@@ -1028,5 +1028,152 @@ describe("Workbook", () => {
         await promisify(fs.unlink)(RESAVED_FILEPATH);
       });
     });
+
+    describe("GitHub Issue #5 - rowItems/colItems/recordCount fix", () => {
+      it("generates correct rowItems with all unique values plus grand total", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("table");
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a1", "b2", 5],
+            ["a2", "b1", 24],
+            ["a2", "b2", 35],
+            ["a3", "b1", 45],
+            ["a3", "b2", 45]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-issue5.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        // Read and parse the XML to verify correct structure
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotTable1.xml
+        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        expect(pivotTableXml).toBeDefined();
+        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+
+        // rowItems should have 4 items: a1, a2, a3, and grand total
+        // The pattern should be: <rowItems count="4">
+        expect(pivotTableStr).toMatch(/<rowItems count="4">/);
+        // Should have 3 regular items: <i><x v="0" /></i>, <i><x v="1" /></i>, <i><x v="2" /></i>
+        expect(pivotTableStr).toMatch(/<i><x v="0" \/><\/i>/);
+        expect(pivotTableStr).toMatch(/<i><x v="1" \/><\/i>/);
+        expect(pivotTableStr).toMatch(/<i><x v="2" \/><\/i>/);
+        // And grand total: <i t="grand"><x /></i>
+        expect(pivotTableStr).toMatch(/<i t="grand"><x \/><\/i>/);
+
+        // colItems should have 3 items: b1, b2, and grand total
+        expect(pivotTableStr).toMatch(/<colItems count="3">/);
+
+        // Check pivotCacheDefinition1.xml for correct recordCount
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        expect(cacheDefXml).toBeDefined();
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // recordCount should be 6 (number of data rows)
+        expect(cacheDefStr).toMatch(/recordCount="6"/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+
+      it("generates correct colItems when columns is empty with single value", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("table");
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a2", "b2", 10]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: [], // empty columns
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-no-cols.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+
+        // With no columns and single value, colItems should just have grand total
+        expect(pivotTableStr).toMatch(/<colItems count="1">/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+
+      it("generates correct colItems when columns is empty with multiple values", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("table");
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a2", "b2", 10]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: [], // empty columns
+          values: ["B", "C"], // multiple values
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-multi-vals.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+
+        // With no columns and 2 values, colItems should have 3 items (2 values + grand total)
+        expect(pivotTableStr).toMatch(/<colItems count="3">/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+    });
   });
 });

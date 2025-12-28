@@ -92,6 +92,9 @@ class PivotCacheDefinitionXform extends BaseXform {
   private renderNew(xmlStream: any, model: CacheDefinitionModel): void {
     const { source, cacheFields } = model;
 
+    // Record count = number of data rows (excluding header row)
+    const recordCount = source.getSheetValues().slice(2).length;
+
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
       ...PivotCacheDefinitionXform.PIVOT_CACHE_DEFINITION_ATTRIBUTES,
@@ -102,7 +105,7 @@ class PivotCacheDefinitionXform extends BaseXform {
       createdVersion: "8",
       refreshedVersion: "8",
       minRefreshableVersion: "3",
-      recordCount: cacheFields.length + 1
+      recordCount
     });
 
     xmlStream.openNode("cacheSource", { type: "worksheet" });

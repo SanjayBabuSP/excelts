@@ -186,6 +186,26 @@ class PivotTableXform extends BaseXform {
     // Generate unique UID for each pivot table to prevent Excel treating them as identical
     const uniqueUid = `{${crypto.randomUUID().toUpperCase()}}`;
 
+    // Build rowItems - need one <i> for each unique value in row fields, plus grand total
+    const rowItems = buildRowItems(rows, cacheFields);
+    // Build colItems - need one <i> for each unique value in col fields, plus grand total
+    const colItems = buildColItems(columns, cacheFields, values.length);
+
+    // Calculate pivot table dimensions
+    const rowFieldItemCount = rows.length > 0 ? cacheFields[rows[0]]?.sharedItems?.length || 0 : 0;
+    const colFieldItemCount =
+      columns.length > 0 ? cacheFields[columns[0]]?.sharedItems?.length || 0 : 0;
+
+    // Location: A3 is where pivot table starts
+    // - firstHeaderRow: 1 (column headers are in first row of pivot table)
+    // - firstDataRow: 2 (data starts in second row)
+    // - firstDataCol: 1 (data starts in second column, after row labels)
+    // Calculate ref based on actual data size
+    const endRow = 3 + rowFieldItemCount + 1; // start row + data rows + grand total
+    const endCol = 1 + colFieldItemCount + 1; // start col + data cols + grand total
+    const endColLetter = String.fromCharCode(64 + endCol);
+    const locationRef = `A3:${endColLetter}${endRow}`;
+
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
       ...PivotTableXform.PIVOT_TABLE_ATTRIBUTES,
@@ -211,15 +231,15 @@ class PivotTableXform extends BaseXform {
     });
 
     xmlStream.writeXml(`
-      <location ref="A3:E15" firstHeaderRow="1" firstDataRow="2" firstDataCol="1" />
+      <location ref="${locationRef}" firstHeaderRow="1" firstDataRow="2" firstDataCol="1" />
       <pivotFields count="${cacheFields.length}">
         ${renderPivotFields(model)}
       </pivotFields>
       <rowFields count="${rows.length}">
         ${rows.map(rowIndex => `<field x="${rowIndex}" />`).join("\n    ")}
       </rowFields>
-      <rowItems count="1">
-        <i t="grand"><x /></i>
+      <rowItems count="${rowItems.count}">
+        ${rowItems.xml}
       </rowItems>
       <colFields count="${columns.length === 0 ? 1 : columns.length}">
         ${
@@ -228,8 +248,8 @@ class PivotTableXform extends BaseXform {
             : columns.map(columnIndex => `<field x="${columnIndex}" />`).join("\n    ")
         }
       </colFields>
-      <colItems count="1">
-        <i t="grand"><x /></i>
+      <colItems count="${colItems.count}">
+        ${colItems.xml}
       </colItems>
       <dataFields count="${values.length}">
         ${buildDataFields(cacheFields, values, model.metric)}
@@ -637,6 +657,86 @@ class PivotTableXform extends BaseXform {
 // Helpers
 
 /**
+ * Build rowItems XML - one item for each unique value in row fields, plus grand total.
+ * Each <i> represents a row in the pivot table.
+ * - Regular items: <i><x v="index"/></i> where index is the position in sharedItems
+ * - Grand total: <i t="grand"><x/></i>
+ */
+function buildRowItems(rows: number[], cacheFields: any[]): { count: number; xml: string } {
+  if (rows.length === 0) {
+    // No row fields - just grand total
+    return { count: 1, xml: '<i t="grand"><x /></i>' };
+  }
+
+  // Get unique values count from the first row field
+  const rowFieldIndex = rows[0];
+  const sharedItems = cacheFields[rowFieldIndex]?.sharedItems || [];
+  const itemCount = sharedItems.length;
+
+  // Build items: one for each unique value + grand total
+  const items: string[] = [];
+
+  // Regular items - reference each unique value by index
+  for (let i = 0; i < itemCount; i++) {
+    items.push(`<i><x v="${i}" /></i>`);
+  }
+
+  // Grand total row
+  items.push('<i t="grand"><x /></i>');
+
+  return {
+    count: items.length,
+    xml: items.join("\n        ")
+  };
+}
+
+/**
+ * Build colItems XML - one item for each unique value in column fields, plus grand total.
+ * When there are multiple data fields (values), each column value may have sub-columns.
+ */
+function buildColItems(
+  columns: number[],
+  cacheFields: any[],
+  valueCount: number
+): { count: number; xml: string } {
+  if (columns.length === 0) {
+    // No column fields - columns are based on data fields (values)
+    if (valueCount > 1) {
+      // Multiple values: one column per value + grand total
+      const items: string[] = [];
+      for (let i = 0; i < valueCount; i++) {
+        items.push(`<i><x v="${i}" /></i>`);
+      }
+      items.push('<i t="grand"><x /></i>');
+      return { count: items.length, xml: items.join("\n        ") };
+    }
+    // Single value: just grand total
+    return { count: 1, xml: '<i t="grand"><x /></i>' };
+  }
+
+  // Get unique values count from the first column field
+  const colFieldIndex = columns[0];
+  const sharedItems = cacheFields[colFieldIndex]?.sharedItems || [];
+  const itemCount = sharedItems.length;
+
+  // Build items: one for each unique value + grand total
+  const items: string[] = [];
+
+  // Regular items - reference each unique value by index
+  for (let i = 0; i < itemCount; i++) {
+    items.push(`<i><x v="${i}" /></i>`);
+  }
+
+  // Grand total column
+  items.push('<i t="grand"><x /></i>');
+
+  return {
+    count: items.length,
+    xml: items.join("\n        ")
+  };
+}
+
+/**
  * Build dataField XML elements for all values in the pivot table.
  * Supports multiple values when columns is empty.
  */
@@ -684,10 +784,15 @@ function renderPivotField(fieldType: string | null, sharedItems: string[] | null
 
   if (fieldType === "row" || fieldType === "column") {
     const axis = fieldType === "row" ? "axisRow" : "axisCol";
+    // items = one for each shared item + one default item
+    const itemsXml = [
+      ...sharedItems!.map((_item: string, index: number) => `<item x="${index}" />`),
+      '<item t="default" />' // Required default item for subtotals/grand totals
+    ].join("\n              ");
     return `
       <pivotField axis="${axis}" ${defaultAttributes}>
         <items count="${sharedItems!.length + 1}">
-          ${sharedItems!.map((_item: string, index: number) => `<item x="${index}" />`).join("\n              ")}
+          ${itemsXml}
         </items>
       </pivotField>
     `;
