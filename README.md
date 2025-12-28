@@ -23,8 +23,9 @@ ExcelTS is a modernized fork of [ExcelJS](https://github.com/exceljs/exceljs) wi
 
 ## Installation
 
-````bash
+```bash
 npm install @cj-tech-master/excelts
+```
 
 ## Quick Start
 
@@ -43,7 +44,7 @@ sheet.addRow(["Jane Smith", 25, "jane@example.com"]);
 
 // Save to file
 await workbook.xlsx.writeFile("output.xlsx");
-````
+```
 
 ### Reading a Workbook
 
