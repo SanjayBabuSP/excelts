@@ -177,7 +177,7 @@ describe("Workbook", () => {
           values: ["C"],
           metric: "sum"
         });
-      }).toThrow('The header name "NonExistent" was not found in TestTable.');
+      }).toThrow('The header name "NonExistent" was not found in Sheet1.');
     });
 
     it("throws error if sourceTable has no data rows", () => {
@@ -604,20 +604,6 @@ describe("Workbook", () => {
       expect(pivotTable1Xml).toContain('cacheId="10"');
       expect(pivotTable2Xml).toContain('cacheId="11"');
       expect(pivotTable3Xml).toContain('cacheId="12"');
-
-      // Verify each pivot table has unique UID (not hardcoded)
-      const uid1Match = pivotTable1Xml.match(/xr:uid="([^"]+)"/);
-      const uid2Match = pivotTable2Xml.match(/xr:uid="([^"]+)"/);
-      const uid3Match = pivotTable3Xml.match(/xr:uid="([^"]+)"/);
-
-      expect(uid1Match).toBeTruthy();
-      expect(uid2Match).toBeTruthy();
-      expect(uid3Match).toBeTruthy();
-
-      // UIDs should all be different
-      expect(uid1Match![1]).not.toBe(uid2Match![1]);
-      expect(uid2Match![1]).not.toBe(uid3Match![1]);
-      expect(uid1Match![1]).not.toBe(uid3Match![1]);
     });
 
     it("supports 'count' metric for pivot tables", async () => {
@@ -1073,8 +1059,9 @@ describe("Workbook", () => {
         // rowItems should have 4 items: a1, a2, a3, and grand total
         // The pattern should be: <rowItems count="4">
         expect(pivotTableStr).toMatch(/<rowItems count="4">/);
-        // Should have 3 regular items: <i><x v="0" /></i>, <i><x v="1" /></i>, <i><x v="2" /></i>
-        expect(pivotTableStr).toMatch(/<i><x v="0" \/><\/i>/);
+        // Should have 3 regular items: <i><x /></i>, <i><x v="1" /></i>, <i><x v="2" /></i>
+        // Note: v="0" is omitted per Excel convention (v="0" is the default)
+        expect(pivotTableStr).toMatch(/<i><x \/><\/i>/);
         expect(pivotTableStr).toMatch(/<i><x v="1" \/><\/i>/);
         expect(pivotTableStr).toMatch(/<i><x v="2" \/><\/i>/);
         // And grand total: <i t="grand"><x /></i>
@@ -1170,6 +1157,52 @@ describe("Workbook", () => {
 
         // With no columns and 2 values, colItems should have 3 items (2 values + grand total)
         expect(pivotTableStr).toMatch(/<colItems count="3">/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+    });
+
+    describe("GitHub Issue #5 - worksheetSource sheet name fix", () => {
+      it("uses worksheet name (not table name) in pivotCacheDefinition worksheetSource", async () => {
+        const workbook = new Workbook();
+        // Create a worksheet named "DataSheet" with a table named "MyTable"
+        const worksheet = workbook.addWorksheet("DataSheet");
+
+        const table = worksheet.addTable({
+          name: "MyTable", // Table name is different from worksheet name
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "Col1" }, { name: "Col2" }, { name: "Value" }],
+          rows: [
+            ["a", "x", 10],
+            ["b", "y", 20]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("PivotSheet");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["Col1"],
+          columns: ["Col2"],
+          values: ["Value"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-worksheet-name.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotCacheDefinition1.xml
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // The worksheetSource sheet attribute should reference the worksheet name "DataSheet"
+        // NOT the table name "MyTable"
+        expect(cacheDefStr).toContain('sheet="DataSheet"');
+        expect(cacheDefStr).not.toContain('sheet="MyTable"');
 
         // Clean up
         await promisify(fs.unlink)(pivotFilePath);

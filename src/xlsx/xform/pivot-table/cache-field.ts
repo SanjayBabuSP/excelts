@@ -3,13 +3,17 @@ import { xmlEncode } from "../../../utils/utils";
 interface CacheFieldConfig {
   name: string;
   sharedItems: string[] | null;
+  minValue?: number;
+  maxValue?: number;
 }
 
 class CacheField {
   declare private name: string;
   declare private sharedItems: string[] | null;
+  declare private minValue?: number;
+  declare private maxValue?: number;
 
-  constructor({ name, sharedItems }: CacheFieldConfig) {
+  constructor({ name, sharedItems, minValue, maxValue }: CacheFieldConfig) {
     // string type
     //
     // {
@@ -23,10 +27,14 @@ class CacheField {
     //
     // {
     //   'name': 'D',
-    //   'sharedItems': null
+    //   'sharedItems': null,
+    //   'minValue': 5,
+    //   'maxValue': 45
     // }
     this.name = name;
     this.sharedItems = sharedItems;
+    this.minValue = minValue;
+    this.maxValue = maxValue;
   }
 
   render(): string {
@@ -38,9 +46,13 @@ class CacheField {
 
     // integer types
     if (this.sharedItems === null) {
-      // TK(2023-07-18): left out attributes... minValue="5" maxValue="45"
+      // Build minValue/maxValue attributes if available
+      const minMaxAttrs =
+        this.minValue !== undefined && this.maxValue !== undefined
+          ? ` minValue="${this.minValue}" maxValue="${this.maxValue}"`
+          : "";
       return `<cacheField name="${escapedName}" numFmtId="0">
-      <sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" containsInteger="1" />
+      <sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" containsInteger="1"${minMaxAttrs} />
     </cacheField>`;
     }
 

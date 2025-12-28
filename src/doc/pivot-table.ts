@@ -7,7 +7,7 @@ import type { Table } from "./table";
  * This allows both Worksheet and Table to be used as pivot table data sources.
  */
 export interface PivotTableSource {
-  /** Name of the source (worksheet name or table name) */
+  /** Name of the worksheet containing the source data (used in pivotCacheDefinition) */
   name: string;
   /** Get row values by 1-indexed row number */
   getRow(rowNumber: number): { values: any[] };
@@ -70,6 +70,10 @@ export interface CacheField {
   name: string;
   /** Unique values for row/column fields, null for value fields */
   sharedItems: any[] | null;
+  /** Minimum value for numeric fields */
+  minValue?: number;
+  /** Maximum value for numeric fields */
+  maxValue?: number;
 }
 
 /** Aggregation function types for pivot table data fields */
@@ -204,8 +208,12 @@ function createTableSourceAdapter(table: Table): PivotTableSource {
 
   const shortRange = colCache.encode(startRow, startCol, endRow, endCol);
 
+  // Use the worksheet name (not table name) for pivotCacheDefinition's worksheetSource
+  // The sheet attribute in worksheetSource must reference the actual worksheet name
+  const worksheetName = table.worksheet.name;
+
   return {
-    name: tableModel.name,
+    name: worksheetName,
     getRow(rowNumber: number): { values: any[] } {
       if (rowNumber === 1) {
         return { values: headerRow };
@@ -383,12 +391,43 @@ function makeCacheFields(
     return toSortedArray(uniqueValues);
   };
 
+  // Calculate min/max for numeric fields
+  const getMinMax = (columnIndex: number): { minValue: number; maxValue: number } | null => {
+    const columnValues = source.getColumn(columnIndex).values;
+    let min = Infinity;
+    let max = -Infinity;
+    let hasNumeric = false;
+    for (let i = 2; i < columnValues.length; i++) {
+      const v = columnValues[i];
+      if (typeof v === "number" && !isNaN(v)) {
+        hasNumeric = true;
+        if (v < min) {
+          min = v;
+        }
+        if (v > max) {
+          max = v;
+        }
+      }
+    }
+    return hasNumeric ? { minValue: min, maxValue: max } : null;
+  };
+
   // Build result array
   const result: CacheField[] = [];
   for (const columnIndex of range(1, names.length)) {
     const name = names[columnIndex];
-    const sharedItems = sharedItemsFields.has(name) ? aggregate(columnIndex) : null;
-    result.push({ name, sharedItems });
+    if (sharedItemsFields.has(name)) {
+      result.push({ name, sharedItems: aggregate(columnIndex) });
+    } else {
+      // Numeric field - calculate min/max
+      const minMax = getMinMax(columnIndex);
+      result.push({
+        name,
+        sharedItems: null,
+        minValue: minMax?.minValue,
+        maxValue: minMax?.maxValue
+      });
+    }
   }
   return result;
 }

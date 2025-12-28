@@ -183,9 +183,6 @@ class PivotTableXform extends BaseXform {
   private renderNew(xmlStream: any, model: PivotTableModel): void {
     const { rows, columns, values, cacheFields, cacheId, applyWidthHeightFormats } = model;
 
-    // Generate unique UID for each pivot table to prevent Excel treating them as identical
-    const uniqueUid = `{${crypto.randomUUID().toUpperCase()}}`;
-
     // Build rowItems - need one <i> for each unique value in row fields, plus grand total
     const rowItems = buildRowItems(rows, cacheFields);
     // Build colItems - need one <i> for each unique value in col fields, plus grand total
@@ -200,8 +197,14 @@ class PivotTableXform extends BaseXform {
     // - firstHeaderRow: 1 (column headers are in first row of pivot table)
     // - firstDataRow: 2 (data starts in second row)
     // - firstDataCol: 1 (data starts in second column, after row labels)
-    // Calculate ref based on actual data size
-    const endRow = 3 + rowFieldItemCount + 1; // start row + data rows + grand total
+    // Calculate ref based on actual data size:
+    // - Start row: 3
+    // - Header rows: 2 (column label row + subheader row)
+    // - Data rows: rowFieldItemCount
+    // - Grand total row: 1
+    // endRow = 3 + 2 + rowFieldItemCount + 1 - 1 = 5 + rowFieldItemCount
+    // Or simplified: startRow (3) + 1 (column labels) + rowFieldItemCount (data) + 1 (grand total)
+    const endRow = 3 + 1 + rowFieldItemCount + 1; // = 5 + rowFieldItemCount
     const endCol = 1 + colFieldItemCount + 1; // start col + data cols + grand total
     const endColLetter = String.fromCharCode(64 + endCol);
     const locationRef = `A3:${endColLetter}${endRow}`;
@@ -209,7 +212,6 @@ class PivotTableXform extends BaseXform {
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
       ...PivotTableXform.PIVOT_TABLE_ATTRIBUTES,
-      "xr:uid": uniqueUid,
       name: "PivotTable2",
       cacheId,
       applyNumberFormats: "0",
@@ -291,12 +293,9 @@ class PivotTableXform extends BaseXform {
    * Render loaded pivot table (preserving original structure)
    */
   private renderLoaded(xmlStream: any, model: ParsedPivotTableModel): void {
-    const uniqueUid = model.uid || `{${crypto.randomUUID().toUpperCase()}}`;
-
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
       ...PivotTableXform.PIVOT_TABLE_ATTRIBUTES,
-      "xr:uid": uniqueUid,
       name: model.name || "PivotTable1",
       cacheId: model.cacheId,
       applyNumberFormats: model.applyNumberFormats || "0",
@@ -647,10 +646,7 @@ class PivotTableXform extends BaseXform {
   }
 
   static PIVOT_TABLE_ATTRIBUTES = {
-    xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
-    "xmlns:mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
-    "mc:Ignorable": "xr",
-    "xmlns:xr": "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+    xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
   };
 }
 
@@ -659,8 +655,9 @@ class PivotTableXform extends BaseXform {
 /**
  * Build rowItems XML - one item for each unique value in row fields, plus grand total.
  * Each <i> represents a row in the pivot table.
- * - Regular items: <i><x v="index"/></i> where index is the position in sharedItems
+ * - Regular items: <i><x/></i> for index 0, <i><x v="index"/></i> for index > 0
  * - Grand total: <i t="grand"><x/></i>
+ * Note: When v=0, the v attribute should be omitted (Excel convention)
  */
 function buildRowItems(rows: number[], cacheFields: any[]): { count: number; xml: string } {
   if (rows.length === 0) {
@@ -677,8 +674,13 @@ function buildRowItems(rows: number[], cacheFields: any[]): { count: number; xml
   const items: string[] = [];
 
   // Regular items - reference each unique value by index
+  // Note: v="0" should be omitted (Excel uses <x/> instead of <x v="0"/>)
   for (let i = 0; i < itemCount; i++) {
-    items.push(`<i><x v="${i}" /></i>`);
+    if (i === 0) {
+      items.push("<i><x /></i>");
+    } else {
+      items.push(`<i><x v="${i}" /></i>`);
+    }
   }
 
   // Grand total row
@@ -693,6 +695,7 @@ function buildRowItems(rows: number[], cacheFields: any[]): { count: number; xml
 /**
  * Build colItems XML - one item for each unique value in column fields, plus grand total.
  * When there are multiple data fields (values), each column value may have sub-columns.
+ * Note: When v=0, the v attribute should be omitted (Excel convention)
  */
 function buildColItems(
   columns: number[],
@@ -705,7 +708,11 @@ function buildColItems(
       // Multiple values: one column per value + grand total
       const items: string[] = [];
       for (let i = 0; i < valueCount; i++) {
-        items.push(`<i><x v="${i}" /></i>`);
+        if (i === 0) {
+          items.push("<i><x /></i>");
+        } else {
+          items.push(`<i><x v="${i}" /></i>`);
+        }
       }
       items.push('<i t="grand"><x /></i>');
       return { count: items.length, xml: items.join("\n        ") };
@@ -723,8 +730,13 @@ function buildColItems(
   const items: string[] = [];
 
   // Regular items - reference each unique value by index
+  // Note: v="0" should be omitted (Excel uses <x/> instead of <x v="0"/>)
   for (let i = 0; i < itemCount; i++) {
-    items.push(`<i><x v="${i}" /></i>`);
+    if (i === 0) {
+      items.push("<i><x /></i>");
+    } else {
+      items.push(`<i><x v="${i}" /></i>`);
+    }
   }
 
   // Grand total column
@@ -779,24 +791,28 @@ function renderPivotFields(pivotTable: PivotTableModel): string {
 
 function renderPivotField(fieldType: string | null, sharedItems: string[] | null): string {
   // fieldType: 'row', 'column', 'value', null
-
-  const defaultAttributes = 'compact="0" outline="0" showAll="0" defaultSubtotal="0"';
+  // Note: defaultSubtotal="0" should only be on value fields and non-axis fields,
+  // NOT on row/column axis fields (Excel will auto-calculate subtotals for them)
 
   if (fieldType === "row" || fieldType === "column") {
     const axis = fieldType === "row" ? "axisRow" : "axisCol";
+    // Row and column fields should NOT have defaultSubtotal="0"
+    const axisAttributes = 'compact="0" outline="0" showAll="0"';
     // items = one for each shared item + one default item
     const itemsXml = [
       ...sharedItems!.map((_item: string, index: number) => `<item x="${index}" />`),
       '<item t="default" />' // Required default item for subtotals/grand totals
     ].join("\n              ");
     return `
-      <pivotField axis="${axis}" ${defaultAttributes}>
+      <pivotField axis="${axis}" ${axisAttributes}>
         <items count="${sharedItems!.length + 1}">
           ${itemsXml}
         </items>
       </pivotField>
     `;
   }
+  // Value fields and non-axis fields should have defaultSubtotal="0"
+  const defaultAttributes = 'compact="0" outline="0" showAll="0" defaultSubtotal="0"';
   return `
     <pivotField
       ${fieldType === "value" ? 'dataField="1"' : ""}
