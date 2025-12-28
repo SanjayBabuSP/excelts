@@ -47,16 +47,21 @@ class SheetViewXform extends BaseXform {
   }
 
   render(xmlStream: any, model: SheetViewModel): void {
-    xmlStream.openNode("sheetView", {
-      workbookViewId: model.workbookViewId || 0
-    });
+    // Build initial attributes with correct order to match Excel output
+    const initialAttrs: any = {};
+    if (model.tabSelected) {
+      initialAttrs.tabSelected = "1";
+    }
+    initialAttrs.workbookViewId = model.workbookViewId || 0;
+
+    xmlStream.openNode("sheetView", initialAttrs);
     const add = function (name: string, value: any, included: any): void {
       if (included) {
         xmlStream.addAttribute(name, value);
       }
     };
     add("rightToLeft", "1", model.rightToLeft === true);
-    add("tabSelected", "1", model.tabSelected);
+    // tabSelected is now in initialAttrs
     add("showRuler", "0", model.showRuler === false);
     add("showRowColHeaders", "0", model.showRowColHeaders === false);
     add("showGridLines", "0", model.showGridLines === false);

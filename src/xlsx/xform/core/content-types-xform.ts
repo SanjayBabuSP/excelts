@@ -45,7 +45,7 @@ class ContentTypesXform extends BaseXform {
     });
 
     if ((model.pivotTables || []).length) {
-      // Add content types for each pivot table
+      // Add content types for pivot cache (definition and records)
       (model.pivotTables || []).forEach((pivotTable: any) => {
         const n = pivotTable.tableNumber;
         xmlStream.leafNode("Override", {
@@ -57,10 +57,6 @@ class ContentTypesXform extends BaseXform {
           PartName: `/xl/pivotCache/pivotCacheRecords${n}.xml`,
           ContentType:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"
-        });
-        xmlStream.leafNode("Override", {
-          PartName: `/xl/pivotTables/pivotTable${n}.xml`,
-          ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"
         });
       });
     }
@@ -91,6 +87,17 @@ class ContentTypesXform extends BaseXform {
       });
     }
 
+    // Add pivot table overrides after tables (matches Excel order)
+    if ((model.pivotTables || []).length) {
+      (model.pivotTables || []).forEach((pivotTable: any) => {
+        const n = pivotTable.tableNumber;
+        xmlStream.leafNode("Override", {
+          PartName: `/xl/pivotTables/pivotTable${n}.xml`,
+          ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"
+        });
+      });
+    }
+
     if (model.drawings) {
       model.drawings.forEach((drawing: any) => {
         xmlStream.leafNode("Override", {
@@ -100,7 +107,7 @@ class ContentTypesXform extends BaseXform {
       });
     }
 
-    if (model.commentRefs) {
+    if (model.commentRefs && model.commentRefs.length) {
       xmlStream.leafNode("Default", {
         Extension: "vml",
         ContentType: "application/vnd.openxmlformats-officedocument.vmlDrawing"
