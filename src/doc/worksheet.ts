@@ -201,7 +201,6 @@ class Worksheet {
       {},
       {
         defaultRowHeight: 15,
-        dyDescent: 55,
         outlineLevelCol: 0,
         outlineLevelRow: 0
       },

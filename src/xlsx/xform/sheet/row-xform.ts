@@ -79,7 +79,7 @@ class RowXform extends BaseXform {
       xmlStream.addAttribute("s", model.styleId);
       xmlStream.addAttribute("customFormat", "1");
     }
-    xmlStream.addAttribute("x14ac:dyDescent", "0.25");
+    // Note: dyDescent is MS extension, not output by default (Excel auto-calculates)
     if (model.outlineLevel) {
       xmlStream.addAttribute("outlineLevel", model.outlineLevel);
     }

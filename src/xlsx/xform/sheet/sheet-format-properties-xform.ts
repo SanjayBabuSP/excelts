@@ -2,7 +2,7 @@ import { BaseXform } from "../base-xform";
 
 interface SheetFormatPropertiesModel {
   defaultRowHeight: number;
-  dyDescent: number;
+  dyDescent?: number;
   outlineLevelRow: number;
   outlineLevelCol: number;
   defaultColWidth?: number;
@@ -17,10 +17,13 @@ class SheetFormatPropertiesXform extends BaseXform {
     if (model) {
       const attributes: any = {
         defaultRowHeight: model.defaultRowHeight,
-        outlineLevelRow: model.outlineLevelRow,
-        outlineLevelCol: model.outlineLevelCol,
-        "x14ac:dyDescent": model.dyDescent
+        // Only output outlineLevelRow/Col when non-zero (matches Excel behavior)
+        outlineLevelRow: model.outlineLevelRow || undefined,
+        outlineLevelCol: model.outlineLevelCol || undefined,
+        // Only output dyDescent if explicitly set (MS extension, not ECMA-376 standard)
+        "x14ac:dyDescent": model.dyDescent || undefined
       };
+      // Only output defaultColWidth if explicitly set
       if (model.defaultColWidth) {
         attributes.defaultColWidth = model.defaultColWidth;
       }
