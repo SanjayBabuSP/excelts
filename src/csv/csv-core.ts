@@ -44,13 +44,6 @@ export type RowValidateFunction<T = Row> =
   | ((row: T) => boolean)
   | ((row: T, callback: RowValidateCallback) => void);
 
-/** Validation result */
-export interface RowValidationResult<T = Row> {
-  row: T | null;
-  isValid: boolean;
-  reason?: string;
-}
-
 /**
  * CSV parsing options
  */

@@ -36,7 +36,7 @@ export interface WorksheetHyperlink {
 }
 
 /** Events emitted during worksheet parsing */
-export type WorksheetEventType = "row" | "hyperlink";
+export type WorksheetEventType = RowEvent["eventType"] | HyperlinkEvent["eventType"];
 
 /** Row event emitted during parsing */
 export interface RowEvent {

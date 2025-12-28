@@ -80,7 +80,7 @@ interface EntryPayload {
 }
 
 /** Parse event types */
-export type ParseEventType = "shared-strings" | "worksheet" | "hyperlinks";
+export type ParseEventType = EntryPayload["type"];
 
 export interface SharedStringEvent {
   eventType: "shared-strings";
