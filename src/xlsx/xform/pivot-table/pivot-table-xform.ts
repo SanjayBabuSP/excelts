@@ -777,30 +777,34 @@ function renderPivotFields(pivotTable: PivotTableModel): string {
 
   return pivotTable.cacheFields
     .map((cacheField: any, fieldIndex: number) => {
-      const fieldType = rowSet.has(fieldIndex)
-        ? "row"
-        : colSet.has(fieldIndex)
-          ? "column"
-          : valueSet.has(fieldIndex)
-            ? "value"
-            : null;
-      return renderPivotField(fieldType, cacheField.sharedItems);
+      const isRow = rowSet.has(fieldIndex);
+      const isCol = colSet.has(fieldIndex);
+      const isValue = valueSet.has(fieldIndex);
+      return renderPivotField(isRow, isCol, isValue, cacheField.sharedItems);
     })
     .join("");
 }
 
-function renderPivotField(fieldType: string | null, sharedItems: string[] | null): string {
-  // fieldType: 'row', 'column', 'value', null
-  // Note: defaultSubtotal="0" should only be on value fields and non-axis fields,
-  // NOT on row/column axis fields (Excel will auto-calculate subtotals for them)
+function renderPivotField(
+  isRow: boolean,
+  isCol: boolean,
+  isValue: boolean,
+  sharedItems: any[] | null
+): string {
+  // A field can be both a row/column field AND a value field (issue #15)
+  // In this case, it needs both axis attribute AND dataField="1"
 
-  if (fieldType === "row" || fieldType === "column") {
-    const axis = fieldType === "row" ? "axisRow" : "axisCol";
+  if (isRow || isCol) {
+    const axis = isRow ? "axisRow" : "axisCol";
     // Row and column fields should NOT have defaultSubtotal="0"
-    const axisAttributes = 'compact="0" outline="0" showAll="0"';
+    let axisAttributes = 'compact="0" outline="0" showAll="0"';
+    // If also a value field, add dataField="1"
+    if (isValue) {
+      axisAttributes = `dataField="1" ${axisAttributes}`;
+    }
     // items = one for each shared item + one default item
     const itemsXml = [
-      ...sharedItems!.map((_item: string, index: number) => `<item x="${index}" />`),
+      ...sharedItems!.map((_item: any, index: number) => `<item x="${index}" />`),
       '<item t="default" />' // Required default item for subtotals/grand totals
     ].join("\n              ");
     return `
@@ -815,7 +819,7 @@ function renderPivotField(fieldType: string | null, sharedItems: string[] | null
   const defaultAttributes = 'compact="0" outline="0" showAll="0" defaultSubtotal="0"';
   return `
     <pivotField
-      ${fieldType === "value" ? 'dataField="1"' : ""}
+      ${isValue ? 'dataField="1"' : ""}
       ${defaultAttributes}
     />
   `;

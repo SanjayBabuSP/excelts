@@ -6,7 +6,7 @@ import { xmlDecode } from "../../../utils/utils";
  */
 interface CacheFieldModel {
   name: string;
-  sharedItems: string[] | null;
+  sharedItems: any[] | null;
   // Numeric field metadata
   containsNumber?: boolean;
   containsInteger?: boolean;
@@ -66,27 +66,23 @@ class CacheFieldXform extends BaseXform {
 
       case "sharedItems":
         this.inSharedItems = true;
-        // Check if this is a numeric field (no string items)
-        if (attributes.containsNumber === "1" || attributes.containsInteger === "1") {
-          if (this.model) {
-            this.model.containsNumber = attributes.containsNumber === "1";
-            this.model.containsInteger = attributes.containsInteger === "1";
-            if (attributes.minValue !== undefined) {
-              this.model.minValue = parseFloat(attributes.minValue);
-            }
-            if (attributes.maxValue !== undefined) {
-              this.model.maxValue = parseFloat(attributes.maxValue);
-            }
-            // Numeric fields have sharedItems = null
-            this.model.sharedItems = null;
+        // Store numeric field metadata
+        if (this.model) {
+          this.model.containsNumber = attributes.containsNumber === "1";
+          this.model.containsInteger = attributes.containsInteger === "1";
+          if (attributes.minValue !== undefined) {
+            this.model.minValue = parseFloat(attributes.minValue);
           }
-        } else {
-          // String field - initialize sharedItems array if count > 0
-          if (this.model) {
-            const count = parseInt(attributes.count || "0", 10);
-            if (count > 0) {
-              this.model.sharedItems = [];
-            }
+          if (attributes.maxValue !== undefined) {
+            this.model.maxValue = parseFloat(attributes.maxValue);
+          }
+          // Initialize sharedItems array if count > 0 (for both string and numeric fields)
+          const count = parseInt(attributes.count || "0", 10);
+          if (count > 0) {
+            this.model.sharedItems = [];
+          } else {
+            // No count means no individual items (pure numeric field)
+            this.model.sharedItems = null;
           }
         }
         break;

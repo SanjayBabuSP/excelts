@@ -293,7 +293,7 @@ function makePivotTable(worksheet: any, model: PivotTableModel): PivotTable {
   const { rows, values } = model;
   const columns = model.columns ?? [];
 
-  const cacheFields = makeCacheFields(source, [...rows, ...columns]);
+  const cacheFields = makeCacheFields(source, [...rows, ...columns], values);
 
   const nameToIndex = cacheFields.reduce(
     (result: Record<string, number>, cacheField: CacheField, index: number) => {
@@ -368,15 +368,18 @@ function validate(_worksheet: any, model: PivotTableModel, source: PivotTableSou
 
 function makeCacheFields(
   source: PivotTableSource,
-  fieldNamesWithSharedItems: string[]
+  fieldNamesWithSharedItems: string[],
+  valueFieldNames: string[]
 ): CacheField[] {
   // Cache fields are used in pivot tables to reference source data.
   // Fields in fieldNamesWithSharedItems get their unique values extracted as sharedItems.
-  // Other fields (typically numeric) have sharedItems = null.
+  // Fields in valueFieldNames (but not in fieldNamesWithSharedItems) get min/max calculated.
+  // Other fields are unused and get empty sharedItems.
 
   const names = source.getRow(1).values;
   // Use Set for O(1) lookup instead of object
   const sharedItemsFields = new Set(fieldNamesWithSharedItems);
+  const valueFields = new Set(valueFieldNames);
 
   const aggregate = (columnIndex: number): any[] => {
     const columnValues = source.getColumn(columnIndex).values;
@@ -417,9 +420,10 @@ function makeCacheFields(
   for (const columnIndex of range(1, names.length)) {
     const name = names[columnIndex];
     if (sharedItemsFields.has(name)) {
+      // Field used for rows/columns - extract unique values as sharedItems
       result.push({ name, sharedItems: aggregate(columnIndex) });
-    } else {
-      // Numeric field - calculate min/max
+    } else if (valueFields.has(name)) {
+      // Field used only for values (aggregation) - calculate min/max
       const minMax = getMinMax(columnIndex);
       result.push({
         name,
@@ -427,6 +431,9 @@ function makeCacheFields(
         minValue: minMax?.minValue,
         maxValue: minMax?.maxValue
       });
+    } else {
+      // Unused field - just empty sharedItems (like Excel does)
+      result.push({ name, sharedItems: null });
     }
   }
   return result;

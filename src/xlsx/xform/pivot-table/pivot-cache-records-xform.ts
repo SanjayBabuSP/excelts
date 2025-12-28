@@ -160,7 +160,7 @@ class PivotCacheRecordsXform extends BaseXform {
     return parts.join("");
   }
 
-  private renderCellNew(value: any, sharedItems: string[] | null): string {
+  private renderCellNew(value: any, sharedItems: any[] | null): string {
     // Handle null/undefined values first
     if (value === null || value === undefined) {
       return "<m />";
@@ -174,7 +174,7 @@ class PivotCacheRecordsXform extends BaseXform {
       return `<s v="${xmlEncode(String(value))}" />`;
     }
 
-    // shared items
+    // shared items - use indexOf for value lookup (works for both string and numeric)
     const sharedItemsIndex = sharedItems.indexOf(value);
     if (sharedItemsIndex < 0) {
       throw new Error(`${JSON.stringify(value)} not in sharedItems ${JSON.stringify(sharedItems)}`);

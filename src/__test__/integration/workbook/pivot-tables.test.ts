@@ -1208,5 +1208,122 @@ describe("Workbook", () => {
         await promisify(fs.unlink)(pivotFilePath);
       });
     });
+
+    describe("GitHub Issue #15 - same field in rows and values", () => {
+      it("handles numeric field used as both row and value field correctly", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet();
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a1", "b2", 5],
+            ["a2", "b1", 24],
+            ["a2", "b2", 35],
+            ["a3", "b1", 45],
+            ["a3", "b2", 45]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        // Use same field "C" for both rows and values
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["C"],
+          columns: ["B"],
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-issue15.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotCacheDefinition1.xml
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // Field C should have numeric shared items (not string)
+        // Should have containsNumber="1" and use <n v="..." /> format
+        expect(cacheDefStr).toContain('name="C"');
+        expect(cacheDefStr).toContain('containsNumber="1"');
+        expect(cacheDefStr).toContain('<n v="5"');
+        expect(cacheDefStr).toContain('<n v="24"');
+        expect(cacheDefStr).toContain('<n v="35"');
+        expect(cacheDefStr).toContain('<n v="45"');
+        // Should NOT have string format for numeric values
+        expect(cacheDefStr).not.toContain('<s v="5"');
+        expect(cacheDefStr).not.toContain('<s v="24"');
+
+        // Check pivotCacheRecords1.xml - records should use index references
+        const cacheRecXml = zipData["xl/pivotCache/pivotCacheRecords1.xml"];
+        const cacheRecStr = new TextDecoder().decode(cacheRecXml);
+
+        // Records should use <x v="..." /> format for indexed lookup
+        expect(cacheRecStr).toContain('<x v="');
+
+        // Check pivotTable1.xml
+        const pivotXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        const pivotStr = new TextDecoder().decode(pivotXml);
+
+        // Should have dataField for "C" with Sum
+        expect(pivotStr).toContain("Sum of C");
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+
+      it("handles same numeric field used as both row and column", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet();
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", 1, 100],
+            ["a1", 2, 200],
+            ["a2", 1, 300],
+            ["a2", 2, 400]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        // Use numeric field "B" for rows and "C" for values
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["B"],
+          columns: ["A"],
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-issue15-numeric-rows.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotCacheDefinition1.xml
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // Field B should have numeric shared items
+        expect(cacheDefStr).toContain('name="B"');
+        expect(cacheDefStr).toContain('<n v="1"');
+        expect(cacheDefStr).toContain('<n v="2"');
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+    });
   });
 });
