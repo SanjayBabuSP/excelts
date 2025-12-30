@@ -63,8 +63,12 @@ const SpecialValues: Record<string, boolean | CellErrorValue> = {
 /**
  * Create the default value mapper for CSV parsing
  */
-export function createDefaultValueMapper(dateFormats: readonly DateFormat[]) {
+export function createDefaultValueMapper(
+  dateFormats: readonly DateFormat[],
+  parserOptions?: Pick<CsvParseOptions, "decimalSeparator">
+) {
   const dateParser = DateParser.create(dateFormats);
+  const decimalSeparator: "." | "," = parserOptions?.decimalSeparator ?? ".";
 
   return function mapValue(datum: any): any {
     if (datum === "") {
@@ -72,7 +76,19 @@ export function createDefaultValueMapper(dateFormats: readonly DateFormat[]) {
     }
 
     // Try to parse as number
-    const datumNumber = Number(datum);
+    let datumNumber: number;
+    if (decimalSeparator === "," && typeof datum === "string") {
+      const trimmed = datum.trim();
+      // Minimal locale support: treat a single comma as the decimal separator.
+      // Common EU CSV uses delimiter ';' and decimal ',' (e.g. 12,34).
+      if (/^-?\d+(,\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
+        datumNumber = Number(trimmed.replace(",", "."));
+      } else {
+        datumNumber = Number(datum);
+      }
+    } else {
+      datumNumber = Number(datum);
+    }
     if (!Number.isNaN(datumNumber) && datumNumber !== Infinity) {
       return datumNumber;
     }
@@ -148,14 +164,16 @@ export function parseCsvToWorksheet(
     "YYYY-MM-DD"
   ];
 
-  const map = options.map || createDefaultValueMapper(dateFormats);
+  // If using the default mapper, pass parserOptions for locale-aware number parsing.
+  // (Custom map overrides this behavior.)
+  const effectiveMap = options.map || createDefaultValueMapper(dateFormats, options.parserOptions);
 
   // Parse CSV
   const rows = parseCsv(content, options.parserOptions) as string[][];
 
   // Add rows to worksheet
   for (const row of rows) {
-    worksheet.addRow(row.map(map));
+    worksheet.addRow(row.map(effectiveMap));
   }
 
   return worksheet;

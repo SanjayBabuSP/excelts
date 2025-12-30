@@ -85,7 +85,7 @@ class CSV {
       options?.dateFormats ??
       (["YYYY-MM-DD[T]HH:mm:ssZ", "YYYY-MM-DD[T]HH:mm:ss", "MM-DD-YYYY", "YYYY-MM-DD"] as const);
 
-    const map = options?.map || createDefaultValueMapper(dateFormats);
+    const map = options?.map || createDefaultValueMapper(dateFormats, options?.parserOptions);
 
     const parser = new CsvParserStream(options?.parserOptions);
 
@@ -266,7 +266,7 @@ class CSV {
       options?.dateFormats ??
       (["YYYY-MM-DD[T]HH:mm:ssZ", "YYYY-MM-DD[T]HH:mm:ss", "MM-DD-YYYY", "YYYY-MM-DD"] as const);
 
-    const map = options?.map || createDefaultValueMapper(dateFormats);
+    const map = options?.map || createDefaultValueMapper(dateFormats, options?.parserOptions);
 
     const parser = new CsvParserStream(options?.parserOptions);
 

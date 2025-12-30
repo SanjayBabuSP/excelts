@@ -337,6 +337,14 @@ describe("CSV Base - Worksheet Integration", () => {
       expect(mapper("0")).toBe(0);
     });
 
+    it("should support comma decimalSeparator for numbers", () => {
+      const mapper = createDefaultValueMapper([], { decimalSeparator: "," });
+      expect(mapper("3,14")).toBe(3.14);
+      expect(mapper("-0,5")).toBe(-0.5);
+      // whitespace should be tolerated
+      expect(mapper("  12,34  ")).toBe(12.34);
+    });
+
     it("should preserve non-numeric strings", () => {
       const mapper = createDefaultValueMapper([]);
       expect(mapper("hello")).toBe("hello");
