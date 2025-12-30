@@ -7,6 +7,7 @@
 
 import { DateParser, DateFormatter, type DateFormat } from "../utils/datetime";
 import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "./csv-core";
+import { parseNumberFromCsv } from "./csv-number";
 import type { Workbook } from "../doc/workbook";
 import type { Worksheet } from "../doc/worksheet";
 import type { CellErrorValue } from "../types";
@@ -76,19 +77,8 @@ export function createDefaultValueMapper(
     }
 
     // Try to parse as number
-    let datumNumber: number;
-    if (decimalSeparator === "," && typeof datum === "string") {
-      const trimmed = datum.trim();
-      // Minimal locale support: treat a single comma as the decimal separator.
-      // Common EU CSV uses delimiter ';' and decimal ',' (e.g. 12,34).
-      if (/^-?\d+(,\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
-        datumNumber = Number(trimmed.replace(",", "."));
-      } else {
-        datumNumber = Number(datum);
-      }
-    } else {
-      datumNumber = Number(datum);
-    }
+    const datumNumber =
+      typeof datum === "string" ? parseNumberFromCsv(datum, decimalSeparator) : Number(datum);
     if (!Number.isNaN(datumNumber) && datumNumber !== Infinity) {
       return datumNumber;
     }

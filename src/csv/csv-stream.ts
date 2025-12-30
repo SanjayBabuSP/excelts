@@ -16,6 +16,7 @@ import type {
   RowValidateCallback
 } from "./csv-core";
 import { isSyncTransform, isSyncValidate } from "./csv-core";
+import { formatNumberForCsv } from "./csv-number";
 
 /**
  * Transform stream that parses CSV data row by row
@@ -707,12 +708,8 @@ export class CsvFormatterStream extends Transform {
       return "";
     }
 
-    let str: string;
-    if (typeof value === "number" && this.decimalSeparator === ",") {
-      str = String(value).split(".").join(",");
-    } else {
-      str = String(value);
-    }
+    const str =
+      typeof value === "number" ? formatNumberForCsv(value, this.decimalSeparator) : String(value);
 
     if (!this.quoteEnabled) {
       return str;

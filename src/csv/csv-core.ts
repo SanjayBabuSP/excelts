@@ -9,6 +9,8 @@
  * @see https://tools.ietf.org/html/rfc4180
  */
 
+import { formatNumberForCsv, type DecimalSeparator } from "./csv-number";
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -686,14 +688,10 @@ export function formatCsv(
       return "";
     }
 
-    let str: string;
-    if (typeof value === "number" && decimalSeparator === ",") {
-      // Keep JS numeric string form but replace the decimal point.
-      // Use split/join for broad runtime compatibility.
-      str = String(value).split(".").join(",");
-    } else {
-      str = String(value);
-    }
+    const str =
+      typeof value === "number"
+        ? formatNumberForCsv(value, decimalSeparator as DecimalSeparator)
+        : String(value);
 
     // If quoting is disabled, return raw string
     if (!quoteEnabled) {
