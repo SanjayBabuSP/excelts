@@ -285,6 +285,31 @@ class Row {
   }
 
   /**
+   * Get row values as a 0-based sparse array (column 1 => index 0).
+   *
+   * This is useful when you want to compare/stringify values without the
+   * leading separator produced by the 1-based sparse array returned by `values`.
+   */
+  getValues(): CellValue[] {
+    const values: CellValue[] = [];
+    this._cells.forEach(cell => {
+      if (cell && cell.type !== Enums.ValueType.Null) {
+        values[cell.col - 1] = cell.value;
+      }
+    });
+    return values;
+  }
+
+  /**
+   * Convenience stringification for row values.
+   *
+   * Equivalent to `row.getValues().join(separator)`.
+   */
+  valuesToString(separator = ","): string {
+    return this.getValues().join(separator);
+  }
+
+  /**
    * Returns true if the row includes at least one cell with a value
    */
   get hasValues(): boolean {

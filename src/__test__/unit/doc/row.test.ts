@@ -239,6 +239,25 @@ describe("Row", () => {
     expect(count).toBe(7);
   });
 
+  it("exposes 0-based values helpers", () => {
+    const sheet = testUtils.createSheetMock();
+    const row = sheet.getRow(1);
+
+    row.values = [1, 2, 3];
+    expect(row.values).toEqual([, 1, 2, 3]);
+
+    expect(row.getValues()).toEqual([1, 2, 3]);
+    expect(row.valuesToString()).toBe("1,2,3");
+    expect(row.valuesToString("|")).toBe("1|2|3");
+
+    // Sparse: only column 2 has a value
+    const row2 = sheet.getRow(2);
+    row2.getCell(2).value = 42;
+    expect(row2.values).toEqual([, , 42]);
+    expect(row2.getValues()).toEqual([, 42]);
+    expect(row2.valuesToString()).toBe(",42");
+  });
+
   it("builds a model", () => {
     const sheet = testUtils.createSheetMock();
     const row1 = sheet.getRow(1);
