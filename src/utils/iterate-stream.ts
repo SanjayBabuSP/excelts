@@ -1,6 +1,11 @@
-import type { EventEmitter } from "events";
+type Listener = (...args: any[]) => void;
 
-interface Readable extends EventEmitter {
+interface EventEmitterLike {
+  on(event: string, listener: Listener): this;
+  removeListener(event: string, listener: Listener): this;
+}
+
+interface Readable extends EventEmitterLike {
   resume(): void;
   pause(): void;
   on(event: "data", listener: (chunk: any) => void): this;

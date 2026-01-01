@@ -74,7 +74,6 @@ class FilterColumnXform extends BaseXform {
         return true;
       case "dynamicFilter":
         // Ignore dynamicFilter nodes - we don't need to preserve them for reading
-        // See: https://github.com/exceljs/exceljs/issues/2972
         return true;
       default:
         this.parser = this.map[node.name];

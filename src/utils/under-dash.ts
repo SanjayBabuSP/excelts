@@ -1,183 +1,176 @@
-const { toString } = Object.prototype;
-const escapeHtmlRegex = /["&<>]/;
+const escapeHtmlMap: Record<string, string> = {
+  '"': "&quot;",
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;"
+};
+const escapeHtmlRegex = /["&<>]/g;
 
 export function isEqual(a: any, b: any): boolean {
-  const aType = typeof a;
-  const bType = typeof b;
-  const aArray = Array.isArray(a);
-  const bArray = Array.isArray(b);
-  let keys: string[];
+  // Fast path: identical references or primitives
+  if (a === b) {
+    return true;
+  }
+  if (a == null || b == null) {
+    return a === b;
+  }
 
-  if (aType !== bType) {
+  const aType = typeof a;
+  if (aType !== typeof b) {
     return false;
   }
-  switch (typeof a) {
-    case "object":
-      if (aArray || bArray) {
-        if (aArray && bArray) {
-          return (
-            a.length === b.length &&
-            a.every((aValue: any, index: number) => {
-              const bValue = b[index];
-              return isEqual(aValue, bValue);
-            })
-          );
-        }
-        return false;
-      }
 
-      if (a === null || b === null) {
-        return a === b;
-      }
-
-      // Compare object keys and values
-      keys = Object.keys(a);
-
-      if (Object.keys(b).length !== keys.length) {
-        return false;
-      }
-
-      for (const key of keys) {
-        if (!Object.prototype.hasOwnProperty.call(b, key)) {
-          return false;
-        }
-      }
-
-      return keys.every(key => {
-        const aValue = a[key];
-        const bValue = b[key];
-        return isEqual(aValue, bValue);
-      });
-
-    default:
-      return a === b;
+  // Primitives already handled by ===
+  if (aType !== "object") {
+    return false;
   }
+
+  // Arrays
+  const aIsArray = Array.isArray(a);
+  const bIsArray = Array.isArray(b);
+  if (aIsArray !== bIsArray) {
+    return false;
+  }
+
+  if (aIsArray) {
+    const len = a.length;
+    if (len !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < len; i++) {
+      if (!isEqual(a[i], b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Objects
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+
+  for (let i = 0, len = aKeys.length; i < len; i++) {
+    const key = aKeys[i];
+    if (!Object.prototype.hasOwnProperty.call(b, key)) {
+      return false;
+    }
+    if (!isEqual(a[key], b[key])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function escapeHtml(html: string): string {
-  const regexResult = escapeHtmlRegex.exec(html);
-  if (!regexResult) {
-    return html;
-  }
-
-  let result = "";
-  let escape = "";
-  let lastIndex = 0;
-  let i = regexResult.index;
-  for (; i < html.length; i++) {
-    switch (html.charAt(i)) {
-      case '"':
-        escape = "&quot;";
-        break;
-      case "&":
-        escape = "&amp;";
-        break;
-      case "<":
-        escape = "&lt;";
-        break;
-      case ">":
-        escape = "&gt;";
-        break;
-      default:
-        continue;
-    }
-    if (lastIndex !== i) {
-      result += html.substring(lastIndex, i);
-    }
-    lastIndex = i + 1;
-    result += escape;
-  }
-  if (lastIndex !== i) {
-    return result + html.substring(lastIndex, i);
-  }
-  return result;
+  return html.replace(escapeHtmlRegex, char => escapeHtmlMap[char]);
 }
 
 export function isUndefined(val: any): val is undefined {
-  return toString.call(val) === "[object Undefined]";
+  return val === undefined;
 }
 
 export function isObject(val: any): val is Record<string, any> {
-  return toString.call(val) === "[object Object]";
+  return val !== null && typeof val === "object" && !Array.isArray(val);
 }
 
 export function deepMerge<T = any>(...args: any[]): T {
   const target: any = args[0] || {};
-  const { length } = args;
-  let src: any, clone: any, copyIsArray: boolean;
+  const len = args.length;
 
-  function assignValue(val: any, key: string | number): void {
-    src = target[key];
-    copyIsArray = Array.isArray(val);
-    if (isObject(val) || copyIsArray) {
-      if (copyIsArray) {
-        copyIsArray = false;
-        clone = src && Array.isArray(src) ? src : [];
-      } else {
-        clone = src && isObject(src) ? src : {};
-      }
-      target[key] = deepMerge(clone, val);
-    } else if (!isUndefined(val)) {
-      target[key] = val;
-    }
-  }
-
-  for (let i = 0; i < length; i++) {
+  for (let i = 1; i < len; i++) {
     const arg = args[i];
-    if (arg) {
-      if (Array.isArray(arg)) {
-        arg.forEach((val, index) => assignValue(val, index));
-      } else {
-        Object.entries(arg).forEach(([key, val]) => {
-          // Prevent prototype pollution
-          if (key === "__proto__" || key === "constructor" || key === "prototype") {
-            return;
-          }
-          assignValue(val, key);
-        });
+    if (!arg) {
+      continue;
+    }
+
+    if (Array.isArray(arg)) {
+      for (let j = 0, jLen = arg.length; j < jLen; j++) {
+        const val = arg[j];
+        if (val === undefined) {
+          continue;
+        }
+        const src = target[j];
+        if (Array.isArray(val)) {
+          target[j] = deepMerge(Array.isArray(src) ? src : [], val);
+        } else if (isObject(val)) {
+          target[j] = deepMerge(isObject(src) ? src : {}, val);
+        } else {
+          target[j] = val;
+        }
+      }
+    } else {
+      const keys = Object.keys(arg);
+      for (let j = 0, jLen = keys.length; j < jLen; j++) {
+        const key = keys[j];
+        // Prevent prototype pollution
+        if (key === "__proto__" || key === "constructor" || key === "prototype") {
+          continue;
+        }
+        const val = arg[key];
+        if (val === undefined) {
+          continue;
+        }
+        const src = target[key];
+        if (Array.isArray(val)) {
+          target[key] = deepMerge(Array.isArray(src) ? src : [], val);
+        } else if (isObject(val)) {
+          target[key] = deepMerge(isObject(src) ? src : {}, val);
+        } else {
+          target[key] = val;
+        }
       }
     }
   }
   return target;
 }
 
-export function cloneDeep(obj: any, preserveUndefined?: boolean): any {
-  if (preserveUndefined === undefined) {
-    preserveUndefined = true;
-  }
-  let clone: any;
-  if (obj === null) {
-    return null;
+export function cloneDeep(obj: any, preserveUndefined = true): any {
+  if (obj === null || typeof obj !== "object") {
+    return obj;
   }
   if (obj instanceof Date) {
     return obj;
   }
-  if (obj instanceof Array) {
-    clone = [];
-    obj.forEach((value: any, index: number) => {
+
+  if (Array.isArray(obj)) {
+    const len = obj.length;
+    const clone = new Array(len);
+    for (let i = 0; i < len; i++) {
+      const value = obj[i];
       if (value !== undefined) {
-        clone[index] = cloneDeep(value, preserveUndefined);
+        clone[i] = cloneDeep(value, preserveUndefined);
       } else if (preserveUndefined) {
-        clone[index] = undefined;
+        clone[i] = undefined;
       }
-    });
-  } else if (typeof obj === "object") {
-    clone = {};
-    Object.keys(obj).forEach(name => {
-      const value = obj[name];
-      if (value !== undefined) {
-        clone[name] = cloneDeep(value, preserveUndefined);
-      } else if (preserveUndefined) {
-        clone[name] = undefined;
-      }
-    });
-  } else {
-    return obj;
+    }
+    return clone;
+  }
+
+  const clone: any = {};
+  const keys = Object.keys(obj);
+  for (let i = 0, len = keys.length; i < len; i++) {
+    const key = keys[i];
+    const value = obj[key];
+    if (value !== undefined) {
+      clone[key] = cloneDeep(value, preserveUndefined);
+    } else if (preserveUndefined) {
+      clone[key] = undefined;
+    }
   }
   return clone;
 }
 
 export function get<T = any>(obj: any, path: string, defaultValue?: T): T {
   const keys = path.split(".");
-  return keys.reduce((result, key) => result?.[key], obj) ?? defaultValue;
+  let result = obj;
+  for (let i = 0, len = keys.length; i < len; i++) {
+    if (result == null) {
+      return defaultValue as T;
+    }
+    result = result[keys[i]];
+  }
+  return result ?? (defaultValue as T);
 }

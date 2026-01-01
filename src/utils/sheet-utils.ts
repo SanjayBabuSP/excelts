@@ -9,16 +9,7 @@ import type { Cell } from "../doc/cell";
 import { colCache } from "./col-cache";
 import type { CellValue } from "../types";
 import { format as cellFormat } from "./cell-format";
-
-/**
- * Convert a Date object back to Excel serial number without timezone issues.
- * This reverses the excelToDate conversion exactly.
- * excelToDate uses: new Date(Math.round((v - 25569) * 24 * 3600 * 1000))
- * So we reverse it: (date.getTime() / (24 * 3600 * 1000)) + 25569
- */
-function dateToExcelSerial(d: Date): number {
-  return d.getTime() / (24 * 3600 * 1000) + 25569;
-}
+import { dateToExcel } from "./utils.base";
 
 /**
  * Check if format is a pure time format (no date components like y, m for month, d)
@@ -110,7 +101,7 @@ function formatValue(
 ): string {
   // Date object - convert back to Excel serial number
   if (value instanceof Date) {
-    let serial = dateToExcelSerial(value);
+    let serial = dateToExcel(value);
 
     // For time-only formats, use only the fractional part (time portion)
     if (isTimeOnlyFormat(fmt)) {
@@ -910,32 +901,3 @@ export function sheetToAoa(worksheet: Worksheet): CellValue[][] {
 
   return result;
 }
-
-// =============================================================================
-// Export utils object
-// =============================================================================
-
-export const utils = {
-  // Cell encoding/decoding (camelCase)
-  decodeCol,
-  encodeCol,
-  decodeRow,
-  encodeRow,
-  decodeCell,
-  encodeCell,
-  decodeRange,
-  encodeRange,
-
-  // Sheet/JSON conversion (camelCase)
-  jsonToSheet,
-  sheetAddJson,
-  sheetToJson,
-  sheetToCsv,
-  aoaToSheet,
-  sheetAddAoa,
-  sheetToAoa,
-
-  // Workbook functions (camelCase)
-  bookNew,
-  bookAppendSheet
-};

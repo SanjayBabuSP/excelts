@@ -1,5 +1,16 @@
 import { XmlStream } from "../../../utils/xml-stream";
 import { BaseXform } from "../base-xform";
+import {
+  OOXML_PATHS,
+  commentsPathFromName,
+  drawingPath,
+  pivotCacheDefinitionPath,
+  pivotCacheRecordsPath,
+  pivotTablePath,
+  tablePath,
+  toContentTypesPartName,
+  worksheetPath
+} from "../../../utils/ooxml-paths";
 
 // used for rendering the [Content_Types].xml file
 // not used for parsing
@@ -30,16 +41,15 @@ class ContentTypesXform extends BaseXform {
     xmlStream.leafNode("Default", { Extension: "xml", ContentType: "application/xml" });
 
     xmlStream.leafNode("Override", {
-      PartName: "/xl/workbook.xml",
+      PartName: toContentTypesPartName(OOXML_PATHS.xlWorkbook),
       ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
     });
 
     model.worksheets.forEach((worksheet: any, index: number) => {
       // Use fileIndex if set, otherwise use sequential index (1-based)
       const fileIndex = worksheet.fileIndex || index + 1;
-      const name = `/xl/worksheets/sheet${fileIndex}.xml`;
       xmlStream.leafNode("Override", {
-        PartName: name,
+        PartName: toContentTypesPartName(worksheetPath(fileIndex)),
         ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
       });
     });
@@ -49,35 +59,35 @@ class ContentTypesXform extends BaseXform {
       (model.pivotTables || []).forEach((pivotTable: any) => {
         const n = pivotTable.tableNumber;
         xmlStream.leafNode("Override", {
-          PartName: `/xl/pivotCache/pivotCacheDefinition${n}.xml`,
+          PartName: toContentTypesPartName(pivotCacheDefinitionPath(n)),
           ContentType:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"
         });
         xmlStream.leafNode("Override", {
-          PartName: `/xl/pivotCache/pivotCacheRecords${n}.xml`,
+          PartName: toContentTypesPartName(pivotCacheRecordsPath(n)),
           ContentType:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"
         });
         xmlStream.leafNode("Override", {
-          PartName: `/xl/pivotTables/pivotTable${n}.xml`,
+          PartName: toContentTypesPartName(pivotTablePath(n)),
           ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"
         });
       });
     }
 
     xmlStream.leafNode("Override", {
-      PartName: "/xl/theme/theme1.xml",
+      PartName: toContentTypesPartName(OOXML_PATHS.xlTheme1),
       ContentType: "application/vnd.openxmlformats-officedocument.theme+xml"
     });
     xmlStream.leafNode("Override", {
-      PartName: "/xl/styles.xml",
+      PartName: toContentTypesPartName(OOXML_PATHS.xlStyles),
       ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
     });
 
     const hasSharedStrings = model.sharedStrings && model.sharedStrings.count;
     if (hasSharedStrings) {
       xmlStream.leafNode("Override", {
-        PartName: "/xl/sharedStrings.xml",
+        PartName: toContentTypesPartName(OOXML_PATHS.xlSharedStrings),
         ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
       });
     }
@@ -85,7 +95,7 @@ class ContentTypesXform extends BaseXform {
     if (model.tables) {
       model.tables.forEach((table: any) => {
         xmlStream.leafNode("Override", {
-          PartName: `/xl/tables/${table.target}`,
+          PartName: toContentTypesPartName(tablePath(table.target)),
           ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
         });
       });
@@ -94,7 +104,7 @@ class ContentTypesXform extends BaseXform {
     if (model.drawings) {
       model.drawings.forEach((drawing: any) => {
         xmlStream.leafNode("Override", {
-          PartName: `/xl/drawings/${drawing.name}.xml`,
+          PartName: toContentTypesPartName(drawingPath(drawing.name)),
           ContentType: "application/vnd.openxmlformats-officedocument.drawing+xml"
         });
       });
@@ -108,18 +118,18 @@ class ContentTypesXform extends BaseXform {
 
       model.commentRefs.forEach(({ commentName }: { commentName: string }) => {
         xmlStream.leafNode("Override", {
-          PartName: `/xl/${commentName}.xml`,
+          PartName: toContentTypesPartName(commentsPathFromName(commentName)),
           ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
         });
       });
     }
 
     xmlStream.leafNode("Override", {
-      PartName: "/docProps/core.xml",
+      PartName: toContentTypesPartName(OOXML_PATHS.docPropsCore),
       ContentType: "application/vnd.openxmlformats-package.core-properties+xml"
     });
     xmlStream.leafNode("Override", {
-      PartName: "/docProps/app.xml",
+      PartName: toContentTypesPartName(OOXML_PATHS.docPropsApp),
       ContentType: "application/vnd.openxmlformats-officedocument.extended-properties+xml"
     });
 

@@ -8,6 +8,7 @@ import { Image, type ImageModel } from "./image";
 import { Table, type TableModel } from "./table";
 import { DataValidations } from "./data-validations";
 import { Encryptor } from "../utils/encryptor";
+import { uint8ArrayToBase64 } from "../utils/utils";
 import { makePivotTable, type PivotTable, type PivotTableModel } from "./pivot-table";
 import { copyStyle } from "../utils/copy-style";
 import type { Workbook } from "./workbook";
@@ -1020,39 +1021,34 @@ class Worksheet {
   /**
    * Protect the worksheet with optional password and options
    */
-  protect(password?: string, options?: Partial<SheetProtection>): Promise<void> {
-    // TODO: make this function truly async
-    // perhaps marshal to worker thread or something
-    return new Promise(resolve => {
-      this.sheetProtection = {
-        sheet: true
-      };
-      if (options && "spinCount" in options) {
-        // force spinCount to be integer >= 0
-        options.spinCount = Number.isFinite(options.spinCount)
-          ? Math.round(Math.max(0, options.spinCount))
-          : 100000;
+  async protect(password?: string, options?: Partial<SheetProtection>): Promise<void> {
+    this.sheetProtection = {
+      sheet: true
+    };
+    if (options && "spinCount" in options) {
+      // force spinCount to be integer >= 0
+      options.spinCount = Number.isFinite(options.spinCount)
+        ? Math.round(Math.max(0, options.spinCount))
+        : 100000;
+    }
+    if (password) {
+      this.sheetProtection.algorithmName = "SHA-512";
+      this.sheetProtection.saltValue = uint8ArrayToBase64(Encryptor.randomBytes(16));
+      this.sheetProtection.spinCount =
+        options && "spinCount" in options ? options.spinCount : 100000; // allow user specified spinCount
+      this.sheetProtection.hashValue = await Encryptor.convertPasswordToHash(
+        password,
+        "SHA-512",
+        this.sheetProtection.saltValue,
+        this.sheetProtection.spinCount
+      );
+    }
+    if (options) {
+      this.sheetProtection = Object.assign(this.sheetProtection, options);
+      if (!password && "spinCount" in options) {
+        delete this.sheetProtection.spinCount;
       }
-      if (password) {
-        this.sheetProtection.algorithmName = "SHA-512";
-        this.sheetProtection.saltValue = Encryptor.randomBytes(16).toString("base64");
-        this.sheetProtection.spinCount =
-          options && "spinCount" in options ? options.spinCount : 100000; // allow user specified spinCount
-        this.sheetProtection.hashValue = Encryptor.convertPasswordToHash(
-          password,
-          "SHA512",
-          this.sheetProtection.saltValue,
-          this.sheetProtection.spinCount
-        );
-      }
-      if (options) {
-        this.sheetProtection = Object.assign(this.sheetProtection, options);
-        if (!password && "spinCount" in options) {
-          delete this.sheetProtection.spinCount;
-        }
-      }
-      resolve();
-    });
+    }
   }
 
   unprotect(): void {

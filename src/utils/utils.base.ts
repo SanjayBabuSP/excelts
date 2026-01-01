@@ -1,7 +1,30 @@
 /**
  * Base utility functions shared between Node.js and Browser
- * Platform-independent implementations only
+ * All functions use standard Web APIs that work in both environments
+ * (Node.js 16+ supports atob/btoa/TextEncoder/TextDecoder globally)
  */
+
+// =============================================================================
+// Base64 utilities (with native Buffer optimization for Node.js)
+// =============================================================================
+
+/**
+ * Convert base64 string to Uint8Array
+ * Uses native Buffer in Node.js for better performance
+ */
+export function base64ToUint8Array(base64: string): Uint8Array {
+  // Node.js: use native Buffer (fast, C++ implementation)
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(base64, "base64");
+  }
+  // Browser: use atob
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
 
 // =============================================================================
 // Basic utilities
@@ -108,7 +131,65 @@ export function xmlDecode(text: string): string {
     return xmlDecodingMap[entity] || match;
   });
 }
+// oxlint-disable-next-line no-control-regex -- Control characters are intentionally matched for XML encoding
+const xmlEncodeRegex = /[<>&'"\x7F\x00-\x08\x0B-\x0C\x0E-\x1F]/;
 
+/**
+ * Encode special characters for XML output
+ * Handles XML entities (< > & " ') and removes invalid control characters
+ */
+export function xmlEncode(text: string): string {
+  const regexResult = xmlEncodeRegex.exec(text);
+  if (!regexResult) {
+    return text;
+  }
+
+  let result = "";
+  let escape = "";
+  let lastIndex = 0;
+  let i = regexResult.index;
+  for (; i < text.length; i++) {
+    const charCode = text.charCodeAt(i);
+    switch (charCode) {
+      case 34: // "
+        escape = "&quot;";
+        break;
+      case 38: // &
+        escape = "&amp;";
+        break;
+      case 39: // '
+        escape = "&apos;";
+        break;
+      case 60: // <
+        escape = "&lt;";
+        break;
+      case 62: // >
+        escape = "&gt;";
+        break;
+      case 127:
+        escape = "";
+        break;
+      default: {
+        if (charCode <= 31 && (charCode <= 8 || (charCode >= 11 && charCode !== 13))) {
+          escape = "";
+          break;
+        }
+        continue;
+      }
+    }
+    if (lastIndex !== i) {
+      result += text.substring(lastIndex, i);
+    }
+    lastIndex = i + 1;
+    if (escape) {
+      result += escape;
+    }
+  }
+  if (lastIndex !== i) {
+    return result + text.substring(lastIndex, i);
+  }
+  return result;
+}
 // =============================================================================
 // Parsing utilities
 // =============================================================================
@@ -182,4 +263,35 @@ export function bufferToString(chunk: ArrayBuffer | Uint8Array | string): string
     return chunk;
   }
   return textDecoder.decode(chunk);
+}
+
+/**
+ * Convert Uint8Array to base64 string
+ * Uses native Buffer in Node.js, optimized chunked conversion in browser
+ */
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  // Node.js: use native Buffer (fast, C++ implementation)
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  // Browser: chunked String.fromCharCode.apply to avoid stack overflow and reduce string concatenation
+  const CHUNK_SIZE = 0x8000; // 32KB chunks
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE) as any));
+  }
+  return btoa(chunks.join(""));
+}
+
+/**
+ * Convert string to UTF-16LE Uint8Array (used for Excel password hashing)
+ */
+export function stringToUtf16Le(str: string): Uint8Array {
+  const bytes = new Uint8Array(str.length * 2);
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    bytes[i * 2] = code & 0xff;
+    bytes[i * 2 + 1] = (code >> 8) & 0xff;
+  }
+  return bytes;
 }

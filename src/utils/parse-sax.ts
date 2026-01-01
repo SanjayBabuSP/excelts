@@ -1335,7 +1335,9 @@ async function* parseSax(iterable: any): AsyncGenerator<SaxEvent[]> {
   parser.on("closetag", (value: any) => events.push({ eventType: "closetag", value }));
 
   for await (const chunk of iterable) {
-    parser.write(bufferToString(chunk));
+    const chunkStr = bufferToString(chunk);
+
+    parser.write(chunkStr);
     if (error) {
       throw error;
     }

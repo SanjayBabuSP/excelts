@@ -1,0 +1,264 @@
+export const OOXML_PATHS = {
+  contentTypes: "[Content_Types].xml",
+  rootRels: "_rels/.rels",
+
+  docPropsApp: "docProps/app.xml",
+  docPropsCore: "docProps/core.xml",
+
+  xlWorkbook: "xl/workbook.xml",
+  xlWorkbookRels: "xl/_rels/workbook.xml.rels",
+  xlSharedStrings: "xl/sharedStrings.xml",
+  xlStyles: "xl/styles.xml",
+  xlTheme1: "xl/theme/theme1.xml"
+} as const;
+
+const worksheetXmlRegex = /^xl\/worksheets\/sheet(\d+)[.]xml$/;
+const worksheetRelsXmlRegex = /^xl\/worksheets\/_rels\/sheet(\d+)[.]xml[.]rels$/;
+const themeXmlRegex = /^xl\/theme\/[a-zA-Z0-9]+[.]xml$/;
+
+const mediaFilenameRegex = /^xl\/media\/([a-zA-Z0-9]+[.][a-zA-Z0-9]{3,4})$/;
+const drawingXmlRegex = /^xl\/drawings\/(drawing\d+)[.]xml$/;
+const drawingRelsXmlRegex = /^xl\/drawings\/_rels\/(drawing\d+)[.]xml[.]rels$/;
+const vmlDrawingRegex = /^xl\/drawings\/(vmlDrawing\d+)[.]vml$/;
+const commentsXmlRegex = /^xl\/comments(\d+)[.]xml$/;
+const tableXmlRegex = /^xl\/tables\/(table\d+)[.]xml$/;
+
+const pivotTableXmlRegex = /^xl\/pivotTables\/(pivotTable\d+)[.]xml$/;
+const pivotTableRelsXmlRegex = /^xl\/pivotTables\/_rels\/(pivotTable\d+)[.]xml[.]rels$/;
+const pivotCacheDefinitionXmlRegex = /^xl\/pivotCache\/(pivotCacheDefinition\d+)[.]xml$/;
+const pivotCacheDefinitionRelsXmlRegex =
+  /^xl\/pivotCache\/_rels\/(pivotCacheDefinition\d+)[.]xml[.]rels$/;
+const pivotCacheRecordsXmlRegex = /^xl\/pivotCache\/(pivotCacheRecords\d+)[.]xml$/;
+
+export function normalizeZipPath(path: string): string {
+  return path.startsWith("/") ? path.slice(1) : path;
+}
+
+export function getWorksheetNoFromWorksheetPath(path: string): number | undefined {
+  const match = worksheetXmlRegex.exec(path);
+  if (!match) {
+    return undefined;
+  }
+  return parseInt(match[1], 10);
+}
+
+export function getWorksheetNoFromWorksheetRelsPath(path: string): number | undefined {
+  const match = worksheetRelsXmlRegex.exec(path);
+  if (!match) {
+    return undefined;
+  }
+  return parseInt(match[1], 10);
+}
+
+export function isMediaPath(path: string): boolean {
+  return path.startsWith("xl/media/");
+}
+
+export function getMediaFilenameFromPath(path: string): string | undefined {
+  const match = mediaFilenameRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function isThemePath(path: string): boolean {
+  return themeXmlRegex.test(path);
+}
+
+export function getThemeNameFromPath(path: string): string | undefined {
+  const match = /^xl\/theme\/([a-zA-Z0-9]+)[.]xml$/.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function isBinaryEntryPath(path: string): boolean {
+  // Media and themes should be treated as binary in the legacy buffer-based reader.
+  // Everything else is parsed as text XML.
+  return isMediaPath(path) || isThemePath(path);
+}
+
+export function getDrawingNameFromPath(path: string): string | undefined {
+  const match = drawingXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getDrawingNameFromRelsPath(path: string): string | undefined {
+  const match = drawingRelsXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getVmlDrawingNameFromPath(path: string): string | undefined {
+  const match = vmlDrawingRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getCommentsIndexFromPath(path: string): string | undefined {
+  const match = commentsXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getTableNameFromPath(path: string): string | undefined {
+  const match = tableXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getPivotTableNameFromPath(path: string): string | undefined {
+  const match = pivotTableXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getPivotTableNameFromRelsPath(path: string): string | undefined {
+  const match = pivotTableRelsXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getPivotCacheDefinitionNameFromPath(path: string): string | undefined {
+  const match = pivotCacheDefinitionXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getPivotCacheDefinitionNameFromRelsPath(path: string): string | undefined {
+  const match = pivotCacheDefinitionRelsXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function getPivotCacheRecordsNameFromPath(path: string): string | undefined {
+  const match = pivotCacheRecordsXmlRegex.exec(path);
+  return match ? match[1] : undefined;
+}
+
+export function toContentTypesPartName(zipPath: string): string {
+  // ContentTypes uses leading slash PartName (e.g. "/xl/workbook.xml").
+  return zipPath.startsWith("/") ? zipPath : `/${zipPath}`;
+}
+
+export function themePath(themeName: string): string {
+  return `xl/theme/${themeName}.xml`;
+}
+
+export function mediaPath(filename: string): string {
+  return `xl/media/${filename}`;
+}
+
+export function worksheetPath(sheetId: number | string): string {
+  return `xl/worksheets/sheet${sheetId}.xml`;
+}
+
+export function worksheetRelsPath(sheetId: number | string): string {
+  return `xl/worksheets/_rels/sheet${sheetId}.xml.rels`;
+}
+
+export function worksheetRelTarget(sheetId: number | string): string {
+  return `worksheets/sheet${sheetId}.xml`;
+}
+
+export function commentsPath(sheetId: number | string): string {
+  return `xl/comments${sheetId}.xml`;
+}
+
+export function commentsPathFromName(commentName: string): string {
+  // For comments when the caller already has the logical name (e.g. "comments1").
+  return `xl/${commentName}.xml`;
+}
+
+export function vmlDrawingPath(sheetId: number | string): string {
+  return `xl/drawings/vmlDrawing${sheetId}.vml`;
+}
+
+export function tablePath(target: string): string {
+  return `xl/tables/${target}`;
+}
+
+export function drawingPath(drawingName: string): string {
+  return `xl/drawings/${drawingName}.xml`;
+}
+
+export function drawingRelsPath(drawingName: string): string {
+  return `xl/drawings/_rels/${drawingName}.xml.rels`;
+}
+
+export function pivotCacheDefinitionPath(n: number | string): string {
+  return `xl/pivotCache/pivotCacheDefinition${n}.xml`;
+}
+
+export function pivotCacheDefinitionRelsPath(n: number | string): string {
+  return `xl/pivotCache/_rels/pivotCacheDefinition${n}.xml.rels`;
+}
+
+export function pivotCacheRecordsPath(n: number | string): string {
+  return `xl/pivotCache/pivotCacheRecords${n}.xml`;
+}
+
+export function pivotCacheRecordsRelTarget(n: number | string): string {
+  return `pivotCacheRecords${n}.xml`;
+}
+
+export function pivotTablePath(n: number | string): string {
+  return `xl/pivotTables/pivotTable${n}.xml`;
+}
+
+export function pivotTableRelsPath(n: number | string): string {
+  return `xl/pivotTables/_rels/pivotTable${n}.xml.rels`;
+}
+
+export function pivotCacheDefinitionRelTargetFromPivotTable(n: number | string): string {
+  return `../pivotCache/pivotCacheDefinition${n}.xml`;
+}
+
+export const OOXML_REL_TARGETS = {
+  // Targets inside xl/_rels/workbook.xml.rels (base: xl/)
+  workbookStyles: "styles.xml",
+  workbookSharedStrings: "sharedStrings.xml",
+  workbookTheme1: "theme/theme1.xml"
+} as const;
+
+export function pivotCacheDefinitionRelTargetFromWorkbook(n: number | string): string {
+  // Target inside xl/_rels/workbook.xml.rels (base: xl/)
+  return `pivotCache/pivotCacheDefinition${n}.xml`;
+}
+
+export function commentsRelTargetFromWorksheet(sheetId: number | string): string {
+  // Target inside xl/worksheets/_rels/sheetN.xml.rels (base: xl/worksheets/)
+  return `../comments${sheetId}.xml`;
+}
+
+export function vmlDrawingRelTargetFromWorksheet(sheetId: number | string): string {
+  // Target inside xl/worksheets/_rels/sheetN.xml.rels (base: xl/worksheets/)
+  return `../drawings/vmlDrawing${sheetId}.vml`;
+}
+
+export function drawingRelTargetFromWorksheet(drawingName: string): string {
+  // Target inside xl/worksheets/_rels/sheetN.xml.rels (base: xl/worksheets/)
+  return `../drawings/${drawingName}.xml`;
+}
+
+export function vmlDrawingRelTargetFromWorksheetName(vmlName: string): string {
+  // For VML drawings when the caller already has the logical name (e.g. "vmlDrawing1").
+  return `../drawings/${vmlName}.vml`;
+}
+
+export function commentsRelTargetFromWorksheetName(commentName: string): string {
+  // For comments when the caller already has the logical name (e.g. "comments1").
+  return `../${commentName}.xml`;
+}
+
+export function pivotTableRelTargetFromWorksheet(n: number | string): string {
+  // Target inside xl/worksheets/_rels/sheetN.xml.rels (base: xl/worksheets/)
+  return `../pivotTables/pivotTable${n}.xml`;
+}
+
+export function pivotTableRelTargetFromWorksheetName(pivotName: string): string {
+  // For pivot tables when the caller already has the logical name (e.g. "pivotTable1").
+  return `../pivotTables/${pivotName}.xml`;
+}
+
+export function tableRelTargetFromWorksheet(target: string): string {
+  // Target inside xl/worksheets/_rels/sheetN.xml.rels (base: xl/worksheets/)
+  return `../tables/${target}`;
+}
+
+export function tableRelTargetFromWorksheetName(name: string): string {
+  return `../tables/${name}.xml`;
+}
+
+export function mediaRelTargetFromRels(filename: string): string {
+  // Target from a rels file located under xl/*/_rels (base is one level deeper than xl/)
+  return `../media/${filename}`;
+}

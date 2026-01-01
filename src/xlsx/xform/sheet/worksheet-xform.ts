@@ -26,6 +26,14 @@ import { ColBreaksXform } from "./col-breaks-xform";
 import { HeaderFooterXform } from "./header-footer-xform";
 import { ConditionalFormattingsXform } from "./cf/conditional-formattings-xform";
 import { ExtLstXform } from "./ext-lst-xform";
+import {
+  commentsRelTargetFromWorksheet,
+  drawingRelTargetFromWorksheet,
+  mediaRelTargetFromRels,
+  pivotTableRelTargetFromWorksheet,
+  tableRelTargetFromWorksheet,
+  vmlDrawingRelTargetFromWorksheet
+} from "../../../utils/ooxml-paths";
 
 const mergeRule = (rule, extRule) => {
   Object.keys(extRule).forEach(key => {
@@ -188,13 +196,13 @@ class WorkSheetXform extends BaseXform {
       const comment = {
         Id: nextRid(rels),
         Type: RelType.Comments,
-        Target: `../comments${model.id}.xml`
+        Target: commentsRelTargetFromWorksheet(model.id)
       };
       rels.push(comment);
       const vmlDrawing = {
         Id: nextRid(rels),
         Type: RelType.VmlDrawing,
-        Target: `../drawings/vmlDrawing${model.id}.vml`
+        Target: vmlDrawingRelTargetFromWorksheet(model.id)
       };
       rels.push(vmlDrawing);
 
@@ -217,7 +225,7 @@ class WorkSheetXform extends BaseXform {
         rels.push({
           Id: rId,
           Type: RelType.Image,
-          Target: `../media/${bookImage.name}.${bookImage.extension}`
+          Target: mediaRelTargetFromRels(`${bookImage.name}.${bookImage.extension}`)
         });
         model.background = {
           rId
@@ -237,7 +245,7 @@ class WorkSheetXform extends BaseXform {
           rels.push({
             Id: drawing.rId,
             Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
-            Target: `../drawings/${drawing.name}.xml`
+            Target: drawingRelTargetFromWorksheet(drawing.name)
           });
         }
         let rIdImage =
@@ -250,7 +258,7 @@ class WorkSheetXform extends BaseXform {
           drawing.rels.push({
             Id: rIdImage,
             Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
-            Target: `../media/${bookImage.name}.${bookImage.extension}`
+            Target: mediaRelTargetFromRels(`${bookImage.name}.${bookImage.extension}`)
           });
         }
 
@@ -287,7 +295,7 @@ class WorkSheetXform extends BaseXform {
       rels.push({
         Id: rId,
         Type: RelType.Table,
-        Target: `../tables/${table.target}`
+        Target: tableRelTargetFromWorksheet(table.target)
       });
 
       // dynamic styles
@@ -304,7 +312,7 @@ class WorkSheetXform extends BaseXform {
       rels.push({
         Id: nextRid(rels),
         Type: RelType.PivotTable,
-        Target: `../pivotTables/pivotTable${pivotTable.tableNumber}.xml`
+        Target: pivotTableRelTargetFromWorksheet(pivotTable.tableNumber)
       });
     });
 

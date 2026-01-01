@@ -1,63 +1,196 @@
 /**
  * XLSX - Node.js version with full functionality
  *
- * Extends XLSXBase with:
+ * Extends XLSX with:
  * - readFile: Read from file path
  * - writeFile: Write to file path
+ * - Constructor injects readFileAsync for filename-based media loading
+ *
+ * Inherited from XLSX:
  * - read: Read from stream
  * - write: Write to stream
  * - load: Load from buffer
- * - writeBuffer: Write to buffer
+ * - writeBuffer: Write to buffer (Uint8Array)
+ * - addMedia: Supports buffer, base64, and filename (via readFileAsync)
  */
 
 import fs from "fs";
-import { PassThrough } from "stream";
-import { ZipParser } from "../utils/unzip/zip-parser";
-import { ZipWriter } from "../utils/zip-stream";
-import { StreamBuf } from "../utils/stream-buf";
-import { fileExists, bufferToString } from "../utils/utils";
-import { XLSXBase, type IStreamBuf, type IParseStream } from "./xlsx.base";
-
-function fsReadFileAsync(filename: string, options?: any): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(filename, options, (error, data) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve(data);
-      }
-    });
-  });
-}
+import { fileExists } from "../utils/utils";
+import { XLSX as XLSXBase } from "./xlsx.browser";
+import { Parse, type StreamZipEntry as ZipEntry } from "../modules/archive";
+import { Writable, pipeline } from "../modules/stream";
 
 class XLSX extends XLSXBase {
-  // ===========================================================================
-  // Abstract method implementations
-  // ===========================================================================
-
-  protected createStreamBuf(): IStreamBuf {
-    return new StreamBuf() as unknown as IStreamBuf;
+  constructor(workbook: any) {
+    super(workbook);
+    // Provide file reading capability for addMedia
+    this.readFileAsync = (filename: string) => fs.promises.readFile(filename);
   }
 
-  protected createBinaryStream(data: Uint8Array): IParseStream {
-    const stream = new PassThrough();
-    stream.end(Buffer.from(data));
-    return stream as unknown as IParseStream;
-  }
+  private static async *iterateZipEntries(parser: Parse): AsyncGenerator<ZipEntry> {
+    const queue: ZipEntry[] = [];
+    let head = 0;
+    let done = false;
+    let error: unknown;
+    let notify: (() => void) | null = null;
 
-  protected createTextStream(content: string): IParseStream {
-    const stream = new PassThrough({
-      readableObjectMode: true,
-      writableObjectMode: true
+    const wake = () => {
+      if (notify) {
+        const fn = notify;
+        notify = null;
+        fn();
+      }
+    };
+
+    parser.on("entry", (entry: ZipEntry) => {
+      queue.push(entry);
+      wake();
     });
-    stream.end(content);
-    return stream as unknown as IParseStream;
+    parser.once("error", (err: unknown) => {
+      error = err;
+      wake();
+    });
+    parser.once("close", () => {
+      done = true;
+      wake();
+    });
+
+    while (!done || head < queue.length) {
+      if (error) {
+        throw error;
+      }
+      if (head < queue.length) {
+        const entry = queue[head++]!;
+        // Periodically compact to avoid unbounded growth.
+        if (head > 1024 && head > queue.length / 2) {
+          queue.splice(0, head);
+          head = 0;
+        }
+        yield entry;
+        continue;
+      }
+      await new Promise<void>(resolve => {
+        notify = resolve;
+      });
+    }
   }
 
-  protected bufferToString(data: any): string {
-    return bufferToString(data);
-  }
+  // ==========================================================================
+  // Node.js specific: TRUE streaming read
+  // ==========================================================================
 
+  override async read(stream: any, options?: any): Promise<any> {
+    const parser = new Parse();
+
+    const swallowError = () => {
+      // Prevent unhandled 'error' events from crashing the process.
+      // Errors are surfaced via rejected promises.
+    };
+
+    // Always attach an error listener to avoid uncaught exceptions.
+    parser.on("error", swallowError);
+    if (stream && typeof stream.on === "function") {
+      stream.on("error", swallowError);
+    }
+
+    // Pump incoming data into the ZIP parser without buffering the whole file.
+    // NOTE: `Parse` is a Duplex; passing it directly to pipeline() can make
+    // Node treat it like a transform and surface `Premature close` errors.
+    // We instead pipeline the input stream into a Writable sink that forwards
+    // chunks into the parser with backpressure.
+    const sink = new Writable<any>({
+      write(chunk: any, _encoding: any, callback: (error?: Error | null) => void) {
+        try {
+          const ok = (parser as any).write(chunk);
+          if (ok) {
+            callback();
+          } else {
+            (parser as any).once("drain", () => callback());
+          }
+        } catch (e) {
+          callback(e as any);
+        }
+      },
+      final(callback: (error?: Error | null) => void) {
+        try {
+          (parser as any).end();
+          callback();
+        } catch (e) {
+          callback(e as any);
+        }
+      }
+    });
+
+    const onParserError = (err: unknown) => {
+      try {
+        sink.destroy(err as any);
+      } catch {
+        // ignore
+      }
+    };
+    parser.on("error", onParserError);
+
+    const pump = pipeline(stream, sink);
+
+    const entries = (async function* () {
+      for await (const entry of XLSX.iterateZipEntries(parser)) {
+        entry.on("error", swallowError);
+        const drain = async () => {
+          const anyEntry = entry as any;
+          if (anyEntry?.readableEnded || anyEntry?.destroyed) {
+            return;
+          }
+          const draining = entry.autodrain();
+          await draining.promise();
+        };
+        yield {
+          name: entry.path,
+          type: entry.type,
+          stream: entry as any,
+          drain
+        };
+      }
+    })();
+
+    try {
+      const workbook = await this.loadFromZipEntries(entries as any, options);
+      await pump;
+      return workbook;
+    } catch (err) {
+      // Stop the ZIP parser so pipeline() can unwind promptly.
+      try {
+        parser.destroy();
+      } catch {
+        // ignore
+      }
+
+      // Ensure pump settles to avoid unhandled rejections.
+      try {
+        await pump;
+      } catch {
+        // ignore pump failures; the original parse error is more useful
+      }
+      throw err;
+    } finally {
+      try {
+        parser.off("error", onParserError);
+      } catch {
+        // ignore
+      }
+      try {
+        parser.off("error", swallowError);
+      } catch {
+        // ignore
+      }
+      if (stream && typeof stream.off === "function") {
+        try {
+          stream.off("error", swallowError);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
   // ===========================================================================
   // Node.js specific: File operations
   // ===========================================================================
@@ -67,188 +200,54 @@ class XLSX extends XLSXBase {
       throw new Error(`File not found: ${filename}`);
     }
     const stream = fs.createReadStream(filename);
-    try {
-      const workbook = await this.read(stream, options);
-      stream.close();
-      return workbook;
-    } catch (error) {
-      stream.close();
-      throw error;
-    }
+    return this.read(stream, options);
   }
 
   writeFile(filename: string, options?: any): Promise<void> {
     const stream = fs.createWriteStream(filename);
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+
       const cleanup = () => {
-        stream.removeListener("finish", onFinish);
-        stream.removeListener("error", onError);
+        stream.off("finish", onFinish);
+        stream.off("error", onError);
+        stream.off("close", onClose);
       };
 
       const onFinish = () => {
-        cleanup();
-        resolve();
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
       };
 
       const onError = (error: Error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      };
+
+      const onClose = () => {
         cleanup();
-        reject(error);
       };
 
       stream.once("finish", onFinish);
-      stream.on("error", onError);
+      stream.once("error", onError);
+      stream.once("close", onClose);
 
-      this.write(stream, options)
-        .then(() => {
-          stream.end();
-        })
-        .catch(err => {
-          cleanup();
+      this.write(stream, options).catch(err => {
+        if (!settled) {
+          settled = true;
           reject(err);
-        });
-    });
-  }
-
-  // ===========================================================================
-  // Node.js specific: Stream operations
-  // ===========================================================================
-
-  async read(stream: any, options?: any): Promise<any> {
-    // Collect all stream data into a single buffer
-    const chunks: Uint8Array[] = [];
-
-    await new Promise<void>((resolve, reject) => {
-      const onData = (chunk: Buffer) => {
-        chunks.push(chunk);
-      };
-
-      const onEnd = () => {
-        stream.removeListener("data", onData);
-        stream.removeListener("end", onEnd);
-        stream.removeListener("error", onError);
-        resolve();
-      };
-
-      const onError = (err: Error) => {
-        stream.removeListener("data", onData);
-        stream.removeListener("end", onEnd);
-        stream.removeListener("error", onError);
-        reject(err);
-      };
-
-      stream.on("data", onData);
-      stream.on("end", onEnd);
-      stream.on("error", onError);
-    });
-
-    // Combine chunks into a single buffer
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const buffer = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      buffer.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    // Use native ZipParser for extraction
-    const parser = new ZipParser(buffer);
-    const filesMap = await parser.extractAll();
-
-    // Convert Map to Record for loadFromFiles
-    const allFiles: Record<string, Uint8Array> = {};
-    for (const [path, content] of filesMap) {
-      allFiles[path] = content;
-    }
-
-    return this.loadFromFiles(allFiles, options);
-  }
-
-  async write(stream: any, options?: any): Promise<XLSX> {
-    options = options || {};
-    const { model } = this.workbook;
-    const zip = new ZipWriter(options.zip);
-    zip.pipe(stream);
-
-    this.prepareModel(model, options);
-
-    await this.addContentTypes(zip, model);
-    await this.addOfficeRels(zip, model);
-    await this.addWorkbookRels(zip, model);
-    await this.addWorksheets(zip, model);
-    await this.addSharedStrings(zip, model);
-    this.addDrawings(zip, model);
-    this.addTables(zip, model);
-    this.addPivotTables(zip, model);
-    await Promise.all([this.addThemes(zip, model), this.addStyles(zip, model)]);
-    await this.addMedia(zip, model);
-    await Promise.all([this.addApp(zip, model), this.addCore(zip, model)]);
-    await this.addWorkbook(zip, model);
-    return this._finalize(zip) as Promise<XLSX>;
-  }
-
-  // ===========================================================================
-  // Node.js specific: Buffer operations
-  // ===========================================================================
-
-  async load(data: any, options?: any): Promise<any> {
-    let buffer: Buffer;
-
-    if (
-      !data ||
-      (typeof data === "object" &&
-        !Buffer.isBuffer(data) &&
-        !(data instanceof Uint8Array) &&
-        !(data instanceof ArrayBuffer))
-    ) {
-      throw new Error(
-        "Can't read the data of 'the loaded zip file'. Is it in a supported JavaScript type (String, Blob, ArrayBuffer, etc) ?"
-      );
-    }
-
-    if (options && options.base64) {
-      buffer = Buffer.from(data.toString(), "base64");
-    } else {
-      buffer = data;
-    }
-
-    const stream = new PassThrough();
-    stream.end(buffer);
-
-    return this.read(stream, options);
-  }
-
-  async writeBuffer(options?: any): Promise<Buffer> {
-    const stream = new StreamBuf();
-    await this.write(stream, options);
-    return stream.read();
-  }
-
-  // ===========================================================================
-  // Node.js specific: Media handling with file support
-  // ===========================================================================
-
-  async addMedia(zip: any, model: any): Promise<void> {
-    await Promise.all(
-      model.media.map(async (medium: any) => {
-        if (medium.type === "image") {
-          const filename = `xl/media/${medium.name}.${medium.extension}`;
-          if (medium.filename) {
-            const data = await fsReadFileAsync(medium.filename);
-            return zip.append(data, { name: filename });
-          }
-          if (medium.buffer) {
-            return zip.append(medium.buffer, { name: filename });
-          }
-          if (medium.base64) {
-            const dataimg64 = medium.base64;
-            const content = dataimg64.substring(dataimg64.indexOf(",") + 1);
-            return zip.append(content, { name: filename, base64: true });
-          }
         }
-        throw new Error("Unsupported media");
-      })
-    );
+        // Ensure the underlying FD is closed on failure. Keep listeners
+        // attached until the stream closes, otherwise the emitted 'error'
+        // event can become an uncaught exception.
+        stream.destroy(err);
+      });
+    });
   }
 }
 

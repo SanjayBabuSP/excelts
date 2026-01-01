@@ -63,7 +63,18 @@ class BaseXform {
   }
 
   async parse(saxParser: AsyncIterable<ParseEvent[]>): Promise<any> {
+    // IMPORTANT:
+    // Do not return early once parsing is "done".
+    // In true streaming scenarios, `parseSax(stream)` is backed by a Node.js
+    // Readable async iterator. Returning early would close the iterator, which
+    // destroys the underlying stream and can surface as AbortError (ABORT_ERR).
+    let done = false;
+    let finalModel: any;
+
     for await (const events of saxParser) {
+      if (done) {
+        continue;
+      }
       for (const { eventType, value } of events) {
         if (eventType === "opentag") {
           this.parseOpen(value);
@@ -71,12 +82,15 @@ class BaseXform {
           this.parseText(value);
         } else if (eventType === "closetag") {
           if (!this.parseClose(value.name)) {
-            return (this as any).model;
+            done = true;
+            finalModel = (this as any).model;
+            break;
           }
         }
       }
     }
-    return (this as any).model;
+
+    return done ? finalModel : (this as any).model;
   }
 
   async parseStream(stream: any): Promise<any> {

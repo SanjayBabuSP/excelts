@@ -1,56 +1,48 @@
+/**
+ * Node.js Encryptor - uses native crypto module
+ */
+
 import crypto from "crypto";
+import { base64ToUint8Array, uint8ArrayToBase64, stringToUtf16Le } from "./utils.base";
+import { concatUint8Arrays } from "../modules/stream";
+
+function uint32ToLe(num: number): Uint8Array {
+  const arr = new Uint8Array(4);
+  arr[0] = num & 0xff;
+  arr[1] = (num >> 8) & 0xff;
+  arr[2] = (num >> 16) & 0xff;
+  arr[3] = (num >> 24) & 0xff;
+  return arr;
+}
 
 const Encryptor = {
-  /**
-   * Calculate a hash of the concatenated buffers with the given algorithm.
-   * @param algorithm - The hash algorithm.
-   * @returns The hash
-   */
-  hash(algorithm: string, ...buffers: Buffer[]): Buffer {
-    const hash = crypto.createHash(algorithm);
-    hash.update(Buffer.concat(buffers));
-    return hash.digest();
+  hash(algorithm: string, ...buffers: Uint8Array[]): Uint8Array {
+    const algo = algorithm.toLowerCase().replace(/-/g, "");
+    const hash = crypto.createHash(algo);
+    hash.update(concatUint8Arrays(buffers));
+    return new Uint8Array(hash.digest());
   },
-  /**
-   * Convert a password into an encryption key
-   * @param password - The password
-   * @param hashAlgorithm - The hash algoritm
-   * @param saltValue - The salt value
-   * @param spinCount - The spin count
-   * @returns The encryption key
-   */
-  convertPasswordToHash(
+
+  async convertPasswordToHash(
     password: string,
     hashAlgorithm: string,
     saltValue: string,
     spinCount: number
-  ): string {
-    hashAlgorithm = hashAlgorithm.toLowerCase();
-    const hashes = crypto.getHashes();
-    if (hashes.indexOf(hashAlgorithm) < 0) {
-      throw new Error(`Hash algorithm '${hashAlgorithm}' not supported!`);
+  ): Promise<string> {
+    const passwordBuffer = stringToUtf16Le(password);
+    const saltBuffer = base64ToUint8Array(saltValue);
+
+    let key = this.hash(hashAlgorithm, saltBuffer, passwordBuffer);
+    for (let i = 0; i < spinCount; i++) {
+      key = this.hash(hashAlgorithm, key, uint32ToLe(i));
     }
 
-    // Password must be in unicode buffer
-    const passwordBuffer = Buffer.from(password, "utf16le");
-    // Generate the initial hash
-    let key = this.hash(hashAlgorithm, Buffer.from(saltValue, "base64"), passwordBuffer);
-    // Now regenerate until spin count
-    for (let i = 0; i < spinCount; i++) {
-      const iterator = Buffer.alloc(4);
-      // this is the 'special' element of Excel password hashing
-      // that stops us from using crypto.pbkdf2()
-      iterator.writeUInt32LE(i, 0);
-      key = this.hash(hashAlgorithm, key, iterator);
-    }
-    return key.toString("base64");
+    return uint8ArrayToBase64(key);
   },
-  /**
-   * Generates cryptographically strong pseudo-random data.
-   * @param size The size argument is a number indicating the number of bytes to generate.
-   */
-  randomBytes(size: number): Buffer {
-    return crypto.randomBytes(size);
+
+  randomBytes(size: number): Uint8Array {
+    return new Uint8Array(crypto.randomBytes(size));
   }
 };
+
 export { Encryptor };

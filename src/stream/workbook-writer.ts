@@ -1,0 +1,81 @@
+/**
+ * WorkbookWriter - Node.js Streaming Excel Writer
+ *
+ * Extends base with file path support and file system image loading.
+ */
+
+import fs from "fs";
+import { WorksheetWriter } from "./worksheet-writer";
+import {
+  WorkbookWriterBase,
+  type WorkbookWriterOptions as BaseOptions,
+  type ZipOptions,
+  type ZlibOptions
+} from "./workbook-writer.browser";
+import { mediaPath } from "../utils/ooxml-paths";
+
+export type { ZipOptions, ZlibOptions };
+
+// Node.js version also supports filename option for output
+export interface WorkbookWriterOptions extends BaseOptions {
+  /** If stream not specified, this field specifies the path to a file to write the XLSX workbook to */
+  filename?: string;
+}
+
+// Interface for output stream
+interface OutputStreamLike {
+  emit(eventName: string | symbol, ...args: any[]): boolean;
+  write(chunk: any): boolean | Promise<boolean>;
+  end(): void;
+  once(eventName: string | symbol, listener: (...args: any[]) => void): this;
+  removeListener(eventName: string | symbol, listener: (...args: any[]) => void): this;
+}
+
+class WorkbookWriter extends WorkbookWriterBase<WorksheetWriter> {
+  constructor(options: WorkbookWriterOptions = {}) {
+    super(options, WorksheetWriter);
+  }
+
+  /**
+   * Create output stream - supports filename option in Node.js
+   */
+  protected _createOutputStream(options: WorkbookWriterOptions): OutputStreamLike {
+    if (options.filename) {
+      return fs.createWriteStream(options.filename);
+    }
+    return super._createOutputStream(options);
+  }
+
+  /**
+   * Add media files - supports loading from file system
+   */
+  addMedia(): Promise<void[]> {
+    return Promise.all(
+      this.media.map(async medium => {
+        if (medium.type === "image") {
+          const filename = mediaPath(medium.name);
+          // Node.js: support loading from file
+          if (medium.filename) {
+            // `fs.readFile` returns a `Buffer` (which is already a `Uint8Array`).
+            // Avoid copying into a new `Uint8Array` for performance.
+            const data = await fs.promises.readFile(medium.filename);
+            this._addFile(data, filename);
+            return;
+          }
+          if (medium.buffer) {
+            this._addFile(medium.buffer, filename);
+            return;
+          }
+          if (medium.base64) {
+            const content = medium.base64.substring(medium.base64.indexOf(",") + 1);
+            this._addFile(content, filename, true);
+            return;
+          }
+        }
+        throw new Error("Unsupported media");
+      })
+    );
+  }
+}
+
+export { WorkbookWriter };

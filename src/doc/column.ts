@@ -433,7 +433,20 @@ class Column {
     return cols.length ? cols : undefined;
   }
 
-  static fromModel(worksheet: Worksheet, cols: ColumnModel[]): Column[] | null {
+  static fromModel(cols: ColumnModel[]): Column[] | null;
+  static fromModel(worksheet: Worksheet, cols: ColumnModel[]): Column[] | null;
+  static fromModel(
+    worksheetOrCols: Worksheet | ColumnModel[],
+    colsMaybe?: ColumnModel[]
+  ): Column[] | null {
+    // Streaming readers historically called Column.fromModel(cols) without a Worksheet.
+    // Preserve that behavior by accepting the 1-arg form and intentionally using the
+    // cols array as the backing "worksheet" object.
+    const worksheet: Worksheet = Array.isArray(worksheetOrCols)
+      ? (worksheetOrCols as any as Worksheet)
+      : worksheetOrCols;
+    let cols: ColumnModel[] = Array.isArray(worksheetOrCols) ? worksheetOrCols : (colsMaybe ?? []);
+
     cols = cols || [];
     const columns: Column[] = [];
     let count = 1;
