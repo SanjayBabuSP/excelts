@@ -33,6 +33,8 @@ export class CsvParserStream extends Transform {
   private buffer: string = "";
   private currentRow: string[] = [];
   private currentField: string = "";
+  private currentFieldParts: string[] | null = null;
+  private currentFieldLength: number = 0;
   private inQuotes: boolean = false;
   private lineNumber: number = 0;
   private rowCount: number = 0;
@@ -44,12 +46,17 @@ export class CsvParserStream extends Transform {
   private escape: string;
   private quoteEnabled: boolean;
   private trimField: (s: string) => string;
+  private decoder: TextDecoder;
   private _rowTransform: ((row: Row, cb: RowTransformCallback<Row>) => void) | null = null;
   private _rowValidator: ((row: Row, cb: RowValidateCallback) => void) | null = null;
 
   constructor(options: CsvParseOptions = {}) {
     super({ objectMode: options.objectMode !== false });
     this.options = options;
+
+    // Reuse a single decoder instance and enable streaming decode to correctly handle
+    // multi-byte characters split across chunks.
+    this.decoder = new TextDecoder();
 
     const quoteOption = options.quote ?? '"';
     this.quoteEnabled = quoteOption !== null && quoteOption !== false;
@@ -129,7 +136,7 @@ export class CsvParserStream extends Transform {
     callback: (error?: Error | null, data?: Row) => void
   ): void {
     try {
-      const data = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+      const data = typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
       this.buffer += data;
       this.processBuffer(callback);
     } catch (error) {
@@ -139,16 +146,75 @@ export class CsvParserStream extends Transform {
 
   override _flush(callback: (error?: Error | null) => void): void {
     try {
-      // Process any remaining data
-      if (this.currentField !== "" || this.currentRow.length > 0) {
-        this.currentRow.push(this.trimField(this.currentField));
-        this.emitRow(callback);
-      } else {
-        callback();
+      const remainingDecoded = this.decoder.decode();
+      if (remainingDecoded) {
+        this.buffer += remainingDecoded;
       }
+
+      if (this.buffer) {
+        this.processBuffer(err => {
+          if (err) {
+            callback(err);
+            return;
+          }
+          this.flushCurrentRow(callback);
+        });
+        return;
+      }
+
+      this.flushCurrentRow(callback);
     } catch (error) {
       callback(error as Error);
     }
+  }
+
+  private flushCurrentRow(callback: (error?: Error | null) => void): void {
+    // Process any remaining data without a trailing newline.
+    if (this.currentFieldLength !== 0 || this.currentRow.length > 0) {
+      this.currentRow.push(this.trimField(this.takeCurrentField()));
+      this.emitRow(callback);
+      return;
+    }
+    callback();
+  }
+
+  private appendToField(text: string): void {
+    if (text.length === 0) {
+      return;
+    }
+
+    const nextLength = this.currentFieldLength + text.length;
+
+    // For small fields, string concatenation is fast enough.
+    // For very large fields, switch to chunk accumulation to avoid pathological O(n^2) behavior.
+    const LARGE_FIELD_THRESHOLD = 1024;
+    if (!this.currentFieldParts && nextLength <= LARGE_FIELD_THRESHOLD) {
+      this.currentField += text;
+      this.currentFieldLength = nextLength;
+      return;
+    }
+
+    if (!this.currentFieldParts) {
+      this.currentFieldParts = this.currentFieldLength === 0 ? [text] : [this.currentField, text];
+      this.currentField = "";
+      this.currentFieldLength = nextLength;
+      return;
+    }
+
+    this.currentFieldParts.push(text);
+    this.currentFieldLength = nextLength;
+  }
+
+  private takeCurrentField(): string {
+    if (this.currentFieldLength === 0) {
+      return "";
+    }
+
+    const value = this.currentFieldParts ? this.currentFieldParts.join("") : this.currentField;
+    this.currentField = "";
+    this.currentFieldParts = null;
+    this.currentFieldLength = 0;
+    return value;
   }
 
   private processBuffer(callback: (error?: Error | null) => void): void {
@@ -168,14 +234,14 @@ export class CsvParserStream extends Transform {
     const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
     let i = 0;
     const len = this.buffer.length;
-    const pendingRows: Array<{ row: Row }> = [];
+    const pendingRows: Row[] = [];
 
     while (i < len) {
       const char = this.buffer[i];
 
       if (this.inQuotes && this.quoteEnabled) {
         if (this.escape && char === this.escape && this.buffer[i + 1] === this.quote) {
-          this.currentField += this.quote;
+          this.appendToField(this.quote);
           i += 2;
         } else if (char === this.quote) {
           this.inQuotes = false;
@@ -190,20 +256,19 @@ export class CsvParserStream extends Transform {
           if (this.buffer[i + 1] === "\n") {
             i++; // Skip \r, will add \n on next iteration
           } else {
-            this.currentField += "\n"; // Convert standalone \r to \n
+            this.appendToField("\n"); // Convert standalone \r to \n
             i++;
           }
         } else {
-          this.currentField += char;
+          this.appendToField(char);
           i++;
         }
       } else {
-        if (this.quoteEnabled && char === this.quote && this.currentField === "") {
+        if (this.quoteEnabled && char === this.quote && this.currentFieldLength === 0) {
           this.inQuotes = true;
           i++;
         } else if (char === this.delimiter) {
-          this.currentRow.push(this.trimField(this.currentField));
-          this.currentField = "";
+          this.currentRow.push(this.trimField(this.takeCurrentField()));
           i++;
         } else if (char === "\n" || char === "\r") {
           // Handle \r\n
@@ -211,8 +276,7 @@ export class CsvParserStream extends Transform {
             i++;
           }
 
-          this.currentRow.push(this.trimField(this.currentField));
-          this.currentField = "";
+          this.currentRow.push(this.trimField(this.takeCurrentField()));
           this.lineNumber++;
 
           // Skip lines at beginning
@@ -331,12 +395,10 @@ export class CsvParserStream extends Transform {
           // Queue this row for emission
           const rowToEmit = this.currentRow;
           this.currentRow = [];
-          pendingRows.push({
-            row: this.buildRow(rowToEmit)
-          });
+          pendingRows.push(this.buildRow(rowToEmit));
           i++;
         } else {
-          this.currentField += char;
+          this.appendToField(char);
           i++;
         }
       }
@@ -349,18 +411,16 @@ export class CsvParserStream extends Transform {
   private buildRow(rawRow: string[]): Row {
     if (this.options.headers && this.headerRow) {
       const obj: Record<string, string> = {};
-      this.headerRow.forEach((header, index) => {
+      for (let index = 0; index < this.headerRow.length; index++) {
+        const header = this.headerRow[index];
         obj[header] = rawRow[index] ?? "";
-      });
+      }
       return obj;
     }
     return rawRow;
   }
 
-  private processPendingRows(
-    rows: Array<{ row: Row }>,
-    callback: (error?: Error | null) => void
-  ): void {
+  private processPendingRows(rows: Row[], callback: (error?: Error | null) => void): void {
     if (rows.length === 0) {
       callback();
       return;
@@ -373,7 +433,7 @@ export class CsvParserStream extends Transform {
         return;
       }
 
-      const { row } = rows[index];
+      const row = rows[index];
       index++;
 
       this.transformAndValidateRow(row, (err, result) => {
