@@ -8,6 +8,7 @@
 import { DateParser, DateFormatter, type DateFormat } from "../../utils/datetime";
 import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "./csv-core";
 import { CsvParserStream, CsvFormatterStream, type CsvFormatterStreamOptions } from "./csv-stream";
+import { parseNumberFromCsv, type DecimalSeparator } from "./csv-number";
 import { pipeline } from "../stream";
 import type { IReadable, IWritable } from "../stream/types";
 import type { Workbook } from "../../doc/workbook";
@@ -71,17 +72,32 @@ const SpecialValues: Record<string, boolean | CellErrorValue> = {
   "#NUM!": { error: "#NUM!" }
 };
 
-export function createDefaultValueMapper(dateFormats: readonly DateFormat[]) {
+export interface DefaultValueMapperOptions {
+  decimalSeparator?: DecimalSeparator;
+}
+
+export function createDefaultValueMapper(
+  dateFormats: readonly DateFormat[],
+  options?: DefaultValueMapperOptions
+) {
   const dateParser = DateParser.create(dateFormats);
+  const decimalSeparator: DecimalSeparator = options?.decimalSeparator ?? ".";
 
   return function mapValue(datum: any): any {
     if (datum === "") {
       return null;
     }
 
-    const datumNumber = Number(datum);
-    if (!Number.isNaN(datumNumber) && datumNumber !== Infinity) {
-      return datumNumber;
+    if (typeof datum === "string") {
+      const datumNumber = parseNumberFromCsv(datum, decimalSeparator);
+      if (!Number.isNaN(datumNumber) && datumNumber !== Infinity) {
+        return datumNumber;
+      }
+    } else {
+      const datumNumber = Number(datum);
+      if (!Number.isNaN(datumNumber) && datumNumber !== Infinity) {
+        return datumNumber;
+      }
     }
 
     const date = dateParser.parse(datum);
