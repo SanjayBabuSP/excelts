@@ -1,5 +1,4 @@
 /**
- * Test for https://github.com/exceljs/exceljs/issues/2941
  * Using WorkbookWriter (streaming) for large data
  *
  * WorkbookWriter writes data to disk incrementally, avoiding memory issues
