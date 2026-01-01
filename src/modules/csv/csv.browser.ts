@@ -35,6 +35,8 @@ export interface CsvReadOptions {
   map?(value: any, index: number): any;
   sheetName?: string;
   parserOptions?: Partial<CsvParseOptions>;
+  /** Options for the default value mapper (string -> number/date/etc). */
+  valueMapperOptions?: DefaultValueMapperOptions;
 }
 
 export interface CsvWriteOptions {
@@ -168,7 +170,12 @@ class CSV {
 
     const worksheet = this.workbook.addWorksheet(options?.sheetName);
     const dateFormats = options?.dateFormats ?? DEFAULT_DATE_FORMATS;
-    const map = options?.map || createDefaultValueMapper(dateFormats);
+    const map =
+      options?.map ||
+      createDefaultValueMapper(dateFormats, {
+        decimalSeparator:
+          options?.valueMapperOptions?.decimalSeparator ?? options?.parserOptions?.decimalSeparator
+      });
     const rows = parseCsv(str, options?.parserOptions) as string[][];
 
     for (const row of rows) {
@@ -217,7 +224,12 @@ class CSV {
   async read(stream: IReadable<any>, options?: CsvReadOptions): Promise<Worksheet> {
     const worksheet = this.workbook.addWorksheet(options?.sheetName);
     const dateFormats = options?.dateFormats ?? DEFAULT_DATE_FORMATS;
-    const map = options?.map || createDefaultValueMapper(dateFormats);
+    const map =
+      options?.map ||
+      createDefaultValueMapper(dateFormats, {
+        decimalSeparator:
+          options?.valueMapperOptions?.decimalSeparator ?? options?.parserOptions?.decimalSeparator
+      });
     const parser = new CsvParserStream(options?.parserOptions);
 
     return new Promise((resolve, reject) => {
@@ -292,7 +304,12 @@ class CSV {
   createWriteStream(options?: CsvReadOptions): IWritable<any> {
     const worksheet = this.workbook.addWorksheet(options?.sheetName);
     const dateFormats = options?.dateFormats ?? DEFAULT_DATE_FORMATS;
-    const map = options?.map || createDefaultValueMapper(dateFormats);
+    const map =
+      options?.map ||
+      createDefaultValueMapper(dateFormats, {
+        decimalSeparator:
+          options?.valueMapperOptions?.decimalSeparator ?? options?.parserOptions?.decimalSeparator
+      });
     const parser = new CsvParserStream(options?.parserOptions);
     parser.on("data", (row: string[]) => worksheet.addRow(row.map(map)));
     return parser;

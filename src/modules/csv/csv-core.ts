@@ -83,8 +83,10 @@ export interface CsvParseOptions {
   /**
    * Decimal separator used when parsing numbers from CSV (default: ".").
    *
-   * Note: core CSV parsing returns strings; this option is intended for higher-level
-   * consumers (e.g. the default value mapper in csv.base) that convert strings to numbers.
+   * Note: core CSV parsing returns strings; number conversion is handled by higher-level
+   * consumers (e.g. the default value mapper in the CSV module).
+   *
+   * @deprecated Use CsvReadOptions.valueMapperOptions.decimalSeparator instead.
    */
   decimalSeparator?: "." | ",";
   /** Maximum number of data rows to parse (excluding header) */

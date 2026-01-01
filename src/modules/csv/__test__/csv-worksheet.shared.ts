@@ -104,6 +104,29 @@ export function runCsvWorksheetTests<TWorkbook extends WorkbookLike>(
       expect(worksheet.getCell("E1").value).toBe(1000000);
     });
 
+    it("should support comma decimalSeparator via valueMapperOptions", () => {
+      const csv = "3,14;-0,5\n12,34;0";
+      const worksheet = parseCsvToWorksheet(csv, workbook, {
+        parserOptions: { delimiter: ";" },
+        valueMapperOptions: { decimalSeparator: "," }
+      });
+
+      expect(worksheet.getCell("A1").value).toBe(3.14);
+      expect(worksheet.getCell("B1").value).toBe(-0.5);
+      expect(worksheet.getCell("A2").value).toBe(12.34);
+      expect(worksheet.getCell("B2").value).toBe(0);
+    });
+
+    it("should support comma decimalSeparator via parserOptions (deprecated)", () => {
+      const csv = "3,14;-0,5";
+      const worksheet = parseCsvToWorksheet(csv, workbook, {
+        parserOptions: { delimiter: ";", decimalSeparator: "," }
+      });
+
+      expect(worksheet.getCell("A1").value).toBe(3.14);
+      expect(worksheet.getCell("B1").value).toBe(-0.5);
+    });
+
     it("should convert empty strings to null", () => {
       const csv = "a,,c";
       const worksheet = parseCsvToWorksheet(csv, workbook);
