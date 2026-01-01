@@ -78,6 +78,8 @@ import {
   worksheetRelsPath
 } from "../utils/ooxml-paths";
 
+import type { ZipTimestampMode } from "../modules/archive/utils/timestamps";
+
 type StreamListener = Parameters<IEventEmitter["on"]>[1];
 
 interface EmitterLike {
@@ -112,10 +114,14 @@ class StreamingZipWriterAdapter implements IZipWriter {
   private readonly events: Map<string, Set<StreamListener>> = new Map();
   private pipedStream: Pick<IStreamBuf, "write" | "end"> | null = null;
   private level: number;
+  private modTime: Date | undefined;
+  private timestamps: ZipTimestampMode | undefined;
   private finalized = false;
 
   constructor(options?: ZipWriterOptions) {
     this.level = options?.level ?? 6;
+    this.modTime = options?.modTime;
+    this.timestamps = options?.timestamps;
     this.zip = new StreamingZip((err: Error | null, data: Uint8Array, final: boolean) => {
       if (err) {
         this._emit("error", err);
@@ -199,7 +205,11 @@ class StreamingZipWriterAdapter implements IZipWriter {
       buffer = data;
     }
 
-    const file = new ZipDeflateFile(options.name, { level: this.level });
+    const file = new ZipDeflateFile(options.name, {
+      level: this.level,
+      modTime: this.modTime,
+      timestamps: this.timestamps
+    });
     this.zip.add(file);
 
     const pushResult = (file as any).push(buffer, true);
@@ -228,6 +238,10 @@ export interface XlsxReadOptions {
 
 export interface ZipWriterOptions {
   level?: number;
+  /** ZIP entry modification time (optional). If omitted, defaults to current time. */
+  modTime?: Date;
+  /** Timestamp writing strategy for ZIP entry metadata (optional). */
+  timestamps?: ZipTimestampMode;
 }
 
 export interface XlsxWriteOptions {
@@ -383,9 +397,12 @@ class XLSX {
    */
   async write(stream: any, options?: XlsxWriteOptions): Promise<XLSX> {
     options = options || {};
+
+    options.zip = options.zip || {};
+    options.zip.modTime ??= this.workbook.modified ?? this.workbook.created;
+
     const zip = this.createZipWriter(options.zip);
     zip.pipe(stream);
-
     await this.writeToZip(zip, options);
     return this._finalize(zip) as Promise<XLSX>;
   }
@@ -564,10 +581,13 @@ class XLSX {
    */
   async writeBuffer(options?: XlsxWriteOptions): Promise<Uint8Array> {
     options = options || {};
+
+    options.zip = options.zip || {};
+    options.zip.modTime ??= this.workbook.modified ?? this.workbook.created;
+
     const zip = this.createZipWriter(options.zip);
     const stream = this.createStreamBuf();
     zip.pipe(stream);
-
     await this.writeToZip(zip, options);
     await this._finalize(zip);
     return stream.read() || new Uint8Array(0);

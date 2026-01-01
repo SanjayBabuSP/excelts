@@ -80,7 +80,7 @@ export function createXlsxStreamParityTests(getContext: () => ParityTestContext)
       const wb = new ctx.Workbook();
       buildSmallWorkbook(wb);
 
-      const options = { zip: { level: 6 } };
+      const options = { zip: { level: 6, modTime: new Date(Date.UTC(2000, 0, 1, 0, 0, 0)) } };
 
       const bufferNonStream = await wb.xlsx.writeBuffer(options);
 
@@ -99,7 +99,9 @@ export function createXlsxStreamParityTests(getContext: () => ParityTestContext)
       const wb = new ctx.Workbook();
       buildSmallWorkbook(wb);
 
-      const data = await wb.xlsx.writeBuffer({ zip: { level: 6 } });
+      const data = await wb.xlsx.writeBuffer({
+        zip: { level: 6, modTime: new Date(Date.UTC(2000, 0, 1, 0, 0, 0)) }
+      });
 
       const wbFromBuffer = new ctx.Workbook();
       await wbFromBuffer.xlsx.load(data);
