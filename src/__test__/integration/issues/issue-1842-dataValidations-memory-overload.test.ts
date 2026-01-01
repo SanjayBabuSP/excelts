@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "path";
 import { readFileSync } from "fs";
 import { Workbook } from "../../../index";
-import { testDataPath } from "../../utils/test-file-helper";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 
 const fileName = testDataPath("test-issue-1842.xlsx");
 

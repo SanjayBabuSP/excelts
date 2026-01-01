@@ -5,15 +5,15 @@
  * Node.js version (csv.ts) extends this with file system support.
  */
 
-import { DateParser, DateFormatter, type DateFormat } from "../../utils/datetime";
+import { DateParser, DateFormatter, type DateFormat } from "../excel/utils/datetime";
 import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "./csv-core";
 import { CsvParserStream, CsvFormatterStream, type CsvFormatterStreamOptions } from "./csv-stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "./csv-number";
 import { pipeline } from "../stream";
 import type { IReadable, IWritable } from "../stream/types";
-import type { Workbook } from "../../doc/workbook";
-import type { Worksheet } from "../../doc/worksheet";
-import type { CellErrorValue } from "../../types";
+import type { Workbook } from "../excel/workbook";
+import type { Worksheet } from "../excel/worksheet";
+import type { CellErrorValue } from "../excel/types";
 
 // =============================================================================
 // Constants

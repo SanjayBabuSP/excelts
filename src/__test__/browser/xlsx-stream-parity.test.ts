@@ -3,7 +3,7 @@
  */
 
 import { beforeAll } from "vitest";
-import { createXlsxStreamParityTests } from "../utils/xlsx-stream-parity-tests";
+import { createXlsxStreamParityTests } from "../../modules/excel/utils/__test__/xlsx-stream-parity-tests";
 
 let Workbook: any;
 let PassThrough: any;

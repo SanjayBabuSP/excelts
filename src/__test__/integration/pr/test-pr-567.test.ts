@@ -1,5 +1,5 @@
 import { describe, it } from "vitest";
-import { testDataPath } from "../../utils/test-file-helper";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 import { Workbook } from "../../../index";
 
 const TEST_567_XLSX_FILE_NAME = testDataPath("test-pr-567.xlsx");

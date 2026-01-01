@@ -4,7 +4,7 @@
  * Uses Browser-specific APIs to verify TRUE streaming behavior for CSV.
  */
 
-import { createTrueStreamingCsvTests } from "../utils/true-streaming-csv-tests";
+import { createTrueStreamingCsvTests } from "../../modules/excel/utils/__test__/true-streaming-csv-tests";
 import { CsvParserStream, CsvFormatterStream } from "../../modules/csv/csv.browser";
 
 // ============================================================================

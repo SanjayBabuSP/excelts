@@ -1,4 +1,4 @@
-import { colCache } from "../utils/col-cache";
+import { colCache } from "../modules/excel/utils/col-cache";
 
 const arg = process.argv[2];
 

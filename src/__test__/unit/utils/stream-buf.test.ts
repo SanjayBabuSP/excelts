@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { StreamBuf } from "../../../utils/stream-buf";
-import { StringBuf } from "../../../utils/string-buf";
+import { StreamBuf } from "../../../modules/excel/utils/stream-buf";
+import { StringBuf } from "../../../modules/excel/utils/string-buf";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

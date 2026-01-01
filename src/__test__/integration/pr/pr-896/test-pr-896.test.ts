@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "../../../../index";
-import { fix } from "../../../utils/tools";
-import { testFilePath } from "../../../utils/test-file-helper";
-import sheetProperties from "../../../utils/data/sheet-properties.json" with { type: "json" };
-import pageSetup from "../../../utils/data/page-setup.json" with { type: "json" };
+import { fix } from "../../../../modules/excel/utils/__test__/tools";
+import { testFilePath } from "../../../../modules/excel/utils/__test__/test-file-helper";
+import sheetProperties from "../../../../modules/excel/utils/__test__/data/sheet-properties.json" with { type: "json" };
+import pageSetup from "../../../../modules/excel/utils/__test__/data/page-setup.json" with { type: "json" };
 
 process.env.EXCEL_NATIVE = "yes";
 

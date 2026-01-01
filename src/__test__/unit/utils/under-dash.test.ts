@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isEqual } from "../../../utils/under-dash";
+import { isEqual } from "../../../modules/excel/utils/under-dash";
 import util from "util";
 
 describe("under-dash", () => {

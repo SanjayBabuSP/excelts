@@ -5,13 +5,13 @@
  */
 
 import fs from "fs";
-import { fileExists } from "../../utils/utils";
+import { fileExists } from "../excel/utils/utils";
 import {
   CSV as CSVBrowser,
   type CsvStreamReadOptions,
   type CsvStreamWriteOptions
 } from "./csv.browser";
-import type { Worksheet } from "../../doc/worksheet";
+import type { Worksheet } from "../excel/worksheet";
 
 class CSV extends CSVBrowser {
   override async readFile(filename: string, options?: CsvStreamReadOptions): Promise<Worksheet> {

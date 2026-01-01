@@ -5,7 +5,7 @@
  */
 
 import { describe } from "vitest";
-import { Workbook } from "../../../doc/workbook";
+import { Workbook } from "../../excel/workbook";
 import {
   parseCsvToWorksheet,
   formatWorksheetToCsv,

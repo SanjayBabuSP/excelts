@@ -17,7 +17,7 @@ import {
   sheetToAoa,
   bookNew,
   bookAppendSheet
-} from "../../../utils/sheet-utils";
+} from "../../../modules/excel/utils/sheet-utils";
 
 describe("sheet-utils", () => {
   // ===========================================================================

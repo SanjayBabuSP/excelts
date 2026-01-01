@@ -1,5 +1,5 @@
 import { describe, it } from "vitest";
-import { testDataPath, testFilePath } from "../../utils/test-file-helper";
+import { testDataPath, testFilePath } from "../../../modules/excel/utils/__test__/test-file-helper";
 import fs from "fs";
 import { Workbook } from "../../../index";
 

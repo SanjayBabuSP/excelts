@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import type { Workbook } from "../../../doc/workbook";
-import type { Worksheet } from "../../../doc/worksheet";
+import type { Workbook } from "../../excel/workbook";
+import type { Worksheet } from "../../excel/worksheet";
 import type { CsvReadOptions, CsvWriteOptions } from "../csv.browser";
 
 /**

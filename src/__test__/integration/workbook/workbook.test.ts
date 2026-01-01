@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { testUtils } from "../../utils/index";
-import { testFilePath, testDataPath } from "../../utils/test-file-helper";
+import { testUtils } from "../../../modules/excel/utils/__test__/index";
+import { testFilePath, testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 import { Workbook, type CsvStreamReadOptions } from "../../../index";
-import { ValueType } from "../../../doc/enums";
+import { ValueType } from "../../../modules/excel/enums";
 
 const TEST_XLSX_FILE_NAME = testFilePath("workbook.test");
 const TEST_CSV_FILE_NAME = testFilePath("wb.test", ".csv");

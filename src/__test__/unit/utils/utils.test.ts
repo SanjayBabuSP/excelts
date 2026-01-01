@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { xmlEncode, isDateFmt, dateToExcel, excelToDate } from "../../../utils/utils";
+import { xmlEncode, isDateFmt, dateToExcel, excelToDate } from "../../../modules/excel/utils/utils";
 
 describe("utils", () => {
   describe("xmlEncode", () => {

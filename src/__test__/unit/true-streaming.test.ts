@@ -6,7 +6,7 @@
 
 import { PassThrough, Readable } from "../../modules/stream";
 import { beforeAll } from "vitest";
-import { createTrueStreamingTests } from "../utils/true-streaming-tests";
+import { createTrueStreamingTests } from "../../modules/excel/utils/__test__/true-streaming-tests";
 
 // Lazy imports
 let WorkbookWriter: any;

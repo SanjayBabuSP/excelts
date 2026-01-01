@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import fs from "fs";
-import { testUtils } from "../utils/index";
+import { testUtils } from "../../modules/excel/utils/__test__/index";
 import { ValueType, Workbook } from "../../index";
-import { testFilePath, testDataPath } from "../utils/test-file-helper";
+import { testFilePath, testDataPath } from "../../modules/excel/utils/__test__/test-file-helper";
 
 const TEST_FILE_NAME = testFilePath("wb-xlsx-reader.test");
 

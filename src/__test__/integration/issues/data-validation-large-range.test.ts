@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { Workbook } from "../../../index";
-import type { DataValidationWithFormulae } from "../../../types";
+import type { DataValidationWithFormulae } from "../../../modules/excel/types";
 import fs from "fs";
 import path from "path";
 import os from "os";

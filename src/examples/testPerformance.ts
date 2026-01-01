@@ -1,7 +1,7 @@
 import fs from "fs";
 import { Workbook, WorkbookWriter } from "../index";
 import { HrStopwatch } from "./utils/hr-stopwatch";
-import { delay } from "../utils/utils";
+import { delay } from "../modules/excel/utils/utils";
 
 if (process.argv[2] === "help") {
   console.log("Usage:");

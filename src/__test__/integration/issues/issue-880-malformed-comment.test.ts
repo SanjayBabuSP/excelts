@@ -2,7 +2,7 @@ import { describe, it } from "vitest";
 import fs from "fs";
 import { Workbook } from "../../../index";
 // this file to contain integration tests created from github issues
-import { testFilePath, testDataPath } from "../../utils/test-file-helper";
+import { testFilePath, testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 
 const TEST_XLSX_FILE_NAME = testFilePath("wb-issue-880.test");
 

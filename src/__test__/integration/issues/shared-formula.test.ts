@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { testDataPath } from "../../utils/test-file-helper";
-import { ValueType } from "../../../doc/enums";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
+import { ValueType } from "../../../modules/excel/enums";
 import { Workbook } from "../../../index";
 
 describe("github issues", () => {

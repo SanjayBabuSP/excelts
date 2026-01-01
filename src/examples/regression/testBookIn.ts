@@ -1,5 +1,5 @@
 import { Workbook } from "../../index";
-import { isEqual } from "../../utils/under-dash";
+import { isEqual } from "../../modules/excel/utils/under-dash";
 import { HrStopwatch } from "./utils/hr-stopwatch";
 
 const filename = process.argv[2];

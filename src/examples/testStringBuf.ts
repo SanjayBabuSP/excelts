@@ -1,7 +1,7 @@
 import { randomName } from "./utils/utils";
 import { HrStopwatch } from "./utils/hr-stopwatch";
-import { StringBuf } from "../utils/string-buf";
-import { delay } from "../utils/utils";
+import { StringBuf } from "../modules/excel/utils/string-buf";
+import { delay } from "../modules/excel/utils/utils";
 
 const SIZE = 1048576;
 

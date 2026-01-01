@@ -4,7 +4,7 @@ import { promisify } from "util";
 import { Workbook } from "../../../index";
 
 const IMAGE_FILENAME = `${__dirname}/../data/image.png`;
-import { testFilePath } from "../../utils/test-file-helper";
+import { testFilePath } from "../../../modules/excel/utils/__test__/test-file-helper";
 
 const TEST_XLSX_FILE_NAME = testFilePath("workbook-images.test");
 const fsReadFileAsync = promisify(fs.readFile);

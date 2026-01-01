@@ -1,5 +1,5 @@
 import fs from "fs";
-import { Worksheet } from "../doc/worksheet";
+import { Worksheet } from "../modules/excel/worksheet";
 
 const sheetname = process.argv[2];
 const stringname = process.argv[3];

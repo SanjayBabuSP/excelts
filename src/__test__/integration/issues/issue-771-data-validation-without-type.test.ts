@@ -1,5 +1,5 @@
 import { describe, it } from "vitest";
-import { testDataPath } from "../../utils/test-file-helper";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 import { Workbook } from "../../../index";
 
 describe("github issues", () => {

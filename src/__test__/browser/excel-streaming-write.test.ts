@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { WorkbookWriter } from "../../stream/workbook-writer.browser";
+import { WorkbookWriter } from "../../modules/excel/stream/workbook-writer.browser";
 
 describe("Real Excel Streaming Write - Browser", () => {
   it("should test raw CompressionStream behavior in browser", async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fs from "fs";
-import { testDataPath } from "../../utils/test-file-helper";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 import { WorkbookReader } from "../../../index";
 
 describe("streaming reader: hyperlinks cache", () => {

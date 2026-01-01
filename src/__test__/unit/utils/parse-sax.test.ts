@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { SaxesTagPlain } from "../../../utils/parse-sax";
-import { SaxesParser, parseSax } from "../../../utils/parse-sax";
+import type { SaxesTagPlain } from "../../../modules/excel/utils/parse-sax";
+import { SaxesParser, parseSax } from "../../../modules/excel/utils/parse-sax";
 
 // Helper type for test events
 type EventTuple = ["opentag" | "closetag" | "text" | "error", any];

@@ -16,7 +16,7 @@ const PIVOT_TABLE_FILEPATHS = [
   "xl/pivotTables/_rels/pivotTable1.xml.rels"
 ];
 
-import { testFilePath } from "../../utils/test-file-helper";
+import { testFilePath } from "../../../modules/excel/utils/__test__/test-file-helper";
 
 const TEST_XLSX_FILEPATH = testFilePath("workbook-pivot.test");
 const TEST_XLSX_TABLE_FILEPATH = testFilePath("workbook-pivot-table.test");

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "../../../index";
-import { testDataPath } from "../../utils/test-file-helper";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 
 describe("github issues", () => {
   it("257 - Sheet Order", () => {

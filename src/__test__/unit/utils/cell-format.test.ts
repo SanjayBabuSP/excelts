@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { format, cellFormat } from "../../../utils/cell-format";
+import { format, cellFormat } from "../../../modules/excel/utils/cell-format";
 
 describe("cell-format", () => {
   describe("format", () => {

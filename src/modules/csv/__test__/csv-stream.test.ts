@@ -10,7 +10,7 @@ import fs from "fs";
 import path from "path";
 import { Readable, Writable, pipeline } from "../../stream";
 import { CsvParserStream, CsvFormatterStream } from "../csv-stream";
-import { Workbook } from "../../../doc/workbook";
+import { Workbook } from "../../excel/workbook";
 
 // Test output directory - uses the standard test output folder
 const testDir = path.resolve(__dirname, "../../../__test__/out");

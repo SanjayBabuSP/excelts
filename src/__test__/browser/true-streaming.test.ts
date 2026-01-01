@@ -6,8 +6,11 @@
  */
 
 import { describe, beforeAll, expect, it } from "vitest";
-import { createTrueStreamingTests } from "../utils/true-streaming-tests";
-import { yieldToEventLoop, generateLargeText } from "../utils/streaming-test-base";
+import { createTrueStreamingTests } from "../../modules/excel/utils/__test__/true-streaming-tests";
+import {
+  yieldToEventLoop,
+  generateLargeText
+} from "../../modules/excel/utils/__test__/streaming-test-base";
 
 // Lazy import to avoid Node.js module resolution issues
 let WorkbookWriter: any;

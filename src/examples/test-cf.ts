@@ -1,5 +1,5 @@
 import { Workbook } from "../index";
-import { Range } from "../doc/range";
+import { Range } from "../modules/excel/range";
 import { HrStopwatch } from "./utils/hr-stopwatch";
 
 const [, , filename] = process.argv;

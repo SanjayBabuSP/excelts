@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { testDataPath } from "../../utils/test-file-helper";
+import { testDataPath } from "../../../modules/excel/utils/__test__/test-file-helper";
 import { WorkbookReader } from "../../../index";
 import fs from "fs";
 

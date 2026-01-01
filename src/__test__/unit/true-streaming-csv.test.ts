@@ -5,7 +5,7 @@
  */
 
 import { beforeAll } from "vitest";
-import { createTrueStreamingCsvTests } from "../utils/true-streaming-csv-tests";
+import { createTrueStreamingCsvTests } from "../../modules/excel/utils/__test__/true-streaming-csv-tests";
 
 // Lazy imports
 let CsvParserStream: any;

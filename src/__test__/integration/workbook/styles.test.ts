@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "../../../index";
-import { testFilePath } from "../../utils/test-file-helper";
+import { testFilePath } from "../../../modules/excel/utils/__test__/test-file-helper";
 
 const TEST_XLSX_FILE_NAME = testFilePath("workbook-styles.test");
 
@@ -9,7 +9,7 @@ const TEST_XLSX_FILE_NAME = testFilePath("workbook-styles.test");
 import { richTextSample } from "../data/rich-text-sample";
 import richTextSampleA1 from "../data/rich-text-sample-a1.json" with { type: "json" };
 import { PassThrough } from "../../../modules/stream";
-import { testUtils } from "../../utils/index";
+import { testUtils } from "../../../modules/excel/utils/__test__/index";
 
 // =============================================================================
 // Tests

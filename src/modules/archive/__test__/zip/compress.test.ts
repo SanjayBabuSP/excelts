@@ -6,7 +6,7 @@ import {
   decompressSync,
   hasCompressionStream
 } from "../../compress";
-import { isNode } from "../../../../utils/env";
+import { isNode } from "../../../excel/utils/env";
 
 describe("compress", () => {
   describe("environment detection", () => {

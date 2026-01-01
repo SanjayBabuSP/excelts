@@ -1,5 +1,5 @@
 import { Workbook } from "../../index";
-import type { Fill } from "../../types";
+import type { Fill } from "../../modules/excel/types";
 import { HrStopwatch } from "./utils/hr-stopwatch";
 
 const filename = process.argv[2];

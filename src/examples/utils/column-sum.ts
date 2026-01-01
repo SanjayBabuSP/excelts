@@ -1,4 +1,4 @@
-import type { Row } from "../../doc/row";
+import type { Row } from "../../modules/excel/row";
 
 export class ColumnSum {
   private columns: number[];

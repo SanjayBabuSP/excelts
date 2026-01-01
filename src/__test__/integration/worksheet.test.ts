@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "path";
-import { testUtils } from "../utils/index";
+import { testUtils } from "../../modules/excel/utils/__test__/index";
 import { ValueType, Workbook } from "../../index";
-import { Range } from "../../doc/range";
+import { Range } from "../../modules/excel/range";
 
 describe("Worksheet", () => {
   describe("Values", () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { testUtils } from "../utils/index";
-import { testFilePath } from "../utils/test-file-helper";
+import { testUtils } from "../../modules/excel/utils/__test__/index";
+import { testFilePath } from "../../modules/excel/utils/__test__/test-file-helper";
 import { Workbook, WorkbookWriter, ValueType } from "../../index";
 
 const CONCATENATE_HELLO_WORLD = 'CONCATENATE("Hello", ", ", "World!")';

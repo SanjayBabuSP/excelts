@@ -1,4 +1,4 @@
-import { StreamBuf } from "../utils/stream-buf";
+import { StreamBuf } from "../modules/excel/utils/stream-buf";
 
 const sb = new StreamBuf({ bufSize: 64 });
 sb.write("Hello, World!");

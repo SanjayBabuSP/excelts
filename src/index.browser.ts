@@ -6,30 +6,28 @@
 // =============================================================================
 // Main Classes (Browser-compatible)
 // =============================================================================
-
-export { Workbook } from "./doc/workbook";
-export { Worksheet } from "./doc/worksheet";
-export { Row } from "./doc/row";
-export { Column } from "./doc/column";
-export { Cell } from "./doc/cell";
-export { Range } from "./doc/range";
-export { Image } from "./doc/image";
-export * from "./doc/anchor";
-export { Table } from "./doc/table";
-export { DataValidations } from "./doc/data-validations";
+export { Workbook } from "./modules/excel/workbook";
+export { Worksheet } from "./modules/excel/worksheet";
+export { Row } from "./modules/excel/row";
+export { Column } from "./modules/excel/column";
+export { Cell } from "./modules/excel/cell";
+export { Range } from "./modules/excel/range";
+export { Image } from "./modules/excel/image";
+export * from "./modules/excel/anchor";
+export { Table } from "./modules/excel/table";
+export { DataValidations } from "./modules/excel/data-validations";
 
 // =============================================================================
 // Enums
 // =============================================================================
-
-export * from "./doc/enums";
+export * from "./modules/excel/enums";
 
 // =============================================================================
 // Types
 // =============================================================================
 
 // Export all type definitions from types.ts
-export * from "./types";
+export * from "./modules/excel/types";
 
 // Export pivot table types (type-only, no runtime dependency)
 export type {
@@ -41,13 +39,12 @@ export type {
   PivotTableSubtotal,
   ParsedCacheDefinition,
   ParsedCacheRecords
-} from "./doc/pivot-table";
+} from "./modules/excel/pivot-table";
 
 // =============================================================================
 // Utilities
 // =============================================================================
-
-export * from "./utils/sheet-utils";
+export * from "./modules/excel/utils/sheet-utils";
 
 // =============================================================================
 // CSV support (using native RFC 4180 implementation)
@@ -65,10 +62,10 @@ export { CsvParserStream, CsvFormatterStream } from "./modules/csv/csv.browser";
 // Uses cross-platform base implementation without Node.js fs
 // =============================================================================
 
-import { WorkbookWriter } from "./stream/workbook-writer.browser";
-import { WorkbookReader } from "./stream/workbook-reader.browser";
-import { WorksheetWriter } from "./stream/worksheet-writer";
-import { WorksheetReader } from "./stream/worksheet-reader";
+import { WorkbookWriter } from "./modules/excel/stream/workbook-writer.browser";
+import { WorkbookReader } from "./modules/excel/stream/workbook-reader.browser";
+import { WorksheetWriter } from "./modules/excel/stream/worksheet-writer";
+import { WorksheetReader } from "./modules/excel/stream/worksheet-reader";
 
 export { WorkbookWriter, WorkbookReader, WorksheetWriter, WorksheetReader };
 

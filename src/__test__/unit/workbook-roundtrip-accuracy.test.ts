@@ -4,7 +4,7 @@
 
 import { beforeAll } from "vitest";
 import { PassThrough, Readable } from "../../modules/stream";
-import { createWorkbookRoundtripAccuracyTests } from "../utils/workbook-roundtrip-accuracy-tests";
+import { createWorkbookRoundtripAccuracyTests } from "../../modules/excel/utils/__test__/workbook-roundtrip-accuracy-tests";
 
 let WorkbookWriter: any;
 let WorkbookReader: any;

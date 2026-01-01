@@ -2,39 +2,39 @@
 // Main Classes
 // =============================================================================
 
-export { Workbook } from "./doc/workbook";
-export { Worksheet } from "./doc/worksheet";
-export { Row } from "./doc/row";
-export { Column } from "./doc/column";
-export { Cell } from "./doc/cell";
-export { Range } from "./doc/range";
-export { Image } from "./doc/image";
-export * from "./doc/anchor";
-export { Table } from "./doc/table";
-export { DataValidations } from "./doc/data-validations";
+export { Workbook } from "./modules/excel/workbook";
+export { Worksheet } from "./modules/excel/worksheet";
+export { Row } from "./modules/excel/row";
+export { Column } from "./modules/excel/column";
+export { Cell } from "./modules/excel/cell";
+export { Range } from "./modules/excel/range";
+export { Image } from "./modules/excel/image";
+export * from "./modules/excel/anchor";
+export { Table } from "./modules/excel/table";
+export { DataValidations } from "./modules/excel/data-validations";
 
 // =============================================================================
 // Node.js Only: Streaming Classes
 // These can also be accessed via Workbook.createStreamWriter/createStreamReader
 // =============================================================================
 
-export { WorkbookWriter } from "./stream/workbook-writer";
-export { WorkbookReader } from "./stream/workbook-reader";
-export { WorksheetWriter } from "./stream/worksheet-writer";
-export { WorksheetReader } from "./stream/worksheet-reader";
+export { WorkbookWriter } from "./modules/excel/stream/workbook-writer";
+export { WorkbookReader } from "./modules/excel/stream/workbook-reader";
+export { WorksheetWriter } from "./modules/excel/stream/worksheet-writer";
+export { WorksheetReader } from "./modules/excel/stream/worksheet-reader";
 
 // =============================================================================
 // Enums
 // =============================================================================
 
-export * from "./doc/enums";
+export * from "./modules/excel/enums";
 
 // =============================================================================
 // Types
 // =============================================================================
 
 // Export all type definitions from types.ts
-export * from "./types";
+export * from "./modules/excel/types";
 
 // Pivot table types
 export type {
@@ -46,7 +46,7 @@ export type {
   PivotTableSubtotal,
   ParsedCacheDefinition,
   ParsedCacheRecords
-} from "./doc/pivot-table";
+} from "./modules/excel/pivot-table";
 
 // Node.js Only: Streaming reader types
 export type {
@@ -55,7 +55,7 @@ export type {
   SharedStringEvent,
   WorksheetReadyEvent,
   HyperlinksEvent
-} from "./stream/workbook-reader";
+} from "./modules/excel/stream/workbook-reader";
 
 export type {
   WorksheetReaderOptions,
@@ -63,10 +63,14 @@ export type {
   RowEvent,
   HyperlinkEvent,
   WorksheetHyperlink
-} from "./stream/worksheet-reader";
+} from "./modules/excel/stream/worksheet-reader";
 
 // Node.js Only: Streaming writer types
-export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "./stream/workbook-writer";
+export type {
+  WorkbookWriterOptions,
+  ZipOptions,
+  ZlibOptions
+} from "./modules/excel/stream/workbook-writer";
 
 // Node.js CSV types and stream classes (native implementation)
 export type {
@@ -81,7 +85,7 @@ export { CsvParserStream, CsvFormatterStream } from "./modules/csv/csv";
 // Utilities
 // =============================================================================
 
-export * from "./utils/sheet-utils";
+export * from "./modules/excel/utils/sheet-utils";
 
 // =============================================================================
 // Stream Module - Cross-platform stream utilities
