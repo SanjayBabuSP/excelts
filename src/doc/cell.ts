@@ -23,9 +23,6 @@ import type {
 } from "../types";
 import type { DataValidations } from "./data-validations";
 
-// Alias for backward compatibility
-export type HyperlinkValueData = CellHyperlinkValue;
-
 export type FormulaResult = string | number | boolean | Date | CellErrorValue;
 
 // Extended formula type for internal use (includes shared formula fields)
@@ -81,7 +78,7 @@ export interface CellModel {
     | Date
     | CellRichTextValue
     | CellErrorValue
-    | HyperlinkValueData;
+    | CellHyperlinkValue;
   style?: Partial<Style>;
   comment?: NoteModel;
   text?: string;
@@ -841,7 +838,7 @@ class DateValue {
 class HyperlinkValue {
   declare public model: HyperlinkValueModel;
 
-  constructor(cell: Cell, value?: HyperlinkValueData) {
+  constructor(cell: Cell, value?: CellHyperlinkValue) {
     this.model = {
       address: cell.address,
       type: Cell.Types.Hyperlink,
@@ -853,7 +850,7 @@ class HyperlinkValue {
     }
   }
 
-  get value(): HyperlinkValueData {
+  get value(): CellHyperlinkValue {
     return {
       text: this.model.text || "",
       hyperlink: this.model.hyperlink || "",
@@ -861,7 +858,7 @@ class HyperlinkValue {
     };
   }
 
-  set value(value: HyperlinkValueData) {
+  set value(value: CellHyperlinkValue) {
     this.model.text = value.text;
     this.model.hyperlink = value.hyperlink;
     if (value.tooltip) {
