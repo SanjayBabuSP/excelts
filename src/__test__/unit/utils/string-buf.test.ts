@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { StringBuf } from "../../../utils/string-buf";
 
+const decoder = new TextDecoder();
+
 describe("StringBuf", () => {
   // StringBuf is a lightweight string-builder used by the streaming writers to build
   // strings (e.g. for row data) without too many memory operations
@@ -8,7 +10,7 @@ describe("StringBuf", () => {
     const sb = new StringBuf({ size: 64 });
     sb.addText("Hello, World!");
     const chunk = sb.toBuffer();
-    expect(chunk.toString("utf-8")).toBe("Hello, World!");
+    expect(decoder.decode(chunk)).toBe("Hello, World!");
   });
 
   it("grows properly", () => {
@@ -34,7 +36,7 @@ describe("StringBuf", () => {
 
     // after all that - the string should be intact
     const chunk = sb.toBuffer();
-    expect(chunk.toString("utf-8")).toBe("Hello, World! Hello.");
+    expect(decoder.decode(chunk)).toBe("Hello, World! Hello.");
   });
 
   it("resets", () => {
@@ -49,6 +51,6 @@ describe("StringBuf", () => {
     expect(sb.length).toBe(6);
 
     const chunk = sb.toBuffer();
-    expect(chunk.toString("utf-8")).toBe("World!");
+    expect(decoder.decode(chunk)).toBe("World!");
   });
 });

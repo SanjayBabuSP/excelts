@@ -8,6 +8,14 @@ import { StringBuf } from "../../../utils/string-buf";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Helper to convert Uint8Array to string
+function uint8ToString(data: Uint8Array | null): string {
+  if (!data) {
+    return "";
+  }
+  return new TextDecoder().decode(data);
+}
+
 describe("StreamBuf", () => {
   // StreamBuf is designed as a general-purpose writable-readable stream
   // However its use in ExcelTS is primarily as a memory buffer between
@@ -17,8 +25,10 @@ describe("StreamBuf", () => {
     const stream = new StreamBuf();
     stream.write("Hello, World!");
     const chunk = stream.read();
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Hello, World!");
+
+    // Cross-platform: returns Uint8Array (not Buffer)
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Hello, World!");
   });
 
   // Note: Using async/await here because our ES6 module fix requires it
@@ -29,8 +39,9 @@ describe("StreamBuf", () => {
     strBuf.addText("Hello, World!");
     await stream.write(strBuf);
     const chunk = stream.read();
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Hello, World!");
+
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Hello, World!");
   });
 
   it("signals end", () =>
@@ -49,20 +60,22 @@ describe("StreamBuf", () => {
       const sb = new StreamBuf();
       sb.on("finish", () => {
         const buf = sb.toBuffer();
-        expect(buf.length).toBe(1672);
+        expect(buf!.length).toBe(1672);
         resolve(undefined);
       });
       sb.on("error", reject);
-      s.pipe(sb);
+      // Cast to any because StreamBuf is compatible but types differ slightly
+      s.pipe(sb as any);
     }));
+
   it("handle unsupported type of chunk", async () => {
     const stream = new StreamBuf();
     try {
-      await stream.write({});
+      await stream.write({} as any);
       expect.fail("should fail for given argument");
     } catch (e: any) {
       expect(e.message).toBe(
-        "Chunk must be one of type String, Buffer, Uint8Array, ArrayBuffer or StringBuf."
+        "Chunk must be one of type String, Uint8Array, ArrayBuffer or StringBuf."
       );
     }
   });
@@ -77,8 +90,8 @@ describe("StreamBuf", () => {
     await stream.write(bufferData);
     const chunk = stream.read();
 
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Cross-realm test data");
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Cross-realm test data");
   });
 
   // Test direct Uint8Array support (important for browser environments)
@@ -90,8 +103,8 @@ describe("StreamBuf", () => {
     await stream.write(uint8Data);
     const chunk = stream.read();
 
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Hello");
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Hello");
   });
 
   it("handles Uint8Array converted to Buffer", async () => {
@@ -102,8 +115,8 @@ describe("StreamBuf", () => {
     await stream.write(bufferData);
     const chunk = stream.read();
 
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Hello");
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Hello");
   });
 
   // Test ArrayBuffer support (important for browser environments)
@@ -116,8 +129,8 @@ describe("StreamBuf", () => {
     await stream.write(arrayBuffer);
     const chunk = stream.read();
 
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Hello");
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Hello");
   });
 
   // Test other typed arrays (Int8Array, Uint16Array, etc.)
@@ -129,7 +142,45 @@ describe("StreamBuf", () => {
     await stream.write(int8Data);
     const chunk = stream.read();
 
-    expect(Buffer.isBuffer(chunk)).toBeTruthy();
-    expect(chunk.toString("UTF8")).toBe("Hi");
+    expect(chunk).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(chunk)).toBe("Hi");
+  });
+
+  // Cross-platform toBuffer() test
+  it("toBuffer returns Uint8Array", () => {
+    const stream = new StreamBuf();
+    stream.write("Test data");
+    const buf = stream.toBuffer();
+
+    expect(buf).toBeInstanceOf(Uint8Array);
+    expect(uint8ToString(buf)).toBe("Test data");
+  });
+
+  it("toBuffer returns null for empty stream", () => {
+    const stream = new StreamBuf();
+    const buf = stream.toBuffer();
+
+    expect(buf).toBeNull();
+  });
+
+  it("supports cork and uncork", async () => {
+    const stream = new StreamBuf();
+    stream.cork();
+    await stream.write("Hello ");
+    await stream.write("World!");
+    stream.uncork();
+
+    const buf = stream.toBuffer();
+    expect(uint8ToString(buf)).toBe("Hello World!");
+  });
+
+  it("supports pause and resume", () => {
+    const stream = new StreamBuf();
+
+    expect(stream.isPaused()).toBe(false);
+    stream.pause();
+    expect(stream.isPaused()).toBe(true);
+    stream.resume();
+    expect(stream.isPaused()).toBe(false);
   });
 });

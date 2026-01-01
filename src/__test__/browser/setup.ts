@@ -14,4 +14,4 @@ beforeAll(async () => {
   });
 
   console.log("ExcelTS loaded:", typeof (globalThis as any).ExcelTS);
-});
+}, 60000);

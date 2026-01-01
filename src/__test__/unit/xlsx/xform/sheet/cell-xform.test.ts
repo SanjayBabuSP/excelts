@@ -78,8 +78,6 @@ const expectations = [
   },
   {
     // Strict OpenXML format stores dates as ISO strings with t="d"
-    // issue: https://github.com/exceljs/exceljs/issues/2695
-    // PR: https://github.com/exceljs/exceljs/pull/2702
     title: "Date (Strict OpenXML format)",
     create() {
       return new CellXform();

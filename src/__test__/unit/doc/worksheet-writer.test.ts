@@ -1,11 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { WorksheetWriter } from "../../../stream/xlsx/worksheet-writer";
+import { WorksheetWriter } from "../../../stream/worksheet-writer";
 import { StreamBuf } from "../../../utils/stream-buf";
 
 describe("Worksheet Writer", () => {
   it("generates valid xml even when there is no data", () =>
-    // issue: https://github.com/guyonroche/exceljs/issues/99
-    // PR: https://github.com/guyonroche/exceljs/pull/255
     new Promise((resolve, reject) => {
       const mockWorkbook: any = {
         _openStream() {
@@ -34,7 +32,6 @@ describe("Worksheet Writer", () => {
     }));
 
   it("writes sheetProtection before autoFilter in XML output", () =>
-    // issue: https://github.com/exceljs/exceljs/pull/2685
     // When both autoFilter and sheetProtection are set, sheetProtection must come first
     // in the XML output for Excel to open the file correctly.
     new Promise((resolve, reject) => {

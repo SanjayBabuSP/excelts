@@ -507,7 +507,6 @@ describe("WorksheetWriter", () => {
 
   describe("XML Element Order", () => {
     it("writes sheetProtection before autoFilter for valid Excel files", async () => {
-      // issue: https://github.com/exceljs/exceljs/pull/2685
       // Per OOXML spec (http://www.datypic.com/sc/ooxml/e-ssml_worksheet.html),
       // sheetProtection (#8) must come before autoFilter (#11) in the XML sequence.
       // When the order is wrong, Excel cannot open the file.

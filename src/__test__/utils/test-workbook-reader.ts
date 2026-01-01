@@ -1,7 +1,7 @@
 import { fix } from "./tools";
 import testValuesJson from "./data/sheet-values.json" with { type: "json" };
 const testValues = fix(testValuesJson);
-import { utils } from "../../utils/utils";
+import { dateToExcel } from "../../utils/utils";
 import { WorkbookReader, ValueType } from "../../index";
 
 function fillFormula(f) {
@@ -10,7 +10,7 @@ function fillFormula(f) {
 
 const streamedValues = {
   B1: { sharedString: 0 },
-  C1: utils.dateToExcel(testValues.date),
+  C1: dateToExcel(testValues.date),
   D1: fillFormula(testValues.formulas[0]),
   E1: fillFormula(testValues.formulas[1]),
   F1: { sharedString: 1 },
@@ -27,8 +27,11 @@ const testWorkbookReader = {
   pageSetup: fix(pageSetupJson),
 
   checkBook(filename: string): Promise<void> {
-    // @ts-expect-error - Legacy test pattern: passing empty object to constructor and input to read()
-    const wb = new WorkbookReader({});
+    const wb = new WorkbookReader(filename, {
+      entries: "emit",
+      worksheets: "emit",
+      sharedStrings: "ignore"
+    });
 
     // expectations
     const dateAccuracy = 0.00001;
@@ -146,7 +149,7 @@ const testWorkbookReader = {
         }
       });
 
-      wb.read(filename, { entries: "emit", worksheets: "emit" });
+      wb.read();
     });
   }
 };

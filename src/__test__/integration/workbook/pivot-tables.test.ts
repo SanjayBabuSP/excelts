@@ -4,7 +4,7 @@ import { promisify } from "util";
 
 const fsReadFileAsync = promisify(fs.readFile);
 
-import { ZipParser } from "../../../utils/unzip/zip-parser";
+import { ZipParser } from "../../../modules/archive/zip-parser";
 
 import { Workbook } from "../../../index";
 

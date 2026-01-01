@@ -8,7 +8,7 @@ const TEST_XLSX_FILE_NAME = testFilePath("workbook-styles.test");
 // Sample Data
 import { richTextSample } from "../data/rich-text-sample";
 import richTextSampleA1 from "../data/rich-text-sample-a1.json" with { type: "json" };
-import { PassThrough } from "stream";
+import { PassThrough } from "../../../modules/stream";
 import { testUtils } from "../../utils/index";
 
 // =============================================================================

@@ -16,8 +16,7 @@ import {
   sheetAddAoa,
   sheetToAoa,
   bookNew,
-  bookAppendSheet,
-  utils
+  bookAppendSheet
 } from "../../../utils/sheet-utils";
 
 describe("sheet-utils", () => {
@@ -636,32 +635,6 @@ describe("sheet-utils", () => {
       const csv = sheetToCsv(ws);
 
       expect(csv).toBe('"say ""hello"""');
-    });
-  });
-
-  // ===========================================================================
-  // Utils Export
-  // ===========================================================================
-
-  describe("utils", () => {
-    it("should export all functions", () => {
-      expect(utils.decodeCol).toBe(decodeCol);
-      expect(utils.encodeCol).toBe(encodeCol);
-      expect(utils.decodeRow).toBe(decodeRow);
-      expect(utils.encodeRow).toBe(encodeRow);
-      expect(utils.decodeCell).toBe(decodeCell);
-      expect(utils.encodeCell).toBe(encodeCell);
-      expect(utils.decodeRange).toBe(decodeRange);
-      expect(utils.encodeRange).toBe(encodeRange);
-      expect(utils.jsonToSheet).toBe(jsonToSheet);
-      expect(utils.sheetAddJson).toBe(sheetAddJson);
-      expect(utils.sheetToJson).toBe(sheetToJson);
-      expect(utils.sheetToCsv).toBe(sheetToCsv);
-      expect(utils.aoaToSheet).toBe(aoaToSheet);
-      expect(utils.sheetAddAoa).toBe(sheetAddAoa);
-      expect(utils.sheetToAoa).toBe(sheetToAoa);
-      expect(utils.bookNew).toBe(bookNew);
-      expect(utils.bookAppendSheet).toBe(bookAppendSheet);
     });
   });
 });

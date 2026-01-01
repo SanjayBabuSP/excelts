@@ -37,8 +37,11 @@ describe("ExcelTS Browser Tests", () => {
 
     const buffer = await wb.xlsx.writeBuffer(options);
 
+    // Convert Uint8Array to base64 string
+    const base64String = btoa(String.fromCharCode(...buffer));
+
     const wb2 = new Workbook();
-    await wb2.xlsx.load(buffer.toString("base64"), options);
+    await wb2.xlsx.load(base64String, options);
 
     const ws2 = wb2.getWorksheet("blort");
     expect(ws2).toBeTruthy();
@@ -184,7 +187,7 @@ describe("ExcelTS Browser Tests", () => {
       ws.getCell("A1").value = "Test";
       ws.getCell("B1").value = "Data";
 
-      const buffer = wb.csv.writeBuffer();
+      const buffer = await wb.csv.writeBuffer();
 
       expect(buffer).toBeInstanceOf(Uint8Array);
       const content = new TextDecoder().decode(buffer);

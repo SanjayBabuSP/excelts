@@ -1,4 +1,4 @@
-import { PassThrough } from "stream";
+import { PassThrough } from "../../../../modules/stream";
 import { expect } from "vitest";
 import { CompyXform } from "./compy-xform";
 import { parseSax } from "../../../../utils/parse-sax";
