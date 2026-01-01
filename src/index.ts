@@ -18,11 +18,10 @@ export { DataValidations } from "./doc/data-validations";
 // These can also be accessed via Workbook.createStreamWriter/createStreamReader
 // =============================================================================
 
-export { WorkbookWriter } from "./stream/xlsx/workbook-writer";
-export { WorkbookReader } from "./stream/xlsx/workbook-reader";
-export { WorksheetWriter } from "./stream/xlsx/worksheet-writer";
-export { WorksheetReader } from "./stream/xlsx/worksheet-reader";
-export { ModelContainer } from "./doc/modelcontainer";
+export { WorkbookWriter } from "./stream/workbook-writer";
+export { WorkbookReader } from "./stream/workbook-reader";
+export { WorksheetWriter } from "./stream/worksheet-writer";
+export { WorksheetReader } from "./stream/worksheet-reader";
 
 // =============================================================================
 // Enums
@@ -56,7 +55,7 @@ export type {
   SharedStringEvent,
   WorksheetReadyEvent,
   HyperlinksEvent
-} from "./stream/xlsx/workbook-reader";
+} from "./stream/workbook-reader";
 
 export type {
   WorksheetReaderOptions,
@@ -64,14 +63,10 @@ export type {
   RowEvent,
   HyperlinkEvent,
   WorksheetHyperlink
-} from "./stream/xlsx/worksheet-reader";
+} from "./stream/worksheet-reader";
 
 // Node.js Only: Streaming writer types
-export type {
-  WorkbookWriterOptions,
-  ZipOptions,
-  ZlibOptions
-} from "./stream/xlsx/workbook-writer";
+export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "./stream/workbook-writer";
 
 // Node.js CSV types and stream classes (native implementation)
 export type {
@@ -79,11 +74,83 @@ export type {
   CsvWriteOptions,
   CsvStreamReadOptions,
   CsvStreamWriteOptions
-} from "./csv/csv";
-export { CsvParserStream, CsvFormatterStream } from "./csv/csv";
+} from "./modules/csv/csv";
+export { CsvParserStream, CsvFormatterStream } from "./modules/csv/csv";
 
 // =============================================================================
 // Utilities
 // =============================================================================
 
 export * from "./utils/sheet-utils";
+
+// =============================================================================
+// Stream Module - Cross-platform stream utilities
+// Works in both Node.js and Browser environments
+// =============================================================================
+
+export {
+  // Core stream classes (use these directly!)
+  Readable,
+  Writable,
+  Transform,
+  Duplex,
+  PassThrough,
+  EventEmitter,
+  // Specialized streams
+  Collector,
+  PullStream,
+  BufferedStream,
+  // Factory functions (alternative to new Class())
+  createReadable,
+  createWritable,
+  createTransform,
+  createCollector,
+  createPassThrough,
+  createReadableFromArray,
+  createReadableFromAsyncIterable,
+  createReadableFromGenerator,
+  createReadableFromPromise,
+  createDuplex,
+  createEmptyReadable,
+  createNullWritable,
+  // Pipeline utilities
+  pipeline,
+  finished,
+  // High-level convenience functions (EASY TO USE!)
+  collect,
+  text,
+  json,
+  bytes,
+  fromString,
+  fromJSON,
+  fromBytes,
+  transform,
+  filter,
+  // Binary utilities (auto-convert between types!)
+  toUint8Array,
+  bufferToString,
+  stringToUint8Array,
+  uint8ArrayToString,
+  uint8ArrayEquals,
+  uint8ArrayIndexOf,
+  concatUint8Arrays,
+  // Stream utilities
+  streamToUint8Array,
+  streamToBuffer,
+  streamToString,
+  drainStream,
+  copyStream,
+  addAbortSignal,
+  once,
+  // Type guards
+  isReadable,
+  isWritable,
+  isTransform,
+  isDuplex,
+  isStream,
+  isDestroyed,
+  // Consumers API (like Node.js stream/consumers)
+  consumers,
+  // Promises API (like Node.js stream/promises)
+  promises
+} from "./modules/stream/index";
