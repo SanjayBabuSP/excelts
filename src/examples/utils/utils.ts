@@ -49,13 +49,3 @@ export function fmtNumber(n: number): string {
   }
   return a.join(",");
 }
-
-// For backward compatibility
-export const utils = {
-  cleanDir,
-  randomName,
-  randomNum,
-  fmt: {
-    number: fmtNumber
-  }
-};

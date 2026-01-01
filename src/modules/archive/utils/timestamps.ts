@@ -29,8 +29,6 @@ export function dateToDos(date: Date): [number, number] {
 
 /**
  * Parse DOS date/time to JS Date.
- *
- * Note: returns Date in UTC, matching previous unzipper behavior.
  */
 export function parseDosDateTimeUTC(date: number, time?: number): Date {
   const day = date & 0x1f;
