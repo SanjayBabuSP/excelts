@@ -39,6 +39,13 @@ function addJsExtensions(dir) {
             if (importPath.endsWith(".js") || importPath.endsWith(".json")) {
               return match;
             }
+            // Check if this is a directory import (has index.js)
+            const resolvedPath = path.resolve(path.dirname(filePath), importPath);
+            const indexPath = path.join(resolvedPath, "index.js");
+            if (fs.existsSync(indexPath)) {
+              // It's a directory with index.js, add /index.js
+              return `${prefix}${importPath}/index.js${suffix}`;
+            }
             return `${prefix}${importPath}.js${suffix}`;
           }
         );
@@ -49,6 +56,12 @@ function addJsExtensions(dir) {
           (match, prefix, importPath, suffix) => {
             if (importPath.endsWith(".js") || importPath.endsWith(".json")) {
               return match;
+            }
+            // Check if this is a directory import (has index.js)
+            const resolvedPath = path.resolve(path.dirname(filePath), importPath);
+            const indexPath = path.join(resolvedPath, "index.js");
+            if (fs.existsSync(indexPath)) {
+              return `${prefix}${importPath}/index.js${suffix}`;
             }
             return `${prefix}${importPath}.js${suffix}`;
           }

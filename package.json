@@ -30,11 +30,11 @@
     "node": ">=20.0.0"
   },
   "browserslist": [
-    "chrome >= 85",
-    "edge >= 85",
-    "firefox >= 79",
-    "safari >= 14",
-    "opera >= 71"
+    "chrome >= 89",
+    "edge >= 89",
+    "firefox >= 102",
+    "safari >= 14.1",
+    "opera >= 75"
   ],
   "exports": {
     ".": {
@@ -72,6 +72,7 @@
     "type": "tsgo --noEmit",
     "format": "prettier --write \"**/*.{js,ts,json,md}\"",
     "benchmark": "rimraf dist && npm run build:esm && node --expose-gc scripts/benchmark.js",
+    "benchmark:compress": "rimraf dist && npm run build:esm && node --expose-gc scripts/benchmark-compress.js",
     "build:esm": "tsc --project tsconfig.esm.json && node scripts/fix-esm-imports.mjs",
     "build:cjs": "tsc --project tsconfig.cjs.json && node scripts/fix-cjs-imports.mjs",
     "build:browser": "rolldown -c rolldown.config.js",
