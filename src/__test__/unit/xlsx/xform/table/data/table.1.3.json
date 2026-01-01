@@ -18,8 +18,7 @@
     },
     {
       "filterButton": false,
-      "name": "Word",
-      "totalsRowFunction": "none"
+      "name": "Word"
     }
   ],
   "style": {

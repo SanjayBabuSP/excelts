@@ -29,7 +29,8 @@ class TableColumnXform extends BaseXform {
       id: model.id!.toString(),
       name: model.name,
       totalsRowLabel: model.totalsRowLabel,
-      totalsRowFunction: model.totalsRowFunction,
+      // Excel doesn't output totalsRowFunction when value is 'none'
+      totalsRowFunction: model.totalsRowFunction === "none" ? undefined : model.totalsRowFunction,
       dxfId: model.dxfId
     });
   }

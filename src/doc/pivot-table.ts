@@ -7,7 +7,7 @@ import type { Table } from "./table";
  * This allows both Worksheet and Table to be used as pivot table data sources.
  */
 export interface PivotTableSource {
-  /** Name of the source (worksheet name or table name) */
+  /** Name of the worksheet containing the source data (used in pivotCacheDefinition) */
   name: string;
   /** Get row values by 1-indexed row number */
   getRow(rowNumber: number): { values: any[] };
@@ -70,6 +70,10 @@ export interface CacheField {
   name: string;
   /** Unique values for row/column fields, null for value fields */
   sharedItems: any[] | null;
+  /** Minimum value for numeric fields */
+  minValue?: number;
+  /** Maximum value for numeric fields */
+  maxValue?: number;
 }
 
 /** Aggregation function types for pivot table data fields */
@@ -204,8 +208,12 @@ function createTableSourceAdapter(table: Table): PivotTableSource {
 
   const shortRange = colCache.encode(startRow, startCol, endRow, endCol);
 
+  // Use the worksheet name (not table name) for pivotCacheDefinition's worksheetSource
+  // The sheet attribute in worksheetSource must reference the actual worksheet name
+  const worksheetName = table.worksheet.name;
+
   return {
-    name: tableModel.name,
+    name: worksheetName,
     getRow(rowNumber: number): { values: any[] } {
       if (rowNumber === 1) {
         return { values: headerRow };
@@ -285,7 +293,7 @@ function makePivotTable(worksheet: any, model: PivotTableModel): PivotTable {
   const { rows, values } = model;
   const columns = model.columns ?? [];
 
-  const cacheFields = makeCacheFields(source, [...rows, ...columns]);
+  const cacheFields = makeCacheFields(source, [...rows, ...columns], values);
 
   const nameToIndex = cacheFields.reduce(
     (result: Record<string, number>, cacheField: CacheField, index: number) => {
@@ -360,15 +368,18 @@ function validate(_worksheet: any, model: PivotTableModel, source: PivotTableSou
 
 function makeCacheFields(
   source: PivotTableSource,
-  fieldNamesWithSharedItems: string[]
+  fieldNamesWithSharedItems: string[],
+  valueFieldNames: string[]
 ): CacheField[] {
   // Cache fields are used in pivot tables to reference source data.
   // Fields in fieldNamesWithSharedItems get their unique values extracted as sharedItems.
-  // Other fields (typically numeric) have sharedItems = null.
+  // Fields in valueFieldNames (but not in fieldNamesWithSharedItems) get min/max calculated.
+  // Other fields are unused and get empty sharedItems.
 
   const names = source.getRow(1).values;
   // Use Set for O(1) lookup instead of object
   const sharedItemsFields = new Set(fieldNamesWithSharedItems);
+  const valueFields = new Set(valueFieldNames);
 
   const aggregate = (columnIndex: number): any[] => {
     const columnValues = source.getColumn(columnIndex).values;
@@ -383,12 +394,47 @@ function makeCacheFields(
     return toSortedArray(uniqueValues);
   };
 
+  // Calculate min/max for numeric fields
+  const getMinMax = (columnIndex: number): { minValue: number; maxValue: number } | null => {
+    const columnValues = source.getColumn(columnIndex).values;
+    let min = Infinity;
+    let max = -Infinity;
+    let hasNumeric = false;
+    for (let i = 2; i < columnValues.length; i++) {
+      const v = columnValues[i];
+      if (typeof v === "number" && !isNaN(v)) {
+        hasNumeric = true;
+        if (v < min) {
+          min = v;
+        }
+        if (v > max) {
+          max = v;
+        }
+      }
+    }
+    return hasNumeric ? { minValue: min, maxValue: max } : null;
+  };
+
   // Build result array
   const result: CacheField[] = [];
   for (const columnIndex of range(1, names.length)) {
     const name = names[columnIndex];
-    const sharedItems = sharedItemsFields.has(name) ? aggregate(columnIndex) : null;
-    result.push({ name, sharedItems });
+    if (sharedItemsFields.has(name)) {
+      // Field used for rows/columns - extract unique values as sharedItems
+      result.push({ name, sharedItems: aggregate(columnIndex) });
+    } else if (valueFields.has(name)) {
+      // Field used only for values (aggregation) - calculate min/max
+      const minMax = getMinMax(columnIndex);
+      result.push({
+        name,
+        sharedItems: null,
+        minValue: minMax?.minValue,
+        maxValue: minMax?.maxValue
+      });
+    } else {
+      // Unused field - just empty sharedItems (like Excel does)
+      result.push({ name, sharedItems: null });
+    }
   }
   return result;
 }

@@ -299,7 +299,7 @@ export interface WorksheetProperties {
   };
   defaultRowHeight: number;
   defaultColWidth?: number;
-  dyDescent: number;
+  dyDescent?: number;
   showGridLines: boolean;
 }
 

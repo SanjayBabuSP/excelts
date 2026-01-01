@@ -117,7 +117,7 @@ class WorksheetWriter {
   colBreaks: ColBreak[];
   properties: Partial<WorksheetProperties> & {
     defaultRowHeight: number;
-    dyDescent: number;
+    dyDescent?: number;
     outlineLevelCol: number;
     outlineLevelRow: number;
   };
@@ -205,7 +205,6 @@ class WorksheetWriter {
       {},
       {
         defaultRowHeight: 15,
-        dyDescent: 55,
         outlineLevelCol: 0,
         outlineLevelRow: 0
       },

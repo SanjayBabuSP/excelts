@@ -19,8 +19,6 @@ interface ParsedCacheDefinitionModel {
   rId?: string;
   // Additional attributes to preserve
   refreshOnLoad?: string;
-  refreshedBy?: string;
-  refreshedDate?: string;
   createdVersion?: string;
   refreshedVersion?: string;
   minRefreshableVersion?: string;
@@ -92,17 +90,18 @@ class PivotCacheDefinitionXform extends BaseXform {
   private renderNew(xmlStream: any, model: CacheDefinitionModel): void {
     const { source, cacheFields } = model;
 
+    // Record count = number of data rows (excluding header row)
+    const recordCount = source.getSheetValues().slice(2).length;
+
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
       ...PivotCacheDefinitionXform.PIVOT_CACHE_DEFINITION_ATTRIBUTES,
       "r:id": "rId1",
       refreshOnLoad: "1", // important for our implementation to work
-      refreshedBy: "Author",
-      refreshedDate: "45125.026046874998",
       createdVersion: "8",
       refreshedVersion: "8",
       minRefreshableVersion: "3",
-      recordCount: cacheFields.length + 1
+      recordCount
     });
 
     xmlStream.openNode("cacheSource", { type: "worksheet" });
@@ -133,8 +132,6 @@ class PivotCacheDefinitionXform extends BaseXform {
       ...PivotCacheDefinitionXform.PIVOT_CACHE_DEFINITION_ATTRIBUTES,
       "r:id": model.rId || "rId1",
       refreshOnLoad: model.refreshOnLoad || "1",
-      refreshedBy: model.refreshedBy || "Author",
-      refreshedDate: model.refreshedDate || "45125.026046874998",
       createdVersion: model.createdVersion || "8",
       refreshedVersion: model.refreshedVersion || "8",
       minRefreshableVersion: model.minRefreshableVersion || "3",
@@ -176,8 +173,6 @@ class PivotCacheDefinitionXform extends BaseXform {
           cacheFields: [],
           rId: attributes["r:id"],
           refreshOnLoad: attributes.refreshOnLoad,
-          refreshedBy: attributes.refreshedBy,
-          refreshedDate: attributes.refreshedDate,
           createdVersion: attributes.createdVersion,
           refreshedVersion: attributes.refreshedVersion,
           minRefreshableVersion: attributes.minRefreshableVersion,
@@ -254,10 +249,7 @@ class PivotCacheDefinitionXform extends BaseXform {
 
   static PIVOT_CACHE_DEFINITION_ATTRIBUTES = {
     xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
-    "xmlns:r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-    "xmlns:mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
-    "mc:Ignorable": "xr",
-    "xmlns:xr": "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+    "xmlns:r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
   };
 }
 

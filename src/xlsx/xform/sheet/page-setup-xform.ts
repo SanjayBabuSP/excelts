@@ -70,9 +70,10 @@ class PageSetupXform extends BaseXform {
         draft: booleanToXml(model.draft!),
         cellComments: cellCommentsToXml(model.cellComments!),
         errors: errorsToXml(model.errors!),
-        scale: model.scale,
-        fitToWidth: model.fitToWidth,
-        fitToHeight: model.fitToHeight,
+        // Only output non-default values (matches Excel behavior)
+        scale: model.scale !== 100 ? model.scale : undefined,
+        fitToWidth: model.fitToWidth !== 1 ? model.fitToWidth : undefined,
+        fitToHeight: model.fitToHeight !== 1 ? model.fitToHeight : undefined,
         firstPageNumber: model.firstPageNumber,
         useFirstPageNumber: booleanToXml(!!model.firstPageNumber),
         usePrinterDefaults: booleanToXml(model.usePrinterDefaults!),

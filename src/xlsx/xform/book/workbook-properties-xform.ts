@@ -8,7 +8,7 @@ class WorkbookPropertiesXform extends BaseXform {
   render(xmlStream: any, model: WorkbookPropertiesModel): void {
     xmlStream.leafNode("workbookPr", {
       date1904: model.date1904 ? 1 : undefined,
-      defaultThemeVersion: 164011,
+      // Excel doesn't output defaultThemeVersion
       filterPrivacy: 1
     });
   }

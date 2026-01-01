@@ -451,6 +451,12 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       const result = formatCsv(data as any);
       expect(result).toBe("1,2.5,true,false");
     });
+
+    it("should format numbers with comma decimalSeparator", () => {
+      const data = [[1, 2.5]];
+      const result = formatCsv(data as any, { delimiter: ";", decimalSeparator: "," });
+      expect(result).toBe("1;2,5");
+    });
   });
 
   // ===========================================================================

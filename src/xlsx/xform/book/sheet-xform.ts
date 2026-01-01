@@ -11,9 +11,10 @@ interface SheetModel {
 class WorksheetXform extends BaseXform {
   render(xmlStream: any, model: SheetModel): void {
     xmlStream.leafNode("sheet", {
-      sheetId: model.id,
       name: model.name,
-      state: model.state,
+      sheetId: model.id,
+      // Excel doesn't output state when it's 'visible' (default)
+      state: model.state === "visible" ? undefined : model.state,
       "r:id": model.rId
     });
   }

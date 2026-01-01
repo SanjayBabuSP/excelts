@@ -63,8 +63,8 @@ class TableXform extends BaseXform {
       displayName: model.displayName || model.name,
       ref: model.tableRef,
       totalsRowCount: model.totalsRow ? "1" : undefined,
-      totalsRowShown: model.totalsRow ? undefined : "1",
-      headerRowCount: model.headerRow ? "1" : "0"
+      // Excel doesn't output headerRowCount when it's 1 (default) or when there's a header row
+      headerRowCount: model.headerRow ? undefined : "0"
     });
 
     this.map.autoFilter.render(xmlStream, model);
@@ -88,7 +88,8 @@ class TableXform extends BaseXform {
           displayName: attributes.displayName || attributes.name,
           tableRef: attributes.ref,
           totalsRow: attributes.totalsRowCount === "1",
-          headerRow: attributes.headerRowCount === "1"
+          // ECMA-376: headerRowCount defaults to 1, so missing attribute means has header
+          headerRow: attributes.headerRowCount !== "0"
         };
         break;
       default:
@@ -149,12 +150,7 @@ class TableXform extends BaseXform {
   }
 
   static TABLE_ATTRIBUTES = {
-    xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
-    "xmlns:mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
-    "mc:Ignorable": "xr xr3",
-    "xmlns:xr": "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
-    "xmlns:xr3": "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3"
-    // 'xr:uid': '{00000000-000C-0000-FFFF-FFFF00000000}',
+    xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
   };
 }
 

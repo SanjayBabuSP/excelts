@@ -9,6 +9,8 @@
  * @see https://tools.ietf.org/html/rfc4180
  */
 
+import { formatNumberForCsv, type DecimalSeparator } from "./csv-number";
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -44,13 +46,6 @@ export type RowValidateFunction<T = Row> =
   | ((row: T) => boolean)
   | ((row: T, callback: RowValidateCallback) => void);
 
-/** Validation result */
-export interface RowValidationResult<T = Row> {
-  row: T | null;
-  isValid: boolean;
-  reason?: string;
-}
-
 /**
  * CSV parsing options
  */
@@ -85,6 +80,13 @@ export interface CsvParseOptions {
   renameHeaders?: boolean;
   /** Comment character - lines starting with this are ignored */
   comment?: string;
+  /**
+   * Decimal separator used when parsing numbers from CSV (default: ".").
+   *
+   * Note: core CSV parsing returns strings; this option is intended for higher-level
+   * consumers (e.g. the default value mapper in csv.base) that convert strings to numbers.
+   */
+  decimalSeparator?: "." | ",";
   /** Maximum number of data rows to parse (excluding header) */
   maxRows?: number;
   /** Number of lines to skip at the beginning (before header detection) */
@@ -154,6 +156,11 @@ export interface CsvFormatOptions {
   escape?: string | false | null;
   /** Row delimiter (default: "\n") */
   rowDelimiter?: string;
+  /**
+   * Decimal separator used when formatting numbers to CSV (default: ".").
+   * For European-style CSV, this is commonly "," (often together with delimiter ";").
+   */
+  decimalSeparator?: "." | ",";
   /** Always quote all fields (default: false, only quote when necessary) */
   alwaysQuote?: boolean;
   /** Quote specific columns by name or index */
@@ -636,7 +643,8 @@ export function formatCsv(
     writeBOM = false,
     includeEndRowDelimiter = false,
     alwaysWriteHeaders = false,
-    transform
+    transform,
+    decimalSeparator = "."
   } = options;
 
   // Determine if headers should be written (default: true when headers is provided)
@@ -688,7 +696,10 @@ export function formatCsv(
       return "";
     }
 
-    const str = String(value);
+    const str =
+      typeof value === "number"
+        ? formatNumberForCsv(value, decimalSeparator as DecimalSeparator)
+        : String(value);
 
     // If quoting is disabled, return raw string
     if (!quoteEnabled) {

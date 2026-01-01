@@ -472,6 +472,22 @@ describe("CSV Stream - CsvFormatterStream", () => {
 
       expect(chunks.join("")).toBe("1,2.5,true,false");
     });
+
+    it("should format numbers with comma decimalSeparator", async () => {
+      const formatter = new CsvFormatterStream({ delimiter: ";", decimalSeparator: "," });
+      const chunks: string[] = [];
+
+      formatter.on("data", chunk => {
+        chunks.push(chunk.toString());
+      });
+
+      formatter.write([1, 2.5]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+
+      expect(chunks.join("")).toBe("1;2,5");
+    });
   });
 
   // ===========================================================================

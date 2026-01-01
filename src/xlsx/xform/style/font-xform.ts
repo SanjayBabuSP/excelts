@@ -32,32 +32,49 @@ interface FontOptions {
 class FontXform extends BaseXform {
   declare private options: FontOptions;
   declare public parser: any;
+  declare private renderOrder: string[];
 
   constructor(options?: FontOptions) {
     super();
 
     this.options = options || FontXform.OPTIONS;
 
-    this.map = {
-      b: { prop: "bold", xform: new BooleanXform({ tag: "b", attr: "val" }) },
-      i: { prop: "italic", xform: new BooleanXform({ tag: "i", attr: "val" }) },
-      u: { prop: "underline", xform: new UnderlineXform() },
-      charset: { prop: "charset", xform: new IntegerXform({ tag: "charset", attr: "val" }) },
-      color: { prop: "color", xform: new ColorXform() },
-      condense: { prop: "condense", xform: new BooleanXform({ tag: "condense", attr: "val" }) },
-      extend: { prop: "extend", xform: new BooleanXform({ tag: "extend", attr: "val" }) },
-      family: { prop: "family", xform: new IntegerXform({ tag: "family", attr: "val" }) },
-      outline: { prop: "outline", xform: new BooleanXform({ tag: "outline", attr: "val" }) },
-      vertAlign: { prop: "vertAlign", xform: new StringXform({ tag: "vertAlign", attr: "val" }) },
-      scheme: { prop: "scheme", xform: new StringXform({ tag: "scheme", attr: "val" }) },
-      shadow: { prop: "shadow", xform: new BooleanXform({ tag: "shadow", attr: "val" }) },
-      strike: { prop: "strike", xform: new BooleanXform({ tag: "strike", attr: "val" }) },
-      sz: { prop: "size", xform: new IntegerXform({ tag: "sz", attr: "val" }) }
-    };
-    this.map[this.options.fontNameTag] = {
-      prop: "name",
-      xform: new StringXform({ tag: this.options.fontNameTag, attr: "val" })
-    };
+    // Define properties in render order (Excel's expected order)
+    const fontProperties = [
+      { tag: "b", prop: "bold", xform: new BooleanXform({ tag: "b", attr: "val" }) },
+      { tag: "i", prop: "italic", xform: new BooleanXform({ tag: "i", attr: "val" }) },
+      { tag: "u", prop: "underline", xform: new UnderlineXform() },
+      { tag: "strike", prop: "strike", xform: new BooleanXform({ tag: "strike", attr: "val" }) },
+      {
+        tag: "condense",
+        prop: "condense",
+        xform: new BooleanXform({ tag: "condense", attr: "val" })
+      },
+      { tag: "extend", prop: "extend", xform: new BooleanXform({ tag: "extend", attr: "val" }) },
+      { tag: "outline", prop: "outline", xform: new BooleanXform({ tag: "outline", attr: "val" }) },
+      { tag: "shadow", prop: "shadow", xform: new BooleanXform({ tag: "shadow", attr: "val" }) },
+      { tag: "sz", prop: "size", xform: new IntegerXform({ tag: "sz", attr: "val" }) },
+      { tag: "color", prop: "color", xform: new ColorXform() },
+      {
+        tag: this.options.fontNameTag,
+        prop: "name",
+        xform: new StringXform({ tag: this.options.fontNameTag, attr: "val" })
+      },
+      { tag: "family", prop: "family", xform: new IntegerXform({ tag: "family", attr: "val" }) },
+      { tag: "scheme", prop: "scheme", xform: new StringXform({ tag: "scheme", attr: "val" }) },
+      { tag: "charset", prop: "charset", xform: new IntegerXform({ tag: "charset", attr: "val" }) },
+      {
+        tag: "vertAlign",
+        prop: "vertAlign",
+        xform: new StringXform({ tag: "vertAlign", attr: "val" })
+      }
+    ];
+
+    // Build map and renderOrder from single source of truth
+    this.map = Object.fromEntries(
+      fontProperties.map(p => [p.tag, { prop: p.prop, xform: p.xform }])
+    );
+    this.renderOrder = fontProperties.map(p => p.tag);
   }
 
   get tag(): string {
@@ -65,11 +82,11 @@ class FontXform extends BaseXform {
   }
 
   render(xmlStream: any, model: FontModel): void {
-    const { map } = this;
+    const { map, renderOrder } = this;
 
     xmlStream.openNode(this.options.tagName);
-    Object.entries(this.map).forEach(([tag, defn]: [string, { prop: string; xform: any }]) => {
-      map[tag].xform.render(xmlStream, model[defn.prop as keyof FontModel]);
+    renderOrder.forEach(tag => {
+      map[tag].xform.render(xmlStream, model[map[tag].prop as keyof FontModel]);
     });
     xmlStream.closeNode();
   }

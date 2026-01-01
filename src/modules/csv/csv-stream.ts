@@ -17,6 +17,7 @@ import type {
   RowValidateCallback
 } from "./csv-core";
 import { isSyncTransform, isSyncValidate } from "./csv-core";
+import { formatNumberForCsv } from "./csv-number";
 
 /**
  * Transform stream that parses CSV data row by row
@@ -508,6 +509,7 @@ export class CsvFormatterStream extends Transform {
   private rowDelimiter: string;
   private quoteEnabled: boolean;
   private alwaysQuote: boolean;
+  private decimalSeparator: "." | ",";
   private headerWritten: boolean = false;
   private headers: string[] | null = null;
   private shouldWriteHeaders: boolean;
@@ -537,6 +539,7 @@ export class CsvFormatterStream extends Transform {
     this.delimiter = options.delimiter ?? ",";
     this.rowDelimiter = options.rowDelimiter ?? "\n";
     this.alwaysQuote = options.alwaysQuote ?? false;
+    this.decimalSeparator = options.decimalSeparator ?? ".";
     // writeHeaders defaults to true when headers is provided
     this.shouldWriteHeaders = options.writeHeaders ?? true;
 
@@ -725,7 +728,8 @@ export class CsvFormatterStream extends Transform {
       return "";
     }
 
-    const str = String(value);
+    const str =
+      typeof value === "number" ? formatNumberForCsv(value, this.decimalSeparator) : String(value);
 
     if (!this.quoteEnabled) {
       return str;

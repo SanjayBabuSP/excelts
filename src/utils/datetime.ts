@@ -32,7 +32,6 @@ const PAD2 = Array.from({ length: 60 }, (_, i) => (i < 10 ? `0${i}` : `${i}`));
 
 // Character codes for fast comparison
 const C_0 = 48;
-const C_9 = 57;
 const C_DASH = 45;
 const C_SLASH = 47;
 const C_COLON = 58;
@@ -281,172 +280,6 @@ const AUTO_DETECT: Array<[number, Parser[]]> = [
 ];
 
 // ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * Quick pre-filter to reject non-date strings
- */
-export function mightBeDate(s: string): boolean {
-  const len = s.length;
-  if (len < 10 || len > 30) {
-    return false;
-  }
-  const c0 = s.charCodeAt(0);
-  const c1 = s.charCodeAt(1);
-  // Must start with digits
-  if (c0 < C_0 || c0 > C_9 || c1 < C_0 || c1 > C_9) {
-    return false;
-  }
-  const c2 = s.charCodeAt(2);
-  // Either YYYY format (4 digits) or MM/DD format (separator at pos 2)
-  return (c2 >= C_0 && c2 <= C_9) || c2 === C_DASH || c2 === C_SLASH;
-}
-
-/**
- * Parse a date string
- *
- * @param value - String to parse
- * @param formats - Specific formats to try (optional, auto-detects ISO if omitted)
- * @returns Date object or null
- *
- * @example
- * parseDate("2024-12-26")                    // auto-detect ISO
- * parseDate("12-26-2024", ["MM-DD-YYYY"])   // explicit US format
- */
-export function parseDate(value: string, formats?: DateFormat[]): Date | null {
-  if (!value || typeof value !== "string") {
-    return null;
-  }
-  const s = value.trim();
-  if (!s) {
-    return null;
-  }
-
-  // Explicit formats
-  if (formats?.length) {
-    for (const fmt of formats) {
-      const result = PARSERS[fmt]?.(s);
-      if (result) {
-        return result;
-      }
-    }
-    return null;
-  }
-
-  // Auto-detect by length
-  const len = s.length;
-  for (const [l, parsers] of AUTO_DETECT) {
-    if (len === l) {
-      for (const p of parsers) {
-        const result = p(s);
-        if (result) {
-          return result;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Format a Date to string
- *
- * @param date - Date to format
- * @param format - Format template (optional, defaults to ISO)
- * @param utc - Use UTC time (default: false)
- * @returns Formatted string or empty string if invalid
- *
- * @example
- * formatDate(date)                        // "2024-12-26T10:30:00.000+08:00"
- * formatDate(date, "YYYY-MM-DD", true)   // "2024-12-26"
- */
-export function formatDate(date: Date, format?: string, utc = false): string {
-  if (!(date instanceof Date)) {
-    return "";
-  }
-  const t = date.getTime();
-  if (t !== t) {
-    return "";
-  } // NaN check (faster than isNaN)
-
-  // Default ISO format - direct string building (faster than toISOString)
-  if (!format) {
-    if (utc) {
-      const y = date.getUTCFullYear();
-      const M = date.getUTCMonth() + 1;
-      const D = date.getUTCDate();
-      const H = date.getUTCHours();
-      const m = date.getUTCMinutes();
-      const s = date.getUTCSeconds();
-      const ms = date.getUTCMilliseconds();
-      return `${y}-${PAD2[M]}-${PAD2[D]}T${PAD2[H]}:${PAD2[m]}:${PAD2[s]}.${ms < 10 ? "00" + ms : ms < 100 ? "0" + ms : ms}Z`;
-    }
-    const y = date.getFullYear();
-    const M = date.getMonth() + 1;
-    const D = date.getDate();
-    const H = date.getHours();
-    const m = date.getMinutes();
-    const s = date.getSeconds();
-    const ms = date.getMilliseconds();
-    return `${y}-${PAD2[M]}-${PAD2[D]}T${PAD2[H]}:${PAD2[m]}:${PAD2[s]}.${ms < 10 ? "00" + ms : ms < 100 ? "0" + ms : ms}${tzOffset(date)}`;
-  }
-
-  // Fast paths for common formats
-  if (format === "YYYY-MM-DD") {
-    return utc
-      ? `${date.getUTCFullYear()}-${PAD2[date.getUTCMonth() + 1]}-${PAD2[date.getUTCDate()]}`
-      : `${date.getFullYear()}-${PAD2[date.getMonth() + 1]}-${PAD2[date.getDate()]}`;
-  }
-
-  return renderFormat(date, format, utc);
-}
-
-function tzOffset(d: Date): string {
-  const off = -d.getTimezoneOffset();
-  const sign = off >= 0 ? "+" : "-";
-  const h = (Math.abs(off) / 60) | 0; // Bitwise OR faster than Math.floor
-  const m = Math.abs(off) % 60;
-  return `${sign}${PAD2[h]}:${PAD2[m]}`;
-}
-
-function renderFormat(d: Date, fmt: string, utc: boolean): string {
-  // Handle escaped sections [...]
-  const esc: string[] = [];
-  let out = fmt.replace(/\[([^\]]*)\]/g, (_, c) => {
-    esc.push(c);
-    return `\x00${esc.length - 1}\x00`;
-  });
-
-  // Get components once
-  const y = utc ? d.getUTCFullYear() : d.getFullYear();
-  const M = utc ? d.getUTCMonth() + 1 : d.getMonth() + 1;
-  const D = utc ? d.getUTCDate() : d.getDate();
-  const H = utc ? d.getUTCHours() : d.getHours();
-  const m = utc ? d.getUTCMinutes() : d.getMinutes();
-  const s = utc ? d.getUTCSeconds() : d.getSeconds();
-  const ms = utc ? d.getUTCMilliseconds() : d.getMilliseconds();
-
-  // Replace tokens
-  out = out
-    .replace(/YYYY/g, String(y))
-    .replace(/SSS/g, ms < 10 ? `00${ms}` : ms < 100 ? `0${ms}` : String(ms))
-    .replace(/MM/g, PAD2[M])
-    .replace(/DD/g, PAD2[D])
-    .replace(/HH/g, PAD2[H])
-    .replace(/mm/g, PAD2[m])
-    .replace(/ss/g, PAD2[s])
-    .replace(/Z/g, utc ? "Z" : tzOffset(d));
-
-  // Restore escaped
-  if (esc.length) {
-    // oxlint-disable-next-line no-control-regex
-    out = out.replace(/\x00(\d+)\x00/g, (_, i) => esc[+i]);
-  }
-  return out;
-}
-
-// ============================================================================
 // High-performance batch processors (class-based for state encapsulation)
 // ============================================================================
 
@@ -528,6 +361,14 @@ export class DateParser {
     }
     return out;
   }
+}
+
+function tzOffset(d: Date): string {
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const h = (Math.abs(off) / 60) | 0; // Bitwise OR faster than Math.floor
+  const m = Math.abs(off) % 60;
+  return `${sign}${PAD2[h]}:${PAD2[m]}`;
 }
 
 /**

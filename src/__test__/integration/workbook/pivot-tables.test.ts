@@ -177,7 +177,7 @@ describe("Workbook", () => {
           values: ["C"],
           metric: "sum"
         });
-      }).toThrow('The header name "NonExistent" was not found in TestTable.');
+      }).toThrow('The header name "NonExistent" was not found in Sheet1.');
     });
 
     it("throws error if sourceTable has no data rows", () => {
@@ -604,20 +604,6 @@ describe("Workbook", () => {
       expect(pivotTable1Xml).toContain('cacheId="10"');
       expect(pivotTable2Xml).toContain('cacheId="11"');
       expect(pivotTable3Xml).toContain('cacheId="12"');
-
-      // Verify each pivot table has unique UID (not hardcoded)
-      const uid1Match = pivotTable1Xml.match(/xr:uid="([^"]+)"/);
-      const uid2Match = pivotTable2Xml.match(/xr:uid="([^"]+)"/);
-      const uid3Match = pivotTable3Xml.match(/xr:uid="([^"]+)"/);
-
-      expect(uid1Match).toBeTruthy();
-      expect(uid2Match).toBeTruthy();
-      expect(uid3Match).toBeTruthy();
-
-      // UIDs should all be different
-      expect(uid1Match![1]).not.toBe(uid2Match![1]);
-      expect(uid2Match![1]).not.toBe(uid3Match![1]);
-      expect(uid1Match![1]).not.toBe(uid3Match![1]);
     });
 
     it("supports 'count' metric for pivot tables", async () => {
@@ -1026,6 +1012,317 @@ describe("Workbook", () => {
         // Clean up
         await promisify(fs.unlink)(NON_SEQ_CACHE_FILEPATH);
         await promisify(fs.unlink)(RESAVED_FILEPATH);
+      });
+    });
+
+    describe("GitHub Issue #5 - rowItems/colItems/recordCount fix", () => {
+      it("generates correct rowItems with all unique values plus grand total", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("table");
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a1", "b2", 5],
+            ["a2", "b1", 24],
+            ["a2", "b2", 35],
+            ["a3", "b1", 45],
+            ["a3", "b2", 45]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-issue5.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        // Read and parse the XML to verify correct structure
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotTable1.xml
+        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        expect(pivotTableXml).toBeDefined();
+        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+
+        // rowItems should have 4 items: a1, a2, a3, and grand total
+        // The pattern should be: <rowItems count="4">
+        expect(pivotTableStr).toMatch(/<rowItems count="4">/);
+        // Should have 3 regular items: <i><x /></i>, <i><x v="1" /></i>, <i><x v="2" /></i>
+        // Note: v="0" is omitted per Excel convention (v="0" is the default)
+        expect(pivotTableStr).toMatch(/<i><x \/><\/i>/);
+        expect(pivotTableStr).toMatch(/<i><x v="1" \/><\/i>/);
+        expect(pivotTableStr).toMatch(/<i><x v="2" \/><\/i>/);
+        // And grand total: <i t="grand"><x /></i>
+        expect(pivotTableStr).toMatch(/<i t="grand"><x \/><\/i>/);
+
+        // colItems should have 3 items: b1, b2, and grand total
+        expect(pivotTableStr).toMatch(/<colItems count="3">/);
+
+        // Check pivotCacheDefinition1.xml for correct recordCount
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        expect(cacheDefXml).toBeDefined();
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // recordCount should be 6 (number of data rows)
+        expect(cacheDefStr).toMatch(/recordCount="6"/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+
+      it("generates correct colItems when columns is empty with single value", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("table");
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a2", "b2", 10]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: [], // empty columns
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-no-cols.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+
+        // With no columns and single value, colItems should just have grand total
+        expect(pivotTableStr).toMatch(/<colItems count="1">/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+
+      it("generates correct colItems when columns is empty with multiple values", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("table");
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a2", "b2", 10]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: [], // empty columns
+          values: ["B", "C"], // multiple values
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-multi-vals.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+
+        // With no columns and 2 values, colItems should have 3 items (2 values + grand total)
+        expect(pivotTableStr).toMatch(/<colItems count="3">/);
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+    });
+
+    describe("GitHub Issue #5 - worksheetSource sheet name fix", () => {
+      it("uses worksheet name (not table name) in pivotCacheDefinition worksheetSource", async () => {
+        const workbook = new Workbook();
+        // Create a worksheet named "DataSheet" with a table named "MyTable"
+        const worksheet = workbook.addWorksheet("DataSheet");
+
+        const table = worksheet.addTable({
+          name: "MyTable", // Table name is different from worksheet name
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "Col1" }, { name: "Col2" }, { name: "Value" }],
+          rows: [
+            ["a", "x", 10],
+            ["b", "y", 20]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("PivotSheet");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["Col1"],
+          columns: ["Col2"],
+          values: ["Value"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-worksheet-name.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotCacheDefinition1.xml
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // The worksheetSource sheet attribute should reference the worksheet name "DataSheet"
+        // NOT the table name "MyTable"
+        expect(cacheDefStr).toContain('sheet="DataSheet"');
+        expect(cacheDefStr).not.toContain('sheet="MyTable"');
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+    });
+
+    describe("GitHub Issue #15 - same field in rows and values", () => {
+      it("handles numeric field used as both row and value field correctly", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet();
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", "b1", 5],
+            ["a1", "b2", 5],
+            ["a2", "b1", 24],
+            ["a2", "b2", 35],
+            ["a3", "b1", 45],
+            ["a3", "b2", 45]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        // Use same field "C" for both rows and values
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["C"],
+          columns: ["B"],
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-issue15.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotCacheDefinition1.xml
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // Field C should have numeric shared items (not string)
+        // Should have containsNumber="1" and use <n v="..." /> format
+        expect(cacheDefStr).toContain('name="C"');
+        expect(cacheDefStr).toContain('containsNumber="1"');
+        expect(cacheDefStr).toContain('<n v="5"');
+        expect(cacheDefStr).toContain('<n v="24"');
+        expect(cacheDefStr).toContain('<n v="35"');
+        expect(cacheDefStr).toContain('<n v="45"');
+        // Should NOT have string format for numeric values
+        expect(cacheDefStr).not.toContain('<s v="5"');
+        expect(cacheDefStr).not.toContain('<s v="24"');
+
+        // Check pivotCacheRecords1.xml - records should use index references
+        const cacheRecXml = zipData["xl/pivotCache/pivotCacheRecords1.xml"];
+        const cacheRecStr = new TextDecoder().decode(cacheRecXml);
+
+        // Records should use <x v="..." /> format for indexed lookup
+        expect(cacheRecStr).toContain('<x v="');
+
+        // Check pivotTable1.xml
+        const pivotXml = zipData["xl/pivotTables/pivotTable1.xml"];
+        const pivotStr = new TextDecoder().decode(pivotXml);
+
+        // Should have dataField for "C" with Sum
+        expect(pivotStr).toContain("Sum of C");
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
+      });
+
+      it("handles same numeric field used as both row and column", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet();
+
+        const table = worksheet.addTable({
+          name: "table",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }],
+          rows: [
+            ["a1", 1, 100],
+            ["a1", 2, 200],
+            ["a2", 1, 300],
+            ["a2", 2, 400]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        // Use numeric field "B" for rows and "C" for values
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["B"],
+          columns: ["A"],
+          values: ["C"],
+          metric: "sum"
+        });
+
+        const pivotFilePath = testFilePath("workbook-pivot-issue15-numeric-rows.test");
+        await workbook.xlsx.writeFile(pivotFilePath);
+
+        const buffer = await fsReadFileAsync(pivotFilePath);
+        const zipData = new ZipParser(buffer).extractAllSync();
+
+        // Check pivotCacheDefinition1.xml
+        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
+        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+
+        // Field B should have numeric shared items
+        expect(cacheDefStr).toContain('name="B"');
+        expect(cacheDefStr).toContain('<n v="1"');
+        expect(cacheDefStr).toContain('<n v="2"');
+
+        // Clean up
+        await promisify(fs.unlink)(pivotFilePath);
       });
     });
   });
