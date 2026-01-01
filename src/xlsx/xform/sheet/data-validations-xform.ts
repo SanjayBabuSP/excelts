@@ -1,5 +1,4 @@
 import { BaseXform } from "../base-xform";
-import { Range } from "../../../doc/range";
 import { parseBoolean, dateToExcel, excelToDate } from "../../../utils/utils";
 import { colCache } from "../../../utils/col-cache";
 import { isEqual } from "../../../utils/under-dash";
@@ -262,20 +261,9 @@ class DataValidationsXform extends BaseXform {
         const list = this._address.split(/\s+/g) || [];
         list.forEach((addr: string) => {
           if (addr.includes(":")) {
-            const range = new Range(addr);
-            // Only expand small ranges to avoid performance issues with large ranges
-            // like B2:B1048576 (entire column validations)
-            const rangeSize = (range.bottom - range.top + 1) * (range.right - range.left + 1);
-            if (rangeSize <= 1000) {
-              // Small range: expand to individual cells for backward compatibility
-              range.forEachAddress((address: string) => {
-                this.model[address] = this._dataValidation;
-              });
-            } else {
-              // Large range: store as range string with special marker
-              // The key format "range:A1:Z100" allows DataValidations.find() to detect it
-              this.model[`range:${addr}`] = this._dataValidation;
-            }
+            // Store ranges directly to avoid expanding large (or many) validations.
+            // The key format "range:A1:Z100" allows DataValidations.find() to detect it.
+            this.model[`range:${addr}`] = this._dataValidation;
           } else {
             this.model[addr] = this._dataValidation;
           }

@@ -106,8 +106,8 @@ describe("DataValidation Large Range Performance", () => {
     });
   });
 
-  describe("small range validations (backward compatibility)", () => {
-    it("should expand small ranges to individual cells", async () => {
+  describe("small range validations (range-based lookup)", () => {
+    it("should allow cell lookup for small ranges", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Test");
 
@@ -136,11 +136,11 @@ describe("DataValidation Large Range Performance", () => {
       expect(ws2?.getCell("K1").dataValidation).toBeUndefined();
     });
 
-    it("should handle range exactly at threshold (1000 cells)", async () => {
+    it("should handle moderately sized ranges", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Test");
 
-      // 40x25 = 1000 cells exactly - should be expanded (<=1000)
+      // 40x25 = 1000 cells
       ws.dataValidations.model["A1:Y40"] = {
         type: "list",
         formulae: ["Test"],
@@ -154,7 +154,7 @@ describe("DataValidation Large Range Performance", () => {
       await wb2.xlsx.readFile(filePath);
       const ws2 = wb2.getWorksheet("Test");
 
-      // Should be expanded and accessible
+      // Should be accessible
       expect(ws2?.getCell("A1").dataValidation).toBeDefined();
       expect(ws2?.getCell("Y40").dataValidation).toBeDefined();
     });
