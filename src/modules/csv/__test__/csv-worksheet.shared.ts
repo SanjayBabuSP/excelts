@@ -23,7 +23,10 @@ export interface CsvWorksheetModuleImports {
   // Functions
   parseCsvToWorksheet: (content: string, workbook: Workbook, options?: CsvReadOptions) => Worksheet;
   formatWorksheetToCsv: (worksheet: Worksheet | undefined, options?: CsvWriteOptions) => string;
-  createDefaultValueMapper: (dateFormats: readonly string[]) => (value: string) => any;
+  createDefaultValueMapper: (
+    dateFormats: readonly string[],
+    options?: { decimalSeparator?: "," | "." }
+  ) => (value: any) => any;
   createDefaultWriteMapper: (dateFormat?: string, dateUTC?: boolean) => (value: any) => any;
 }
 
@@ -36,7 +39,10 @@ export interface CsvWorksheetModuleImportsGeneric<TWorkbook> {
     options?: CsvReadOptions
   ) => Worksheet;
   formatWorksheetToCsv: (worksheet: Worksheet | undefined, options?: CsvWriteOptions) => string;
-  createDefaultValueMapper: (dateFormats: readonly string[]) => (value: string) => any;
+  createDefaultValueMapper: (
+    dateFormats: readonly string[],
+    options?: { decimalSeparator?: "," | "." }
+  ) => (value: any) => any;
   createDefaultWriteMapper: (dateFormat?: string, dateUTC?: boolean) => (value: any) => any;
 }
 
