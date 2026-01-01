@@ -259,11 +259,11 @@ const url = URL.createObjectURL(blob);
 
 ### Browsers (No Polyfills Required)
 
-- **Chrome >= 85** (August 2020)
-- **Edge >= 85** (August 2020)
-- **Firefox >= 79** (July 2020)
-- **Safari >= 14** (September 2020)
-- **Opera >= 71** (September 2020)
+- **Chrome >= 89** (March 2021)
+- **Edge >= 89** (March 2021)
+- **Firefox >= 102** (June 2022)
+- **Safari >= 14.1** (April 2021)
+- **Opera >= 75** (March 2021)
 
 For older browsers without native `CompressionStream` API (Firefox < 113, Safari < 16.4), ExcelTS automatically uses a built-in pure JavaScript DEFLATE implementation - no configuration or polyfills needed.
 
