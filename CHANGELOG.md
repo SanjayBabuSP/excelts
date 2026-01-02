@@ -7,39 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.1.0](https://github.com/cjnoname/excelts/compare/v3.0.1...v3.1.0) (2025-12-30)
 
-
 ### Features
 
-* **csv:** support decimalSeparator option ([418eccf](https://github.com/cjnoname/excelts/commit/418eccf56d8ce94127b89a913f6194743d7157d1)), closes [#20](https://github.com/cjnoname/excelts/issues/20)
-* **row:** add getValues and valuesToString helpers ([9dca08f](https://github.com/cjnoname/excelts/commit/9dca08f1ad30144121719ad65b4eb622eef66226)), closes [#19](https://github.com/cjnoname/excelts/issues/19)
+- **csv:** support decimalSeparator option ([418eccf](https://github.com/cjnoname/excelts/commit/418eccf56d8ce94127b89a913f6194743d7157d1)), closes [#20](https://github.com/cjnoname/excelts/issues/20)
+- **row:** add getValues and valuesToString helpers ([9dca08f](https://github.com/cjnoname/excelts/commit/9dca08f1ad30144121719ad65b4eb622eef66226)), closes [#19](https://github.com/cjnoname/excelts/issues/19)
 
 ## [3.0.1](https://github.com/cjnoname/excelts/compare/v3.0.0...v3.0.1) (2025-12-28)
 
-
 ### Bug Fixes
 
-* PivotTable not forming correctly when rows and values fields are equal ([#15](https://github.com/cjnoname/excelts/issues/15)) ([d3eb98d](https://github.com/cjnoname/excelts/commit/d3eb98d2e04a54d05ec3895ec6f3ee49d90a520a))
+- PivotTable not forming correctly when rows and values fields are equal ([#15](https://github.com/cjnoname/excelts/issues/15)) ([d3eb98d](https://github.com/cjnoname/excelts/commit/d3eb98d2e04a54d05ec3895ec6f3ee49d90a520a))
 
 ## [3.0.0](https://github.com/cjnoname/excelts/compare/v2.0.1...v3.0.0) (2025-12-28)
 
-
 ### ⚠ BREAKING CHANGES
 
-* dyDescent is no longer output by default for new worksheets
+- dyDescent is no longer output by default for new worksheets
 
 ### Bug Fixes
 
-* correct Table headerRowCount parsing per ECMA-376 ([6cc6016](https://github.com/cjnoname/excelts/commit/6cc60169b2cd6934b28bbff844195a184990af08))
-* improve XML output to match Excel's minimal format ([379d895](https://github.com/cjnoname/excelts/commit/379d895a52b33cfa1c3815953d59d4170e3ca7ec))
-* make dyDescent optional per ECMA-376 minimum output principle ([76f9c2b](https://github.com/cjnoname/excelts/commit/76f9c2b7b87d659f254836b8c92c2bfc071be3d6))
-* resolve PivotTable XML generation bugs (Issue [#5](https://github.com/cjnoname/excelts/issues/5)) ([d564470](https://github.com/cjnoname/excelts/commit/d564470c3989405a5d4783c669727723cfe020e2))
+- correct Table headerRowCount parsing per ECMA-376 ([6cc6016](https://github.com/cjnoname/excelts/commit/6cc60169b2cd6934b28bbff844195a184990af08))
+- improve XML output to match Excel's minimal format ([379d895](https://github.com/cjnoname/excelts/commit/379d895a52b33cfa1c3815953d59d4170e3ca7ec))
+- make dyDescent optional per ECMA-376 minimum output principle ([76f9c2b](https://github.com/cjnoname/excelts/commit/76f9c2b7b87d659f254836b8c92c2bfc071be3d6))
+- resolve PivotTable XML generation bugs (Issue [#5](https://github.com/cjnoname/excelts/issues/5)) ([d564470](https://github.com/cjnoname/excelts/commit/d564470c3989405a5d4783c669727723cfe020e2))
 
 ## [2.0.1](https://github.com/cjnoname/excelts/compare/v2.0.0...v2.0.1) (2025-12-28)
 
-
 ### Bug Fixes
 
-* correct PivotTable XML generation for rowItems, colItems, and recordCount ([2e956a6](https://github.com/cjnoname/excelts/commit/2e956a6e39be34db854f1d7d56cfca2646b98dc6))
+- correct PivotTable XML generation for rowItems, colItems, and recordCount ([2e956a6](https://github.com/cjnoname/excelts/commit/2e956a6e39be34db854f1d7d56cfca2646b98dc6))
 
 ## [2.0.0](https://github.com/cjnoname/excelts/compare/v1.6.3...v2.0.0) (2025-12-26)
 
@@ -214,7 +210,7 @@ This is the first stable 1.0 release of ExcelTS! The library is now production-r
 
 ### Changed
 
-- Migrated from ExcelJS to ExcelTS
+- Public API and packaging updates
 - All default exports converted to named exports
 - Updated all dependencies to latest versions
 - Migrated testing framework from Mocha to Vitest
@@ -231,34 +227,3 @@ This is the first stable 1.0 release of ExcelTS! The library is now production-r
 - Reduced package size by excluding source files from npm publish
 - Optimized IIFE builds with conditional sourcemaps
 - Better error handling and logging (development-only console warnings)
-
----
-
-## Migration from ExcelJS
-
-If you're migrating from ExcelJS, note these breaking changes:
-
-### Import Changes
-
-```javascript
-// Before (ExcelJS)
-import ExcelJS from "exceljs";
-const workbook = new ExcelJS.Workbook();
-
-// After (ExcelTS)
-import { Workbook } from "@cj-tech-master/excelts";
-const workbook = new Workbook();
-```
-
-### Browser Usage
-
-```javascript
-// Before (ExcelJS)
-import ExcelJS from "exceljs";
-
-// After (ExcelTS)
-import { Workbook } from "@cj-tech-master/excelts/browser";
-// Or use IIFE build with <script> tag
-```
-
-For more details, see [README.md](README.md).

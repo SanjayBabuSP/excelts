@@ -6,7 +6,7 @@ Modern TypeScript Excel Workbook Manager - Read, manipulate and write spreadshee
 
 ## About This Project
 
-ExcelTS is a modernized fork of [ExcelJS](https://github.com/exceljs/exceljs) with:
+ExcelTS is a modern TypeScript Excel workbook manager with:
 
 - 🚀 **Zero Runtime Dependencies** - Pure TypeScript implementation with no external packages
 - ✅ **Full TypeScript Support** - Complete type definitions and modern TypeScript patterns
@@ -15,7 +15,7 @@ ExcelTS is a modernized fork of [ExcelJS](https://github.com/exceljs/exceljs) wi
 - ✅ **ESM First** - Native ES Module support with CommonJS compatibility
 - ✅ **Node 20+** - Optimized for modern Node.js versions
 - ✅ **Named Exports** - All exports are named for better tree-shaking
-- ✅ **Broad Browser Support** - Works in Chrome 85+, Firefox 79+, Safari 14+ with built-in polyfills
+- ✅ **Broad Browser Support** - Works in Chrome 89+, Firefox 102+, Safari 14.1+ (with built-in fallbacks for missing `CompressionStream`)
 
 ## Translations
 
@@ -43,7 +43,10 @@ sheet.addRow(["John Doe", 30, "john@example.com"]);
 sheet.addRow(["Jane Smith", 25, "jane@example.com"]);
 
 // Save to file
+// Node.js only: write to a file path
 await workbook.xlsx.writeFile("output.xlsx");
+
+// Browser: use `writeBuffer()` and save as a Blob (see the Browser Support section)
 ```
 
 ### Reading a Workbook
@@ -52,7 +55,10 @@ await workbook.xlsx.writeFile("output.xlsx");
 import { Workbook } from "@cj-tech-master/excelts";
 
 const workbook = new Workbook();
+// Node.js only: read from a file path
 await workbook.xlsx.readFile("input.xlsx");
+
+// Browser: use `xlsx.load(arrayBuffer)` (see the Browser Support section)
 
 const worksheet = workbook.getWorksheet(1);
 worksheet.eachRow((row, rowNumber) => {
@@ -106,9 +112,13 @@ cell.fill = {
   - Data protection
   - Comments and notes
 
-## Streaming API (Node.js)
+## Streaming API
 
 For processing large Excel files without loading them entirely into memory, ExcelTS provides streaming reader and writer APIs.
+
+- **Node.js**: `WorkbookReader` supports reading from a file path, and `WorkbookWriter` supports writing to a filename.
+- **Browsers**: use `Uint8Array` / `ArrayBuffer` / Web `ReadableStream<Uint8Array>` for reading, and Web `WritableStream<Uint8Array>` for writing.
+- Note: ExcelTS does not re-export the internal stream utility surface (e.g. `Readable`, `Writable`). Prefer standard Web Streams (browser/Node 20+) or Node.js streams.
 
 ### Streaming Reader
 
@@ -117,7 +127,7 @@ Read large XLSX files with minimal memory usage:
 ```javascript
 import { WorkbookReader } from "@cj-tech-master/excelts";
 
-// Read from file path
+// Node.js: read from file path
 const reader = new WorkbookReader("large-file.xlsx", {
   worksheets: "emit", // emit worksheet events
   sharedStrings: "cache", // cache shared strings for cell values
@@ -140,6 +150,7 @@ Write large XLSX files row by row:
 ```javascript
 import { WorkbookWriter } from "@cj-tech-master/excelts";
 
+// Node.js: write to filename
 const workbook = new WorkbookWriter({
   filename: "output.xlsx",
   useSharedStrings: true,
@@ -156,6 +167,63 @@ for (let i = 0; i < 1000000; i++) {
 // Commit worksheet and finalize
 sheet.commit();
 await workbook.commit();
+```
+
+### Web Streams (Node.js 20+ and Browsers)
+
+`WorkbookWriter` can write to a Web `WritableStream<Uint8Array>`, and `WorkbookReader` can read from a Web `ReadableStream<Uint8Array>`.
+
+This does **not** require importing any extra stream utility surface from ExcelTS; it uses the standard Web Streams API.
+
+- Full runnable example: [src/modules/excel/examples/web-streams-reader-writer.ts](src/modules/excel/examples/web-streams-reader-writer.ts)
+
+Run locally (Node.js 20+):
+
+```bash
+npx tsx src/modules/excel/examples/web-streams-reader-writer.ts
+```
+
+Minimal end-to-end snippet:
+
+```javascript
+import { WorkbookWriter, WorkbookReader } from "@cj-tech-master/excelts";
+
+// 1) Write workbook -> Web WritableStream
+const chunks = [];
+const writable = new WritableStream({
+  write(chunk) {
+    chunks.push(chunk);
+  }
+});
+
+const writer = new WorkbookWriter({ stream: writable });
+const sheet = writer.addWorksheet("Sheet1");
+sheet.addRow(["Name", "Score"]).commit();
+sheet.addRow(["Alice", 98]).commit();
+await sheet.commit();
+await writer.commit();
+
+// 2) Read workbook <- Web ReadableStream
+const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+let offset = 0;
+for (const c of chunks) {
+  bytes.set(c, offset);
+  offset += c.length;
+}
+
+const readable = new ReadableStream({
+  start(controller) {
+    controller.enqueue(bytes);
+    controller.close();
+  }
+});
+
+const reader = new WorkbookReader(readable, { worksheets: "emit" });
+for await (const ws of reader) {
+  for await (const row of ws) {
+    console.log(row.values);
+  }
+}
 ```
 
 ## CSV Support
@@ -243,6 +311,21 @@ const url = URL.createObjectURL(blob);
 </script>
 ```
 
+### Manual Browser Example (Local)
+
+For a quick manual smoke test in a real browser (create/download/read XLSX, worksheet protection, etc.), use:
+
+- [src/modules/excel/examples/browser-smoke.html](src/modules/excel/examples/browser-smoke.html)
+
+Steps:
+
+```bash
+npm run build:browser
+npx serve .
+```
+
+Then open `http://localhost:3000/src/modules/excel/examples/browser-smoke.html`.
+
 ### Browser-Specific Notes
 
 - **CSV operations are supported** using native RFC 4180 implementation
@@ -267,6 +350,8 @@ const url = URL.createObjectURL(blob);
 - **Opera >= 75** (March 2021)
 
 For older browsers without native `CompressionStream` API (Firefox < 113, Safari < 16.4), ExcelTS automatically uses a built-in pure JavaScript DEFLATE implementation - no configuration or polyfills needed.
+
+ExcelTS does **not** require `crypto.randomUUID()` in browsers; it uses an internal UUID v4 generator with a `crypto.getRandomValues()` fallback.
 
 ## Maintainer
 
@@ -303,15 +388,13 @@ For detailed API documentation, please refer to the comprehensive documentation 
 - Conditional Formatting
 - File I/O
 
-The API remains largely compatible with the original ExcelJS.
-
 ## Contributing Guidelines
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ### Before Submitting a PR
 
-1. **Bug Fixes**: Add a unit-test or integration-test (in the `src/__test__` folder) that reproduces the issue
+1. **Bug Fixes**: Add a unit-test or integration-test (in `src/**/__tests__`) that reproduces the issue
 2. **New Features**: Open an issue first to discuss the feature and implementation approach
 3. **Documentation**: Update relevant documentation and type definitions
 4. **Code Style**: Follow the existing code style and pass all linters (`npm run lint`)
@@ -335,19 +418,13 @@ If you need help or have questions:
 
 MIT License
 
-Based on [ExcelJS](https://github.com/exceljs/exceljs) by [Guyon Roche](https://github.com/guyonroche)
+See LICENSE.
 
-## Credits
-
-This project is a fork of ExcelJS with modernization improvements. All credit for the original implementation goes to:
-
-- **Guyon Roche** - Original author of ExcelJS
-- All [ExcelJS contributors](https://github.com/exceljs/exceljs/graphs/contributors)
+Third-party software notices and attributions are provided in THIRD_PARTY_NOTICES.md.
 
 ## Links
 
 - [GitHub Repository](https://github.com/cjnoname/excelts)
-- [Original ExcelJS](https://github.com/exceljs/exceljs)
 - [Issue Tracker](https://github.com/cjnoname/excelts/issues)
 
 ## Changelog
