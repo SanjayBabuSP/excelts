@@ -1,5 +1,15 @@
 {
   "compilerOptions": {
+    "paths": {
+      "@archive": ["./src/modules/archive/index.ts"],
+      "@excel/*": ["./src/modules/excel/*"],
+      "@archive/*": ["./src/modules/archive/*"],
+      "@stream": ["./src/modules/stream/index.ts"],
+      "@stream/*": ["./src/modules/stream/*"],
+      "@csv/*": ["./src/modules/csv/*"],
+      "@utils/*": ["./src/utils/*"],
+      "@test/*": ["./src/test/*"]
+    },
     "module": "ESNext",
     "moduleResolution": "bundler",
     "target": "es2020",

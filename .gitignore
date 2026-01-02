@@ -17,8 +17,5 @@ node_modules
 # Mac files
 .DS_Store
 
-# Test generated files
-*.xlsx
-
 # Vitest browser screenshots (empty in headless mode)
 __screenshots__

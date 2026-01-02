@@ -11,13 +11,6 @@
     "name": "cjnoname",
     "email": "powerfulj87@gmail.com"
   },
-  "contributors": [
-    {
-      "name": "Guyon Roche",
-      "email": "guyon@live.com",
-      "url": "https://github.com/guyonroche"
-    }
-  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/cjnoname/excelts.git"
@@ -56,6 +49,7 @@
   "files": [
     "dist",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "README.md",
     "README_zh.md"
   ],
@@ -75,7 +69,7 @@
     "benchmark:compress": "rimraf dist && npm run build:esm && node --expose-gc scripts/benchmark-compress.js",
     "build:esm": "tsc --project tsconfig.esm.json && node scripts/fix-esm-imports.mjs",
     "build:cjs": "tsc --project tsconfig.cjs.json && node scripts/fix-cjs-imports.mjs",
-    "build:browser": "rolldown -c rolldown.config.js",
+    "build:browser": "rolldown -c rolldown.config.ts",
     "prepublishOnly": "npm run build",
     "preversion": "npm run lint && npm run type && npm run build && npm run test",
     "prepare": "husky"
@@ -89,7 +83,6 @@
     "csv",
     "spreadsheet",
     "workbook",
-    "exceljs",
     "font",
     "border",
     "fill",
@@ -114,9 +107,9 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/node": "^25.0.3",
-    "@typescript-eslint/eslint-plugin": "^8.50.1",
-    "@typescript-eslint/parser": "^8.50.1",
-    "@typescript/native-preview": "^7.0.0-dev.20251225.1",
+    "@typescript-eslint/eslint-plugin": "^8.51.0",
+    "@typescript-eslint/parser": "^8.51.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260101.1",
     "@vitest/browser": "^4.0.16",
     "@vitest/browser-playwright": "^4.0.16",
     "@vitest/ui": "^4.0.16",
@@ -126,16 +119,16 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import-x": "^4.16.1",
-    "eslint-plugin-oxlint": "^1.35.0",
+    "eslint-plugin-oxlint": "^1.36.0",
     "eslint-plugin-unused-imports": "^4.3.0",
     "husky": "^9.1.7",
-    "oxlint": "^1.35.0",
+    "oxlint": "^1.36.0",
     "playwright": "^1.57.0",
     "prettier": "^3.7.4",
     "rimraf": "^6.1.2",
-    "rolldown": "^1.0.0-beta.57",
+    "rolldown": "^1.0.0-beta.58",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.50.1",
+    "typescript-eslint": "^8.51.0",
     "vite-tsconfig-paths": "^6.0.3",
     "vitest": "^4.0.16"
   }

@@ -5,7 +5,9 @@ const runs = 3;
 await runProfiling("huge xlsx file streams", () => {
   return new Promise((resolve, reject) => {
     // Data taken from http://eforexcel.com/wp/downloads-18-sample-csv-files-data-sets-for-testing-sales/
-    const workbookReader = new WorkbookReader("./src/__test__/integration/data/huge.xlsx");
+    const workbookReader = new WorkbookReader(
+      "./src/modules/excel/stream/__tests__/data/huge.xlsx"
+    );
     workbookReader.read();
 
     let worksheetCount = 0;
@@ -29,7 +31,7 @@ await runProfiling("huge xlsx file streams", () => {
 
 await runProfiling("huge xlsx file async iteration", async () => {
   // Data taken from http://eforexcel.com/wp/downloads-18-sample-csv-files-data-sets-for-testing-sales/
-  const workbookReader = new WorkbookReader("./src/__test__//integration/data/huge.xlsx");
+  const workbookReader = new WorkbookReader("./src/modules/excel/stream/__tests__/data/huge.xlsx");
   let worksheetCount = 0;
   let rowCount = 0;
   for await (const worksheetReader of workbookReader) {
