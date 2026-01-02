@@ -18,9 +18,9 @@ import {
   hasDeflateRawCompressionStream,
   hasDeflateRawDecompressionStream,
   resolveCompressThresholdBytes
-} from "./compress.base";
-import { inflateRaw, deflateRawCompressed } from "./deflate-fallback";
-import { DEFAULT_COMPRESS_LEVEL } from "./defaults";
+} from "@archive/compress.base";
+import { inflateRaw, deflateRawCompressed } from "@archive/deflate-fallback";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
 
 // Re-export shared types
 export { type CompressOptions };

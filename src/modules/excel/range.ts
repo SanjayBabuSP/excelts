@@ -1,5 +1,5 @@
-import { colCache } from "./utils/col-cache";
-import type { Address } from "./types";
+import { colCache } from "@excel/utils/col-cache";
+import type { Address } from "@excel/types";
 
 interface RangeModel {
   top: number;

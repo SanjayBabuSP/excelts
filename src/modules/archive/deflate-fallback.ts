@@ -11,7 +11,7 @@
  * - Chrome < 103
  */
 
-import { concatUint8Arrays } from "./utils/bytes";
+import { concatUint8Arrays } from "@archive/utils/bytes";
 
 // ============================================================================
 // DEFLATE Decompression (Full implementation)

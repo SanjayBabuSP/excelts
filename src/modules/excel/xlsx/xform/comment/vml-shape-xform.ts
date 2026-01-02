@@ -1,6 +1,6 @@
-import { BaseXform } from "../base-xform";
-import { VmlTextboxXform } from "./vml-textbox-xform";
-import { VmlClientDataXform } from "./vml-client-data-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { VmlTextboxXform } from "@excel/xlsx/xform/comment/vml-textbox-xform";
+import { VmlClientDataXform } from "@excel/xlsx/xform/comment/vml-client-data-xform";
 
 interface ShapeModel {
   note: {

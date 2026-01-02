@@ -1,4 +1,4 @@
-import { BaseXform } from "../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 class ExtLstXform extends BaseXform {
   get tag(): string {

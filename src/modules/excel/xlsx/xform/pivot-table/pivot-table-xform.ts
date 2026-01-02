@@ -1,6 +1,6 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { xmlEncode, xmlDecode } from "../../../utils/utils";
-import { BaseXform } from "../base-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { xmlEncode, xmlDecode } from "@utils/utils";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 /**
  * Model for generating pivot table (with live source)
@@ -791,7 +791,7 @@ function renderPivotField(
   isValue: boolean,
   sharedItems: any[] | null
 ): string {
-  // A field can be both a row/column field AND a value field (issue #15)
+  // A field can be both a row/column field AND a value field
   // In this case, it needs both axis attribute AND dataField="1"
 
   if (isRow || isCol) {

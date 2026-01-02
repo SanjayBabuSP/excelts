@@ -1,4 +1,4 @@
-import { BaseXform } from "../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 abstract class BaseCellAnchorXform extends BaseXform {
   declare public map: { [key: string]: any };

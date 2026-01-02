@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { ColorXform } from "./color-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { ColorXform } from "@excel/xlsx/xform/style/color-xform";
 
 interface StopModel {
   position: number;

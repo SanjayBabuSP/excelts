@@ -1,6 +1,6 @@
-import { CompositeXform } from "../../composite-xform";
-import { SqrefExtXform } from "./sqref-ext-xform";
-import { CfRuleExtXform } from "./cf-rule-ext-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { SqrefExtXform } from "@excel/xlsx/xform/sheet/cf-ext/sqref-ext-xform";
+import { CfRuleExtXform } from "@excel/xlsx/xform/sheet/cf-ext/cf-rule-ext-xform";
 
 class ConditionalFormattingExtXform extends CompositeXform {
   sqRef: SqrefExtXform;

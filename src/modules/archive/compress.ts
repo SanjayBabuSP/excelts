@@ -8,12 +8,12 @@
 import { promisify } from "util";
 import * as zlib from "zlib";
 
-import { DEFAULT_COMPRESS_LEVEL } from "./defaults";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
 
 // Re-export shared types and utilities
-export { type CompressOptions, hasCompressionStream } from "./compress.base";
+export { type CompressOptions, hasCompressionStream } from "@archive/compress.base";
 
-import type { CompressOptions } from "./compress.base";
+import type { CompressOptions } from "@archive/compress.base";
 
 function uint8ArrayToBufferView(data: Uint8Array): Buffer {
   return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
@@ -26,7 +26,7 @@ const deflateRawAsync = promisify(zlib.deflateRaw) as (
 
 const inflateRawAsync = promisify(zlib.inflateRaw) as (input: zlib.InputType) => Promise<Buffer>;
 
-import { resolveCompressThresholdBytes } from "./compress.base";
+import { resolveCompressThresholdBytes } from "@archive/compress.base";
 
 /**
  * Compress data using Node.js native zlib

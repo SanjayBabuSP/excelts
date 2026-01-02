@@ -1,8 +1,8 @@
-import { BaseXform } from "../base-xform";
-import { StaticXform } from "../static-xform";
-import { BlipFillXform } from "./blip-fill-xform";
-import { NvPicPrXform } from "./nv-pic-pr-xform";
-import { spPrJSON } from "./sp-pr";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { StaticXform } from "@excel/xlsx/xform/static-xform";
+import { BlipFillXform } from "@excel/xlsx/xform/drawing/blip-fill-xform";
+import { NvPicPrXform } from "@excel/xlsx/xform/drawing/nv-pic-pr-xform";
+import { spPrJSON } from "@excel/xlsx/xform/drawing/sp-pr";
 
 interface PicModel {
   index?: number;

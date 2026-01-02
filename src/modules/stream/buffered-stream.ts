@@ -5,8 +5,8 @@
  * Works identically in both browser and Node.js environments.
  */
 
-import { EventEmitter } from "./event-emitter";
-import { textEncoder } from "./shared";
+import { EventEmitter } from "@stream/event-emitter";
+import { textEncoder } from "@stream/shared";
 
 /**
  * Represents a chunk of data with copy capabilities

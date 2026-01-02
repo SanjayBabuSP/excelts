@@ -8,7 +8,7 @@
  * - Consuming the output as text
  */
 
-import { fromString, text, transform } from "../index";
+import { fromString, text, transform } from "@stream";
 
 export async function examplePipeAndConsumeText(): Promise<void> {
   const source = fromString("Hello\nworld\n");

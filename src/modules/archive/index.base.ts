@@ -13,10 +13,10 @@ export {
   ZipBuilder,
   type ZipEntry,
   type ZipOptions
-} from "./zip-builder";
+} from "@archive/zip-builder";
 
 // Streaming ZIP (fflate-like API)
-export { StreamingZip, ZipDeflateFile, Zip, ZipDeflate } from "./streaming-zip";
+export { StreamingZip, ZipDeflateFile, Zip, ZipDeflate } from "@archive/streaming-zip";
 
 // Buffer-based unzip API (cross-platform)
 export {
@@ -27,6 +27,6 @@ export {
   ZipParser,
   type ExtractedFile,
   type ZipParseOptions
-} from "./extract";
+} from "@archive/extract";
 
-export type { ZipEntryInfo } from "./zip-entry-info";
+export type { ZipEntryInfo } from "@archive/zip-entry-info";

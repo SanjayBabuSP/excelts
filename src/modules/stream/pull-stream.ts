@@ -5,8 +5,8 @@
  * Works identically in both browser and Node.js environments.
  */
 
-import { EventEmitter } from "./event-emitter";
-import { concatUint8Arrays } from "./shared";
+import { EventEmitter } from "@stream/event-emitter";
+import { concatUint8Arrays } from "@stream/shared";
 
 export interface PullStreamOptions {
   /** Enable object mode */

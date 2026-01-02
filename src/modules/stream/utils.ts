@@ -5,12 +5,12 @@
  * implementation selected by `./streams` (Node.js or browser).
  */
 
-import { createReadableFromArray, createTransform } from "./streams";
-import type { IReadable, ITransform } from "./types";
+import { createReadableFromArray, createTransform } from "@stream/streams";
+import type { IReadable, ITransform } from "@stream/types";
 import {
   stringToUint8Array as _stringToUint8Array,
   uint8ArrayToString as _uint8ArrayToString
-} from "./shared";
+} from "@stream/shared";
 
 // =============================================================================
 // High-Level Stream Consumers

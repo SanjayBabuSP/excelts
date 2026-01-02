@@ -8,7 +8,7 @@
  * Represented as 0xEDB88320 in reversed (LSB-first) form
  */
 
-export { crc32JS as crc32, crc32UpdateJS as crc32Update, crc32Finalize } from "./crc32.base";
+export { crc32JS as crc32, crc32UpdateJS as crc32Update, crc32Finalize } from "@archive/crc32.base";
 
 /**
  * Ensure CRC32 is ready (no-op in browser, for API compatibility)

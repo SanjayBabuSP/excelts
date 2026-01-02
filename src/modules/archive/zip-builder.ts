@@ -22,18 +22,18 @@
  * └──────────────────────────┘
  */
 
-import { compress, compressSync, type CompressOptions } from "./compress";
-import { crc32 } from "./crc32";
-import { concatUint8Arrays, sumUint8ArrayLengths } from "./utils/bytes";
-import { type ZipTimestampMode } from "./utils/timestamps";
-import { buildZipEntryMetadata, resolveZipCompressionMethod } from "./zip-entry-metadata";
-import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "./defaults";
+import { compress, compressSync, type CompressOptions } from "@archive/compress";
+import { crc32 } from "@archive/crc32";
+import { concatUint8Arrays, sumUint8ArrayLengths } from "@archive/utils/bytes";
+import { type ZipTimestampMode } from "@archive/utils/timestamps";
+import { buildZipEntryMetadata, resolveZipCompressionMethod } from "@archive/zip-entry-metadata";
+import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
 import {
   buildCentralDirectoryHeader,
   buildEndOfCentralDirectory,
   buildLocalFileHeader
-} from "./zip-records";
-import { FLAG_UTF8, VERSION_MADE_BY, VERSION_NEEDED } from "./zip-constants";
+} from "@archive/zip-records";
+import { FLAG_UTF8, VERSION_MADE_BY, VERSION_NEEDED } from "@archive/zip-constants";
 
 const LOCAL_FILE_HEADER_FIXED_SIZE = 30;
 

@@ -1,4 +1,4 @@
-import { BaseXform } from "../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 /** https://en.wikipedia.org/wiki/Office_Open_XML_file_formats#DrawingML */
 const EMU_PER_PIXEL_AT_96_DPI = 9525;

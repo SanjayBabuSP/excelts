@@ -1,6 +1,6 @@
-import { CompositeXform } from "../../composite-xform";
-import { CfRuleExtXform } from "./cf-rule-ext-xform";
-import { ConditionalFormattingExtXform } from "./conditional-formatting-ext-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { CfRuleExtXform } from "@excel/xlsx/xform/sheet/cf-ext/cf-rule-ext-xform";
+import { ConditionalFormattingExtXform } from "@excel/xlsx/xform/sheet/cf-ext/conditional-formatting-ext-xform";
 
 class ConditionalFormattingsExtXform extends CompositeXform {
   cfXform: ConditionalFormattingExtXform;

@@ -1,4 +1,4 @@
-import { BaseXform } from "../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 const validation = {
   boolean(value: boolean | undefined, dflt: boolean): boolean {

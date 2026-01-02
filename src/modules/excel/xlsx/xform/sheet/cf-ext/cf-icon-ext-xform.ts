@@ -1,4 +1,4 @@
-import { BaseXform } from "../../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 class CfIconExtXform extends BaseXform {
   get tag() {

@@ -1,4 +1,4 @@
-import { BaseXform } from "../../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 class VmlProtectionXform extends BaseXform {
   declare private _model: { tag?: string };

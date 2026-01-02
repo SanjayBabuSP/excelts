@@ -1,8 +1,8 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { DateXform } from "../simple/date-xform";
-import { StringXform } from "../simple/string-xform";
-import { IntegerXform } from "../simple/integer-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { DateXform } from "@excel/xlsx/xform/simple/date-xform";
+import { StringXform } from "@excel/xlsx/xform/simple/string-xform";
+import { IntegerXform } from "@excel/xlsx/xform/simple/integer-xform";
 
 interface CoreModel {
   creator?: string;

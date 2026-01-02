@@ -1,8 +1,8 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { StringXform } from "../simple/string-xform";
-import { AppHeadingPairsXform } from "./app-heading-pairs-xform";
-import { AppTitlesOfPartsXform } from "./app-titles-of-parts-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { StringXform } from "@excel/xlsx/xform/simple/string-xform";
+import { AppHeadingPairsXform } from "@excel/xlsx/xform/core/app-heading-pairs-xform";
+import { AppTitlesOfPartsXform } from "@excel/xlsx/xform/core/app-titles-of-parts-xform";
 
 interface AppModel {
   worksheets: any[];

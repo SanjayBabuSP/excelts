@@ -1,5 +1,5 @@
-import { CompositeXform } from "../../composite-xform";
-import { FExtXform } from "./f-ext-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { FExtXform } from "@excel/xlsx/xform/sheet/cf-ext/f-ext-xform";
 
 class CfvoExtXform extends CompositeXform {
   fExtXform: FExtXform;

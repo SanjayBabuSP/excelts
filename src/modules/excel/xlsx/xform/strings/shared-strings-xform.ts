@@ -1,6 +1,6 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { SharedStringXform } from "./shared-string-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { SharedStringXform } from "@excel/xlsx/xform/strings/shared-string-xform";
 
 interface SharedStringsModel {
   values: any[];

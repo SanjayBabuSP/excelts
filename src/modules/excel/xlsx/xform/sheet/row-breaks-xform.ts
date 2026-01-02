@@ -1,5 +1,5 @@
-import { PageBreaksXform } from "./page-breaks-xform";
-import { ListXform } from "../list-xform";
+import { PageBreaksXform } from "@excel/xlsx/xform/sheet/page-breaks-xform";
+import { ListXform } from "@excel/xlsx/xform/list-xform";
 
 /**
  * Xform for row page breaks (rowBreaks element in worksheet XML)

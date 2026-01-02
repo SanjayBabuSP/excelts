@@ -1,4 +1,4 @@
-import { BaseXform } from "../base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 function booleanToXml(model: boolean): string | undefined {
   return model ? "1" : undefined;

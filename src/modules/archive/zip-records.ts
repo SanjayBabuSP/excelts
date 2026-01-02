@@ -11,7 +11,7 @@ import {
   LOCAL_FILE_HEADER_SIG,
   VERSION_MADE_BY,
   VERSION_NEEDED
-} from "./zip-constants";
+} from "@archive/zip-constants";
 
 export interface ZipLocalFileHeaderInput {
   fileName: Uint8Array;

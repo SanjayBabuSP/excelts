@@ -1,6 +1,6 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { CommentXform } from "./comment-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CommentXform } from "@excel/xlsx/xform/comment/comment-xform";
 
 interface CommentsModel {
   comments: any[];

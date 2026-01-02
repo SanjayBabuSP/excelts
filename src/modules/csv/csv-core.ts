@@ -9,7 +9,7 @@
  * @see https://tools.ietf.org/html/rfc4180
  */
 
-import { formatNumberForCsv, type DecimalSeparator } from "./csv-number";
+import { formatNumberForCsv, type DecimalSeparator } from "@csv/csv-number";
 
 // =============================================================================
 // Types

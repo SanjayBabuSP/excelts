@@ -1,6 +1,6 @@
-import { BaseXform } from "../base-xform";
-import { parseBoolean } from "../../../utils/utils";
-import { ColorXform } from "./color-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { parseBoolean } from "@utils/utils";
+import { ColorXform } from "@excel/xlsx/xform/style/color-xform";
 
 interface EdgeModel {
   style?: string;

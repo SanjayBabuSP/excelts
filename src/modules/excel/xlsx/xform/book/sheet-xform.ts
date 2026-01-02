@@ -1,5 +1,5 @@
-import { xmlDecode } from "../../../utils/utils";
-import { BaseXform } from "../base-xform";
+import { xmlDecode } from "@utils/utils";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 interface SheetModel {
   id: number;

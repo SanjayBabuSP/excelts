@@ -5,7 +5,7 @@
  * (`zip-parser.ts`) can share ZIP64 + Info-ZIP timestamp handling.
  */
 
-import { parseExtendedTimestampMtimeUnixSeconds } from "./zip-extra";
+import { parseExtendedTimestampMtimeUnixSeconds } from "@archive/utils/zip-extra";
 
 export interface ZipVars {
   uncompressedSize: number;

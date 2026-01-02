@@ -5,10 +5,10 @@
  * browser-specific implementations so we can enforce export-surface parity.
  */
 
-export * from "./index.base";
+export * from "@archive/index.base";
 
 // CRC32
-export { crc32, crc32Update, crc32Finalize } from "./crc32.browser";
+export { crc32, crc32Update, crc32Finalize } from "@archive/crc32.browser";
 
 // Compression
 export {
@@ -18,7 +18,7 @@ export {
   decompressSync,
   hasCompressionStream,
   type CompressOptions
-} from "./compress.browser";
+} from "@archive/compress.browser";
 
 // Streaming compression
 export {
@@ -26,7 +26,7 @@ export {
   createInflateStream,
   hasDeflateRaw,
   type StreamCompressOptions
-} from "./streaming-compress.browser";
+} from "@archive/streaming-compress.browser";
 
 // Stream-based unzip API (browser implementation)
 export {
@@ -34,7 +34,7 @@ export {
   createParse,
   type ParseOptions,
   type ZipEntry as StreamZipEntry
-} from "./parse.browser";
+} from "@archive/parse.browser";
 
 // Buffer-based unzip API (cross-platform)
 // (re-exported from ./index.base)

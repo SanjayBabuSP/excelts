@@ -10,8 +10,8 @@
  */
 
 import type * as zlibType from "zlib";
-import { isNode } from "../excel/utils/env";
-import { crc32JS, crc32UpdateJS, crc32Finalize } from "./crc32.base";
+import { isNode } from "@utils/env";
+import { crc32JS, crc32UpdateJS, crc32Finalize } from "@archive/crc32.base";
 
 // Lazy-loaded zlib module for Node.js
 let _zlib: typeof zlibType | null = null;

@@ -4,7 +4,7 @@
  * Works in both Node.js and browser environments
  */
 
-import { ZipParser, type ZipEntryInfo } from "./zip-parser";
+import { ZipParser, type ZipEntryInfo } from "@archive/zip-parser";
 
 /**
  * Extracted file entry
@@ -137,4 +137,4 @@ export async function forEachEntry(
 }
 
 // Re-export ZipParser for advanced usage
-export { ZipParser, type ZipEntryInfo, type ZipParseOptions } from "./zip-parser";
+export { ZipParser, type ZipEntryInfo, type ZipParseOptions } from "@archive/zip-parser";

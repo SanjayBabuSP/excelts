@@ -1,5 +1,5 @@
-import { CompositeXform } from "../composite-xform";
-import { ConditionalFormattingsExtXform } from "./cf-ext/conditional-formattings-ext-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { ConditionalFormattingsExtXform } from "@excel/xlsx/xform/sheet/cf-ext/conditional-formattings-ext-xform";
 
 class ExtXform extends CompositeXform {
   declare public map: { [key: string]: any };

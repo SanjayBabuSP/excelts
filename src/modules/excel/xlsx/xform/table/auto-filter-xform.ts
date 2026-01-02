@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { FilterColumnXform } from "./filter-column-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { FilterColumnXform } from "@excel/xlsx/xform/table/filter-column-xform";
 
 interface AutoFilterModel {
   autoFilterRef: string;

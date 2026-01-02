@@ -1,4 +1,4 @@
-import type { Address, Location } from "../types";
+import type { Address, Location } from "@excel/types";
 
 const addressRegex = /^[A-Z]+\d+$/;
 

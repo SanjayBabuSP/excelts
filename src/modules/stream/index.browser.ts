@@ -35,7 +35,7 @@ import type {
   PipelineTransform,
   PipelineDestination,
   ReadWriteBufferOptions
-} from "./types";
+} from "@stream/types";
 
 export type {
   ReadableStreamOptions,
@@ -121,9 +121,9 @@ import {
   normalizeWritable as Writeable,
   consumers,
   promises
-} from "./streams.browser";
+} from "@stream/streams.browser";
 
-import type { PipelineOptions, FinishedOptions } from "./streams.browser";
+import type { PipelineOptions, FinishedOptions } from "@stream/streams.browser";
 
 export {
   Readable,
@@ -181,15 +181,15 @@ export {
 
 export type { PipelineOptions, FinishedOptions };
 
-import { EventEmitter } from "./event-emitter";
+import { EventEmitter } from "@stream/event-emitter";
 export { EventEmitter };
 
 // =============================================================================
 // ChunkedBuilder (platform-independent)
 // =============================================================================
 
-import { ChunkedBuilder, TransactionalChunkedBuilder } from "./chunked-builder";
-import type { ChunkedBuilderOptions, BuilderSnapshot } from "./chunked-builder";
+import { ChunkedBuilder, TransactionalChunkedBuilder } from "@stream/chunked-builder";
+import type { ChunkedBuilderOptions, BuilderSnapshot } from "@stream/chunked-builder";
 
 export { ChunkedBuilder, TransactionalChunkedBuilder };
 export type { ChunkedBuilderOptions, BuilderSnapshot };
@@ -209,7 +209,7 @@ import {
   toUint8Array,
   bufferToString,
   concatUint8Arrays
-} from "./shared";
+} from "@stream/shared";
 
 export {
   textEncoder,
@@ -234,6 +234,6 @@ import {
   fromBytes,
   transform,
   filter
-} from "./utils";
+} from "@stream/utils";
 
 export { collect, text, json, bytes, fromString, fromJSON, fromBytes, transform, filter };

@@ -1,8 +1,8 @@
-import { BaseCellAnchorXform } from "./base-cell-anchor-xform";
-import { StaticXform } from "../static-xform";
-import { CellPositionXform } from "./cell-position-xform";
-import { ExtXform } from "./ext-xform";
-import { PicXform } from "./pic-xform";
+import { BaseCellAnchorXform } from "@excel/xlsx/xform/drawing/base-cell-anchor-xform";
+import { StaticXform } from "@excel/xlsx/xform/static-xform";
+import { CellPositionXform } from "@excel/xlsx/xform/drawing/cell-position-xform";
+import { ExtXform } from "@excel/xlsx/xform/drawing/ext-xform";
+import { PicXform } from "@excel/xlsx/xform/drawing/pic-xform";
 
 interface OneCellModel {
   range: {

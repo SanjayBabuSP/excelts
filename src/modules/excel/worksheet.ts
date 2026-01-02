@@ -1,17 +1,17 @@
-import { colCache, type DecodedRange } from "./utils/col-cache";
-import { Range, type RangeInput } from "./range";
-import { Row, type RowModel } from "./row";
-import { Column, type ColumnModel, type ColumnDefn } from "./column";
-import type { Cell, FormulaResult, FormulaValueData } from "./cell";
-import { Enums } from "./enums";
-import { Image, type ImageModel } from "./image";
-import { Table, type TableModel } from "./table";
-import { DataValidations } from "./data-validations";
-import { Encryptor } from "./utils/encryptor";
-import { uint8ArrayToBase64 } from "./utils/utils";
-import { makePivotTable, type PivotTable, type PivotTableModel } from "./pivot-table";
-import { copyStyle } from "./utils/copy-style";
-import type { Workbook } from "./workbook";
+import { colCache, type DecodedRange } from "@excel/utils/col-cache";
+import { Range, type RangeInput } from "@excel/range";
+import { Row, type RowModel } from "@excel/row";
+import { Column, type ColumnModel, type ColumnDefn } from "@excel/column";
+import type { Cell, FormulaResult, FormulaValueData } from "@excel/cell";
+import { Enums } from "@excel/enums";
+import { Image, type ImageModel } from "@excel/image";
+import { Table, type TableModel } from "@excel/table";
+import { DataValidations } from "@excel/data-validations";
+import { Encryptor } from "@excel/utils/encryptor";
+import { uint8ArrayToBase64 } from "@utils/utils";
+import { makePivotTable, type PivotTable, type PivotTableModel } from "@excel/pivot-table";
+import { copyStyle } from "@excel/utils/copy-style";
+import type { Workbook } from "@excel/workbook";
 import type {
   AddImageRange,
   AutoFilter,
@@ -24,7 +24,7 @@ import type {
   TableProperties,
   WorksheetProperties,
   WorksheetView
-} from "./types";
+} from "@excel/types";
 
 // Type for data validation model - maps address to validation
 type DataValidationModel = { [address: string]: DataValidation | undefined };
@@ -444,7 +444,7 @@ class Worksheet {
    *
    * If column properties have been defined, they will be cut or moved accordingly
    *
-   * Known Issue: If a splice causes any merged cells to move, the results may be unpredictable
+   * Known limitation: If a splice causes any merged cells to move, the results may be unpredictable
    *
    * Also: If the worksheet has more rows than values in the column inserts,
    * the rows will still be shifted as if the values existed
@@ -697,7 +697,7 @@ class Worksheet {
    * Cut one or more rows (rows below are shifted up)
    * and optionally insert more
    *
-   * Known Issue: If a splice causes any merged cells to move, the results may be unpredictable
+   * Known limitation: If a splice causes any merged cells to move, the results may be unpredictable
    */
   spliceRows(start: number, count: number, ...inserts: RowValues[]): void {
     // same problem as row.splice, except worse.

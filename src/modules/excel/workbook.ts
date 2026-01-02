@@ -10,14 +10,14 @@
  * implementations for xlsx, csv, and stream modules.
  */
 
-import { Worksheet, type WorksheetModel } from "./worksheet";
-import { DefinedNames, type DefinedNameModel } from "./defined-names";
-import { XLSX } from "./xlsx/xlsx";
-import { CSV } from "../csv/csv";
-import { WorkbookWriter, type WorkbookWriterOptions } from "./stream/workbook-writer";
-import { WorkbookReader, type WorkbookReaderOptions } from "./stream/workbook-reader";
-import type { Readable } from "../stream";
-import type { PivotTable } from "./pivot-table";
+import { Worksheet, type WorksheetModel } from "@excel/worksheet";
+import { DefinedNames, type DefinedNameModel } from "@excel/defined-names";
+import { XLSX } from "@excel/xlsx/xlsx";
+import { CSV } from "@csv/csv";
+import { WorkbookWriter, type WorkbookWriterOptions } from "@excel/stream/workbook-writer";
+import { WorkbookReader, type WorkbookReaderOptions } from "@excel/stream/workbook-reader";
+import type { Readable } from "@stream";
+import type { PivotTable } from "@excel/pivot-table";
 import type {
   AddWorksheetOptions,
   CalculationProperties,
@@ -25,7 +25,7 @@ import type {
   WorkbookProperties,
   WorkbookView,
   Buffer as ExcelBuffer
-} from "./types";
+} from "@excel/types";
 
 // =============================================================================
 // Internal Types

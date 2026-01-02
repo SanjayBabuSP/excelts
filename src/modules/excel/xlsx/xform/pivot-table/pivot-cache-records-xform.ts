@@ -1,7 +1,7 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { xmlEncode, xmlDecode } from "../../../utils/utils";
-import { BaseXform } from "../base-xform";
-import type { PivotTableSource } from "../../../pivot-table";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { xmlEncode, xmlDecode } from "@utils/utils";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import type { PivotTableSource } from "@excel/pivot-table";
 
 /**
  * Model for generating pivot cache records (with live source)

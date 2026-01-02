@@ -1,15 +1,15 @@
-import { encodeUtf8 } from "./utils/text";
+import { encodeUtf8 } from "@archive/utils/text";
 import {
   buildZipTimestampExtraField,
   dateToZipDos,
   type ZipTimestampMode
-} from "./utils/timestamps";
+} from "@archive/utils/timestamps";
 import {
   COMPRESSION_DEFLATE,
   COMPRESSION_STORE,
   FLAG_DATA_DESCRIPTOR,
   FLAG_UTF8
-} from "./zip-constants";
+} from "@archive/zip-constants";
 
 export interface ZipEntryMetadata {
   nameBytes: Uint8Array;

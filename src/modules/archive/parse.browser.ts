@@ -6,9 +6,9 @@
  * Uses the browser Duplex stream implementation for compatibility.
  */
 
-import { Duplex, PassThrough, concatUint8Arrays } from "../stream";
-import { writeUint32LE } from "./utils/binary";
-import { indexOfUint8ArrayPattern } from "./utils/bytes";
+import { Duplex, PassThrough, concatUint8Arrays } from "@stream";
+import { writeUint32LE } from "@archive/utils/binary";
+import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
 import {
   runParseLoop,
   type CrxHeader,
@@ -22,11 +22,11 @@ import {
   type ParseOptions,
   type ZipEntry,
   streamUntilValidatedDataDescriptor
-} from "./parse.base";
-import { inflateRaw as fallbackInflateRaw } from "./deflate-fallback";
-import { ByteQueue } from "./byte-queue";
-import { DATA_DESCRIPTOR_SIG } from "./zip-constants";
-import { hasDeflateRawDecompressionStream } from "./compress.base";
+} from "@archive/parse.base";
+import { inflateRaw as fallbackInflateRaw } from "@archive/deflate-fallback";
+import { ByteQueue } from "@archive/byte-queue";
+import { DATA_DESCRIPTOR_SIG } from "@archive/zip-constants";
+import { hasDeflateRawDecompressionStream } from "@archive/compress.base";
 
 // =============================================================================
 // Browser InflateRaw using DecompressionStream

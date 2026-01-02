@@ -1,4 +1,4 @@
-import { colCache } from "./col-cache";
+import { colCache } from "@excel/utils/col-cache";
 
 // Helper to check for prototype pollution
 function isSafeKey(key: string | number): boolean {

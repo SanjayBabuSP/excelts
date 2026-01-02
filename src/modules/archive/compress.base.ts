@@ -9,7 +9,7 @@
  * see deflate-fallback.ts for pure JS implementation
  */
 
-import { ByteQueue } from "./byte-queue";
+import { ByteQueue } from "@archive/byte-queue";
 
 /**
  * Compression options

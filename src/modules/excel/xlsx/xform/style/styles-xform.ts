@@ -1,14 +1,14 @@
-import { Enums } from "../../../enums";
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { StaticXform } from "../static-xform";
-import { ListXform } from "../list-xform";
-import { FontXform } from "./font-xform";
-import { FillXform } from "./fill-xform";
-import { BorderXform } from "./border-xform";
-import { NumFmtXform } from "./numfmt-xform";
-import { StyleXform } from "./style-xform";
-import { DxfXform } from "./dxf-xform";
+import { Enums } from "@excel/enums";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { StaticXform } from "@excel/xlsx/xform/static-xform";
+import { ListXform } from "@excel/xlsx/xform/list-xform";
+import { FontXform } from "@excel/xlsx/xform/style/font-xform";
+import { FillXform } from "@excel/xlsx/xform/style/fill-xform";
+import { BorderXform } from "@excel/xlsx/xform/style/border-xform";
+import { NumFmtXform } from "@excel/xlsx/xform/style/numfmt-xform";
+import { StyleXform } from "@excel/xlsx/xform/style/style-xform";
+import { DxfXform } from "@excel/xlsx/xform/style/dxf-xform";
 
 // custom numfmt ids start here
 const NUMFMT_BASE = 164;

@@ -4,11 +4,11 @@
  * No dependency on Node.js stream module
  */
 
-import { decompress, decompressSync } from "./compress";
-import { BinaryReader } from "./utils/binary";
-import { resolveZipLastModifiedDateFromUnixSeconds } from "./utils/timestamps";
-import { parseZipExtraFields } from "./utils/zip-extra-fields";
-import type { ZipEntryInfo } from "./zip-entry-info";
+import { decompress, decompressSync } from "@archive/compress";
+import { BinaryReader } from "@archive/utils/binary";
+import { resolveZipLastModifiedDateFromUnixSeconds } from "@archive/utils/timestamps";
+import { parseZipExtraFields } from "@archive/utils/zip-extra-fields";
+import type { ZipEntryInfo } from "@archive/zip-entry-info";
 import {
   CENTRAL_DIR_HEADER_SIG,
   COMPRESSION_DEFLATE,
@@ -19,7 +19,7 @@ import {
   UINT32_MAX,
   ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
   ZIP64_END_OF_CENTRAL_DIR_SIG
-} from "./zip-constants";
+} from "@archive/zip-constants";
 
 export type { ZipEntryInfo };
 

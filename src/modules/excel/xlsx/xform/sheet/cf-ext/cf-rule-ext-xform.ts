@@ -1,7 +1,8 @@
-import { BaseXform } from "../../base-xform";
-import { CompositeXform } from "../../composite-xform";
-import { DatabarExtXform } from "./databar-ext-xform";
-import { IconSetExtXform } from "./icon-set-ext-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { DatabarExtXform } from "@excel/xlsx/xform/sheet/cf-ext/databar-ext-xform";
+import { IconSetExtXform } from "@excel/xlsx/xform/sheet/cf-ext/icon-set-ext-xform";
+import { uuidV4 } from "@utils/uuid";
 
 const extIcons = {
   "3Triangles": true,
@@ -41,7 +42,7 @@ class CfRuleExtXform extends CompositeXform {
 
   prepare(model) {
     if (CfRuleExtXform.isExt(model)) {
-      model.x14Id = `{${crypto.randomUUID()}}`.toUpperCase();
+      model.x14Id = `{${uuidV4()}}`.toUpperCase();
     }
   }
 
@@ -75,7 +76,7 @@ class CfRuleExtXform extends CompositeXform {
     xmlStream.openNode(this.tag, {
       type: "iconSet",
       priority: model.priority,
-      id: model.x14Id || `{${crypto.randomUUID()}}`
+      id: model.x14Id || `{${uuidV4()}}`
     });
 
     this.iconSetXform.render(xmlStream, model);

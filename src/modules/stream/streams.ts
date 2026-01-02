@@ -33,14 +33,14 @@ import type {
   PipelineStreamLike,
   ReadableLike,
   WritableLike
-} from "./types";
+} from "@stream/types";
 
 import {
   BufferedStream as StandaloneBufferedStream,
   StringChunk as StandaloneStringChunk,
   BufferChunk as StandaloneBufferChunk
-} from "./buffered-stream";
-import { PullStream as StandalonePullStream } from "./pull-stream";
+} from "@stream/buffered-stream";
+import { PullStream as StandalonePullStream } from "@stream/pull-stream";
 
 // =============================================================================
 // Unified Writable class (compatible with browser API)
@@ -138,7 +138,7 @@ export function normalizeWritable<T = Uint8Array>(
 }
 
 // Import for internal use
-import { textDecoder } from "./shared";
+import { textDecoder } from "@stream/shared";
 
 // =============================================================================
 // Promisified utilities

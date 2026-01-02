@@ -1,7 +1,7 @@
-import { BaseXform } from "../base-xform";
-import { ListXform } from "../list-xform";
-import { CustomFilterXform } from "./custom-filter-xform";
-import { FilterXform } from "./filter-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { ListXform } from "@excel/xlsx/xform/list-xform";
+import { CustomFilterXform } from "@excel/xlsx/xform/table/custom-filter-xform";
+import { FilterXform } from "@excel/xlsx/xform/table/filter-xform";
 
 interface FilterColumnModel {
   colId?: string;

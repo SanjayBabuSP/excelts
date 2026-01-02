@@ -15,10 +15,10 @@
  */
 
 import fs from "fs";
-import { fileExists } from "../utils/utils";
-import { XLSX as XLSXBase } from "./xlsx.browser";
-import { Parse, type StreamZipEntry as ZipEntry } from "../../archive";
-import { Writable, pipeline } from "../../stream";
+import { fileExists } from "@utils/utils";
+import { XLSX as XLSXBase } from "@excel/xlsx/xlsx.browser";
+import { Parse, type StreamZipEntry as ZipEntry } from "@archive";
+import { Writable, pipeline } from "@stream";
 
 class XLSX extends XLSXBase {
   constructor(workbook: any) {

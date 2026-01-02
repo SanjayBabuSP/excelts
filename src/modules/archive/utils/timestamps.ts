@@ -1,7 +1,7 @@
 import {
   buildExtendedTimestampExtraFieldFromDate,
   parseExtendedTimestampMtimeUnixSeconds
-} from "./zip-extra";
+} from "@archive/utils/zip-extra";
 
 /**
  * DOS date/time helpers for ZIP files.

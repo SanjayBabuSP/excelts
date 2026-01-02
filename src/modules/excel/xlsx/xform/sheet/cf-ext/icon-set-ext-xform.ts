@@ -1,7 +1,7 @@
-import { BaseXform } from "../../base-xform";
-import { CompositeXform } from "../../composite-xform";
-import { CfvoExtXform } from "./cfvo-ext-xform";
-import { CfIconExtXform } from "./cf-icon-ext-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { CfvoExtXform } from "@excel/xlsx/xform/sheet/cf-ext/cfvo-ext-xform";
+import { CfIconExtXform } from "@excel/xlsx/xform/sheet/cf-ext/cf-icon-ext-xform";
 
 class IconSetExtXform extends CompositeXform {
   cfvoXform: CfvoExtXform;

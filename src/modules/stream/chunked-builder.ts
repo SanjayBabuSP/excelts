@@ -5,7 +5,7 @@
  * This file provides the same API but works in browser environments.
  */
 
-import { textEncoder } from "./shared";
+import { textEncoder } from "@stream/shared";
 
 /**
  * Options for ChunkedBuilder

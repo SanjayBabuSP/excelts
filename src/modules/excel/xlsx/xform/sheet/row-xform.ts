@@ -1,7 +1,7 @@
-import { BaseXform } from "../base-xform";
-import { CellXform } from "./cell-xform";
-import { parseBoolean } from "../../../utils/utils";
-import { colCache } from "../../../utils/col-cache";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CellXform } from "@excel/xlsx/xform/sheet/cell-xform";
+import { parseBoolean } from "@utils/utils";
+import { colCache } from "@excel/utils/col-cache";
 
 interface RowXformOptions {
   maxItems?: number;

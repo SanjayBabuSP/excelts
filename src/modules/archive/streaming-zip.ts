@@ -6,19 +6,19 @@
  * - In browser builds the bundler aliases those imports to their browser variants.
  */
 
-import { crc32Update, crc32Finalize } from "./crc32";
-import { createDeflateStream } from "./streaming-compress";
-import type { ZipTimestampMode } from "./utils/timestamps";
-import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "./defaults";
-import { buildZipEntryMetadata } from "./zip-entry-metadata";
-import type { ZipEntryInfo as UnzipZipEntryInfo } from "./zip-entry-info";
+import { crc32Update, crc32Finalize } from "@archive/crc32";
+import { createDeflateStream } from "@archive/streaming-compress";
+import type { ZipTimestampMode } from "@archive/utils/timestamps";
+import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
+import { buildZipEntryMetadata } from "@archive/zip-entry-metadata";
+import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-entry-info";
 import {
   buildCentralDirectoryHeader,
   buildDataDescriptor,
   buildEndOfCentralDirectory,
   buildLocalFileHeader
-} from "./zip-records";
-import { VERSION_MADE_BY, VERSION_NEEDED } from "./zip-constants";
+} from "@archive/zip-records";
+import { VERSION_MADE_BY, VERSION_NEEDED } from "@archive/zip-constants";
 
 /**
  * Internal entry info for central directory

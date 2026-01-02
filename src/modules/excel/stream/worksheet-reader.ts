@@ -4,15 +4,15 @@
  * Works in both Node.js and Browser.
  */
 
-import { EventEmitter } from "../../stream";
-import { parseSax } from "../utils/parse-sax";
-import { xmlDecode, isDateFmt, excelToDate } from "../utils/utils";
-import { colCache } from "../utils/col-cache";
-import { Dimensions } from "../range";
-import { Row } from "../row";
-import { Column } from "../column";
-import type { InternalWorksheetOptions } from "./workbook-reader.browser";
-import type { WorksheetState, CellErrorValue } from "../types";
+import { EventEmitter } from "@stream";
+import { parseSax } from "@excel/utils/parse-sax";
+import { xmlDecode, isDateFmt, excelToDate } from "@utils/utils";
+import { colCache } from "@excel/utils/col-cache";
+import { Dimensions } from "@excel/range";
+import { Row } from "@excel/row";
+import { Column } from "@excel/column";
+import type { InternalWorksheetOptions } from "@excel/stream/workbook-reader.browser";
+import type { WorksheetState, CellErrorValue } from "@excel/types";
 
 // ============================================================================
 // Internal Types

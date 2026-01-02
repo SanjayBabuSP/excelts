@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { parseBoolean } from "../../../utils/utils";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { parseBoolean } from "@utils/utils";
 
 interface ColModel {
   min: number;

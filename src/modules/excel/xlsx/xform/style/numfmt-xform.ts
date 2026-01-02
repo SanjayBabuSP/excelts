@@ -1,5 +1,5 @@
-import { defaultNumFormats } from "../../defaultnumformats";
-import { BaseXform } from "../base-xform";
+import { defaultNumFormats } from "@excel/xlsx/defaultnumformats";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 interface NumFmtModel {
   id: number;

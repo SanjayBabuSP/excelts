@@ -1,9 +1,9 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { ListXform } from "../list-xform";
-import { AutoFilterXform } from "./auto-filter-xform";
-import { TableColumnXform } from "./table-column-xform";
-import { TableStyleInfoXform } from "./table-style-info-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { ListXform } from "@excel/xlsx/xform/list-xform";
+import { AutoFilterXform } from "@excel/xlsx/xform/table/auto-filter-xform";
+import { TableColumnXform } from "@excel/xlsx/xform/table/table-column-xform";
+import { TableStyleInfoXform } from "@excel/xlsx/xform/table/table-style-info-xform";
 
 interface TableModel {
   id?: number;

@@ -1,5 +1,5 @@
-import { colCache } from "../../../utils/col-cache";
-import { BaseXform } from "../base-xform";
+import { colCache } from "@excel/utils/col-cache";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 class AutoFilterXform extends BaseXform {
   declare public model: any;

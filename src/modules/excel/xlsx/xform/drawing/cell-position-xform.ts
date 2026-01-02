@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { IntegerXform } from "../simple/integer-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { IntegerXform } from "@excel/xlsx/xform/simple/integer-xform";
 
 interface PositionModel {
   nativeCol: number;

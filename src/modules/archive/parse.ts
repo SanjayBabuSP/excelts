@@ -1,6 +1,6 @@
 import zlib from "zlib";
-import type { Duplex, PassThrough, Transform } from "../stream";
-import { writeUint32LE } from "./utils/binary";
+import type { Duplex, PassThrough, Transform } from "@stream";
+import { writeUint32LE } from "@archive/utils/binary";
 import {
   PullStream,
   type PullStreamPublicApi,
@@ -15,8 +15,8 @@ import {
   type ParseIO,
   type ParseOptions,
   type ZipEntry
-} from "./parse.base";
-import { DATA_DESCRIPTOR_SIG } from "./zip-constants";
+} from "@archive/parse.base";
+import { DATA_DESCRIPTOR_SIG } from "@archive/zip-constants";
 
 /**
  * Creates an InflateRaw stream using Node.js native zlib.
@@ -25,7 +25,7 @@ function createInflateRaw(): Transform {
   return zlib.createInflateRaw();
 }
 
-export type { CrxHeader } from "./parse.base";
+export type { CrxHeader } from "@archive/parse.base";
 
 export type { EntryProps, EntryVars, ParseOptions, ZipEntry };
 

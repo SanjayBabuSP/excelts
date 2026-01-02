@@ -5,10 +5,10 @@
  * It groups all ZIP creation and extraction utilities in one place.
  */
 
-export * from "./index.base";
+export * from "@archive/index.base";
 
 // CRC32
-export { crc32, crc32Update, crc32Finalize } from "./crc32";
+export { crc32, crc32Update, crc32Finalize } from "@archive/crc32";
 
 // Compression
 export {
@@ -18,7 +18,7 @@ export {
   decompressSync,
   hasCompressionStream,
   type CompressOptions
-} from "./compress";
+} from "@archive/compress";
 
 // Streaming compression
 export {
@@ -26,7 +26,7 @@ export {
   createInflateStream,
   hasDeflateRaw,
   type StreamCompressOptions
-} from "./streaming-compress";
+} from "@archive/streaming-compress";
 
 // Stream-based unzip API (Node.js; browser build aliases to ./parse.browser.ts)
-export { Parse, createParse, type ParseOptions, type ZipEntry as StreamZipEntry } from "./parse";
+export { Parse, createParse, type ParseOptions, type ZipEntry as StreamZipEntry } from "@archive/parse";

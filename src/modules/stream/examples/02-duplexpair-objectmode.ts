@@ -7,7 +7,7 @@
  * - A tiny "server" that responds to client messages
  */
 
-import { duplexPair, finished } from "../index";
+import { duplexPair, finished } from "@stream";
 
 export async function exampleDuplexPairObjectMode(): Promise<void> {
   const [client, server] = duplexPair({ objectMode: true });

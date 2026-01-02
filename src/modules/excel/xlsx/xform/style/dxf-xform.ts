@@ -1,10 +1,10 @@
-import { BaseXform } from "../base-xform";
-import { AlignmentXform } from "./alignment-xform";
-import { BorderXform } from "./border-xform";
-import { FillXform } from "./fill-xform";
-import { FontXform } from "./font-xform";
-import { NumFmtXform } from "./numfmt-xform";
-import { ProtectionXform } from "./protection-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { AlignmentXform } from "@excel/xlsx/xform/style/alignment-xform";
+import { BorderXform } from "@excel/xlsx/xform/style/border-xform";
+import { FillXform } from "@excel/xlsx/xform/style/fill-xform";
+import { FontXform } from "@excel/xlsx/xform/style/font-xform";
+import { NumFmtXform } from "@excel/xlsx/xform/style/numfmt-xform";
+import { ProtectionXform } from "@excel/xlsx/xform/style/protection-xform";
 
 // <xf numFmtId="[numFmtId]" fontId="[fontId]" fillId="[fillId]" borderId="[xf.borderId]" xfId="[xfId]">
 //   Optional <alignment>

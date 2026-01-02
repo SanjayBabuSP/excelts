@@ -1,7 +1,7 @@
-import { BaseXform } from "../../base-xform";
-import { CompositeXform } from "../../composite-xform";
-import { ColorXform } from "../../style/color-xform";
-import { CfvoExtXform } from "./cfvo-ext-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { ColorXform } from "@excel/xlsx/xform/style/color-xform";
+import { CfvoExtXform } from "@excel/xlsx/xform/sheet/cf-ext/cfvo-ext-xform";
 
 class DatabarExtXform extends CompositeXform {
   cfvoXform: CfvoExtXform;

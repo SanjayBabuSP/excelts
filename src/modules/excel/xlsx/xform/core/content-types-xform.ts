@@ -1,5 +1,5 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import {
   OOXML_PATHS,
   commentsPathFromName,
@@ -10,7 +10,7 @@ import {
   tablePath,
   toContentTypesPartName,
   worksheetPath
-} from "../../../utils/ooxml-paths";
+} from "@excel/utils/ooxml-paths";
 
 // used for rendering the [Content_Types].xml file
 // not used for parsing

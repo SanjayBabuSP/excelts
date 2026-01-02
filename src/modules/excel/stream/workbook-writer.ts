@@ -5,14 +5,14 @@
  */
 
 import fs from "fs";
-import { WorksheetWriter } from "./worksheet-writer";
+import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 import {
   WorkbookWriterBase,
   type WorkbookWriterOptions as BaseOptions,
   type ZipOptions,
   type ZlibOptions
-} from "./workbook-writer.browser";
-import { mediaPath } from "../utils/ooxml-paths";
+} from "@excel/stream/workbook-writer.browser";
+import { mediaPath } from "@excel/utils/ooxml-paths";
 
 export type { ZipOptions, ZlibOptions };
 

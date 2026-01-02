@@ -1,4 +1,4 @@
-import { colCache } from "./utils/col-cache";
+import { colCache } from "@excel/utils/col-cache";
 
 interface ValidationModel {
   [address: string]: any;

@@ -18,57 +18,56 @@ interface ExampleTest {
 
 const examples: ExampleTest[] = [
   {
-    file: "test-a1.ts",
+    file: "src/modules/excel/examples/a1-addressing.ts",
     description: "Test A1-style cell references",
     outputFiles: []
   },
   {
-    file: "test-colour-cell.ts",
+    file: "src/modules/excel/examples/colour-cell.ts",
     description: "Test cell colors and fills",
-    outputFiles: ["src/examples/data/test-colour-cell.xlsx"],
-    args: ["src/examples/data/test-colour-cell.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/colour-cell.xlsx"],
+    args: ["src/modules/excel/examples/data/colour-cell.xlsx"]
   },
   {
-    file: "test-formula.ts",
+    file: "src/modules/excel/examples/formulas.ts",
     description: "Test formula functionality",
-    outputFiles: ["src/examples/data/test-formula.xlsx"],
-    args: ["src/examples/data/test-formula.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/formulas.xlsx"],
+    args: ["src/modules/excel/examples/data/formulas.xlsx"]
   },
   {
-    file: "test-hyperlink.ts",
+    file: "src/modules/excel/examples/hyperlinks.ts",
     description: "Test hyperlink functionality",
-    outputFiles: ["src/examples/data/test-hyperlink.xlsx"],
-    args: ["src/examples/data/test-hyperlink.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/hyperlinks.xlsx"],
+    args: ["src/modules/excel/examples/data/hyperlinks.xlsx"]
   },
   {
-    file: "test-merge-align.ts",
+    file: "src/modules/excel/examples/merge-align.ts",
     description: "Test cell merging and alignment",
-    outputFiles: ["src/examples/data/test-merge-align.xlsx"],
-    args: ["src/examples/data/test-merge-align.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/merge-align.xlsx"],
+    args: ["src/modules/excel/examples/data/merge-align.xlsx"]
   },
   {
-    file: "testBookOut.ts",
-    description: "Test full workbook output (fonts, borders, fills, etc.)",
-    outputFiles: ["src/examples/data/test.xlsx"],
-    args: ["src/examples/data/test.xlsx"]
-  },
-  {
-    file: "test-table.ts",
+    file: "src/modules/excel/examples/table.ts",
     description: "Test Excel table functionality",
-    outputFiles: ["src/examples/data/test-table.xlsx"],
-    args: ["src/examples/data/test-table.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/table.xlsx"],
+    args: ["src/modules/excel/examples/data/table.xlsx"]
   },
   {
-    file: "test-newline.ts",
+    file: "src/modules/excel/examples/newline.ts",
     description: "Test newlines in cells",
-    outputFiles: ["src/examples/data/test-newline.xlsx"],
-    args: ["src/examples/data/test-newline.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/newline.xlsx"],
+    args: ["src/modules/excel/examples/data/newline.xlsx"]
   },
   {
-    file: "testTinyBookOut.ts",
+    file: "src/modules/excel/examples/tiny-workbook.ts",
     description: "Test minimal workbook output",
-    outputFiles: ["src/examples/data/test-tiny.xlsx"],
-    args: ["src/examples/data/test-tiny.xlsx"]
+    outputFiles: ["src/modules/excel/examples/data/tiny-workbook.xlsx"],
+    args: ["src/modules/excel/examples/data/tiny-workbook.xlsx"]
+  },
+  {
+    file: "src/modules/excel/examples/web-streams-reader-writer.ts",
+    description: "Web Streams: writer -> reader roundtrip",
+    outputFiles: []
   }
 ];
 
@@ -83,7 +82,7 @@ interface TestResult {
 
 async function runExample(example: ExampleTest): Promise<TestResult> {
   const startTime = Date.now();
-  const examplePath = path.join(__dirname, "../src/examples", example.file);
+  const examplePath = path.join(__dirname, "..", example.file);
 
   // Prepare command arguments
   const args = ["tsx", examplePath];

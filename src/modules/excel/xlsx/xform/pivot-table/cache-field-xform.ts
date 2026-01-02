@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { xmlDecode } from "../../../utils/utils";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { xmlDecode } from "@utils/utils";
 
 /**
  * Parsed cache field model containing name and shared items (if any)

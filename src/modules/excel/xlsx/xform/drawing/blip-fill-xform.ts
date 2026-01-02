@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { BlipXform } from "./blip-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { BlipXform } from "@excel/xlsx/xform/drawing/blip-xform";
 
 class BlipFillXform extends BaseXform {
   declare public map: { [key: string]: BlipXform };

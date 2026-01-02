@@ -5,15 +5,15 @@
  * Node.js version (csv.ts) extends this with file system support.
  */
 
-import { DateParser, DateFormatter, type DateFormat } from "../excel/utils/datetime";
-import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "./csv-core";
-import { CsvParserStream, CsvFormatterStream, type CsvFormatterStreamOptions } from "./csv-stream";
-import { parseNumberFromCsv, type DecimalSeparator } from "./csv-number";
-import { pipeline } from "../stream";
-import type { IReadable, IWritable } from "../stream/types";
-import type { Workbook } from "../excel/workbook";
-import type { Worksheet } from "../excel/worksheet";
-import type { CellErrorValue } from "../excel/types";
+import { DateParser, DateFormatter, type DateFormat } from "@utils/datetime";
+import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "@csv/csv-core";
+import { CsvParserStream, CsvFormatterStream, type CsvFormatterStreamOptions } from "@csv/csv-stream";
+import { parseNumberFromCsv, type DecimalSeparator } from "@csv/csv-number";
+import { pipeline } from "@stream";
+import type { IReadable, IWritable } from "@stream/types";
+import type { Workbook } from "@excel/workbook";
+import type { Worksheet } from "@excel/worksheet";
+import type { CellErrorValue } from "@excel/types";
 
 // =============================================================================
 // Constants
@@ -363,6 +363,6 @@ export function formatWorksheetToCsv(
 }
 
 export { CSV };
-export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
-export { parseCsv, formatCsv } from "./csv-core";
-export type { CsvParseOptions, CsvFormatOptions } from "./csv-core";
+export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
+export { parseCsv, formatCsv } from "@csv/csv-core";
+export type { CsvParseOptions, CsvFormatOptions } from "@csv/csv-core";

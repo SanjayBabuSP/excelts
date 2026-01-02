@@ -1,6 +1,6 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { VmlShapeXform } from "./vml-shape-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { VmlShapeXform } from "@excel/xlsx/xform/comment/vml-shape-xform";
 
 interface VmlNotesModel {
   comments: any[];

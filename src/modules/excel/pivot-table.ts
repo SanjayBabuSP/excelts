@@ -1,6 +1,6 @@
-import { range, toSortedArray } from "./utils/utils";
-import { colCache } from "./utils/col-cache";
-import type { Table } from "./table";
+import { range, toSortedArray } from "@utils/utils";
+import { colCache } from "@excel/utils/col-cache";
+import type { Table } from "@excel/table";
 
 /**
  * Interface representing the source data abstraction for pivot tables.

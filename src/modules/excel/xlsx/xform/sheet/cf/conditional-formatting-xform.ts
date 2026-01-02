@@ -1,5 +1,5 @@
-import { CompositeXform } from "../../composite-xform";
-import { CfRuleXform } from "./cf-rule-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
+import { CfRuleXform } from "@excel/xlsx/xform/sheet/cf/cf-rule-xform";
 
 class ConditionalFormattingXform extends CompositeXform {
   constructor() {

@@ -3,7 +3,7 @@
  * Shared by ZIP parsers.
  */
 
-import { decodeLatin1, decodeUtf8 } from "./text";
+import { decodeLatin1, decodeUtf8 } from "@archive/utils/text";
 
 export function writeUint32LE(value: number): Uint8Array {
   const out = new Uint8Array(4);

@@ -1,8 +1,8 @@
-import { BaseXform } from "../base-xform";
-import { CacheField } from "./cache-field";
-import { CacheFieldXform, type CacheFieldModel } from "./cache-field-xform";
-import { XmlStream } from "../../../utils/xml-stream";
-import type { PivotTableSource } from "../../../pivot-table";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CacheField } from "@excel/xlsx/xform/pivot-table/cache-field";
+import { CacheFieldXform, type CacheFieldModel } from "@excel/xlsx/xform/pivot-table/cache-field-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import type { PivotTableSource } from "@excel/pivot-table";
 
 /**
  * Model for parsed pivot cache definition

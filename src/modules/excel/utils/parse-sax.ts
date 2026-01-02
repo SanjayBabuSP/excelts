@@ -8,7 +8,7 @@
  * Based on XML 1.0 specification with optimizations for common Excel XML patterns.
  */
 
-import { bufferToString } from "./utils";
+import { bufferToString } from "@utils/utils";
 
 // ============================================================================
 // Types

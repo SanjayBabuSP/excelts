@@ -1,6 +1,6 @@
-import { BaseXform } from "../base-xform";
-import { HLinkClickXform } from "./hlink-click-xform";
-import { ExtLstXform } from "./ext-lst-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { HLinkClickXform } from "@excel/xlsx/xform/drawing/hlink-click-xform";
+import { ExtLstXform } from "@excel/xlsx/xform/drawing/ext-lst-xform";
 
 interface CNvPrModel {
   index: number;

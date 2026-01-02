@@ -1,5 +1,5 @@
-import { RichTextXform } from "../strings/rich-text-xform";
-import { BaseXform } from "../base-xform";
+import { RichTextXform } from "@excel/xlsx/xform/strings/rich-text-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 interface NoteText {
   font?: any;

@@ -9,24 +9,24 @@
  * with filesystem-specific features (filename input + temp-file buffering).
  */
 
-import { EventEmitter, Readable } from "../../stream";
-import { createParse } from "../../archive/parse";
-import { iterateStream } from "../utils/iterate-stream";
+import { EventEmitter, Readable } from "@stream";
+import { createParse } from "@archive/parse";
+import { iterateStream } from "@excel/utils/iterate-stream";
 import {
   getWorksheetNoFromWorksheetPath,
   getWorksheetNoFromWorksheetRelsPath,
   normalizeZipPath,
   OOXML_PATHS,
   worksheetRelTarget
-} from "../utils/ooxml-paths";
-import { parseSax } from "../utils/parse-sax";
-import { StylesXform } from "../xlsx/xform/style/styles-xform";
-import { WorkbookXform } from "../xlsx/xform/book/workbook-xform";
-import { RelationshipsXform } from "../xlsx/xform/core/relationships-xform";
-import type { WorksheetState, Font, WorkbookProperties } from "../types";
+} from "@excel/utils/ooxml-paths";
+import { parseSax } from "@excel/utils/parse-sax";
+import { StylesXform } from "@excel/xlsx/xform/style/styles-xform";
+import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
+import { RelationshipsXform } from "@excel/xlsx/xform/core/relationships-xform";
+import type { WorksheetState, Font, WorkbookProperties } from "@excel/types";
 
-import { WorksheetReader } from "./worksheet-reader";
-import { HyperlinkReader, type Hyperlink } from "./hyperlink-reader";
+import { WorksheetReader } from "@excel/stream/worksheet-reader";
+import { HyperlinkReader, type Hyperlink } from "@excel/stream/hyperlink-reader";
 
 // ============================================================================
 // Types
@@ -103,7 +103,7 @@ export interface WaitingWorksheetEntry {
   entry: any;
 }
 
-export type CommonInput = Uint8Array | ArrayBuffer | Readable;
+export type CommonInput = Uint8Array | ArrayBuffer | Readable | ReadableStream<Uint8Array>;
 
 export interface WorkbookReaderOptions {
   worksheets?: "emit" | "ignore";
@@ -202,15 +202,38 @@ export abstract class WorkbookReaderBase<
     if (input instanceof Readable) {
       return input;
     }
+
+    // Accept Web ReadableStream (browser fetch() body, Node 18+ fetch(), etc.)
+    if (
+      input &&
+      typeof input === "object" &&
+      typeof (input as unknown as ReadableStream<Uint8Array>).getReader === "function"
+    ) {
+      const fromWeb = (Readable as any).fromWeb as
+        | undefined
+        | ((stream: ReadableStream<Uint8Array>) => Readable);
+      if (typeof fromWeb === "function") {
+        return fromWeb(input as unknown as ReadableStream<Uint8Array>);
+      }
+
+      // Browser wrapper supports `{ stream }` constructor option.
+      // Node's Readable does not, so this is best-effort.
+      try {
+        return new (Readable as any)({
+          stream: input as unknown as ReadableStream<Uint8Array>
+        });
+      } catch {
+        throw new Error("Could not recognise input: ReadableStream");
+      }
+    }
+
     let data: unknown = input;
     if (data instanceof ArrayBuffer) {
       data = new Uint8Array(data);
     }
     if (data instanceof Uint8Array) {
-      const readable = new Readable();
-      readable.push(data);
-      readable.push(null);
-      return readable;
+      // Cross-platform: both Node's Readable and our browser Readable implement `.from()`.
+      return (Readable as any).from([data]) as Readable;
     }
     throw new Error(`Could not recognise input: ${input}`);
   }

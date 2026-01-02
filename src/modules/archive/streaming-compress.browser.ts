@@ -7,20 +7,20 @@
  * API compatible with Node.js version - supports .on("data"), .on("end"), .write(callback), .end()
  */
 
-import { EventEmitter } from "../stream";
-import { deflateRawCompressed, inflateRaw } from "./deflate-fallback";
-import { hasDeflateRawWebStreams } from "./compress.base";
-import { concatUint8Arrays } from "./utils/bytes";
-import { DEFAULT_COMPRESS_LEVEL } from "./defaults";
+import { EventEmitter } from "@stream";
+import { deflateRawCompressed, inflateRaw } from "@archive/deflate-fallback";
+import { hasDeflateRawWebStreams } from "@archive/compress.base";
+import { concatUint8Arrays } from "@archive/utils/bytes";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
 
-export type { StreamCompressOptions } from "./streaming-compress.base";
+export type { StreamCompressOptions } from "@archive/streaming-compress.base";
 import {
   asError,
   type DeflateStream,
   type InflateStream,
   type StreamCallback,
   type StreamCompressOptions
-} from "./streaming-compress.base";
+} from "@archive/streaming-compress.base";
 
 /**
  * Check if deflate-raw streaming compression is supported by this library.

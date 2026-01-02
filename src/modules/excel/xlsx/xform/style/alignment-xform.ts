@@ -1,5 +1,5 @@
-import { BaseXform } from "../base-xform";
-import { validInt, parseBoolean } from "../../../utils/utils";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { validInt, parseBoolean } from "@utils/utils";
 
 const Enums = {
   ReadingOrder: {

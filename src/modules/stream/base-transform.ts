@@ -5,7 +5,7 @@
  * Works identically in both browser and Node.js environments.
  */
 
-import { EventEmitter } from "./event-emitter";
+import { EventEmitter } from "@stream/event-emitter";
 
 export interface BaseTransformOptions {
   /** High water mark for backpressure */

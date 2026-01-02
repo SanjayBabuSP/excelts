@@ -1,6 +1,6 @@
-import { TextXform } from "./text-xform";
-import { RichTextXform } from "./rich-text-xform";
-import { BaseXform } from "../base-xform";
+import { TextXform } from "@excel/xlsx/xform/strings/text-xform";
+import { RichTextXform } from "@excel/xlsx/xform/strings/rich-text-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 // <rPh sb="0" eb="1">
 //   <t>(its pronounciation in KATAKANA)</t>

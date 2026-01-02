@@ -5,19 +5,19 @@
  */
 
 import fs from "fs";
-import type { Readable } from "../../stream";
+import type { Readable } from "@stream";
 import os from "os";
 import { join } from "path";
-import { iterateStream } from "../utils/iterate-stream";
-import { WorksheetReader } from "./worksheet-reader";
-import { HyperlinkReader } from "./hyperlink-reader";
+import { iterateStream } from "@excel/utils/iterate-stream";
+import { WorksheetReader } from "@excel/stream/worksheet-reader";
+import { HyperlinkReader } from "@excel/stream/hyperlink-reader";
 import {
   WorkbookReaderBase,
   type CommonInput,
   type WorkbookReaderOptions,
   type WorksheetReadyEvent,
   WorkbookReaderOptionsSchema
-} from "./workbook-reader.browser";
+} from "@excel/stream/workbook-reader.browser";
 
 // Re-export types
 export type {
@@ -34,7 +34,7 @@ export type {
   WorksheetReadyEvent,
   HyperlinksEvent,
   ParseEvent
-} from "./workbook-reader.browser";
+} from "@excel/stream/workbook-reader.browser";
 
 export type NodeInput = string | CommonInput;
 

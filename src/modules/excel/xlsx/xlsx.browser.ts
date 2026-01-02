@@ -9,33 +9,33 @@
  * - loadFromFiles: Load from pre-extracted ZIP data
  */
 
-import { XmlStream } from "../utils/xml-stream";
-import { StylesXform } from "./xform/style/styles-xform";
-import { CoreXform } from "./xform/core/core-xform";
-import { SharedStringsXform } from "./xform/strings/shared-strings-xform";
-import { RelationshipsXform } from "./xform/core/relationships-xform";
-import { ContentTypesXform } from "./xform/core/content-types-xform";
-import { AppXform } from "./xform/core/app-xform";
-import { WorkbookXform } from "./xform/book/workbook-xform";
-import { WorkSheetXform } from "./xform/sheet/worksheet-xform";
-import { DrawingXform } from "./xform/drawing/drawing-xform";
-import { TableXform } from "./xform/table/table-xform";
-import { PivotCacheRecordsXform } from "./xform/pivot-table/pivot-cache-records-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { StylesXform } from "@excel/xlsx/xform/style/styles-xform";
+import { CoreXform } from "@excel/xlsx/xform/core/core-xform";
+import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xform";
+import { RelationshipsXform } from "@excel/xlsx/xform/core/relationships-xform";
+import { ContentTypesXform } from "@excel/xlsx/xform/core/content-types-xform";
+import { AppXform } from "@excel/xlsx/xform/core/app-xform";
+import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
+import { WorkSheetXform } from "@excel/xlsx/xform/sheet/worksheet-xform";
+import { DrawingXform } from "@excel/xlsx/xform/drawing/drawing-xform";
+import { TableXform } from "@excel/xlsx/xform/table/table-xform";
+import { PivotCacheRecordsXform } from "@excel/xlsx/xform/pivot-table/pivot-cache-records-xform";
 import {
   PivotCacheDefinitionXform,
   type ParsedCacheDefinitionModel
-} from "./xform/pivot-table/pivot-cache-definition-xform";
-import { PivotTableXform, type ParsedPivotTableModel } from "./xform/pivot-table/pivot-table-xform";
-import { CommentsXform } from "./xform/comment/comments-xform";
-import { VmlNotesXform } from "./xform/comment/vml-notes-xform";
-import { theme1Xml } from "./xml/theme1";
-import { RelType } from "./rel-type";
-import { StreamBuf } from "../utils/stream-buf";
-import { bufferToString, base64ToUint8Array } from "../utils/utils";
-import { StreamingZip, ZipDeflateFile } from "../../archive/streaming-zip";
-import { ZipParser } from "../../archive";
-import { PassThrough, concatUint8Arrays, type IEventEmitter } from "../../stream";
-import type { Workbook } from "../workbook";
+} from "@excel/xlsx/xform/pivot-table/pivot-cache-definition-xform";
+import { PivotTableXform, type ParsedPivotTableModel } from "@excel/xlsx/xform/pivot-table/pivot-table-xform";
+import { CommentsXform } from "@excel/xlsx/xform/comment/comments-xform";
+import { VmlNotesXform } from "@excel/xlsx/xform/comment/vml-notes-xform";
+import { theme1Xml } from "@excel/xlsx/xml/theme1";
+import { RelType } from "@excel/xlsx/rel-type";
+import { StreamBuf } from "@excel/utils/stream-buf";
+import { bufferToString, base64ToUint8Array } from "@utils/utils";
+import { StreamingZip, ZipDeflateFile } from "@archive/streaming-zip";
+import { ZipParser } from "@archive";
+import { PassThrough, concatUint8Arrays, type IEventEmitter } from "@stream";
+import type { Workbook } from "@excel/workbook";
 import {
   commentsPath,
   commentsRelTargetFromWorksheetName,
@@ -76,9 +76,9 @@ import {
   vmlDrawingPath,
   worksheetPath,
   worksheetRelsPath
-} from "../utils/ooxml-paths";
+} from "@excel/utils/ooxml-paths";
 
-import type { ZipTimestampMode } from "../../archive/utils/timestamps";
+import type { ZipTimestampMode } from "@archive/utils/timestamps";
 
 type StreamListener = Parameters<IEventEmitter["on"]>[1];
 

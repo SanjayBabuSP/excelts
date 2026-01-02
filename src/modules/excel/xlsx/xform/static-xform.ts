@@ -1,5 +1,5 @@
-import { BaseXform } from "./base-xform";
-import { XmlStream } from "../../utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
 
 interface StaticModel {
   tag: string;
@@ -40,7 +40,7 @@ class StaticXform extends BaseXform {
     // This class is an optimisation for static (unimportant and unchanging) xml
     // It is stateless - apart from its static model and so can be used as a singleton
     // Being stateless - it will only track entry to and exit from it's root xml tag during parsing and nothing else
-    // Known issues:
+    // Known limitations:
     //    since stateless - parseOpen always returns true. Parent xform must know when to start using this xform
     //    if the root tag is recursive, the parsing will behave unpredictably
     this._model = model;

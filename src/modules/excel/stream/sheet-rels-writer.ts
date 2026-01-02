@@ -1,6 +1,6 @@
-import { xmlEncode } from "../utils/utils";
-import { RelType } from "../xlsx/rel-type";
-import { worksheetRelsPath } from "../utils/ooxml-paths";
+import { xmlEncode } from "@utils/utils";
+import { RelType } from "@excel/xlsx/rel-type";
+import { worksheetRelsPath } from "@excel/utils/ooxml-paths";
 
 interface Hyperlink {
   address: string;

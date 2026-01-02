@@ -9,7 +9,7 @@
  * a single Promise you can await and centralized error/cleanup handling.
  */
 
-import { createCollector, createReadableFromArray, createTransform, pipeline } from "../index";
+import { createCollector, createReadableFromArray, createTransform, pipeline } from "@stream";
 
 export async function examplePipelineObjectMode(): Promise<void> {
   const source = createReadableFromArray(["hello", "world"], { objectMode: true });

@@ -1,6 +1,6 @@
-import { BaseXform } from "../base-xform";
-import { AlignmentXform } from "./alignment-xform";
-import { ProtectionXform } from "./protection-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { AlignmentXform } from "@excel/xlsx/xform/style/alignment-xform";
+import { ProtectionXform } from "@excel/xlsx/xform/style/protection-xform";
 
 // <xf numFmtId="[numFmtId]" fontId="[fontId]" fillId="[fillId]" borderId="[xf.borderId]" xfId="[xfId]">
 //   Optional <alignment>

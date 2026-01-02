@@ -1,6 +1,6 @@
-import { XmlStream } from "../../../utils/xml-stream";
-import { BaseXform } from "../base-xform";
-import { RelationshipXform } from "./relationship-xform";
+import { XmlStream } from "@excel/utils/xml-stream";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { RelationshipXform } from "@excel/xlsx/xform/core/relationship-xform";
 
 class RelationshipsXform extends BaseXform {
   declare public parser: any;

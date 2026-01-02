@@ -5,8 +5,8 @@
  * Works identically in both Node.js and Browser environments.
  */
 
-import { Transform } from "../stream";
-import type { IReadable } from "../stream/types";
+import { Transform } from "@stream";
+import type { IReadable } from "@stream/types";
 import type {
   CsvParseOptions,
   CsvFormatOptions,
@@ -15,9 +15,9 @@ import type {
   Row,
   RowTransformCallback,
   RowValidateCallback
-} from "./csv-core";
-import { isSyncTransform, isSyncValidate } from "./csv-core";
-import { formatNumberForCsv } from "./csv-number";
+} from "@csv/csv-core";
+import { isSyncTransform, isSyncValidate } from "@csv/csv-core";
+import { formatNumberForCsv } from "@csv/csv-number";
 
 /**
  * Transform stream that parses CSV data row by row

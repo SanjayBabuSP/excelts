@@ -1,4 +1,4 @@
-import { deepMerge } from "./utils/under-dash";
+import { deepMerge } from "@excel/utils/under-dash";
 
 interface NoteText {
   text: string;

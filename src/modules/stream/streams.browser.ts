@@ -29,22 +29,22 @@ import type {
   PipelineStreamLike,
   ReadableLike,
   WritableLike
-} from "./types";
+} from "@stream/types";
 
 import type { Writable as NodeWritable } from "stream";
 
-import { EventEmitter } from "./event-emitter";
+import { EventEmitter } from "@stream/event-emitter";
 import {
   PullStream as StandalonePullStream,
   type PullStreamOptions as StandalonePullStreamOptions
-} from "./pull-stream";
+} from "@stream/pull-stream";
 import {
   BufferedStream as StandaloneBufferedStream,
   StringChunk as StandaloneStringChunk,
   BufferChunk as StandaloneBufferChunk
-} from "./buffered-stream";
+} from "@stream/buffered-stream";
 
-import { concatUint8Arrays, getTextDecoder, textDecoder } from "./shared";
+import { concatUint8Arrays, getTextDecoder, textDecoder } from "@stream/shared";
 
 // =============================================================================
 // Readable Stream Wrapper
@@ -3962,13 +3962,13 @@ export function duplexPair<T = Uint8Array>(
   const stream2 = new Duplex<T, T>(options);
 
   // Override write to push to the other stream's readable
-  stream1.write = function (chunk: T, ..._args: any[]): boolean {
+  stream1.write = function (chunk: T): boolean {
     // Push to stream2's readable side
     stream2.push(chunk);
     return true;
   };
 
-  stream2.write = function (chunk: T, ..._args: any[]): boolean {
+  stream2.write = function (chunk: T): boolean {
     // Push to stream1's readable side
     stream1.push(chunk);
     return true;
@@ -3978,7 +3978,7 @@ export function duplexPair<T = Uint8Array>(
   const originalEnd1 = stream1.end.bind(stream1);
   const originalEnd2 = stream2.end.bind(stream2);
 
-  stream1.end = function (chunk?: T | (() => void), ..._args: any[]): any {
+  stream1.end = function (chunk?: T | (() => void)): any {
     if (chunk !== undefined && typeof chunk !== "function") {
       stream2.push(chunk);
     }
@@ -3986,7 +3986,7 @@ export function duplexPair<T = Uint8Array>(
     return originalEnd1(typeof chunk === "function" ? chunk : undefined);
   };
 
-  stream2.end = function (chunk?: T | (() => void), ..._args: any[]): any {
+  stream2.end = function (chunk?: T | (() => void)): any {
     if (chunk !== undefined && typeof chunk !== "function") {
       stream1.push(chunk);
     }

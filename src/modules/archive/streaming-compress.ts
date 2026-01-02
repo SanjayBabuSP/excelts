@@ -6,21 +6,21 @@
  */
 
 import { createDeflateRaw, createInflateRaw, constants, type DeflateRaw } from "zlib";
-import { Transform, type TransformCallback } from "../stream";
+import { Transform, type TransformCallback } from "@stream";
 
-import { DEFAULT_COMPRESS_LEVEL } from "./defaults";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
 
 export type {
   DeflateStream,
   InflateStream,
   StreamCompressOptions,
   StreamingCodec
-} from "./streaming-compress.base";
+} from "@archive/streaming-compress.base";
 import type {
   DeflateStream,
   InflateStream,
   StreamCompressOptions
-} from "./streaming-compress.base";
+} from "@archive/streaming-compress.base";
 
 /**
  * Wrapper around zlib DeflateRaw that flushes after every write

@@ -1,4 +1,4 @@
-import { xmlEncode } from "./utils";
+import { xmlEncode } from "@utils/utils";
 
 // constants
 const OPEN_ANGLE = "<";
@@ -28,11 +28,15 @@ function pushAttribute(xml: string[], name: string, value: any): void {
 function pushAttributes(xml: string[], attributes?: Attributes): void {
   if (attributes) {
     const tmp: string[] = [];
-    Object.entries(attributes).forEach(([name, value]) => {
-      if (value !== undefined) {
-        pushAttribute(tmp, name as string, value);
+    for (const name in attributes) {
+      if (!Object.prototype.hasOwnProperty.call(attributes, name)) {
+        continue;
       }
-    });
+      const value = attributes[name];
+      if (value !== undefined) {
+        pushAttribute(tmp, name, value);
+      }
+    }
     xml.push(tmp.join(""));
   }
 }
@@ -50,13 +54,20 @@ class XmlStream {
     this._chunks = [];
     this._stack = [];
     this._rollbacks = [];
+    this.leaf = false;
+    this.open = false;
   }
 
   private _consolidate(): void {
+    // Consolidation is not rollback-safe: joining and moving fragments into `_chunks`
+    // cannot be undone. Avoid consolidating while a rollback marker is active.
+    if (this._rollbacks.length > 0) {
+      return;
+    }
     // Periodically join small strings into larger chunks to reduce final join overhead
     if (this._xml.length >= CHUNK_SIZE) {
       this._chunks.push(this._xml.join(""));
-      this._xml = [];
+      this._xml.length = 0;
     }
   }
 
@@ -163,8 +174,8 @@ class XmlStream {
     this._rollbacks.push({
       xml: this._xml.length,
       stack: this._stack.length,
-      leaf: this.leaf!,
-      open: this.open!,
+      leaf: this.leaf ?? false,
+      open: this.open ?? false,
       chunksLength: this._chunks.length
     });
     return this.cursor;
@@ -177,13 +188,13 @@ class XmlStream {
   rollback(): void {
     const r = this._rollbacks.pop()!;
     if (this._xml.length > r.xml) {
-      this._xml.splice(r.xml, this._xml.length - r.xml);
+      this._xml.length = r.xml;
     }
     if (this._stack.length > r.stack) {
-      this._stack.splice(r.stack, this._stack.length - r.stack);
+      this._stack.length = r.stack;
     }
     if (this._chunks.length > r.chunksLength) {
-      this._chunks.splice(r.chunksLength, this._chunks.length - r.chunksLength);
+      this._chunks.length = r.chunksLength;
     }
     this.leaf = r.leaf;
     this.open = r.open;

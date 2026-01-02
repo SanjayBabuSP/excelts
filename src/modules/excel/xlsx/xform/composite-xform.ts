@@ -1,4 +1,4 @@
-import { BaseXform } from "./base-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 /* 'virtual' methods used as a form of documentation */
 

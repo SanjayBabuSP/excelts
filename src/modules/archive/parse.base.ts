@@ -1,4 +1,4 @@
-import { parseDosDateTimeUTC, resolveZipLastModifiedDateFromUnixSeconds } from "./utils/timestamps";
+import { parseDosDateTimeUTC, resolveZipLastModifiedDateFromUnixSeconds } from "@archive/utils/timestamps";
 import {
   Duplex,
   PassThrough,
@@ -6,19 +6,19 @@ import {
   concatUint8Arrays,
   pipeline,
   type Readable
-} from "../stream";
-import { parseTyped as parseBuffer } from "./utils/parse-buffer";
-import { ByteQueue } from "./byte-queue";
-import { indexOfUint8ArrayPattern } from "./utils/bytes";
-import { readUint32LE, writeUint32LE } from "./utils/binary";
-import { parseZipExtraFields, type ZipExtraFields, type ZipVars } from "./utils/zip-extra-fields";
+} from "@stream";
+import { parseTyped as parseBuffer } from "@archive/utils/parse-buffer";
+import { ByteQueue } from "@archive/byte-queue";
+import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
+import { readUint32LE, writeUint32LE } from "@archive/utils/binary";
+import { parseZipExtraFields, type ZipExtraFields, type ZipVars } from "@archive/utils/zip-extra-fields";
 import {
   CENTRAL_DIR_HEADER_SIG,
   END_OF_CENTRAL_DIR_SIG,
   LOCAL_FILE_HEADER_SIG,
   ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
   ZIP64_END_OF_CENTRAL_DIR_SIG
-} from "./zip-constants";
+} from "@archive/zip-constants";
 
 // Shared parseBuffer() formats
 export const CRX_HEADER_FORMAT: [string, number][] = [

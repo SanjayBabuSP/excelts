@@ -8,30 +8,30 @@
  * with filesystem-specific features (filename output + image loading).
  */
 
-import { Zip, ZipDeflate } from "../../archive/streaming-zip";
-import { StreamBuf } from "../utils/stream-buf";
-import { base64ToUint8Array } from "../utils/utils";
-import { RelType } from "../xlsx/rel-type";
-import { StylesXform } from "../xlsx/xform/style/styles-xform";
-import { SharedStrings } from "../utils/shared-strings";
-import { DefinedNames } from "../defined-names";
-import { CoreXform } from "../xlsx/xform/core/core-xform";
-import { RelationshipsXform } from "../xlsx/xform/core/relationships-xform";
-import { ContentTypesXform } from "../xlsx/xform/core/content-types-xform";
-import { AppXform } from "../xlsx/xform/core/app-xform";
-import { WorkbookXform } from "../xlsx/xform/book/workbook-xform";
-import { SharedStringsXform } from "../xlsx/xform/strings/shared-strings-xform";
-import { theme1Xml } from "../xlsx/xml/theme1";
-import type { Writable } from "../../stream";
-import { Writeable, stringToUint8Array } from "../../stream";
+import { Zip, ZipDeflate } from "@archive/streaming-zip";
+import { StreamBuf } from "@excel/utils/stream-buf";
+import { base64ToUint8Array } from "@utils/utils";
+import { RelType } from "@excel/xlsx/rel-type";
+import { StylesXform } from "@excel/xlsx/xform/style/styles-xform";
+import { SharedStrings } from "@excel/utils/shared-strings";
+import { DefinedNames } from "@excel/defined-names";
+import { CoreXform } from "@excel/xlsx/xform/core/core-xform";
+import { RelationshipsXform } from "@excel/xlsx/xform/core/relationships-xform";
+import { ContentTypesXform } from "@excel/xlsx/xform/core/content-types-xform";
+import { AppXform } from "@excel/xlsx/xform/core/app-xform";
+import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
+import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xform";
+import { theme1Xml } from "@excel/xlsx/xml/theme1";
+import type { Writable } from "@stream";
+import { Writeable, stringToUint8Array } from "@stream";
 import {
   mediaPath,
   OOXML_PATHS,
   OOXML_REL_TARGETS,
   worksheetRelTarget
-} from "../utils/ooxml-paths";
-import type { Image, WorkbookView, AddWorksheetOptions } from "../types";
-import { WorksheetWriter } from "./worksheet-writer";
+} from "@excel/utils/ooxml-paths";
+import type { Image, WorkbookView, AddWorksheetOptions } from "@excel/types";
+import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 
 const EMPTY_U8 = new Uint8Array(0);
 const TEXT_DECODER = new TextDecoder();

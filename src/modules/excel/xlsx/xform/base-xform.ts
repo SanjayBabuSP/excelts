@@ -1,5 +1,5 @@
-import { parseSax } from "../../utils/parse-sax";
-import { XmlStream } from "../../utils/xml-stream";
+import { parseSax } from "@excel/utils/parse-sax";
+import { XmlStream } from "@excel/utils/xml-stream";
 
 /* 'virtual' methods used as a form of documentation */
 

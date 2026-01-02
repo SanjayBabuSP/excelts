@@ -10,8 +10,8 @@
  * - As readable stream: feed data into writable part and read from it
  */
 
-import { EventEmitter } from "../../stream";
-import { StringBuf } from "./string-buf";
+import { EventEmitter } from "@stream";
+import { StringBuf } from "@excel/utils/string-buf";
 
 // =============================================================================
 // Data Chunks - encapsulating incoming data

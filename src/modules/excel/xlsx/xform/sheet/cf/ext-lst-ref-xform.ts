@@ -1,5 +1,5 @@
-import { BaseXform } from "../../base-xform";
-import { CompositeXform } from "../../composite-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { CompositeXform } from "@excel/xlsx/xform/composite-xform";
 
 class X14IdXform extends BaseXform {
   get tag(): string {

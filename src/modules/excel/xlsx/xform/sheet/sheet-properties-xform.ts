@@ -1,7 +1,7 @@
-import { BaseXform } from "../base-xform";
-import { ColorXform } from "../style/color-xform";
-import { PageSetupPropertiesXform } from "./page-setup-properties-xform";
-import { OutlinePropertiesXform } from "./outline-properties-xform";
+import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { ColorXform } from "@excel/xlsx/xform/style/color-xform";
+import { PageSetupPropertiesXform } from "@excel/xlsx/xform/sheet/page-setup-properties-xform";
+import { OutlinePropertiesXform } from "@excel/xlsx/xform/sheet/outline-properties-xform";
 
 interface SheetPropertiesModel {
   tabColor?: any;
