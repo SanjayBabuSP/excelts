@@ -1808,8 +1808,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           } else if (userFlush) {
             if (isNodeStyleFlush) {
               // Node.js style: flush(callback)
+              // isNodeStyleFlush means userFlush.length >= 1
               await new Promise<void>((resolve, reject) => {
-                (userFlush as any).call(getInstance(), (err?: Error | null, data?: TOutput) => {
+                (
+                  userFlush as (
+                    this: Transform<TInput, TOutput>,
+                    callback: (error?: Error | null, data?: TOutput) => void
+                  ) => void
+                ).call(getInstance(), (err?: Error | null, data?: TOutput) => {
                   if (err) {
                     reject(err);
                   } else {
