@@ -1731,9 +1731,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           // Check for subclass _transform override first
           if (hasSubclassTransform()) {
             // Call subclass _transform method (Node.js style)
+            // _transform signature is always (chunk, encoding, callback)
             await new Promise<void>((resolve, reject) => {
-              const transformFn = this._transform as unknown as (...args: any[]) => void;
-              const callback = (err?: Error | null, data?: TOutput) => {
+              this._transform(chunk, "utf8", (err?: Error | null, data?: TOutput) => {
                 if (err) {
                   reject(err);
                 } else {
@@ -1742,32 +1742,30 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
                   }
                   resolve();
                 }
-              };
-
-              const args =
-                transformFn.length >= 3 ? [chunk, "utf8", callback] : [chunk, callback];
-              transformFn.apply(this, args);
+              });
             });
           } else if (userTransform) {
             if (isNodeStyleTransform) {
               // Node.js style: transform(chunk, encoding, callback)
+              // isNodeStyleTransform means userTransform.length >= 3
               await new Promise<void>((resolve, reject) => {
-                const transformFn = userTransform as unknown as (...args: any[]) => void;
-                const callback = (err?: Error | null, data?: TOutput) => {
+                (
+                  userTransform as (
+                    this: Transform<TInput, TOutput>,
+                    chunk: TInput,
+                    encoding: string,
+                    callback: (error?: Error | null, data?: TOutput) => void
+                  ) => void
+                ).call(getInstance(), chunk, "utf8", (err?: Error | null, data?: TOutput) => {
                   if (err) {
                     reject(err);
                   } else {
-                    // If data provided via callback, enqueue it
                     if (data !== undefined) {
                       controller.enqueue(data);
                     }
                     resolve();
                   }
-                };
-
-                const args =
-                  transformFn.length >= 3 ? [chunk, "utf8", callback] : [chunk, callback];
-                transformFn.apply(getInstance(), args);
+                });
               });
             } else {
               // Simple style: transform(chunk) => result
