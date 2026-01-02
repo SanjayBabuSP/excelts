@@ -9,11 +9,16 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const esmDir = path.join(__dirname, "../dist/esm");
+const typesDir = path.join(__dirname, "../dist/types");
 
 let filesModified = 0;
 
 function toPosixPath(p) {
   return p.split(path.sep).join("/");
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function tryResolveFile(filePathWithoutExt) {
@@ -40,7 +45,7 @@ function loadTsconfigPaths() {
 
 const tsconfigPaths = loadTsconfigPaths();
 
-function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
+function resolveAliasToRelativeImport({ specifier, filePath, distRoot, outputExtension }) {
   if (!specifier.startsWith("@")) {
     return null;
   }
@@ -76,14 +81,20 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
         continue;
       }
 
-      let absDistFile = path.join(distRoot, relFromSrcRoot).replace(/\.[cm]?tsx?$/i, ".js");
+      let absDistFile = path
+        .join(distRoot, relFromSrcRoot)
+        .replace(/\.[cm]?tsx?$/i, outputExtension);
 
-      // If the target was a directory mapping, prefer index.js
-      if (!absDistFile.endsWith(".js")) {
-        absDistFile = `${absDistFile}.js`;
+      // If the target was a directory mapping, prefer index + extension
+      if (!absDistFile.endsWith(outputExtension)) {
+        absDistFile = `${absDistFile}${outputExtension}`;
       }
       if (!fs.existsSync(absDistFile)) {
-        const indexCandidate = path.join(absDistFile.replace(/\.js$/i, ""), "index.js");
+        const outputExtRegex = new RegExp(`${escapeRegExp(outputExtension)}$`, "i");
+        const indexCandidate = path.join(
+          absDistFile.replace(outputExtRegex, ""),
+          `index${outputExtension}`
+        );
         if (fs.existsSync(indexCandidate)) {
           absDistFile = indexCandidate;
         }
@@ -101,7 +112,7 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
   return null;
 }
 
-function rewritePathAliasesInFile(filePath, distRoot) {
+function rewritePathAliasesInFile(filePath, distRoot, outputExtension) {
   let content;
   try {
     content = fs.readFileSync(filePath, "utf8");
@@ -114,7 +125,12 @@ function rewritePathAliasesInFile(filePath, distRoot) {
   content = content.replace(
     /((?:import|export)\s*(?:[^'\"]*\s+from\s+)?['\"])([^'\"]+)(['\"])/g,
     (match, prefix, specifier, suffix) => {
-      const rewritten = resolveAliasToRelativeImport({ specifier, filePath, distRoot });
+      const rewritten = resolveAliasToRelativeImport({
+        specifier,
+        filePath,
+        distRoot,
+        outputExtension
+      });
       if (!rewritten) {
         return match;
       }
@@ -126,7 +142,12 @@ function rewritePathAliasesInFile(filePath, distRoot) {
   content = content.replace(
     /(import\s*\(\s*['\"])([^'\"]+)(['\"]\s*\))/g,
     (match, prefix, specifier, suffix) => {
-      const rewritten = resolveAliasToRelativeImport({ specifier, filePath, distRoot });
+      const rewritten = resolveAliasToRelativeImport({
+        specifier,
+        filePath,
+        distRoot,
+        outputExtension
+      });
       if (!rewritten) {
         return match;
       }
@@ -140,7 +161,7 @@ function rewritePathAliasesInFile(filePath, distRoot) {
   }
 }
 
-function rewritePathAliases(dir, distRoot) {
+function rewritePathAliases(dir, distRoot, { fileExtensions, outputExtension }) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -151,9 +172,9 @@ function rewritePathAliases(dir, distRoot) {
   for (const entry of entries) {
     const filePath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      rewritePathAliases(filePath, distRoot);
-    } else if (entry.isFile() && entry.name.endsWith(".js")) {
-      rewritePathAliasesInFile(filePath, distRoot);
+      rewritePathAliases(filePath, distRoot, { fileExtensions, outputExtension });
+    } else if (entry.isFile() && fileExtensions.some(ext => entry.name.endsWith(ext))) {
+      rewritePathAliasesInFile(filePath, distRoot, outputExtension);
     }
   }
 }
@@ -228,7 +249,10 @@ function addJsExtensions(dir) {
 }
 
 console.log("Rewriting tsconfig path aliases in ESM output...");
-rewritePathAliases(esmDir, esmDir);
+rewritePathAliases(esmDir, esmDir, { fileExtensions: [".js"], outputExtension: ".js" });
+
+console.log("Rewriting tsconfig path aliases in declaration output...");
+rewritePathAliases(typesDir, typesDir, { fileExtensions: [".d.ts"], outputExtension: ".d.ts" });
 
 console.log("Adding .js extensions to ESM imports for Node.js compatibility...");
 addJsExtensions(esmDir);

@@ -42,22 +42,6 @@ export type {
 } from "@excel/pivot-table";
 
 // =============================================================================
-// Utilities
-// =============================================================================
-export * from "@excel/utils/sheet-utils";
-
-// =============================================================================
-// CSV support (using native RFC 4180 implementation)
-// =============================================================================
-export type {
-  CsvReadOptions,
-  CsvWriteOptions,
-  CsvStreamReadOptions,
-  CsvStreamWriteOptions
-} from "@csv/csv.browser";
-export { CsvParserStream, CsvFormatterStream } from "@csv/csv.browser";
-
-// =============================================================================
 // Streaming Writer (Browser-compatible)
 // Uses cross-platform base implementation without Node.js fs
 // =============================================================================
@@ -74,3 +58,19 @@ export { WorkbookWriter, WorkbookReader, WorksheetWriter, WorksheetReader };
 // - Reading from a file path is not supported (use Uint8Array/ArrayBuffer/Blob instead)
 // - Writing to a file path is not supported (use writeBuffer() / stream output, then save as Blob/download)
 // =============================================================================
+
+// =============================================================================
+// CSV support (using native RFC 4180 implementation)
+// =============================================================================
+export type {
+  CsvReadOptions,
+  CsvWriteOptions,
+  CsvStreamReadOptions,
+  CsvStreamWriteOptions
+} from "@csv/csv.browser";
+export { CsvParserStream, CsvFormatterStream } from "@csv/csv.browser";
+
+// =============================================================================
+// Utilities
+// =============================================================================
+export * from "@excel/utils/sheet-utils";
