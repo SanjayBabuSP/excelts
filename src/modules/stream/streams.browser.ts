@@ -1675,10 +1675,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     const userTransform = options?.transform;
     const userFlush = options?.flush;
 
-    // Determine if transform function is Node.js style (has 3 params) or simple style
-    const isNodeStyleTransform = userTransform && userTransform.length >= 3;
-    const isNodeStyleFlush = userFlush && userFlush.length >= 1;
-
     // Create bound references for use in TransformStream callbacks
     const setController = (ctrl: TransformStreamDefaultController<TOutput> | null): void => {
       this._transformController = ctrl;
@@ -1731,7 +1727,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           // Check for subclass _transform override first
           if (hasSubclassTransform()) {
             // Call subclass _transform method (Node.js style)
-            // _transform signature is always (chunk, encoding, callback)
+            // _transform signature is (chunk, encoding, callback)
             await new Promise<void>((resolve, reject) => {
               this._transform(chunk, "utf8", (err?: Error | null, data?: TOutput) => {
                 if (err) {
@@ -1745,9 +1741,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
               });
             });
           } else if (userTransform) {
-            if (isNodeStyleTransform) {
+            const transformParamCount = userTransform.length;
+
+            if (transformParamCount >= 3) {
               // Node.js style: transform(chunk, encoding, callback)
-              // isNodeStyleTransform means userTransform.length >= 3
               await new Promise<void>((resolve, reject) => {
                 (
                   userTransform as (
@@ -1767,13 +1764,37 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
                   }
                 });
               });
+            } else if (transformParamCount === 2) {
+              await new Promise<void>((resolve, reject) => {
+                (
+                  userTransform as (
+                    this: Transform<TInput, TOutput>,
+                    chunk: TInput,
+                    callback: (error?: Error | null, data?: TOutput) => void
+                  ) => void
+                ).call(getInstance(), chunk, (err?: Error | null, data?: TOutput) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    if (data !== undefined) {
+                      controller.enqueue(data);
+                    }
+                    resolve();
+                  }
+                });
+              });
             } else {
               // Simple style: transform(chunk) => result
-              const result = await (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>)(
-                chunk
-              );
-              if (result !== undefined) {
-                controller.enqueue(result);
+              const result = userTransform.call(getInstance(), chunk);
+              if (result && typeof result.then === "function") {
+                const awaitedResult = await result;
+                if (awaitedResult !== undefined) {
+                  controller.enqueue(awaitedResult);
+                }
+              } else {
+                if (result !== undefined) {
+                  controller.enqueue(result);
+                }
               }
             }
           } else {
@@ -1806,9 +1827,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
               });
             });
           } else if (userFlush) {
-            if (isNodeStyleFlush) {
+            const flushParamCount = userFlush.length;
+
+            if (flushParamCount >= 1) {
               // Node.js style: flush(callback)
-              // isNodeStyleFlush means userFlush.length >= 1
               await new Promise<void>((resolve, reject) => {
                 (
                   userFlush as (
@@ -1828,9 +1850,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
               });
             } else {
               // Simple style: flush() => result
-              const result = await (userFlush as () => TOutput | void | Promise<TOutput | void>)();
-              if (result !== undefined && result !== null) {
-                controller.enqueue(result as TOutput);
+              const result = userFlush.call(getInstance());
+              if (result && typeof result.then === "function") {
+                const awaitedResult = await result;
+                if (awaitedResult !== undefined && awaitedResult !== null) {
+                  controller.enqueue(awaitedResult as TOutput);
+                }
+              } else {
+                if (result !== undefined && result !== null) {
+                  controller.enqueue(result as TOutput);
+                }
               }
             }
           }
