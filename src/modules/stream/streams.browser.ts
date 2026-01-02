@@ -1732,7 +1732,8 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           if (hasSubclassTransform()) {
             // Call subclass _transform method (Node.js style)
             await new Promise<void>((resolve, reject) => {
-              this._transform(chunk, "utf8", (err?: Error | null, data?: TOutput) => {
+              const transformFn = this._transform as unknown as (...args: any[]) => void;
+              const callback = (err?: Error | null, data?: TOutput) => {
                 if (err) {
                   reject(err);
                 } else {
@@ -1741,7 +1742,13 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
                   }
                   resolve();
                 }
-              });
+              };
+
+              if (transformFn.length >= 3) {
+                transformFn.call(this, chunk, "utf8", callback);
+              } else {
+                transformFn.call(this, chunk, callback);
+              }
             });
           } else if (userTransform) {
             if (isNodeStyleTransform) {

@@ -21,6 +21,27 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isSafeAliasCapture(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  if (value.includes("\0") || value.includes("\\")) {
+    return false;
+  }
+  // Reject absolute paths and any traversal outside the alias root.
+  // Captures can contain forward slashes (e.g. utils/sheet-utils).
+  const normalized = path.posix.normalize(value);
+  if (path.posix.isAbsolute(normalized)) {
+    return false;
+  }
+  return !normalized.startsWith("..") && !normalized.includes("../");
+}
+
+function replaceStarLiteral(pattern, replacement) {
+  // Avoid String.replace replacement semantics (e.g. $1) by using split/join.
+  return pattern.split("*").join(replacement);
+}
+
 function tryResolveFile(filePathWithoutExt) {
   const candidates = [
     filePathWithoutExt,
@@ -60,6 +81,9 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot, outputExt
       const [prefix, suffix] = aliasPattern.split("*");
       if (specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
         captured = specifier.slice(prefix.length, specifier.length - suffix.length);
+        if (!isSafeAliasCapture(captured)) {
+          continue;
+        }
       } else {
         continue;
       }
@@ -71,7 +95,7 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot, outputExt
     }
 
     for (const targetPattern of targetPatterns) {
-      const replaced = hasStar ? targetPattern.replace("*", captured) : targetPattern;
+      const replaced = hasStar ? replaceStarLiteral(targetPattern, captured) : targetPattern;
       const absTarget = path.resolve(projectRoot, replaced);
       const absSrcFile = tryResolveFile(absTarget) ?? absTarget;
 

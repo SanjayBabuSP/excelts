@@ -277,7 +277,6 @@ class StreamBuf extends EventEmitter {
     const nop = () => {};
     if (typeof encoding === "function") {
       callback = encoding;
-      encoding = "utf8";
     }
     callback = callback || nop;
 
