@@ -1,0 +1,80 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { Workbook } from "../../../index";
+import { makeTestDataPath, testFilePath } from "@test/utils";
+
+const excelTestDataPath = makeTestDataPath(import.meta.url, "./data");
+
+describe("DataValidations", () => {
+  it("reads a workbook with dataValidation missing type", async () => {
+    const wb = new Workbook();
+    await wb.xlsx.readFile(excelTestDataPath("data-validation-missing-type.xlsx"));
+  });
+
+  it("writes a full-column validation without throwing", async () => {
+    const TEST_XLSX_FILE_NAME = testFilePath("data-validation-full-column.test");
+
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Sheet1");
+
+    const range = "A2:A1048576";
+    ws.dataValidations.model[range] = {
+      allowBlank: true,
+      error: "Please use the drop down to select a valid value",
+      errorTitle: "Invalid Selection",
+      formulae: ['"Apples,Bananas,Oranges"'],
+      showErrorMessage: true,
+      type: "list"
+    };
+
+    await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+  });
+
+  it("reads and writes data validations", async () => {
+    const TEST_XLSX_FILE_NAME = testFilePath("pr-1204.data-validations.test");
+
+    const wb = new Workbook();
+    await wb.xlsx.readFile(excelTestDataPath("test-pr-1204.xlsx"));
+
+    const expected = {
+      E1: {
+        type: "textLength",
+        formulae: [2],
+        showInputMessage: true,
+        showErrorMessage: true,
+        operator: "greaterThan"
+      },
+      E4: {
+        type: "textLength",
+        formulae: [2],
+        showInputMessage: true,
+        showErrorMessage: true,
+        operator: "greaterThan"
+      }
+    };
+
+    const ws = wb.getWorksheet(1);
+    expect(ws.dataValidations.model).toEqual(expected);
+
+    await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+  });
+
+  describe("ignoreNodes", () => {
+    it("readFile ignores dataValidations without blowing up memory", async () => {
+      const wb = new Workbook();
+      await wb.xlsx.readFile(excelTestDataPath("data-validations-large.xlsx"), {
+        ignoreNodes: ["dataValidations"]
+      });
+      expect(true).toBe(true);
+    });
+
+    it("load(buffer) ignores dataValidations without blowing up memory", async () => {
+      const buffer = readFileSync(excelTestDataPath("data-validations-large.xlsx"));
+      const wb = new Workbook();
+      await wb.xlsx.load(buffer, {
+        ignoreNodes: ["dataValidations"]
+      });
+      expect(true).toBe(true);
+    });
+  });
+});

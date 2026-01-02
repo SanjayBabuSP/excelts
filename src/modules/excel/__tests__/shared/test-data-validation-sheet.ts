@@ -1,0 +1,131 @@
+import { fix, concatenateFormula } from "@excel/__tests__/shared/tools";
+import dataValidationsJson from "@excel/__tests__/shared/data/data-validations.json" with { type: "json" };
+
+const self = {
+  dataValidations: fix(dataValidationsJson),
+  createDataValidations(type: string, operator: string) {
+    const dataValidation: any = {
+      type,
+      operator,
+      allowBlank: true,
+      showInputMessage: true,
+      showErrorMessage: true,
+      formulae: [(self.dataValidations as any).values[type].v1]
+    };
+    switch (operator) {
+      case "between":
+      case "notBetween":
+        dataValidation.formulae.push((self.dataValidations as any).values[type].v2);
+        break;
+      default:
+        break;
+    }
+    return dataValidation;
+  },
+
+  addSheet(wb: any) {
+    const ws = wb.addWorksheet("data-validations");
+
+    // named list
+    ws.getCell("D1").value = "Hewie";
+    ws.getCell("D1").name = "Nephews";
+    ws.getCell("E1").value = "Dewie";
+    ws.getCell("E1").name = "Nephews";
+    ws.getCell("F1").value = "Louie";
+    ws.getCell("F1").name = "Nephews";
+    ws.getCell("A1").value = concatenateFormula("Named List");
+    ws.getCell("B1").dataValidation = (self.dataValidations as any).B1;
+
+    ws.getCell("A3").value = concatenateFormula("Literal List");
+    ws.getCell("B3").dataValidation = (self.dataValidations as any).B3;
+
+    ws.getCell("D5").value = "Tom";
+    ws.getCell("E5").value = "Dick";
+    ws.getCell("F5").value = "Harry";
+    ws.getCell("A5").value = concatenateFormula("Range List");
+    ws.getCell("B5").dataValidation = (self.dataValidations as any).B5;
+
+    (self.dataValidations as any).operators.forEach((operator: string, cIndex: number) => {
+      const col = 3 + cIndex;
+      ws.getCell(7, col).value = concatenateFormula(operator);
+    });
+    (self.dataValidations as any).types.forEach((type: string, rIndex: number) => {
+      const row = 8 + rIndex;
+      ws.getCell(row, 1).value = concatenateFormula(type);
+      (self.dataValidations as any).operators.forEach((operator: string, cIndex: number) => {
+        const col = 3 + cIndex;
+        ws.getCell(row, col).dataValidation = self.createDataValidations(type, operator);
+      });
+    });
+
+    ws.getCell("A13").value = concatenateFormula("Prompt");
+    ws.getCell("B13").dataValidation = (self.dataValidations as any).B13;
+
+    ws.getCell("D13").value = concatenateFormula("Error");
+    ws.getCell("E13").dataValidation = (self.dataValidations as any).E13;
+
+    ws.getCell("A15").value = concatenateFormula("Terse");
+    ws.getCell("B15").dataValidation = (self.dataValidations as any).B15;
+
+    ws.getCell("A17").value = concatenateFormula("Decimal");
+    ws.getCell("B17").dataValidation = (self.dataValidations as any).B17;
+
+    ws.getCell("A19").value = concatenateFormula("Any");
+    ws.getCell("B19").dataValidation = (self.dataValidations as any).B19;
+
+    ws.getCell("A20").value = new Date();
+    ws.getCell("A20").dataValidation = {
+      type: "date",
+      operator: "greaterThan",
+      showErrorMessage: true,
+      allowBlank: true,
+      formulae: [new Date(2016, 0, 1)]
+    };
+
+    // two rows of the same validation to test dataValidation optimisation
+    ["A22", "A23"].forEach(address => {
+      ws.getCell(address).value = concatenateFormula("Five Numbers");
+    });
+    ["B22", "C22", "D22", "E22", "F22", "B23", "C23", "D23", "E23", "F23"].forEach(address => {
+      ws.getCell(address).dataValidation = JSON.parse(
+        JSON.stringify((self.dataValidations as any).shared)
+      );
+    });
+  },
+
+  checkSheet(wb: any) {
+    const ws = wb.getWorksheet("data-validations");
+    expect(ws).toBeDefined();
+
+    expect(ws.getCell("B1").dataValidation).to.deep.equal((self.dataValidations as any).B1);
+    expect(ws.getCell("B3").dataValidation).to.deep.equal((self.dataValidations as any).B3);
+    expect(ws.getCell("B5").dataValidation).to.deep.equal((self.dataValidations as any).B5);
+
+    (self.dataValidations as any).types.forEach((type: string, rIndex: number) => {
+      const row = 8 + rIndex;
+      ws.getCell(row, 1).value = concatenateFormula(type);
+      (self.dataValidations as any).operators.forEach((operator: string, cIndex: number) => {
+        const col = 3 + cIndex;
+        expect(ws.getCell(row, col).dataValidation).to.deep.equal(
+          self.createDataValidations(type, operator)
+        );
+      });
+    });
+
+    expect(ws.getCell("B13").dataValidation).to.deep.equal((self.dataValidations as any).B13);
+    expect(ws.getCell("E13").dataValidation).to.deep.equal((self.dataValidations as any).E13);
+    expect(ws.getCell("B15").dataValidation).to.deep.equal((self.dataValidations as any).B15);
+    expect(ws.getCell("B17").dataValidation).to.deep.equal((self.dataValidations as any).B17);
+    expect(ws.getCell("B19").dataValidation).to.deep.equal((self.dataValidations as any).B19);
+
+    // two rows of the same validation to test dataValidation optimisation
+    ["B22", "C22", "D22", "E22", "F22", "B23", "C23", "D23", "E23", "F23"].forEach(address => {
+      expect(ws.getCell(address).dataValidation).to.deep.equal(
+        (self.dataValidations as any).shared
+      );
+    });
+  }
+};
+
+const dataValidations = self;
+export { dataValidations };

@@ -9,7 +9,7 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 30000,
-    include: ["src/**/__test__/**/*.test.ts"],
-    exclude: ["src/__test__/browser/**/*.test.ts"]
+    include: ["src/**/__tests__/**/*.test.ts"],
+    exclude: ["src/**/__tests__/browser/**/*.test.ts"]
   }
 });

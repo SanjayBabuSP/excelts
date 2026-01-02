@@ -1,0 +1,119 @@
+/**
+ * Stream Module Node Tests
+ *
+ * Runs the shared stream test suite against the Node.js implementation.
+ * The same suite is also executed in browser tests to ensure behavior and
+ * data integrity stay consistent across environments.
+ */
+
+import { describe } from "vitest";
+
+import {
+  EventEmitter,
+  Readable,
+  Writable,
+  Transform,
+  Duplex,
+  BufferedStream,
+  StringChunk,
+  BufferChunk,
+  ChunkedBuilder,
+  TransactionalChunkedBuilder,
+  PullStream,
+  stringToUint8Array,
+  uint8ArrayToString,
+  uint8ArrayEquals,
+  uint8ArrayIndexOf,
+  concatUint8Arrays,
+  createCollector,
+  createDuplex,
+  createEmptyReadable,
+  createNullWritable,
+  createReadableFromAsyncIterable,
+  createReadableFromGenerator,
+  createReadableFromPromise,
+  isStream,
+  isReadable,
+  isWritable,
+  isTransform,
+  isDuplex,
+  isDestroyed,
+  isDisturbed,
+  isErrored,
+  createTransform,
+  createReadableFromArray,
+  pipeline,
+  finished,
+  streamToUint8Array,
+  streamToString,
+  drainStream,
+  copyStream,
+  addAbortSignal,
+  compose,
+  finishedAll,
+  once,
+  getDefaultHighWaterMark,
+  setDefaultHighWaterMark,
+  duplexPair,
+  consumers,
+  promises,
+  promisify
+} from "@stream";
+
+import { runStreamTests, type StreamModuleImports } from "@stream/__tests__/stream.shared";
+
+describe("Stream Module - Shared Tests (Node)", () => {
+  const imports: StreamModuleImports = {
+    EventEmitter,
+    Readable,
+    Writable,
+    Transform,
+    Duplex,
+    BufferedStream,
+    PullStream,
+    StringChunk,
+    BufferChunk,
+    ChunkedBuilder,
+    TransactionalChunkedBuilder,
+    createTransform,
+    createCollector,
+    createDuplex,
+    createReadableFromArray,
+    createReadableFromAsyncIterable,
+    createReadableFromGenerator,
+    createReadableFromPromise,
+    createEmptyReadable,
+    createNullWritable,
+    duplexPair,
+    pipeline,
+    finished,
+    streamToUint8Array,
+    streamToString,
+    drainStream,
+    copyStream,
+    concatUint8Arrays,
+    addAbortSignal,
+    compose,
+    finishedAll,
+    once,
+    promisify,
+    isReadable,
+    isWritable,
+    isTransform,
+    isDuplex,
+    isStream,
+    isDestroyed,
+    isDisturbed,
+    isErrored,
+    getDefaultHighWaterMark,
+    setDefaultHighWaterMark,
+    consumers,
+    promises,
+    stringToUint8Array,
+    uint8ArrayToString,
+    uint8ArrayEquals,
+    uint8ArrayIndexOf
+  };
+
+  runStreamTests(imports);
+});
