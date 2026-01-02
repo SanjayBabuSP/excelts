@@ -1754,22 +1754,27 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
             if (isNodeStyleTransform) {
               // Node.js style: transform(chunk, encoding, callback)
               await new Promise<void>((resolve, reject) => {
-                (userTransform as any).call(
-                  getInstance(),
-                  chunk,
-                  "utf8",
-                  (err?: Error | null, data?: TOutput) => {
-                    if (err) {
-                      reject(err);
-                    } else {
-                      // If data provided via callback, enqueue it
-                      if (data !== undefined) {
-                        controller.enqueue(data);
-                      }
-                      resolve();
+                const transformFn = userTransform as unknown as (...args: any[]) => void;
+                const callback = (err?: Error | null, data?: TOutput) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    // If data provided via callback, enqueue it
+                    if (data !== undefined) {
+                      controller.enqueue(data);
                     }
+                    resolve();
                   }
-                );
+                };
+
+                // Support both Node.js-style signatures:
+                // - transform(chunk, callback)
+                // - transform(chunk, encoding, callback)
+                if (transformFn.length >= 3) {
+                  transformFn.call(getInstance(), chunk, "utf8", callback);
+                } else {
+                  transformFn.call(getInstance(), chunk, callback);
+                }
               });
             } else {
               // Simple style: transform(chunk) => result
