@@ -1744,11 +1744,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
                 }
               };
 
-              if (transformFn.length >= 3) {
-                transformFn.call(this, chunk, "utf8", callback);
-              } else {
-                transformFn.call(this, chunk, callback);
-              }
+              const args =
+                transformFn.length >= 3 ? [chunk, "utf8", callback] : [chunk, callback];
+              transformFn.apply(this, args);
             });
           } else if (userTransform) {
             if (isNodeStyleTransform) {
@@ -1767,14 +1765,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
                   }
                 };
 
-                // Support both Node.js-style signatures:
-                // - transform(chunk, callback)
-                // - transform(chunk, encoding, callback)
-                if (transformFn.length >= 3) {
-                  transformFn.call(getInstance(), chunk, "utf8", callback);
-                } else {
-                  transformFn.call(getInstance(), chunk, callback);
-                }
+                const args =
+                  transformFn.length >= 3 ? [chunk, "utf8", callback] : [chunk, callback];
+                transformFn.apply(getInstance(), args);
               });
             } else {
               // Simple style: transform(chunk) => result
