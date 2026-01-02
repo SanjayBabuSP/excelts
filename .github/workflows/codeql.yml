@@ -18,7 +18,7 @@ jobs:
 
         steps:
             - name: Checkout
-              uses: actions/checkout@v4
+              uses: actions/checkout@v5
               with:
                   # For pull_request_target, analyze the PR's HEAD commit.
                   # We intentionally do not run builds/install scripts in this workflow.
@@ -26,13 +26,13 @@ jobs:
                   persist-credentials: false
 
             - name: Initialize CodeQL
-              uses: github/codeql-action/init@v3
+              uses: github/codeql-action/init@v4
               with:
                   languages: javascript
                   queries: +security-and-quality
                   build-mode: none
 
             - name: Perform CodeQL Analysis
-              uses: github/codeql-action/analyze@v3
+              uses: github/codeql-action/analyze@v4
               with:
                   category: "/language:javascript"
