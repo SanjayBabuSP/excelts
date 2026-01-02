@@ -1,0 +1,24 @@
+name: "Feature"
+description: "Suggest a feature or improvement"
+title: "[Feature]: "
+labels:
+  - "feature"
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: "What do you want?"
+      placeholder: "Describe the feature in a few sentences."
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: "Example (optional)"
+      placeholder: |
+        ```ts
+        // Example usage or API shape
+        ```
+    validations:
+      required: false
