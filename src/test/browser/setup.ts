@@ -2,7 +2,7 @@ import { beforeAll } from "vitest";
 
 beforeAll(async () => {
   const script = document.createElement("script");
-  script.src = "/dist/browser/excelts.iife.min.js";
+  script.src = "/dist/iife/excelts.iife.min.js";
 
   await new Promise((resolve, reject) => {
     script.onload = resolve;

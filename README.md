@@ -303,7 +303,7 @@ const url = URL.createObjectURL(blob);
 ### Using with Script Tags (No Bundler)
 
 ```html
-<script src="https://unpkg.com/@cj-tech-master/excelts/dist/browser/excelts.iife.min.js"></script>
+<script src="https://unpkg.com/@cj-tech-master/excelts/dist/iife/excelts.iife.min.js"></script>
 <script>
   const { Workbook } = ExcelTS;
   const wb = new Workbook();
@@ -320,7 +320,7 @@ For a quick manual smoke test in a real browser (create/download/read XLSX, work
 Steps:
 
 ```bash
-npm run build:browser
+npm run build:browser:bundle
 npx serve .
 ```
 

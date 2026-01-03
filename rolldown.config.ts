@@ -1,6 +1,7 @@
 import { defineConfig } from "rolldown";
 import fs from "node:fs";
 import { preferBrowserFilesPlugin } from "./src/utils/browser";
+import { visualizer } from "rollup-plugin-visualizer";
 
 const pkg = JSON.parse(fs.readFileSync("./package.json", "utf-8"));
 const banner = `/*!
@@ -30,34 +31,24 @@ const copyLicensePlugin = {
   }
 };
 
+const analyzePlugins =
+  process.env.ANALYZE === "true"
+    ? [
+        visualizer({
+          filename: "./dist/stats.html",
+          open: false,
+          gzipSize: true,
+          brotliSize: true,
+          template: "treemap"
+        })
+      ]
+    : [];
+
 export default defineConfig([
   {
     ...commonConfig,
     output: {
-      dir: "./dist/browser",
-      format: "esm",
-      sourcemap: true,
-      banner,
-      entryFileNames: "excelts.esm.js"
-    },
-    plugins: [...commonConfig.plugins, copyLicensePlugin]
-  },
-  {
-    ...commonConfig,
-    output: {
-      dir: "./dist/browser",
-      format: "esm",
-      sourcemap: false,
-      banner,
-      minify: true,
-      entryFileNames: "excelts.esm.min.js"
-    },
-    plugins: [...commonConfig.plugins]
-  },
-  {
-    ...commonConfig,
-    output: {
-      dir: "./dist/browser",
+      dir: "./dist/iife",
       format: "iife",
       name: "ExcelTS",
       sourcemap: true,
@@ -65,12 +56,12 @@ export default defineConfig([
       exports: "named",
       entryFileNames: "excelts.iife.js"
     },
-    plugins: [...commonConfig.plugins]
+    plugins: [...commonConfig.plugins, copyLicensePlugin, ...analyzePlugins]
   },
   {
     ...commonConfig,
     output: {
-      dir: "./dist/browser",
+      dir: "./dist/iife",
       format: "iife",
       name: "ExcelTS",
       sourcemap: false,
@@ -79,6 +70,6 @@ export default defineConfig([
       minify: true,
       entryFileNames: "excelts.iife.min.js"
     },
-    plugins: [...commonConfig.plugins]
+    plugins: [...commonConfig.plugins, copyLicensePlugin]
   }
 ]);

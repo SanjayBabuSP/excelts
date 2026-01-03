@@ -137,7 +137,7 @@
     // Load the bundle
     const startTime = performance.now();
     const script = document.createElement('script');
-    script.src = '../../../../dist/excelts.iife.min.js';
+    script.src = '../../../../dist/iife/excelts.iife.min.js';
     script.onload = () => {
       const loadTime = (performance.now() - startTime).toFixed(0);
       document.getElementById('loadTime').textContent = loadTime + 'ms';
@@ -146,7 +146,7 @@
       log(`Available exports: ${Object.keys(window.ExcelTS).join(', ')}`);
       
       // Fetch bundle size
-      fetch('../../../../dist/excelts.iife.min.js')
+      fetch('../../../../dist/iife/excelts.iife.min.js')
         .then(r => r.blob())
         .then(b => {
           document.getElementById('bundleSize').textContent = (b.size / 1024).toFixed(0) + ' KB';

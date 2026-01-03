@@ -303,7 +303,7 @@ const url = URL.createObjectURL(blob);
 ### 使用 Script 标签（无打包工具）
 
 ```html
-<script src="https://unpkg.com/@cj-tech-master/excelts/dist/browser/excelts.iife.min.js"></script>
+<script src="https://unpkg.com/@cj-tech-master/excelts/dist/iife/excelts.iife.min.js"></script>
 <script>
   const { Workbook } = ExcelTS;
   const wb = new Workbook();
@@ -320,7 +320,7 @@ const url = URL.createObjectURL(blob);
 使用方式：
 
 ```bash
-npm run build:browser
+npm run build:browser:bundle
 npx serve .
 ```
 
