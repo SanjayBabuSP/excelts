@@ -8,8 +8,29 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
-const esmDir = path.join(__dirname, "../dist/esm");
-const typesDir = path.join(__dirname, "../dist/types");
+const defaultEsmDir = path.join(__dirname, "../dist/esm");
+const defaultTypesDir = path.join(__dirname, "../dist/types");
+
+function resolveDirArg(value) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+  const resolved = path.isAbsolute(value) ? value : path.resolve(projectRoot, value);
+  return resolved;
+}
+
+function readArg(name) {
+  const argv = process.argv;
+  const idx = argv.indexOf(name);
+  if (idx === -1) {
+    return null;
+  }
+  const value = argv[idx + 1];
+  return value ?? null;
+}
+
+const esmDir = resolveDirArg(readArg("--dist") ?? readArg("--esm")) ?? defaultEsmDir;
+const typesDir = resolveDirArg(readArg("--types")) ?? defaultTypesDir;
 
 let filesModified = 0;
 
@@ -272,10 +293,10 @@ function addJsExtensions(dir) {
   }
 }
 
-console.log("Rewriting tsconfig path aliases in ESM output...");
+console.log(`Rewriting tsconfig path aliases in ESM output (${toPosixPath(esmDir)})...`);
 rewritePathAliases(esmDir, esmDir, { fileExtensions: [".js"], outputExtension: ".js" });
 
-console.log("Rewriting tsconfig path aliases in declaration output...");
+console.log(`Rewriting tsconfig path aliases in declaration output (${toPosixPath(typesDir)})...`);
 rewritePathAliases(typesDir, typesDir, { fileExtensions: [".d.ts"], outputExtension: ".d.ts" });
 
 console.log("Adding .js extensions to ESM imports for Node.js compatibility...");

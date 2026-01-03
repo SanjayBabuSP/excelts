@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "./dist/browser",
+    "declaration": true,
+    "emitDeclarationOnly": false
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "**/*.d.ts",
+    "**/*.test.ts",
+    "src/**/__tests__/**",
+    "src/test",
+    "src/examples",
+    "src/**/examples/**",
+    "vitest.config.ts",
+    "vitest.browser.config.ts",
+    "rolldown.config.ts",
+    "benchmark.js"
+  ]
+}
