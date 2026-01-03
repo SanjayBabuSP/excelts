@@ -224,6 +224,58 @@ function rewritePathAliases(dir, distRoot, { fileExtensions, outputExtension }) 
   }
 }
 
+function stripDtsExtensionsInDeclarations(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const filePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      stripDtsExtensionsInDeclarations(filePath);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+
+    let content;
+    try {
+      content = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const originalContent = content;
+
+    // TypeScript 5.9+ rejects explicit `.d.ts` specifiers in non-type-only imports/exports (TS2846).
+    // In `.d.ts` files, extensionless relative specifiers resolve to the `.d.ts` implementation.
+
+    // Static imports/exports: import ... from "./x.d.ts"; export ... from "./x.d.ts";
+    content = content.replace(
+      /((?:import|export)\s*(?:[^'\"]*\s+from\s+)?['\"])(\.[^'\"]+?)\.d\.ts(['\"])/g,
+      (match, prefix, specifier, suffix) => `${prefix}${specifier}${suffix}`
+    );
+
+    // Dynamic imports: import("./x.d.ts")
+    content = content.replace(
+      /(import\s*\(\s*['\"])(\.[^'\"]+?)\.d\.ts(['\"]\s*\))/g,
+      (match, prefix, specifier, suffix) => `${prefix}${specifier}${suffix}`
+    );
+
+    if (content !== originalContent) {
+      try {
+        fs.writeFileSync(filePath, content);
+        filesModified++;
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 function addJsExtensions(dir) {
   let entries;
   try {
@@ -298,6 +350,9 @@ rewritePathAliases(esmDir, esmDir, { fileExtensions: [".js"], outputExtension: "
 
 console.log(`Rewriting tsconfig path aliases in declaration output (${toPosixPath(typesDir)})...`);
 rewritePathAliases(typesDir, typesDir, { fileExtensions: [".d.ts"], outputExtension: ".d.ts" });
+
+console.log(`Stripping .d.ts extensions in declaration specifiers (${toPosixPath(typesDir)})...`);
+stripDtsExtensionsInDeclarations(typesDir);
 
 console.log("Adding .js extensions to ESM imports for Node.js compatibility...");
 addJsExtensions(esmDir);
