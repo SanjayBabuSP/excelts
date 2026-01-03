@@ -19,3 +19,6 @@ node_modules
 
 # Vitest browser screenshots (empty in headless mode)
 __screenshots__
+
+# Temporary local smoke-test projects
+tmp/
