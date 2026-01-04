@@ -24,6 +24,9 @@ export const commonLintConfig = defineConfig(
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
+      "tmp/**",
+      "docs/.vitepress/cache/**",
+      "docs/.vitepress/dist/**",
       "**/*.graphql",
       "**/*.mustache",
       "**/*.md",
