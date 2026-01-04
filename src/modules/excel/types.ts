@@ -733,6 +733,13 @@ export interface TableProperties {
   ref: string;
   headerRow?: boolean;
   totalsRow?: boolean;
+  /**
+   * When true, expands implicit structured references like [@A] to
+   * TableName[[#This Row],[A]] when storing table row formulas.
+   *
+   * Default: false (keeps formulas as provided, e.g. [@A]).
+   */
+  qualifyImplicitStructuredReferences?: boolean;
   style?: TableStyleProperties;
   columns: TableColumnProperties[];
   rows: any[][];

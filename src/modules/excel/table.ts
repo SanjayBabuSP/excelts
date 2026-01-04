@@ -18,6 +18,7 @@ interface TableModel {
   rows: CellValue[][];
   headerRow?: boolean;
   totalsRow?: boolean;
+  qualifyImplicitStructuredReferences?: boolean;
   style?: TableStyleProperties;
   tl?: Address;
   autoFilterRef?: string;
@@ -241,16 +242,20 @@ class Table {
       data.forEach((value, j) => {
         const cell = r.getCell(col + j);
         const formula = (value as any)?.formula;
-        cell.value =
-          typeof formula === "string"
-            ? {
-                ...(value as CellFormulaValue),
-                formula: formula.replace(
+        if (typeof formula === "string") {
+          const shouldQualify = table.qualifyImplicitStructuredReferences === true;
+          cell.value = {
+            ...(value as CellFormulaValue),
+            formula: shouldQualify
+              ? formula.replace(
                   /(^|[^A-Za-z0-9_])\[@\[?([^\[\]]+?)\]?\]/g,
                   `$1${table.name}[[#This Row],[$2]]`
                 )
-              }
-            : value;
+              : formula
+          } as CellFormulaValue;
+        } else {
+          cell.value = value;
+        }
 
         assignStyle(cell, table.columns[j].style);
       });

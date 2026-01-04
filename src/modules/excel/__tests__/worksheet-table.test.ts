@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { colCache } from "@excel/utils/col-cache";
 import { Workbook } from "../../../index";
+import { extractAll } from "@archive/extract";
 
 const spliceArray = (a: any[], index: number, count: number, ...rest: any[]) => {
   const clone = [...a];
@@ -205,7 +206,7 @@ describe("Worksheet", () => {
       checkTable("A1", ws, newValues);
     });
 
-    it("qualifies implicit structured references", () => {
+    it("keeps implicit structured references by default", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
 
@@ -218,7 +219,51 @@ describe("Worksheet", () => {
       });
 
       const cellValue = ws.getRow(2).getCell(2).value;
+      expect(cellValue).toEqual({ formula: "[@A]" });
+    });
+
+    it("qualifies implicit structured references when enabled", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("blort");
+
+      ws.addTable({
+        name: "TestTable",
+        ref: "A1",
+        headerRow: true,
+        qualifyImplicitStructuredReferences: true,
+        columns: [{ name: "A" }, { name: "B" }],
+        rows: [["a1", { formula: "[@A]" }]]
+      });
+
+      const cellValue = ws.getRow(2).getCell(2).value;
       expect(cellValue).toEqual({ formula: "TestTable[[#This Row],[A]]" });
+    });
+
+    it("writes CONCAT([@A]) without leading @", async () => {
+      const workbook = new Workbook();
+      const worksheet = workbook.addWorksheet();
+
+      worksheet.addTable({
+        name: "table",
+        ref: "A1",
+        headerRow: true,
+        columns: [{ name: "A" }, { name: "B" }],
+        rows: [["a1", { formula: "CONCAT([@A])" }]]
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const zipData = await extractAll(new Uint8Array(buffer));
+
+      const sheet1 = zipData.get("xl/worksheets/sheet1.xml");
+      expect(sheet1).toBeDefined();
+
+      const xml = new TextDecoder().decode(sheet1!.data);
+      const match = xml.match(/<c[^>]*\br="B2"[^>]*>[\s\S]*?<f[^>]*>([^<]*)<\/f>/);
+      expect(match).toBeTruthy();
+
+      const formula = match![1];
+      expect(formula).toBe("CONCAT([@A])");
+      expect(formula.startsWith("@")).toBe(false);
     });
   });
 });
