@@ -250,19 +250,57 @@ function stripDtsExtensionsInDeclarations(dir) {
     }
     const originalContent = content;
 
-    // TypeScript 5.9+ rejects explicit `.d.ts` specifiers in non-type-only imports/exports (TS2846).
-    // In `.d.ts` files, extensionless relative specifiers resolve to the `.d.ts` implementation.
+    // Consumers using `moduleResolution: node16|nodenext` require explicit extensions in ESM-style
+    // imports/exports, including those that appear inside `.d.ts` files (TS2834).
+    // TypeScript 5.9+ also rejects explicit `.d.ts` specifiers in non-type-only imports/exports (TS2846),
+    // so we normalize declaration specifiers to `.js` (TypeScript will still resolve them to `.d.ts`).
 
-    // Static imports/exports: import ... from "./x.d.ts"; export ... from "./x.d.ts";
+    function hasKnownExtension(specifier) {
+      const ext = path.posix.extname(specifier);
+      return Boolean(ext);
+    }
+
+    function rewriteDeclarationSpecifier(filePathForResolution, specifier) {
+      // Only rewrite relative imports.
+      if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+        return specifier;
+      }
+
+      // Convert explicit `.d.ts` -> `.js`.
+      if (specifier.endsWith(".d.ts")) {
+        return `${specifier.slice(0, -".d.ts".length)}.js`;
+      }
+
+      // Preserve existing extensions (e.g. .js, .json).
+      if (hasKnownExtension(specifier)) {
+        return specifier;
+      }
+
+      // Add `.js`, and for directory imports use `/index.js`.
+      const resolvedPath = path.resolve(path.dirname(filePathForResolution), specifier);
+      const indexDtsPath = path.join(resolvedPath, "index.d.ts");
+      if (fs.existsSync(indexDtsPath)) {
+        return `${specifier}/index.js`;
+      }
+      return `${specifier}.js`;
+    }
+
+    // Static imports/exports: import ... from "./x"; export ... from "./x";
     content = content.replace(
-      /((?:import|export)\s*(?:[^'\"]*\s+from\s+)?['\"])(\.[^'\"]+?)\.d\.ts(['\"])/g,
-      (match, prefix, specifier, suffix) => `${prefix}${specifier}${suffix}`
+      /((?:import|export)\s*(?:[^'\"]*\s+from\s+)?['\"])(\.?\.?\/[^'\"]+?)(['\"])/g,
+      (match, prefix, specifier, suffix) => {
+        const rewritten = rewriteDeclarationSpecifier(filePath, specifier);
+        return rewritten === specifier ? match : `${prefix}${rewritten}${suffix}`;
+      }
     );
 
-    // Dynamic imports: import("./x.d.ts")
+    // Dynamic imports: import("./x")
     content = content.replace(
-      /(import\s*\(\s*['\"])(\.[^'\"]+?)\.d\.ts(['\"]\s*\))/g,
-      (match, prefix, specifier, suffix) => `${prefix}${specifier}${suffix}`
+      /(import\s*\(\s*['\"])(\.?\.?\/[^'\"]+?)(['\"]\s*\))/g,
+      (match, prefix, specifier, suffix) => {
+        const rewritten = rewriteDeclarationSpecifier(filePath, specifier);
+        return rewritten === specifier ? match : `${prefix}${rewritten}${suffix}`;
+      }
     );
 
     if (content !== originalContent) {
@@ -351,7 +389,7 @@ rewritePathAliases(esmDir, esmDir, { fileExtensions: [".js"], outputExtension: "
 console.log(`Rewriting tsconfig path aliases in declaration output (${toPosixPath(typesDir)})...`);
 rewritePathAliases(typesDir, typesDir, { fileExtensions: [".d.ts"], outputExtension: ".d.ts" });
 
-console.log(`Stripping .d.ts extensions in declaration specifiers (${toPosixPath(typesDir)})...`);
+console.log(`Normalizing declaration specifiers for Node16/NodeNext (${toPosixPath(typesDir)})...`);
 stripDtsExtensionsInDeclarations(typesDir);
 
 console.log("Adding .js extensions to ESM imports for Node.js compatibility...");
