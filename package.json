@@ -1,6 +1,6 @@
 {
   "name": "@cj-tech-master/excelts",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "description": "TypeScript Excel Workbook Manager - Read and Write xlsx and csv Files.",
   "type": "module",
   "publishConfig": {
