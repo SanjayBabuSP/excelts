@@ -38,6 +38,7 @@ interface StyleIndex {
 class StylesXform extends BaseXform {
   declare private index?: StyleIndex;
   declare private weakMap?: WeakMap<any, number>;
+  declare private _hasCheckboxes?: boolean;
   declare public parser: any;
   static Mock: typeof StylesXform;
 
@@ -119,6 +120,7 @@ class StylesXform extends BaseXform {
     this._addFill({ type: "pattern", pattern: "gray125" });
 
     this.weakMap = new WeakMap();
+    this._hasCheckboxes = false;
   }
 
   render(xmlStream: any, model?: StylesModel): void {
@@ -278,13 +280,17 @@ class StylesXform extends BaseXform {
       this._addFont({ size: 11, color: { theme: 1 }, name: "Calibri", family: 2, scheme: "minor" });
     }
 
-    // if we have seen this style object before, assume it has the same styleId
-    if (this.weakMap && this.weakMap.has(model)) {
+    const type = cellType || Enums.ValueType.Number;
+
+    // If we have seen this style object before, assume it has the same styleId.
+    // Do not cache by object identity for checkbox cells because the styleId must
+    // include checkbox-specific extLst, and the same style object may be reused
+    // for non-checkbox cells.
+    if (type !== Enums.ValueType.Checkbox && this.weakMap && this.weakMap.has(model)) {
       return this.weakMap.get(model)!;
     }
 
     const style: any = {};
-    const type = cellType || Enums.ValueType.Number;
 
     if (model.numFmt) {
       style.numFmtId = this._addNumFmtStr(model.numFmt);
@@ -321,8 +327,18 @@ class StylesXform extends BaseXform {
       style.protection = model.protection;
     }
 
+    if (type === Enums.ValueType.Checkbox) {
+      // Checkbox rendering relies on style extensions (extLst) and workbook-level parts.
+      // Force applyAlignment="1" (without emitting an <alignment/> node) by providing
+      // an empty alignment object when none is specified.
+      this._hasCheckboxes = true;
+      style.alignment = style.alignment || {};
+      style.checkbox = true;
+      style.xfComplementIndex = 0;
+    }
+
     const styleId = this._addStyle(style);
-    if (this.weakMap) {
+    if (type !== Enums.ValueType.Checkbox && this.weakMap) {
       this.weakMap.set(model, styleId);
     }
     return styleId;
@@ -397,6 +413,11 @@ class StylesXform extends BaseXform {
 
   getDxfStyle(id: number): any {
     return this.model.dxfs[id];
+  }
+
+  // Check if workbook uses checkbox feature
+  get hasCheckboxes(): boolean {
+    return !!this._hasCheckboxes;
   }
 
   // =========================================================================
@@ -549,11 +570,19 @@ class StylesXformMock extends StylesXform {
   // the styleId is returned. Note: cellType is used when numFmt not defined
   addStyleModel(model: any, cellType?: number): number {
     switch (cellType) {
+      case Enums.ValueType.Checkbox:
+        // Checkbox rendering relies on style extensions (extLst) and workbook-level parts.
+        // The mock style manager intentionally does not build those structures.
+        throw new Error("Checkbox cells require styles to be enabled (useStyles: true)");
       case Enums.ValueType.Date:
         return this.dateStyleId;
       default:
         return 0;
     }
+  }
+
+  get hasCheckboxes(): boolean {
+    return false;
   }
 
   get dateStyleId(): number {

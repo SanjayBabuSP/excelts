@@ -21,6 +21,7 @@ import { ContentTypesXform } from "@excel/xlsx/xform/core/content-types-xform";
 import { AppXform } from "@excel/xlsx/xform/core/app-xform";
 import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
 import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xform";
+import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property-bag-xform";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import type { Writable } from "@stream";
 import { Writeable, stringToUint8Array } from "@stream";
@@ -278,6 +279,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
       this.addCore(),
       this.addSharedStrings(),
       this.addStyles(),
+      this.addFeaturePropertyBag(),
       this.addWorkbookRels()
     ]);
     await this.addWorkbook();
@@ -384,7 +386,8 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
         worksheets: this._worksheets.filter(Boolean),
         sharedStrings: this.sharedStrings,
         commentRefs: this.commentRefs,
-        media: this.media
+        media: this.media,
+        hasCheckboxes: this.styles.hasCheckboxes
       };
       const xform = new ContentTypesXform();
       this._addFile(xform.toXml(model), OOXML_PATHS.contentTypes);
@@ -450,6 +453,14 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return Promise.resolve();
   }
 
+  addFeaturePropertyBag(): Promise<void> {
+    if (this.styles.hasCheckboxes) {
+      const xform = new FeaturePropertyBagXform();
+      this._addFile(xform.toXml({}), OOXML_PATHS.xlFeaturePropertyBag);
+    }
+    return Promise.resolve();
+  }
+
   addWorkbookRels(): Promise<void> {
     let count = 1;
     const relationships: Array<{ Id: string; Type: string; Target: string }> = [
@@ -461,6 +472,14 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
         Id: `rId${count++}`,
         Type: RelType.SharedStrings,
         Target: OOXML_REL_TARGETS.workbookSharedStrings
+      });
+    }
+    // Add FeaturePropertyBag relationship if checkboxes are used
+    if (this.styles.hasCheckboxes) {
+      relationships.push({
+        Id: `rId${count++}`,
+        Type: RelType.FeaturePropertyBag,
+        Target: OOXML_REL_TARGETS.workbookFeaturePropertyBag
       });
     }
     this._worksheets.forEach(ws => {

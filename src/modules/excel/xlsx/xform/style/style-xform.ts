@@ -15,6 +15,8 @@ interface StyleModel {
   xfId?: number;
   alignment?: any;
   protection?: any;
+  checkbox?: boolean;
+  xfComplementIndex?: number;
 }
 
 interface StyleOptions {
@@ -81,6 +83,18 @@ class StyleXform extends BaseXform {
     }
     if (model.protection) {
       this.map.protection.render(xmlStream, model.protection);
+    }
+
+    // Add checkbox extLst if needed
+    if (model.checkbox && model.xfComplementIndex !== undefined) {
+      xmlStream.openNode("extLst");
+      xmlStream.openNode("ext", {
+        "xmlns:xfpb": "http://schemas.microsoft.com/office/spreadsheetml/2022/featurepropertybag",
+        uri: "{C7286773-470A-42A8-94C5-96B5CB345126}"
+      });
+      xmlStream.leafNode("xfpb:xfComplement", { i: model.xfComplementIndex });
+      xmlStream.closeNode();
+      xmlStream.closeNode();
     }
 
     xmlStream.closeNode();

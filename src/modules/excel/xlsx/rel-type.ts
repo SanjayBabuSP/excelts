@@ -20,7 +20,8 @@ const RelType = {
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition",
   PivotCacheRecords:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords",
-  PivotTable: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable"
+  PivotTable: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable",
+  FeaturePropertyBag: "http://schemas.microsoft.com/office/2022/11/relationships/FeaturePropertyBag"
 };
 
 export { RelType };

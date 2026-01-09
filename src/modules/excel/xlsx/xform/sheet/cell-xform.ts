@@ -226,6 +226,12 @@ class CellXform extends BaseXform {
         xmlStream.leafNode("v", null, model.value ? "1" : "0");
         break;
 
+      case Enums.ValueType.Checkbox:
+        // Checkboxes are stored as boolean values
+        xmlStream.addAttribute("t", "b");
+        xmlStream.leafNode("v", null, model.value ? "1" : "0");
+        break;
+
       case Enums.ValueType.Error:
         xmlStream.addAttribute("t", "e");
         xmlStream.leafNode("v", null, model.value.error);

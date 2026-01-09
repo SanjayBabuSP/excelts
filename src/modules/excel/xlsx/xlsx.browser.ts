@@ -18,6 +18,7 @@ import { ContentTypesXform } from "@excel/xlsx/xform/core/content-types-xform";
 import { AppXform } from "@excel/xlsx/xform/core/app-xform";
 import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
 import { WorkSheetXform } from "@excel/xlsx/xform/sheet/worksheet-xform";
+import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property-bag-xform";
 import { DrawingXform } from "@excel/xlsx/xform/drawing/drawing-xform";
 import { TableXform } from "@excel/xlsx/xform/table/table-xform";
 import { PivotCacheRecordsXform } from "@excel/xlsx/xform/pivot-table/pivot-cache-records-xform";
@@ -25,7 +26,10 @@ import {
   PivotCacheDefinitionXform,
   type ParsedCacheDefinitionModel
 } from "@excel/xlsx/xform/pivot-table/pivot-cache-definition-xform";
-import { PivotTableXform, type ParsedPivotTableModel } from "@excel/xlsx/xform/pivot-table/pivot-table-xform";
+import {
+  PivotTableXform,
+  type ParsedPivotTableModel
+} from "@excel/xlsx/xform/pivot-table/pivot-table-xform";
 import { CommentsXform } from "@excel/xlsx/xform/comment/comments-xform";
 import { VmlNotesXform } from "@excel/xlsx/xform/comment/vml-notes-xform";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
@@ -349,6 +353,7 @@ class XLSX {
     this.addTables(zip, model);
     this.addPivotTables(zip, model);
     await Promise.all([this.addThemes(zip, model), this.addStyles(zip, model)]);
+    await this.addFeaturePropertyBag(zip, model);
     await this.addMedia(zip, model);
     await Promise.all([this.addApp(zip, model), this.addCore(zip, model)]);
     await this.addWorkbook(zip, model);
@@ -1270,6 +1275,15 @@ class XLSX {
         Target: OOXML_REL_TARGETS.workbookSharedStrings
       });
     }
+
+    // Add FeaturePropertyBag relationship if checkboxes are used
+    if (model.hasCheckboxes) {
+      relationships.push({
+        Id: `rId${count++}`,
+        Type: XLSX.RelType.FeaturePropertyBag,
+        Target: OOXML_REL_TARGETS.workbookFeaturePropertyBag
+      });
+    }
     (model.pivotTables || []).forEach((pivotTable: any) => {
       pivotTable.rId = `rId${count++}`;
       relationships.push({
@@ -1290,6 +1304,14 @@ class XLSX {
     const xform = new RelationshipsXform();
     const xml = xform.toXml(relationships);
     zip.append(xml, { name: OOXML_PATHS.xlWorkbookRels });
+  }
+
+  async addFeaturePropertyBag(zip: IZipWriter, model: any): Promise<void> {
+    if (!model.hasCheckboxes) {
+      return;
+    }
+    const xform = new FeaturePropertyBagXform();
+    zip.append(xform.toXml({}), { name: OOXML_PATHS.xlFeaturePropertyBag });
   }
 
   async addSharedStrings(zip: IZipWriter, model: any): Promise<void> {
@@ -1473,6 +1495,9 @@ class XLSX {
 
       worksheetXform.prepare(worksheet, worksheetOptions);
     });
+
+    // ContentTypesXform expects this flag
+    model.hasCheckboxes = model.styles.hasCheckboxes;
   }
 }
 

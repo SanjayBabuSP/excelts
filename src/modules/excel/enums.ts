@@ -10,7 +10,8 @@ export enum ValueType {
   RichText = 8,
   Boolean = 9,
   Error = 10,
-  JSON = 11 // Internal type for JSON values that serialize as String
+  JSON = 11, // Internal type for JSON values that serialize as String
+  Checkbox = 12
 }
 
 export enum FormulaType {

@@ -400,6 +400,11 @@ export interface CellSharedFormulaValue {
   date1904?: boolean;
 }
 
+export interface CellCheckboxValue {
+  /** Indicates this is a checkbox value */
+  checkbox: boolean;
+}
+
 export type CellValue =
   | null
   | number
@@ -412,7 +417,8 @@ export type CellValue =
   | CellHyperlinkValue
   | CellFormulaValue
   | CellArrayFormulaValue
-  | CellSharedFormulaValue;
+  | CellSharedFormulaValue
+  | CellCheckboxValue;
 
 // ============================================================================
 // Comment Types

@@ -19,7 +19,8 @@ import type {
   CellErrorValue,
   DataValidation,
   CellValue,
-  CellHyperlinkValue
+  CellHyperlinkValue,
+  CellCheckboxValue
 } from "@excel/types";
 import type { DataValidations } from "@excel/data-validations";
 
@@ -1237,6 +1238,57 @@ class BooleanValue {
   }
 }
 
+interface CheckboxValueModel extends CellModel {
+  type: typeof Cell.Types.Checkbox;
+  value: boolean;
+}
+
+class CheckboxValue {
+  declare public model: CheckboxValueModel;
+
+  constructor(cell: Cell, value: CellCheckboxValue) {
+    this.model = {
+      address: cell.address,
+      type: Cell.Types.Checkbox,
+      value: value.checkbox
+    };
+  }
+
+  get value(): CellCheckboxValue {
+    return { checkbox: this.model.value };
+  }
+
+  set value(value: CellCheckboxValue) {
+    this.model.value = value.checkbox;
+  }
+
+  get type(): number {
+    return Cell.Types.Checkbox;
+  }
+
+  get effectiveType(): number {
+    return Cell.Types.Boolean;
+  }
+
+  get address(): string {
+    return this.model.address;
+  }
+
+  set address(value: string) {
+    this.model.address = value;
+  }
+
+  toCsvString(): number {
+    return this.model.value ? 1 : 0;
+  }
+
+  release(): void {}
+
+  toString(): string {
+    return this.model.value.toString();
+  }
+}
+
 class ErrorValue {
   declare public model: ErrorValueModel;
 
@@ -1350,6 +1402,9 @@ const Value = {
       return Cell.Types.Date;
     }
     if (typeof value === "object") {
+      if ("checkbox" in value && typeof value.checkbox === "boolean") {
+        return Cell.Types.Checkbox;
+      }
       if ("text" in value && value.text && "hyperlink" in value && value.hyperlink) {
         return Cell.Types.Hyperlink;
       }
@@ -1385,7 +1440,8 @@ const Value = {
     { t: Cell.Types.SharedString, f: SharedStringValue },
     { t: Cell.Types.RichText, f: RichTextValue },
     { t: Cell.Types.Boolean, f: BooleanValue },
-    { t: Cell.Types.Error, f: ErrorValue }
+    { t: Cell.Types.Error, f: ErrorValue },
+    { t: Cell.Types.Checkbox, f: CheckboxValue }
   ].reduce(
     (
       p: (
@@ -1401,6 +1457,7 @@ const Value = {
         | typeof RichTextValue
         | typeof BooleanValue
         | typeof ErrorValue
+        | typeof CheckboxValue
       )[],
       t
     ) => {

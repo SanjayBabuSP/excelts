@@ -68,6 +68,12 @@ const examples: ExampleTest[] = [
     file: "src/modules/excel/examples/web-streams-reader-writer.ts",
     description: "Web Streams: writer -> reader roundtrip",
     outputFiles: []
+  },
+  {
+    file: "src/modules/excel/examples/checkbox.ts",
+    description: "Checkbox cells (Office Online compatible)",
+    outputFiles: ["src/modules/excel/examples/data/checkbox.xlsx"],
+    args: ["src/modules/excel/examples/data/checkbox.xlsx"]
   }
 ];
 

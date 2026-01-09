@@ -84,6 +84,14 @@ class ContentTypesXform extends BaseXform {
       ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
     });
 
+    // Add FeaturePropertyBag if checkboxes are used
+    if (model.hasCheckboxes) {
+      xmlStream.leafNode("Override", {
+        PartName: toContentTypesPartName(OOXML_PATHS.xlFeaturePropertyBag),
+        ContentType: "application/vnd.ms-excel.featurepropertybag+xml"
+      });
+    }
+
     const hasSharedStrings = model.sharedStrings && model.sharedStrings.count;
     if (hasSharedStrings) {
       xmlStream.leafNode("Override", {
