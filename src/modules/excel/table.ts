@@ -110,6 +110,28 @@ class Table {
     this.worksheet = worksheet;
     if (table) {
       this.table = table;
+
+      // When loading tables from xlsx, Excel stores table ranges and cell values in the worksheet,
+      // but may not embed row data into the table definition. Hydrate rows from the worksheet so
+      // table mutations (e.g. addRow) can correctly expand table ranges and serialize.
+      if (Array.isArray(table.rows) && table.rows.length === 0 && table.tableRef) {
+        const decoded = colCache.decode(table.tableRef);
+        if ("dimensions" in decoded) {
+          const startRow = decoded.top + (table.headerRow === false ? 0 : 1);
+          const endRow = decoded.bottom - (table.totalsRow === true ? 1 : 0);
+
+          if (endRow >= startRow) {
+            for (let r = startRow; r <= endRow; r++) {
+              const row = worksheet.getRow(r);
+              const values: CellValue[] = [];
+              for (let c = decoded.left; c <= decoded.right; c++) {
+                values.push(row.getCell(c).value);
+              }
+              table.rows.push(values);
+            }
+          }
+        }
+      }
       // check things are ok first
       this.validate();
 
@@ -197,10 +219,11 @@ class Table {
     assert(row > 0, "Table must be on valid row");
     assert(col > 0, "Table must be on valid col");
 
-    const { width, filterHeight, tableHeight } = this;
+    const { width, tableHeight } = this;
 
-    // autoFilterRef is a range that includes optional headers only
-    table.autoFilterRef = colCache.encode(row, col, row + filterHeight - 1, col + width - 1);
+    // autoFilterRef is a single-row range that targets the header row only.
+    // Excel uses this for filter buttons; including data rows can break filter rendering.
+    table.autoFilterRef = colCache.encode(row, col, row, col + width - 1);
 
     // tableRef is a range that includes optional headers and totals
     table.tableRef = colCache.encode(row, col, row + tableHeight - 1, col + width - 1);
@@ -383,9 +406,10 @@ class Table {
     }
 
     this.store();
+    this._cache = undefined;
   }
 
-  addRow(values: CellValue[], rowNumber?: number): void {
+  addRow(values: CellValue[], rowNumber?: number, options?: { commit?: boolean }): void {
     // Add a row of data, either insert at rowNumber or append
     this.cacheState();
 
@@ -394,12 +418,20 @@ class Table {
     } else {
       this.table.rows.splice(rowNumber, 0, values);
     }
+
+    if (options?.commit !== false) {
+      this.commit();
+    }
   }
 
-  removeRows(rowIndex: number, count: number = 1): void {
+  removeRows(rowIndex: number, count: number = 1, options?: { commit?: boolean }): void {
     // Remove a rows of data
     this.cacheState();
     this.table.rows.splice(rowIndex, count);
+
+    if (options?.commit !== false) {
+      this.commit();
+    }
   }
 
   getColumn(colIndex: number): Column {
