@@ -99,7 +99,10 @@ export function compressSync(data: Uint8Array, options: CompressOptions = {}): U
  * @param data - Compressed data (deflate-raw format)
  * @returns Decompressed data
  */
-export async function decompress(data: Uint8Array): Promise<Uint8Array> {
+export async function decompress(
+  data: Uint8Array,
+  _options: CompressOptions = {}
+): Promise<Uint8Array> {
   // Always use native DecompressionStream when available - it's much faster than JS
   if (hasDeflateRawDecompressionStream()) {
     return decompressWithStream(data);
