@@ -47,6 +47,66 @@ import {
 import { concatUint8Arrays, getTextDecoder, textDecoder } from "@stream/shared";
 
 // =============================================================================
+// Shared event listener helpers
+// =============================================================================
+
+type AnyEventEmitter = {
+  on?: (event: string, listener: (...args: any[]) => void) => any;
+  once?: (event: string, listener: (...args: any[]) => void) => any;
+  off?: (event: string, listener: (...args: any[]) => void) => any;
+  removeListener?: (event: string, listener: (...args: any[]) => void) => any;
+};
+
+const removeEmitterListener = (
+  emitter: AnyEventEmitter,
+  event: string,
+  listener: (...args: any[]) => void
+): void => {
+  if (typeof emitter.off === "function") {
+    emitter.off(event, listener);
+  } else if (typeof emitter.removeListener === "function") {
+    emitter.removeListener(event, listener);
+  }
+};
+
+const addEmitterListener = (
+  emitter: AnyEventEmitter,
+  event: string,
+  listener: (...args: any[]) => void,
+  options?: { once?: boolean }
+): (() => void) => {
+  if (options?.once && typeof emitter.once === "function") {
+    emitter.once(event, listener);
+  } else {
+    emitter.on!(event, listener);
+  }
+  return () => removeEmitterListener(emitter, event, listener);
+};
+
+const createListenerRegistry = (): {
+  add: (emitter: AnyEventEmitter, event: string, listener: (...args: any[]) => void) => void;
+  once: (emitter: AnyEventEmitter, event: string, listener: (...args: any[]) => void) => void;
+  cleanup: () => void;
+} => {
+  const listeners: Array<() => void> = [];
+
+  return {
+    add: (emitter, event, listener) => {
+      listeners.push(addEmitterListener(emitter, event, listener));
+    },
+    once: (emitter, event, listener) => {
+      listeners.push(addEmitterListener(emitter, event, listener, { once: true }));
+    },
+    cleanup: () => {
+      for (let i = listeners.length - 1; i >= 0; i--) {
+        listeners[i]();
+      }
+      listeners.length = 0;
+    }
+  };
+};
+
+// =============================================================================
 // Readable Stream Wrapper
 // =============================================================================
 
@@ -62,6 +122,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _bufferSize: number = 0;
   private _reading: boolean = false;
   private _ended: boolean = false;
+  private _endEmitted: boolean = false;
   private _destroyed: boolean = false;
   private _errored: Error | null = null;
   private _closed: boolean = false;
@@ -70,7 +131,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _pipeTo: WritableLike[] = [];
   private _pipeListeners: Map<
     WritableLike,
-    { data: (chunk: T) => void; end: () => void; error: (err: Error) => void }
+    {
+      data: (chunk: T) => void;
+      end: () => void;
+      error: (err: Error) => void;
+      drain?: () => void;
+      eventTarget: any;
+    }
   > = new Map();
   private _encoding: string | null = null;
   private _decoder: TextDecoder | null = null;
@@ -131,7 +198,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       });
 
       // Expose controller for push/end
-      (this as any)._controller = controller!;
+      (this as any)._controller = controller;
     }
   }
 
@@ -144,19 +211,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Readable<T> {
     const readable = new Readable<T>({ ...options, objectMode: options?.objectMode ?? true });
 
-    (async () => {
-      try {
-        for await (const chunk of iterable as AsyncIterable<T>) {
-          if (!readable.push(chunk)) {
-            // Backpressure
-            await new Promise(resolve => setTimeout(resolve, 0));
-          }
-        }
-        readable.push(null);
-      } catch (err) {
-        readable.destroy(err as Error);
-      }
-    })();
+    pumpAsyncIterableToReadable(readable, toAsyncIterable(iterable));
 
     return readable;
   }
@@ -208,17 +263,32 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           // Controller may already be closed
         }
       }
-      this.emit("end");
+
+      // Emit 'end' only after buffered data is fully drained.
+      // This avoids premature 'end' when producers push null while paused.
+      if (this._bufferedLength() === 0) {
+        this._emitEndOnce();
+      }
       // Note: Don't call destroy() here, let the stream be consumed naturally
       // The reader will return done:true when it finishes reading
       return false;
+    }
+
+    // Keep the internal Web ReadableStream in sync for controllable streams.
+    // For external Web streams (_webStreamMode=true), push() is not the data source.
+    if (controller && !this._webStreamMode) {
+      try {
+        controller.enqueue(chunk);
+      } catch {
+        // Controller may be closed/errored; Node-side buffering/events still work.
+      }
     }
 
     if (this._flowing) {
       // In flowing mode, emit data directly without buffering or enqueueing
       // const chunkStr = chunk instanceof Uint8Array ? new TextDecoder().decode(chunk.slice(0, 50)) : String(chunk).slice(0, 50);
       // console.log(`[Readable#${this._id}.push FLOWING] emit data size:${(chunk as any).length || (chunk as any).byteLength} start:"${chunkStr}"`);
-      this.emit("data", chunk);
+      this.emit("data", this._applyEncoding(chunk));
       // Check if stream was paused during emit (backpressure from consumer)
       if (!this._flowing) {
         return false;
@@ -242,10 +312,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (!this.objectMode) {
         this._bufferSize += this._getChunkSize(chunk);
       }
-      // NOTE: Do NOT enqueue to Web Stream controller here!
-      // In push mode, _buffer is the only source of data for data events.
-      // Web Stream is only used for async iteration when not in push mode.
-      // Enqueueing here would cause data duplication when _startReading is also running.
+      // NOTE: We still buffer for Node-style read()/data semantics.
+      // The internal Web ReadableStream is also fed via controller.enqueue() above.
 
       // Emit readable event when buffer goes from empty to having data
       if (wasEmpty) {
@@ -259,6 +327,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // For binary mode, use tracked buffer size (O(1))
       return this._bufferSize < this.readableHighWaterMark;
     }
+  }
+
+  private _emitEndOnce(): void {
+    if (this._endEmitted) {
+      return;
+    }
+    this._endEmitted = true;
+    this.emit("end");
   }
 
   /**
@@ -287,14 +363,22 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         if (!this.objectMode) {
           this._bufferSize -= this._getChunkSize(chunk);
         }
-        return this._applyEncoding(chunk);
+        const decoded = this._applyEncoding(chunk);
+        if (this._ended && this._bufferedLength() === 0) {
+          queueMicrotask(() => this._emitEndOnce());
+        }
+        return decoded;
       }
       // For binary mode, handle size
       const chunk = this._bufferShift();
       if (!this.objectMode) {
         this._bufferSize -= this._getChunkSize(chunk);
       }
-      return this._applyEncoding(chunk);
+      const decoded = this._applyEncoding(chunk);
+      if (this._ended && this._bufferedLength() === 0) {
+        queueMicrotask(() => this._emitEndOnce());
+      }
+      return decoded;
     }
     return null;
   }
@@ -414,12 +498,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (!this.objectMode) {
         this._bufferSize -= this._getChunkSize(chunk);
       }
-      this.emit("data", chunk);
+      this.emit("data", this._applyEncoding(chunk));
     }
 
     // If already ended, emit end event
     if (this._ended && this._bufferedLength() === 0) {
-      this.emit("end");
+      this._emitEndOnce();
     } else if (this._read) {
       // Call user-provided read function asynchronously
       // This allows multiple pipe() calls to register before data flows
@@ -470,7 +554,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // In bundled/minified builds, multiple copies of this module can exist,
     // causing `instanceof Transform/Writable/Duplex` to fail even when the object
     // is a valid destination.
-    const dest: any = destination as any;
+    const dest = destination;
 
     // For event handling (drain, once, off), we need the object that emits events.
     // For write/end, we must call the destination's own write()/end() methods,
@@ -491,24 +575,38 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this._pipeTo.push(dest);
 
     // Create listeners that we can later remove
+    let drainListener: (() => void) | undefined;
+
+    const removeDrainListener = (): void => {
+      if (!drainListener) {
+        return;
+      }
+      if (typeof eventTarget.off === "function") {
+        eventTarget.off("drain", drainListener);
+      } else if (typeof eventTarget.removeListener === "function") {
+        eventTarget.removeListener("drain", drainListener);
+      }
+      drainListener = undefined;
+    };
+
     const dataListener = (chunk: T): void => {
       // Call destination's write() method (not internal _writable.write())
       // This ensures Transform.write() logic runs properly
       const canWrite = dest.write(chunk);
       if (!canWrite) {
         this.pause();
-        if (typeof eventTarget.once === "function") {
-          eventTarget.once("drain", () => this.resume());
-        } else {
-          const resumeOnce = (): void => {
-            if (typeof eventTarget.off === "function") {
-              eventTarget.off("drain", resumeOnce);
-            } else if (typeof eventTarget.removeListener === "function") {
-              eventTarget.removeListener("drain", resumeOnce);
-            }
+
+        // Install a removable, once-style drain listener.
+        if (!drainListener) {
+          drainListener = () => {
+            removeDrainListener();
             this.resume();
           };
-          eventTarget.on("drain", resumeOnce);
+          eventTarget.on("drain", drainListener);
+          const entry = this._pipeListeners.get(dest);
+          if (entry) {
+            entry.drain = drainListener;
+          }
         }
       }
     };
@@ -530,7 +628,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this._pipeListeners.set(dest, {
       data: dataListener,
       end: endListener,
-      error: errorListener
+      error: errorListener,
+      eventTarget
     });
 
     this.on("data", dataListener);
@@ -557,6 +656,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         this.off("data", listeners.data);
         this.off("end", listeners.end);
         this.off("error", listeners.error);
+
+        if (listeners.drain) {
+          if (typeof listeners.eventTarget?.off === "function") {
+            listeners.eventTarget.off("drain", listeners.drain);
+          } else if (typeof listeners.eventTarget?.removeListener === "function") {
+            listeners.eventTarget.removeListener("drain", listeners.drain);
+          }
+        }
+
         this._pipeListeners.delete(destination);
       }
     } else {
@@ -567,6 +675,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           this.off("data", listeners.data);
           this.off("end", listeners.end);
           this.off("error", listeners.error);
+
+          if (listeners.drain) {
+            if (typeof listeners.eventTarget?.off === "function") {
+              listeners.eventTarget.off("drain", listeners.drain);
+            } else if (typeof listeners.eventTarget?.removeListener === "function") {
+              listeners.eventTarget.removeListener("drain", listeners.drain);
+            }
+          }
+
           this._pipeListeners.delete(target);
         }
       }
@@ -590,13 +707,27 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this._destroyed = true;
     this._ended = true;
 
+    // Ensure we detach from destinations to avoid leaking listeners.
+    this.unpipe();
+
     if (error) {
       this._errored = error;
       this.emit("error", error);
     }
 
     if (this._reader) {
-      this._reader.cancel().catch(() => {});
+      const reader = this._reader;
+      this._reader = null;
+      reader
+        .cancel()
+        .catch(() => {})
+        .finally(() => {
+          try {
+            reader.releaseLock();
+          } catch {
+            // Ignore if a read is still pending
+          }
+        });
     }
 
     this._closed = true;
@@ -694,12 +825,31 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
         // Check _pushMode again after async read - if push() was called, stop reading
         if (this._pushMode) {
+          if (this._reader) {
+            const reader = this._reader;
+            this._reader = null;
+            try {
+              reader.releaseLock();
+            } catch {
+              // Ignore if a read is still pending
+            }
+          }
           break;
         }
 
         if (done) {
           this._ended = true;
-          this.emit("end");
+          this._emitEndOnce();
+
+          if (this._reader) {
+            const reader = this._reader;
+            this._reader = null;
+            try {
+              reader.releaseLock();
+            } catch {
+              // Ignore if a read is still pending
+            }
+          }
           break;
         }
 
@@ -707,7 +857,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           // In flowing mode, emit data directly without buffering
           // Only buffer if not flowing (paused mode)
           if (this._flowing) {
-            this.emit("data", value);
+            this.emit("data", this._applyEncoding(value));
           } else {
             this._buffer.push(value);
             if (!this.objectMode) {
@@ -718,6 +868,16 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       }
     } catch (err) {
       this.emit("error", err);
+
+      if (this._reader) {
+        const reader = this._reader;
+        this._reader = null;
+        try {
+          reader.releaseLock();
+        } catch {
+          // Ignore if a read is still pending
+        }
+      }
     } finally {
       this._reading = false;
     }
@@ -725,7 +885,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Async iterator support
-   * Uses Web Stream reader for non-push mode, event-based for push mode
+   * Uses a unified event-queue iterator with simple backpressure.
+   * This matches Node's behavior more closely (iterator drives flowing mode).
    */
   async *[Symbol.asyncIterator](): AsyncIterableIterator<T> {
     // First yield any buffered data
@@ -734,124 +895,143 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (!this.objectMode) {
         this._bufferSize -= this._getChunkSize(chunk);
       }
-      yield chunk;
+      yield this._applyEncoding(chunk);
     }
 
-    // If already ended, we're done
     if (this._ended) {
       return;
     }
 
-    // For controllable streams (not created from external Web Stream),
-    // use event-based iteration since data comes from push() calls
-    if (!this._webStreamMode) {
-      // Create a promise-based queue for incoming data
-      const dataQueue: T[] = [];
-      let resolveNext: ((value: T | null) => void) | null = null;
-      let rejectNext: ((error: Error) => void) | null = null;
-      let done = false;
-      let streamError: Error | null = null;
-      let dataQueueIndex = 0;
+    const highWaterMark = this.readableHighWaterMark;
+    const lowWaterMark = Math.max(0, Math.floor(highWaterMark / 2));
 
-      const dataHandler = (chunk: T): void => {
-        if (resolveNext) {
-          resolveNext(chunk);
-          resolveNext = null;
-          rejectNext = null;
-        } else {
-          dataQueue.push(chunk);
-        }
-      };
+    const chunkSizeForBackpressure = (chunk: any): number => {
+      if (this.objectMode) {
+        return 1;
+      }
+      if (chunk instanceof Uint8Array) {
+        return chunk.byteLength;
+      }
+      if (typeof chunk === "string") {
+        return chunk.length;
+      }
+      return 1;
+    };
 
-      const endHandler = (): void => {
-        done = true;
-        if (resolveNext) {
-          resolveNext(null);
-          resolveNext = null;
-          rejectNext = null;
-        }
-      };
+    const dataQueue: any[] = [];
+    let dataQueueIndex = 0;
+    let queuedSize = 0;
 
-      const errorHandler = (err: Error): void => {
-        done = true;
-        streamError = err;
-        if (rejectNext) {
-          rejectNext(err);
-          resolveNext = null;
-          rejectNext = null;
-        }
-      };
+    let resolveNext: ((value: any | null) => void) | null = null;
+    let rejectNext: ((error: Error) => void) | null = null;
+    let done = false;
+    let pausedByIterator = false;
+    let streamError: Error | null = null;
 
-      const closeHandler = (): void => {
-        // If stream closed without end event (e.g., after destroy()),
-        // treat it as done
-        done = true;
-        if (resolveNext) {
-          resolveNext(null);
-          resolveNext = null;
-          rejectNext = null;
-        }
-      };
+    const dataHandler = (chunk: any): void => {
+      // data events are already encoding-aware; do not decode again here.
+      if (resolveNext) {
+        resolveNext(chunk);
+        resolveNext = null;
+        rejectNext = null;
+      } else {
+        dataQueue.push(chunk);
+      }
 
-      this.on("data", dataHandler);
-      this.on("end", endHandler);
-      this.on("error", errorHandler);
-      this.on("close", closeHandler);
+      queuedSize += chunkSizeForBackpressure(chunk);
+      if (!pausedByIterator && queuedSize >= highWaterMark) {
+        pausedByIterator = true;
+        this.pause();
+      }
+    };
 
-      try {
-        // Enter flowing mode
-        this.resume();
+    const endHandler = (): void => {
+      done = true;
+      if (resolveNext) {
+        resolveNext(null);
+        resolveNext = null;
+        rejectNext = null;
+      }
+    };
 
-        while (!done || dataQueueIndex < dataQueue.length) {
-          // Check for error before processing
-          if (streamError) {
-            throw streamError;
-          }
-          if (dataQueueIndex < dataQueue.length) {
-            const chunk = dataQueue[dataQueueIndex++]!;
-            if (dataQueueIndex >= 1024 && dataQueueIndex * 2 >= dataQueue.length) {
-              dataQueue.splice(0, dataQueueIndex);
-              dataQueueIndex = 0;
-            }
-            yield chunk;
-          } else if (!done) {
-            const chunk = await new Promise<T | null>((resolve, reject) => {
-              resolveNext = resolve;
-              rejectNext = reject;
-            });
-            if (chunk !== null) {
-              yield chunk;
-            }
-          }
-        }
-        // Check for error after loop
+    const closeHandler = (): void => {
+      done = true;
+      if (resolveNext) {
+        resolveNext(null);
+        resolveNext = null;
+        rejectNext = null;
+      }
+    };
+
+    const errorHandler = (err: Error): void => {
+      done = true;
+      streamError = err;
+      if (rejectNext) {
+        rejectNext(err);
+        resolveNext = null;
+        rejectNext = null;
+      }
+    };
+
+    this.on("data", dataHandler);
+    this.on("end", endHandler);
+    this.on("error", errorHandler);
+    this.on("close", closeHandler);
+
+    try {
+      // Iterator consumption should drive the stream.
+      this.resume();
+
+      while (true) {
         if (streamError) {
           throw streamError;
         }
-      } finally {
-        this.off("data", dataHandler);
-        this.off("end", endHandler);
-        this.off("error", errorHandler);
-        this.off("close", closeHandler);
-      }
-      return;
-    }
 
-    // For Web Stream mode, use the underlying reader
-    if (!this._reader) {
-      this._reader = this._stream.getReader();
-    }
+        if (dataQueueIndex < dataQueue.length) {
+          const chunk = dataQueue[dataQueueIndex++]!;
+          queuedSize -= chunkSizeForBackpressure(chunk);
 
-    try {
-      while (true) {
-        const { done, value } = await this._reader.read();
+          if (dataQueueIndex >= 1024 && dataQueueIndex * 2 >= dataQueue.length) {
+            dataQueue.splice(0, dataQueueIndex);
+            dataQueueIndex = 0;
+          }
+
+          if (pausedByIterator && queuedSize <= lowWaterMark && !done && !this._destroyed) {
+            pausedByIterator = false;
+            this.resume();
+          }
+
+          yield chunk as T;
+          continue;
+        }
+
         if (done) {
           break;
         }
-        yield value;
+
+        const chunk = await new Promise<any | null>((resolve, reject) => {
+          resolveNext = resolve;
+          rejectNext = reject;
+        });
+
+        if (chunk !== null) {
+          queuedSize -= chunkSizeForBackpressure(chunk);
+          if (pausedByIterator && queuedSize <= lowWaterMark && !done && !this._destroyed) {
+            pausedByIterator = false;
+            this.resume();
+          }
+          yield chunk as T;
+        }
+      }
+
+      if (streamError) {
+        throw streamError;
       }
     } finally {
-      this._reader.releaseLock();
+      this.off("data", dataHandler);
+      this.off("end", endHandler);
+      this.off("error", errorHandler);
+      this.off("close", closeHandler);
     }
   }
 
@@ -1137,6 +1317,33 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 }
 
+function toAsyncIterable<T>(iterable: Iterable<T> | AsyncIterable<T>): AsyncIterable<T> {
+  if (iterable && typeof iterable[Symbol.asyncIterator] === "function") {
+    return iterable as AsyncIterable<T>;
+  }
+  return (async function* (): AsyncIterable<T> {
+    for (const item of iterable as Iterable<T>) {
+      yield item;
+    }
+  })();
+}
+
+function pumpAsyncIterableToReadable<T>(readable: Readable<T>, iterable: AsyncIterable<T>): void {
+  (async () => {
+    try {
+      for await (const chunk of iterable) {
+        if (!readable.push(chunk)) {
+          // Simple backpressure: yield to consumer.
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+      readable.push(null);
+    } catch (err) {
+      readable.destroy(err as Error);
+    }
+  })();
+}
+
 // =============================================================================
 // Writable Stream Wrapper
 // =============================================================================
@@ -1154,10 +1361,12 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   private _closed: boolean = false;
   private _pendingWrites: number = 0;
   private _writableLength: number = 0;
+  private _needDrain: boolean = false;
   private _corked: number = 0;
   private _corkedChunks: Array<{ chunk: T; callback?: (error?: Error | null) => void }> = [];
   private _defaultEncoding: string = "utf8";
   private _aborted: boolean = false;
+  private _ownsStream: boolean = false;
   // User-provided write function (Node.js compatibility)
   private _writeFunc?: (
     chunk: T,
@@ -1204,7 +1413,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
     if (options?.stream) {
       this._stream = options.stream;
+      this._ownsStream = false;
     } else {
+      this._ownsStream = true;
       // Create bound references to instance properties/methods for use in WritableStream callbacks
       const getWriteFunc = (): typeof this._writeFunc => this._writeFunc;
       const getFinalFunc = (): typeof this._finalFunc => this._finalFunc;
@@ -1326,7 +1537,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       return this._writableLength < this.writableHighWaterMark;
     }
 
-    return this._doWrite(chunk, cb);
+    const ok = this._doWrite(chunk, cb);
+    if (!ok) {
+      this._needDrain = true;
+    }
+    return ok;
   }
 
   private _doWrite(chunk: T, callback?: (error?: Error | null) => void): boolean {
@@ -1334,19 +1549,26 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     const chunkSize = this._getChunkSize(chunk);
     this._pendingWrites++;
     this._writableLength += chunkSize;
-
-    this._getWriter()
+    const writer = this._getWriter();
+    writer
       .write(chunk)
       .then(() => {
         this._pendingWrites--;
         this._writableLength -= chunkSize;
-        this.emit("drain");
+        if (this._needDrain && this._writableLength < this.writableHighWaterMark) {
+          this._needDrain = false;
+          this.emit("drain");
+        }
         callback?.(null);
       })
       .catch(err => {
         this._pendingWrites--;
         this._writableLength -= chunkSize;
-        this.emit("error", err);
+        // Avoid double-emitting if we're already in an errored/destroyed state.
+        if (!this._destroyed) {
+          this._errored = err;
+          this.emit("error", err);
+        }
         callback?.(err);
       });
 
@@ -1394,12 +1616,30 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
     const finish = async (): Promise<void> => {
       try {
+        const writer = this._getWriter();
         if (chunk !== undefined) {
-          await this._getWriter().write(chunk);
+          await writer.write(chunk);
         }
-        await this._getWriter().close();
-        this._finished = true;
-        this.emit("finish");
+        await writer.close();
+
+        if (this._writer === writer) {
+          this._writer = null;
+          try {
+            writer.releaseLock();
+          } catch {
+            // Ignore
+          }
+        }
+
+        // If we own the underlying Web WritableStream, its `close()` handler already
+        // emits finish/close. For external streams, we must emit finish ourselves.
+        if (!this._ownsStream) {
+          this._finished = true;
+          this.emit("finish");
+          if (this.emitClose) {
+            this.emit("close");
+          }
+        }
         if (cb) {
           cb();
         }
@@ -1423,13 +1663,24 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     this._destroyed = true;
     this._ended = true;
 
-    if (error) {
+    if (error && !this._errored) {
       this._errored = error;
       this.emit("error", error);
     }
 
     if (this._writer) {
-      this._writer.abort(error).catch(() => {});
+      const writer = this._writer;
+      this._writer = null;
+      writer
+        .abort(error)
+        .catch(() => {})
+        .finally(() => {
+          try {
+            writer.releaseLock();
+          } catch {
+            // Ignore
+          }
+        });
     }
 
     this._closed = true;
@@ -1618,40 +1869,47 @@ export function normalizeWritable<T = Uint8Array>(
  * A wrapper around Web TransformStream that provides Node.js-like API
  */
 export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventEmitter {
-  private _stream: TransformStream<TInput, TOutput>;
   /** @internal - for pipe() support */
   readonly _readable: Readable<TOutput>;
   /** @internal - for pipe() support */
   readonly _writable: Writable<TInput>;
   readonly objectMode: boolean;
-  private _ended: boolean = false;
+
   private _destroyed: boolean = false;
+  private _ended: boolean = false;
   private _errored: boolean = false;
-  // Buffer for Node.js style push() calls during transform
-  private _pushBuffer: TOutput[] = [];
-  // Controller for enqueueing pushed data (set during transform execution)
-  private _transformController: TransformStreamDefaultController<TOutput> | null = null;
-  // Buffer for writes that occur after end() but before writable is closed
-  private _pendingEndWrites: { chunk: TInput; callback?: (error?: Error | null) => void }[] = [];
-  // Whether end() has been called but writable not yet closed
-  private _endPending: boolean = false;
+  private _dataForwardingSetup: boolean = false;
+
+  private _endTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private _webStream: TransformStream<TInput, TOutput> | null = null;
+
+  private _sideForwardingCleanup: (() => void) | null = null;
+
+  private _transformImpl:
+    | ((chunk: TInput) => TOutput | Promise<TOutput>)
+    | ((
+        this: Transform<TInput, TOutput>,
+        chunk: TInput,
+        encoding: string,
+        callback: (error?: Error | null, data?: TOutput) => void
+      ) => void)
+    | undefined;
+
+  private _flushImpl:
+    | (() => TOutput | void | Promise<TOutput | void>)
+    | ((
+        this: Transform<TInput, TOutput>,
+        callback: (error?: Error | null, data?: TOutput) => void
+      ) => void)
+    | undefined;
 
   /**
-   * Push data to the readable side (Node.js compatibility)
-   * Can be called from within transform callback
+   * Push data to the readable side (Node.js compatibility).
+   * Intended to be called from within transform/flush.
    */
   push(chunk: TOutput | null): boolean {
-    if (chunk === null) {
-      return false;
-    }
-    if (this._transformController) {
-      // If we're in a transform callback, enqueue directly
-      this._transformController.enqueue(chunk);
-    } else {
-      // Otherwise buffer for later
-      this._pushBuffer.push(chunk);
-    }
-    return true;
+    return this._readable.push(chunk);
   }
 
   constructor(
@@ -1674,269 +1932,284 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   ) {
     super();
     this.objectMode = options?.objectMode ?? false;
-
-    const userTransform = options?.transform;
-    const userFlush = options?.flush;
-
-    // Create bound references for use in TransformStream callbacks
-    const setController = (ctrl: TransformStreamDefaultController<TOutput> | null): void => {
-      this._transformController = ctrl;
-    };
-    const emitEvent = (event: string, ...args: any[]): boolean => {
-      if (event === "error") {
-        // Only emit error once to prevent duplicate events
-        if (this._errored) {
-          return false;
-        }
-        this._errored = true;
-        // Also destroy the writable to prevent further writes
-        this._writable.destroy(args[0] as Error);
-      }
-      return this.emit(event, ...args);
-    };
-    const getInstance = (): Transform<TInput, TOutput> => this;
-
-    // Check if subclass overrides _transform (for Node.js compatibility)
-    // We need to check this at runtime since the subclass constructor runs after super()
-    const hasSubclassTransform = (): boolean => {
-      // If userTransform was provided in options, use that
-      if (userTransform) {
-        return false;
-      }
-      // Check if _transform is overridden (not the base class no-op)
-      const proto = Object.getPrototypeOf(this);
-      return proto._transform !== Transform.prototype._transform;
-    };
-
-    const hasSubclassFlush = (): boolean => {
-      if (userFlush) {
-        return false;
-      }
-      const proto = Object.getPrototypeOf(this);
-      return proto._flush !== Transform.prototype._flush;
-    };
-
-    this._stream = new TransformStream<TInput, TOutput>({
-      transform: async (chunk, controller) => {
-        // Skip processing if already errored
-        if (this._errored) {
-          return;
-        }
-
-        try {
-          // Set controller for push() to use
-          setController(controller);
-
-          // Check for subclass _transform override first
-          if (hasSubclassTransform()) {
-            // Call subclass _transform method (Node.js style)
-            // _transform signature is (chunk, encoding, callback)
-            await new Promise<void>((resolve, reject) => {
-              this._transform(chunk, "utf8", (err?: Error | null, data?: TOutput) => {
-                if (err) {
-                  reject(err);
-                } else {
-                  if (data !== undefined) {
-                    controller.enqueue(data);
-                  }
-                  resolve();
-                }
-              });
-            });
-          } else if (userTransform) {
-            const transformParamCount = userTransform.length;
-
-            if (transformParamCount >= 3) {
-              // Node.js style: transform(chunk, encoding, callback)
-              await new Promise<void>((resolve, reject) => {
-                (
-                  userTransform as (
-                    this: Transform<TInput, TOutput>,
-                    chunk: TInput,
-                    encoding: string,
-                    callback: (error?: Error | null, data?: TOutput) => void
-                  ) => void
-                ).call(getInstance(), chunk, "utf8", (err?: Error | null, data?: TOutput) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    if (data !== undefined) {
-                      controller.enqueue(data);
-                    }
-                    resolve();
-                  }
-                });
-              });
-            } else if (transformParamCount === 2) {
-              await new Promise<void>((resolve, reject) => {
-                (
-                  userTransform as (
-                    this: Transform<TInput, TOutput>,
-                    chunk: TInput,
-                    callback: (error?: Error | null, data?: TOutput) => void
-                  ) => void
-                ).call(getInstance(), chunk, (err?: Error | null, data?: TOutput) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    if (data !== undefined) {
-                      controller.enqueue(data);
-                    }
-                    resolve();
-                  }
-                });
-              });
-            } else {
-              // Simple style: transform(chunk) => result
-              const result = userTransform.call(getInstance(), chunk);
-              if (result && typeof result.then === "function") {
-                const awaitedResult = await result;
-                if (awaitedResult !== undefined) {
-                  controller.enqueue(awaitedResult);
-                }
-              } else {
-                if (result !== undefined) {
-                  controller.enqueue(result);
-                }
-              }
-            }
-          } else {
-            // Default: pass through
-            controller.enqueue(chunk as any as TOutput);
-          }
-        } catch (err) {
-          controller.error(err);
-          emitEvent("error", err);
-        } finally {
-          setController(null);
-        }
-      },
-      flush: async controller => {
-        try {
-          setController(controller);
-
-          // Check for subclass _flush override first
-          if (hasSubclassFlush()) {
-            await new Promise<void>((resolve, reject) => {
-              this._flush((err?: Error | null, data?: TOutput) => {
-                if (err) {
-                  reject(err);
-                } else {
-                  if (data !== undefined) {
-                    controller.enqueue(data);
-                  }
-                  resolve();
-                }
-              });
-            });
-          } else if (userFlush) {
-            const flushParamCount = userFlush.length;
-
-            if (flushParamCount >= 1) {
-              // Node.js style: flush(callback)
-              await new Promise<void>((resolve, reject) => {
-                (
-                  userFlush as (
-                    this: Transform<TInput, TOutput>,
-                    callback: (error?: Error | null, data?: TOutput) => void
-                  ) => void
-                ).call(getInstance(), (err?: Error | null, data?: TOutput) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    if (data !== undefined) {
-                      controller.enqueue(data);
-                    }
-                    resolve();
-                  }
-                });
-              });
-            } else {
-              // Simple style: flush() => result
-              const result = userFlush.call(getInstance());
-              if (result && typeof result.then === "function") {
-                const awaitedResult = await result;
-                if (awaitedResult !== undefined && awaitedResult !== null) {
-                  controller.enqueue(awaitedResult as TOutput);
-                }
-              } else {
-                if (result !== undefined && result !== null) {
-                  controller.enqueue(result as TOutput);
-                }
-              }
-            }
-          }
-          // No flush defined - nothing to do
-        } catch (err) {
-          controller.error(err);
-          emitEvent("error", err);
-        } finally {
-          setController(null);
-        }
-      }
-    });
+    this._transformImpl = options?.transform;
+    this._flushImpl = options?.flush;
 
     this._readable = new Readable<TOutput>({
-      stream: this._stream.readable,
       objectMode: this.objectMode
     });
 
     this._writable = new Writable<TInput>({
-      stream: this._stream.writable,
-      objectMode: this.objectMode
+      objectMode: this.objectMode,
+      write: (chunk, _encoding, callback) => {
+        this._runTransform(chunk)
+          .then(() => callback(null))
+          .catch(err => callback(err));
+      },
+      final: callback => {
+        this._runFlush()
+          .then(() => {
+            this._readable.push(null);
+            callback(null);
+          })
+          .catch(err => callback(err));
+      }
     });
 
-    // Forward non-data events (data forwarding is lazy to avoid premature flowing)
-    this._readable.on("end", () => this.emit("end"));
-    // Only forward errors if not already errored (to prevent duplicate events)
-    this._readable.on("error", err => {
-      if (!this._errored) {
-        this._errored = true;
-        this.emit("error", err);
-      }
-    });
-    this._writable.on("finish", () => this.emit("finish"));
-    this._writable.on("drain", () => this.emit("drain"));
-    // Only forward errors if not already errored (to prevent duplicate events)
-    this._writable.on("error", err => {
-      if (!this._errored) {
-        this._errored = true;
-        this.emit("error", err);
-      }
-    });
+    this._setupSideForwarding();
   }
 
-  // Track if we've already set up data forwarding
-  private _dataForwardingSetup: boolean = false;
+  private _setupSideForwarding(): void {
+    if (this._sideForwardingCleanup) {
+      this._sideForwardingCleanup();
+      this._sideForwardingCleanup = null;
+    }
+
+    const registry = createListenerRegistry();
+
+    registry.once(this._readable, "end", () => this.emit("end"));
+    registry.add(this._readable, "error", err => this._emitErrorOnce(err));
+
+    registry.once(this._writable, "finish", () => this.emit("finish"));
+    registry.add(this._writable, "drain", () => this.emit("drain"));
+    registry.add(this._writable, "error", err => this._emitErrorOnce(err));
+
+    this._sideForwardingCleanup = () => registry.cleanup();
+  }
+
+  private _scheduleEnd(): void {
+    if (this._destroyed || this._errored) {
+      return;
+    }
+    if (this._writable.writableEnded) {
+      return;
+    }
+
+    if (this._endTimer) {
+      clearTimeout(this._endTimer);
+    }
+
+    // Defer closing to allow writes triggered during 'data' callbacks.
+    this._endTimer = setTimeout(() => {
+      this._endTimer = null;
+      if (this._destroyed || this._errored || this._writable.writableEnded) {
+        return;
+      }
+      this._writable.end();
+    }, 0);
+  }
+
+  private _emitErrorOnce(err: any): void {
+    if (this._errored) {
+      return;
+    }
+    this._errored = true;
+    const error = err instanceof Error ? err : new Error(String(err));
+    this.emit("error", error);
+    if (!this._destroyed) {
+      this._destroyed = true;
+      this._readable.destroy(error);
+      this._writable.destroy(error);
+      queueMicrotask(() => this.emit("close"));
+    }
+  }
+
+  private _hasSubclassTransform(): boolean {
+    if (this._transformImpl) {
+      return false;
+    }
+    const proto = Object.getPrototypeOf(this);
+    return proto._transform !== Transform.prototype._transform;
+  }
+
+  private _hasSubclassFlush(): boolean {
+    if (this._flushImpl) {
+      return false;
+    }
+    const proto = Object.getPrototypeOf(this);
+    return proto._flush !== Transform.prototype._flush;
+  }
+
+  private async _runTransform(chunk: TInput): Promise<void> {
+    if (this._destroyed || this._errored) {
+      throw new Error(
+        this._errored ? "Cannot write after stream errored" : "Cannot write after stream destroyed"
+      );
+    }
+
+    try {
+      if (this._hasSubclassTransform()) {
+        await new Promise<void>((resolve, reject) => {
+          this._transform(chunk, "utf8", (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+        return;
+      }
+
+      const userTransform = this._transformImpl;
+      if (!userTransform) {
+        this.push(chunk as any as TOutput);
+        return;
+      }
+
+      const paramCount = userTransform.length;
+
+      if (paramCount >= 3) {
+        await new Promise<void>((resolve, reject) => {
+          (
+            userTransform as (
+              this: Transform<TInput, TOutput>,
+              chunk: TInput,
+              encoding: string,
+              callback: (error?: Error | null, data?: TOutput) => void
+            ) => void
+          ).call(this, chunk, "utf8", (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+        return;
+      }
+
+      if (paramCount === 2) {
+        await new Promise<void>((resolve, reject) => {
+          (
+            userTransform as (
+              this: Transform<TInput, TOutput>,
+              chunk: TInput,
+              callback: (error?: Error | null, data?: TOutput) => void
+            ) => void
+          ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+        return;
+      }
+
+      const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
+        this,
+        chunk
+      );
+
+      if (result && typeof result.then === "function") {
+        const awaited = await result;
+        if (awaited !== undefined) {
+          this.push(awaited);
+        }
+        return;
+      }
+
+      if (result !== undefined) {
+        this.push(result);
+      }
+    } catch (err) {
+      this._emitErrorOnce(err);
+      throw err;
+    }
+  }
+
+  private async _runFlush(): Promise<void> {
+    if (this._destroyed || this._errored) {
+      return;
+    }
+
+    try {
+      if (this._hasSubclassFlush()) {
+        await new Promise<void>((resolve, reject) => {
+          this._flush((err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+        return;
+      }
+
+      const userFlush = this._flushImpl;
+      if (!userFlush) {
+        return;
+      }
+
+      const paramCount = userFlush.length;
+      if (paramCount >= 1) {
+        await new Promise<void>((resolve, reject) => {
+          (
+            userFlush as (
+              this: Transform<TInput, TOutput>,
+              callback: (error?: Error | null, data?: TOutput) => void
+            ) => void
+          ).call(this, (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+        return;
+      }
+
+      const result = (userFlush as () => TOutput | void | Promise<TOutput | void>).call(this);
+      if (result && typeof result.then === "function") {
+        const awaited = await result;
+        if (awaited !== undefined && awaited !== null) {
+          this.push(awaited as TOutput);
+        }
+        return;
+      }
+
+      if (result !== undefined && result !== null) {
+        this.push(result as TOutput);
+      }
+    } catch (err) {
+      this._emitErrorOnce(err);
+      throw err;
+    }
+  }
 
   /**
-   * Override on to start flowing when data listener is added
+   * Override on() to lazily forward readable 'data' events.
+   * Avoids starting flowing mode unless requested.
    */
-  on(event: string | symbol, listener: (...args: any[]) => void): this {
-    // Set up data forwarding when first external data listener is added
+  override on(event: string | symbol, listener: (...args: any[]) => void): this {
     if (event === "data" && !this._dataForwardingSetup) {
       this._dataForwardingSetup = true;
-      this._readable.on("data", data => this.emit("data", data));
+      this._readable.on("data", chunk => this.emit("data", chunk));
     }
-
-    super.on(event, listener);
-
-    // When data listener is added, mark as having consumer
-    // and start the readable in flowing mode
-    if (event === "data") {
-      this._hasDataConsumer = true;
-      this._readable.resume();
-    }
-    return this;
+    return super.on(event, listener);
   }
 
-  /** @internal - whether we have a data event consumer */
-  private _hasDataConsumer: boolean = false;
-
   /**
-   * Write data to the transform stream
-   * Note: Automatically starts consuming readable if no consumer to allow
-   * transform function to execute (Web Streams backpressure compatibility)
+   * Write to the writable side
    */
   write(chunk: TInput, callback?: (error?: Error | null) => void): boolean;
   write(chunk: TInput, encoding?: string, callback?: (error?: Error | null) => void): boolean;
@@ -1946,67 +2219,13 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     callback?: (error?: Error | null) => void
   ): boolean {
     const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-    if (this._destroyed || this._errored) {
-      const err = new Error(
-        this._errored ? "Cannot write after stream errored" : "Cannot write after stream destroyed"
-      );
-      queueMicrotask(() => this.emit("error", err));
-      cb?.(err);
-      return false;
-    }
 
-    // Ensure readable is being consumed to allow transform to execute
-    // This matches Node.js behavior where transform executes immediately on write
-    // Only auto-consume if no explicit consumer (data listener or pipe)
-    if (!this._readableConsuming && !this._hasDataConsumer) {
-      this._readableConsuming = true;
-      this._startAutoConsume();
-    }
-
-    // If end() was called but writable not yet closed, buffer the write
-    // This allows writes during data event handlers to be processed
-    if (this._endPending) {
-      this._pendingEndWrites.push({ chunk, callback: cb });
-      return true;
+    // If end() has been requested, keep the close deferred as long as writes continue.
+    if (this._ended && !this._writable.writableEnded) {
+      this._scheduleEnd();
     }
 
     return this._writable.write(chunk, cb);
-  }
-
-  /** @internal - whether we're auto-consuming the readable */
-  private _readableConsuming: boolean = false;
-  /** @internal - buffer for auto-consumed data */
-  private _autoConsumedBuffer: TOutput[] = [];
-  private _autoConsumedBufferIndex: number = 0;
-  /** @internal - whether auto-consume has ended */
-  private _autoConsumeEnded: boolean = false;
-  /** @internal - promise that resolves when auto-consume finishes */
-  private _autoConsumePromise: Promise<void> | null = null;
-
-  /** @internal - auto-consume readable to allow transform to execute */
-  private _startAutoConsume(): void {
-    this._autoConsumePromise = (async () => {
-      try {
-        for await (const chunk of this._readable) {
-          // Buffer the data for later retrieval
-          this._autoConsumedBuffer.push(chunk);
-          // Forward to any piped destinations
-          for (const dest of this._pipeDestinations) {
-            dest.write(chunk);
-          }
-          // Also emit data event for listeners
-          this.emit("data", chunk);
-        }
-        this._autoConsumeEnded = true;
-        // End all piped destinations
-        for (const dest of this._pipeDestinations) {
-          dest.end();
-        }
-        this.emit("end");
-      } catch (err) {
-        this.emit("error", err);
-      }
-    })();
   }
 
   /**
@@ -2025,7 +2244,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return this;
     }
     this._ended = true;
-    this._endPending = true;
 
     const chunk = typeof chunkOrCallback === "function" ? undefined : chunkOrCallback;
     const cb: (() => void) | undefined =
@@ -2036,25 +2254,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           : callback;
 
     if (cb) {
-      this.once("finish", cb as any);
+      this.once("finish", cb);
     }
 
     if (chunk !== undefined) {
       this._writable.write(chunk);
     }
 
-    // Use setTimeout(0) instead of queueMicrotask to ensure all transform
-    // processing and data events complete before we close the writable.
-    // Microtasks run before the TransformStream processes data.
-    setTimeout(() => {
-      // Process any writes that occurred during data events
-      for (const { chunk: pendingChunk, callback } of this._pendingEndWrites) {
-        this._writable.write(pendingChunk, callback);
-      }
-      this._pendingEndWrites = [];
-      this._endPending = false;
-      this._writable.end();
-    }, 0);
+    this._scheduleEnd();
     return this;
   }
 
@@ -2065,50 +2272,20 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     return this._readable.read(size);
   }
 
-  /** @internal - list of piped destinations for forwarding auto-consumed data */
-  private _pipeDestinations: WritableLike[] = [];
-
   /**
-   * Pipe to another stream (writable, transform, or duplex)
+   * Pipe readable side to destination
    */
   pipe<W extends Writable<TOutput> | Transform<TOutput, any> | Duplex<any, TOutput>>(
     destination: W
   ): W {
-    // Mark as having consumer to prevent new auto-consume from starting
-    this._hasDataConsumer = true;
-
-    // Get the writable target - handle both Transform (with internal _writable) and plain Writable
-    const dest = destination as any;
-    const target: WritableLike = dest?._writable ?? dest;
-
-    // Register destination for forwarding
-    this._pipeDestinations.push(target);
-
-    // If auto-consume is running or has run, we need to handle buffered data ourselves
-    if (this._readableConsuming) {
-      // Forward any buffered data from auto-consume to the destination
-      for (let i = 0; i < this._autoConsumedBuffer.length; i++) {
-        target.write(this._autoConsumedBuffer[i]!);
-      }
-
-      // If auto-consume has ended, end the destination too
-      if (this._autoConsumeEnded) {
-        target.end();
-      }
-      // Don't call _readable.pipe() - auto-consume already consumed _readable
-      // Future data will be forwarded via the 'data' event listener below
-      return destination;
-    }
-
-    // No auto-consume running - use normal pipe through _readable
-    return this._readable.pipe(destination as any) as W;
+    return this._readable.pipe(destination) as W;
   }
 
   /**
    * Unpipe from destination
    */
   unpipe(destination?: any): this {
-    this._readable.unpipe(destination as any);
+    this._readable.unpipe(destination);
     return this;
   }
 
@@ -2143,6 +2320,12 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return;
     }
     this._destroyed = true;
+
+    if (this._sideForwardingCleanup) {
+      this._sideForwardingCleanup();
+      this._sideForwardingCleanup = null;
+    }
+
     this._readable.destroy(error);
     this._writable.destroy(error);
     queueMicrotask(() => this.emit("close"));
@@ -2152,7 +2335,49 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    * Get the underlying Web TransformStream
    */
   get webStream(): TransformStream<TInput, TOutput> {
-    return this._stream;
+    if (this._webStream) {
+      return this._webStream;
+    }
+
+    // Web Streams interop layer.
+    const iterator = this[Symbol.asyncIterator]();
+
+    const readable = new ReadableStream<TOutput>({
+      pull: async controller => {
+        const { done, value } = await iterator.next();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      },
+      cancel: reason => {
+        this.destroy(reason instanceof Error ? reason : new Error(String(reason)));
+      }
+    });
+
+    const writable = new WritableStream<TInput>({
+      write: chunk =>
+        new Promise<void>((resolve, reject) => {
+          this.write(chunk, err => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
+        }),
+      close: () =>
+        new Promise<void>(resolve => {
+          this.end(() => resolve());
+        }),
+      abort: reason => {
+        this.destroy(reason instanceof Error ? reason : new Error(String(reason)));
+      }
+    });
+
+    this._webStream = { readable, writable };
+    return this._webStream;
   }
 
   get readable(): boolean {
@@ -2192,11 +2417,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   get readableObjectMode(): boolean {
-    return (this._readable as any).readableObjectMode ?? this._readable.objectMode;
+    return this._readable.readableObjectMode ?? this._readable.objectMode;
   }
 
   get readableFlowing(): boolean | null {
-    return (this._readable as any).readableFlowing;
+    return this._readable.readableFlowing;
   }
 
   get destroyed(): boolean {
@@ -2207,20 +2432,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    * Async iterator support
    */
   async *[Symbol.asyncIterator](): AsyncIterableIterator<TOutput> {
-    // If auto-consume is running, wait for it to finish and use its buffer
-    if (this._autoConsumePromise) {
-      await this._autoConsumePromise;
-      // Yield all buffered data
-      while (this._autoConsumedBufferIndex < this._autoConsumedBuffer.length) {
-        yield this._autoConsumedBuffer[this._autoConsumedBufferIndex++]!;
-      }
-      // Reset when drained to avoid prefix growth
-      this._autoConsumedBuffer.length = 0;
-      this._autoConsumedBufferIndex = 0;
-      return;
-    }
-
-    // Otherwise delegate to readable's iterator
     yield* this._readable[Symbol.asyncIterator]();
   }
 
@@ -2236,27 +2447,22 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     options?: TransformStreamOptions
   ): Transform<TIn, TOut> {
     const transform = new Transform<TIn, TOut>(options);
-    // Connect the web stream - set the internal _stream property
-    (transform as any)._stream = webStream;
+    transform._webStream = webStream;
 
     // Replace internal streams with the ones from the web stream
     const newReadable = Readable.fromWeb(webStream.readable, { objectMode: options?.objectMode });
     const newWritable = Writable.fromWeb(webStream.writable, { objectMode: options?.objectMode });
 
-    // Remove old event listeners before replacing
-    (transform as any)._readable.removeAllListeners();
-    (transform as any)._writable.removeAllListeners();
+    if (transform._sideForwardingCleanup) {
+      transform._sideForwardingCleanup();
+      transform._sideForwardingCleanup = null;
+    }
 
     (transform as any)._readable = newReadable;
     (transform as any)._writable = newWritable;
 
-    // Re-connect event forwarding
-    newReadable.on("data", (data: TOut) => transform.emit("data", data));
-    newReadable.on("end", () => transform.emit("end"));
-    newReadable.on("error", (err: Error) => transform.emit("error", err));
-    newWritable.on("finish", () => transform.emit("finish"));
-    newWritable.on("drain", () => transform.emit("drain"));
-    newWritable.on("error", (err: Error) => transform.emit("error", err));
+    // Re-connect event forwarding (data forwarding remains lazy via Transform.on)
+    transform._setupSideForwarding();
 
     return transform;
   }
@@ -2346,7 +2552,13 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
         }
       });
 
-      readable.on("error", err => duplex.emit("error", err));
+      const onError = (err: Error): void => {
+        duplex.emit("error", err);
+      };
+      const cleanupError = addEmitterListener(readable, "error", onError);
+      addEmitterListener(readable, "end", cleanupError, { once: true });
+      addEmitterListener(readable, "close", cleanupError, { once: true });
+      addEmitterListener(sink, "finish", cleanupError, { once: true });
       readable.pipe(sink);
     };
 
@@ -2357,25 +2569,28 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       "readable" in source &&
       "writable" in source
     ) {
-      const duplex = new Duplex<R, W>();
       const pair = source as { readable?: Readable<R>; writable?: Writable<W> };
+
+      // Create one duplex that can bridge both sides.
+      // (Previous behavior returned a new writable-only Duplex and dropped the readable side.)
+      const duplex = new Duplex<R, W>({
+        readableObjectMode: pair.readable?.readableObjectMode,
+        writableObjectMode: pair.writable?.writableObjectMode,
+        write: pair.writable
+          ? (chunk, encoding, callback) => {
+              pair.writable!.write(chunk, encoding, callback);
+            }
+          : undefined,
+        final: pair.writable
+          ? callback => {
+              pair.writable!.end(callback);
+            }
+          : undefined
+      });
 
       if (pair.readable) {
         forwardReadableToDuplex(pair.readable, duplex);
       }
-
-      if (pair.writable) {
-        return new Duplex<R, W>({
-          objectMode: duplex.writableObjectMode,
-          write(chunk, encoding, callback) {
-            pair.writable!.write(chunk, encoding, callback);
-          },
-          final(callback) {
-            pair.writable!.end(callback);
-          }
-        });
-      }
-
       return duplex;
     }
 
@@ -2423,9 +2638,25 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   ): Duplex<R, W> {
     const duplex = new Duplex<R, W>(options);
 
-    // Replace internal streams
-    (duplex as any)._readable = new Readable<R>({ stream: pair.readable });
-    (duplex as any)._writable = new Writable<W>({ stream: pair.writable });
+    const newReadable = new Readable<R>({
+      stream: pair.readable,
+      objectMode: duplex.readableObjectMode
+    });
+    const newWritable = new Writable<W>({
+      stream: pair.writable,
+      objectMode: duplex.writableObjectMode
+    });
+
+    if (duplex._sideForwardingCleanup) {
+      duplex._sideForwardingCleanup();
+      duplex._sideForwardingCleanup = null;
+    }
+
+    (duplex as any)._readable = newReadable;
+    (duplex as any)._writable = newWritable;
+
+    // Re-wire event forwarding (data forwarding remains lazy via Duplex.on)
+    duplex._setupSideForwarding();
 
     return duplex;
   }
@@ -2444,6 +2675,8 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
   // Track if we've already set up data forwarding
   private _dataForwardingSetup: boolean = false;
+
+  private _sideForwardingCleanup: (() => void) | null = null;
 
   constructor(
     options?: DuplexStreamOptions & {
@@ -2470,33 +2703,46 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     this._readable = new Readable<TRead>({
       highWaterMark: options?.readableHighWaterMark,
       objectMode: this.readableObjectMode,
-      read: options?.read?.bind(this as any)
+      read: options?.read?.bind(this)
     });
 
     this._writable = new Writable<TWrite>({
       highWaterMark: options?.writableHighWaterMark,
       objectMode: this.writableObjectMode,
-      write: options?.write?.bind(this as any),
-      final: options?.final?.bind(this as any)
+      write: options?.write?.bind(this),
+      final: options?.final?.bind(this)
     });
 
+    this._setupSideForwarding();
+  }
+
+  private _setupSideForwarding(): void {
+    if (this._sideForwardingCleanup) {
+      this._sideForwardingCleanup();
+      this._sideForwardingCleanup = null;
+    }
+
+    const registry = createListenerRegistry();
+
     // Forward non-data events (data forwarding is lazy to avoid premature flowing)
-    this._readable.on("end", () => {
+    registry.once(this._readable, "end", () => {
       this.emit("end");
-      // If not allowHalfOpen, end the writable side too
       if (!this.allowHalfOpen) {
         this._writable.end();
       }
     });
-    this._readable.on("error", err => this.emit("error", err));
-    this._writable.on("finish", () => this.emit("finish"));
-    this._writable.on("drain", () => this.emit("drain"));
-    this._writable.on("close", () => {
-      // If not allowHalfOpen, destroy the readable side too
+    registry.add(this._readable, "error", err => this.emit("error", err));
+
+    registry.add(this._writable, "error", err => this.emit("error", err));
+    registry.once(this._writable, "finish", () => this.emit("finish"));
+    registry.add(this._writable, "drain", () => this.emit("drain"));
+    registry.once(this._writable, "close", () => {
       if (!this.allowHalfOpen && !this._readable.destroyed) {
         this._readable.destroy();
       }
     });
+
+    this._sideForwardingCleanup = () => registry.cleanup();
   }
 
   /**
@@ -2566,7 +2812,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
           : callback;
 
     if (cb) {
-      this.once("finish", cb as any);
+      this.once("finish", cb);
     }
 
     if (chunk !== undefined) {
@@ -2653,6 +2899,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
    * Destroy both sides
    */
   destroy(error?: Error): this {
+    if (this._sideForwardingCleanup) {
+      this._sideForwardingCleanup();
+      this._sideForwardingCleanup = null;
+    }
     this._readable.destroy(error);
     this._writable.destroy(error);
     return this;
@@ -2836,7 +3086,7 @@ export class Collector<T = Uint8Array> extends Writable<T> {
 export class PullStream extends StandalonePullStream {
   // Keep constructor signature aligned with streams.browser.ts public API
   constructor(options?: PullStreamOptions | StandalonePullStreamOptions) {
-    super(options as any);
+    super(options);
   }
 }
 
@@ -2861,18 +3111,9 @@ export function createReadable<T = Uint8Array>(
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IReadable<T> {
-  const readable = new Readable<T>(options);
-
-  // Override read behavior if provided
-  if (options?.read) {
-    const originalRead = readable.read.bind(readable);
-    readable.read = function (size?: number): T | null {
-      options.read!(size ?? 16384);
-      return originalRead(size);
-    };
-  }
-
-  return readable;
+  // Readable already supports Node-style `read()` via the constructor option.
+  // Keep this helper minimal to avoid accidental double-read behavior.
+  return new Readable<T>(options);
 }
 
 /**
@@ -2884,19 +3125,7 @@ export function createReadableFromAsyncIterable<T>(
 ): IReadable<T> {
   const readable = new Readable<T>({ ...options, objectMode: options?.objectMode ?? true });
 
-  (async () => {
-    try {
-      for await (const chunk of iterable) {
-        if (!readable.push(chunk)) {
-          // Backpressure - wait a bit
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-      }
-      readable.push(null);
-    } catch (err) {
-      readable.destroy(err as Error);
-    }
-  })();
+  pumpAsyncIterableToReadable(readable, iterable);
 
   return readable;
 }
@@ -2938,37 +3167,8 @@ export function createWritable<T = Uint8Array>(
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IWritable<T> {
-  // Create a custom WritableStream with user's handlers
-  const stream = new WritableStream<T>({
-    write: async chunk => {
-      if (options?.write) {
-        return new Promise<void>((resolve, reject) => {
-          options.write!(chunk, "utf8", err => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
-        });
-      }
-    },
-    close: async () => {
-      if (options?.final) {
-        return new Promise<void>((resolve, reject) => {
-          options.final!(err => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
-        });
-      }
-    }
-  });
-
-  return new Writable<T>({ ...options, stream });
+  // Writable already supports Node-style `write()` / `final()` via the constructor.
+  return new Writable<T>(options);
 }
 
 /**
@@ -3040,7 +3240,7 @@ const isAsyncIterable = (value: unknown): value is AsyncIterable<unknown> => {
   if (!value || (typeof value !== "object" && typeof value !== "function")) {
     return false;
   }
-  return typeof (value as any)[Symbol.asyncIterator] === "function";
+  return typeof value[Symbol.asyncIterator] === "function";
 };
 
 const isWritableStream = (value: unknown): value is WritableStream<any> =>
@@ -3088,13 +3288,13 @@ const toBrowserPipelineStream = (stream: PipelineStream): any => {
   }
 
   if (isTransformStream(stream)) {
-    return Transform.fromWeb(stream as any);
+    return Transform.fromWeb(stream);
   }
   if (isReadableStream(stream)) {
-    return Readable.fromWeb(stream as any);
+    return Readable.fromWeb(stream);
   }
   if (isWritableStream(stream)) {
-    return Writable.fromWeb(stream as any);
+    return Writable.fromWeb(stream);
   }
 
   return stream;
@@ -3149,18 +3349,27 @@ export function pipeline(
     }
 
     const normalized = streams.map(toBrowserPipelineStream);
-    const source = normalized[0] as any;
-    const destination = normalized[normalized.length - 1] as any;
-    const transforms = normalized.slice(1, -1) as any[];
+    const source = normalized[0];
+    const destination = normalized[normalized.length - 1];
+    const transforms = normalized.slice(1, -1);
 
     let completed = false;
     const allStreams = [source, ...transforms, destination];
 
-    const cleanup = (error?: Error): void => {
+    const registry = createListenerRegistry();
+
+    let onAbort: (() => void) | undefined;
+    const cleanupWithSignal = (error?: Error): void => {
       if (completed) {
         return;
       }
       completed = true;
+
+      registry.cleanup();
+
+      if (onAbort && options.signal) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
 
       // Destroy all streams on error
       if (error) {
@@ -3178,12 +3387,11 @@ export function pipeline(
     // Handle abort signal
     if (options.signal) {
       if (options.signal.aborted) {
-        cleanup(new Error("Pipeline aborted"));
+        cleanupWithSignal(new Error("Pipeline aborted"));
         return;
       }
-      options.signal.addEventListener("abort", () => {
-        cleanup(new Error("Pipeline aborted"));
-      });
+      onAbort = () => cleanupWithSignal(new Error("Pipeline aborted"));
+      options.signal.addEventListener("abort", onAbort);
     }
 
     // Chain the streams
@@ -3198,15 +3406,40 @@ export function pipeline(
       current.pipe(destination);
     } else {
       // Don't end destination
-      current.on("data", chunk => destination.write(chunk));
+      let paused = false;
+      let waitingForDrain = false;
+      const onDrain = (): void => {
+        waitingForDrain = false;
+        if (paused && typeof current.resume === "function") {
+          paused = false;
+          current.resume();
+        }
+      };
+
+      const onData = (chunk: any): void => {
+        const ok = destination.write(chunk);
+        if (!ok && !waitingForDrain) {
+          waitingForDrain = true;
+          if (!paused && typeof current.pause === "function") {
+            paused = true;
+            current.pause();
+          }
+          registry.once(destination, "drain", onDrain);
+        }
+      };
+
+      const onEnd = (): void => cleanupWithSignal();
+
+      registry.add(current, "data", onData);
+      registry.once(current, "end", onEnd);
     }
 
     // Handle completion
-    destination.on("finish", () => cleanup());
+    registry.once(destination, "finish", () => cleanupWithSignal());
 
     // Handle errors on all streams
     for (const stream of allStreams) {
-      stream.on("error", (err: Error) => cleanup(err));
+      registry.once(stream, "error", (err: Error) => cleanupWithSignal(err));
     }
   });
 
@@ -3270,11 +3503,22 @@ export function finished(
     const normalizedStream = toBrowserPipelineStream(stream);
     let resolved = false;
 
+    const registry = createListenerRegistry();
+    let onAbort: (() => void) | undefined;
+    const cleanup = (): void => {
+      registry.cleanup();
+      if (onAbort && options.signal) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
+    };
+
     const done = (err?: Error | null): void => {
       if (resolved) {
         return;
       }
       resolved = true;
+
+      cleanup();
 
       if (err && !options.error) {
         reject(err);
@@ -3289,36 +3533,35 @@ export function finished(
         done(new Error("Aborted"));
         return;
       }
-      options.signal.addEventListener("abort", () => {
-        done(new Error("Aborted"));
-      });
+      onAbort = () => done(new Error("Aborted"));
+      options.signal.addEventListener("abort", onAbort);
     }
 
     const checkReadable = options.readable !== false;
     const checkWritable = options.writable !== false;
 
     // Already finished?
-    if (checkReadable && (normalizedStream as any).readableEnded) {
+    if (checkReadable && normalizedStream.readableEnded) {
       done();
       return;
     }
 
-    if (checkWritable && (normalizedStream as any).writableFinished) {
+    if (checkWritable && normalizedStream.writableFinished) {
       done();
       return;
     }
 
     // Listen for events
     if (checkWritable) {
-      normalizedStream.on("finish", () => done());
+      registry.once(normalizedStream, "finish", () => done());
     }
 
     if (checkReadable) {
-      normalizedStream.on("end", () => done());
+      registry.once(normalizedStream, "end", () => done());
     }
 
-    normalizedStream.on("error", (err: Error) => done(err));
-    normalizedStream.on("close", () => done());
+    registry.once(normalizedStream, "error", (err: Error) => done(err));
+    registry.once(normalizedStream, "close", () => done());
   });
 
   // If callback provided, use it
@@ -3347,40 +3590,8 @@ export async function streamToPromise(stream: PipelineStream): Promise<void> {
 export async function streamToUint8Array(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
 ): Promise<Uint8Array> {
-  let iterable: AsyncIterable<Uint8Array>;
-  if (isReadableStream(stream)) {
-    iterable = Readable.fromWeb(stream as any);
-  } else if (isAsyncIterable(stream)) {
-    iterable = stream;
-  } else {
-    throw new Error("streamToUint8Array: unsupported stream type");
-  }
-
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-
-  for await (const chunk of iterable) {
-    chunks.push(chunk);
-    totalLength += chunk.length;
-  }
-
-  // Fast paths
-  const len = chunks.length;
-  if (len === 0) {
-    return new Uint8Array(0);
-  }
-  if (len === 1) {
-    return chunks[0];
-  }
-
-  // Use precalculated total length
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (let i = 0; i < len; i++) {
-    result.set(chunks[i], offset);
-    offset += chunks[i].length;
-  }
-  return result;
+  const { chunks, totalLength } = await collectStreamChunks(stream);
+  return concatWithLength(chunks, totalLength);
 }
 
 /**
@@ -3395,8 +3606,10 @@ export async function streamToString(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   encoding?: string
 ): Promise<string> {
-  const buffer = await streamToUint8Array(stream as any);
-  return getTextDecoder(encoding).decode(buffer);
+  const { chunks, totalLength } = await collectStreamChunks(stream);
+  const combined = concatWithLength(chunks, totalLength);
+  const decoder = encoding ? getTextDecoder(encoding) : textDecoder;
+  return decoder.decode(combined);
 }
 
 /**
@@ -3407,7 +3620,7 @@ export async function drainStream(
 ): Promise<void> {
   let iterable: AsyncIterable<unknown>;
   if (isReadableStream(stream)) {
-    iterable = Readable.fromWeb(stream as any);
+    iterable = Readable.fromWeb(stream);
   } else if (isAsyncIterable(stream)) {
     iterable = stream;
   } else {
@@ -3426,7 +3639,7 @@ export async function copyStream(
   source: PipelineStreamLike,
   destination: PipelineStreamLike
 ): Promise<void> {
-  return pipeline(source as any, destination as any);
+  return pipeline(source, destination);
 }
 
 // =============================================================================
@@ -3449,7 +3662,7 @@ export function isTransform(obj: unknown): obj is ITransform<any, any> {
     typeof o.pipe === "function" &&
     typeof o.write === "function" &&
     typeof o.end === "function" &&
-    typeof (o as any)._transform === "function"
+    typeof o._transform === "function"
   );
 }
 
@@ -3505,16 +3718,22 @@ export function addAbortSignal<
     return stream;
   }
 
+  const cleanup = (): void => {
+    signal.removeEventListener("abort", onAbort);
+    removeEmitterListener(stream, "close", onClose);
+  };
+
   const onAbort = (): void => {
+    cleanup();
     stream.destroy(new Error("Aborted"));
   };
 
-  signal.addEventListener("abort", onAbort, { once: true });
+  const onClose = (): void => {
+    cleanup();
+  };
 
-  // Clean up when stream is destroyed
-  stream.on("close", () => {
-    signal.removeEventListener("abort", onAbort);
-  });
+  signal.addEventListener("abort", onAbort);
+  addEmitterListener(stream, "close", onClose, { once: true });
 
   return stream;
 }
@@ -3542,77 +3761,71 @@ export function createDuplex<TRead = Uint8Array, TWrite = Uint8Array>(
   const readableObjectMode = options?.readableObjectMode ?? options?.objectMode;
   const writableObjectMode = options?.writableObjectMode ?? options?.objectMode;
 
+  const underlyingWritable: any = options?.writable;
+
   const duplex = new Duplex<TRead, TWrite>({
     allowHalfOpen: options?.allowHalfOpen,
     readableHighWaterMark: options?.readableHighWaterMark,
     writableHighWaterMark: options?.writableHighWaterMark,
     readableObjectMode,
-    writableObjectMode
+    writableObjectMode,
+    read: options?.read,
+    write:
+      options?.write ??
+      (underlyingWritable
+        ? (chunk: TWrite, encoding: string, callback: (error?: Error | null) => void) => {
+            if (typeof underlyingWritable.write === "function") {
+              underlyingWritable.write(chunk, encoding, callback);
+              return;
+            }
+            // Best-effort sync sink
+            try {
+              underlyingWritable.write?.(chunk);
+              callback(null);
+            } catch (err) {
+              callback(err as Error);
+            }
+          }
+        : undefined),
+    final:
+      options?.final ??
+      (underlyingWritable
+        ? (callback: (error?: Error | null) => void) => {
+            if (typeof underlyingWritable.end === "function") {
+              underlyingWritable.end((err: any) => callback(err ?? null));
+            } else {
+              underlyingWritable.end?.();
+              callback(null);
+            }
+          }
+        : undefined)
   });
 
-  // If custom readable/writable provided, pipe them
-  if ((options as any)?.readable) {
-    const readable: any = (options as any).readable;
-    readable.on?.("data", (chunk: any) => duplex.push(chunk));
-    readable.on?.("end", () => duplex.push(null));
-    readable.on?.("error", (err: any) => duplex.destroy(err));
-  }
-
-  if ((options as any)?.writable) {
-    const writable: any = (options as any).writable;
-    duplex.on("data", (chunk: TWrite) => writable.write?.(chunk as any));
-    duplex.on("finish", () => writable.end?.());
-  }
-
-  // If custom read/write/final provided, override methods
-  if (options?.write) {
-    const _originalWrite = duplex.write.bind(duplex); // Keep bound reference for potential future use
-    duplex.write = function (
-      chunk: TWrite,
-      encodingOrCallback?: string | ((error?: Error | null) => void),
-      callback?: (error?: Error | null) => void
-    ): boolean {
-      const encoding = typeof encodingOrCallback === "string" ? encodingOrCallback : "utf8";
-      const cb =
-        typeof encodingOrCallback === "function" ? encodingOrCallback : (callback ?? (() => {}));
-
-      options.write!.call(duplex, chunk, encoding, cb);
-      return true;
-    };
-  }
-
-  if (options?.final) {
-    const originalEnd = duplex.end.bind(duplex);
-    duplex.end = function (
-      chunkOrCallback?: TWrite | (() => void),
-      encodingOrCallback?: string | (() => void),
-      callback?: () => void
-    ): Duplex<TRead, TWrite> {
-      const cb =
-        typeof chunkOrCallback === "function"
-          ? chunkOrCallback
-          : typeof encodingOrCallback === "function"
-            ? encodingOrCallback
-            : (callback ?? (() => {}));
-
-      if (chunkOrCallback !== undefined && typeof chunkOrCallback !== "function") {
-        duplex.write(chunkOrCallback);
+  // If an underlying readable is provided, forward it into the duplex readable side.
+  if (options?.readable) {
+    const readable: any = options.readable;
+    const sink = new Writable<any>({
+      objectMode: duplex.readableObjectMode,
+      write(chunk, _encoding, callback) {
+        duplex.push(chunk);
+        callback(null);
+      },
+      final(callback) {
+        duplex.push(null);
+        callback(null);
       }
+    });
 
-      // Call custom final handler
-      options.final!.call(duplex, (err?: Error | null) => {
-        if (err) {
-          duplex.emit("error", err);
-        } else {
-          duplex.emit("finish");
-        }
-        // Call original end to properly close writable side
-        originalEnd();
-        (cb as () => void)();
-      });
-
-      return duplex;
-    };
+    if (typeof readable?.on === "function") {
+      const onError = (err: any): void => {
+        duplex.destroy(err);
+      };
+      const cleanupError = addEmitterListener(readable as any, "error", onError);
+      addEmitterListener(readable as any, "end", cleanupError, { once: true });
+      addEmitterListener(readable as any, "close", cleanupError, { once: true });
+      addEmitterListener(sink as any, "finish", cleanupError, { once: true });
+    }
+    readable.pipe?.(sink);
   }
 
   if (options?.destroy) {
@@ -3621,7 +3834,7 @@ export function createDuplex<TRead = Uint8Array, TWrite = Uint8Array>(
       options.destroy!.call(duplex, error ?? null, (err: Error | null) => {
         if (err) {
           duplex.emit("error", err);
-          originalDestroy(err as any);
+          originalDestroy(err);
         } else {
           originalDestroy(error);
         }
@@ -3642,19 +3855,7 @@ export function createReadableFromGenerator<T>(
 ): IReadable<T> {
   const readable = new Readable<T>({ ...options, objectMode: options?.objectMode ?? true });
 
-  (async () => {
-    try {
-      for await (const chunk of generator()) {
-        if (!readable.push(chunk)) {
-          // Backpressure
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-      }
-      readable.push(null);
-    } catch (err) {
-      readable.destroy(err as Error);
-    }
-  })();
+  pumpAsyncIterableToReadable(readable, generator());
 
   return readable;
 }
@@ -3696,34 +3897,52 @@ export function compose<T = any, R = any>(
     });
   }
 
-  const isNativeTransform = (stream: ITransform<any, any>): stream is Transform<any, any> =>
-    stream instanceof Transform;
-
-  if (len === 1 && isNativeTransform(transforms[0]!)) {
-    return transforms[0];
+  // Preserve identity: compose(single) returns the same transform.
+  if (len === 1) {
+    return transforms[0] as any as Transform<T, R>;
   }
 
   // Chain the transforms: first → second → ... → last
-  const first = transforms[0] as any;
-  const last = transforms[len - 1] as any;
+  const first = transforms[0]!;
+  const last = transforms[len - 1]!;
 
   // Pipe all transforms together
   for (let i = 0; i < len - 1; i++) {
-    transforms[i].pipe(transforms[i + 1] as any);
+    transforms[i].pipe(transforms[i + 1]);
   }
 
   class ComposedTransform extends Transform<T, R> {
     private _dataForwarding: boolean = false;
     private _endForwarding: boolean = false;
 
+    private _dataForwardCleanup: (() => void) | null = null;
+    private _endForwardCleanup: (() => void) | null = null;
+    private _errorForwardCleanup: Array<() => void> = [];
+
+    constructor(options: any) {
+      super(options);
+      for (const t of transforms) {
+        const onError = (err: Error): void => {
+          this.emit("error", err);
+        };
+        this._errorForwardCleanup.push(addEmitterListener(t as any, "error", onError));
+      }
+    }
+
     override on(event: string | symbol, listener: (...args: any[]) => void): this {
       if (event === "data" && !this._dataForwarding) {
         this._dataForwarding = true;
-        last.on("data", (chunk: R) => this.emit("data", chunk));
+        const onData = (chunk: R): void => {
+          this.emit("data", chunk);
+        };
+        this._dataForwardCleanup = addEmitterListener(last as any, "data", onData);
       }
       if (event === "end" && !this._endForwarding) {
         this._endForwarding = true;
-        last.on("end", () => this.emit("end"));
+        const onEnd = (): void => {
+          this.emit("end");
+        };
+        this._endForwardCleanup = addEmitterListener(last as any, "end", onEnd, { once: true });
       }
       return super.on(event, listener);
     }
@@ -3734,9 +3953,9 @@ export function compose<T = any, R = any>(
       callback?: (error?: Error | null) => void
     ): boolean {
       if (typeof encodingOrCallback === "function") {
-        return first.write(chunk as any, encodingOrCallback);
+        return first.write(chunk, encodingOrCallback);
       }
-      return first.write(chunk as any, encodingOrCallback, callback);
+      return first.write(chunk, encodingOrCallback, callback);
     }
 
     override end(
@@ -3749,18 +3968,31 @@ export function compose<T = any, R = any>(
         return this;
       }
       if (typeof encodingOrCallback === "function") {
-        first.end(chunkOrCallback as any, encodingOrCallback);
+        first.end(chunkOrCallback, encodingOrCallback);
         return this;
       }
-      first.end(chunkOrCallback as any, encodingOrCallback as any, callback as any);
+      first.end(chunkOrCallback, encodingOrCallback, callback);
       return this;
     }
 
     override pipe<W extends Writable<R> | Transform<R, any> | Duplex<any, R>>(destination: W): W {
-      return last.pipe(destination as any) as W;
+      return last.pipe(destination) as W;
     }
 
     override destroy(error?: Error): void {
+      if (this._dataForwardCleanup) {
+        this._dataForwardCleanup();
+        this._dataForwardCleanup = null;
+      }
+      if (this._endForwardCleanup) {
+        this._endForwardCleanup();
+        this._endForwardCleanup = null;
+      }
+      for (let i = this._errorForwardCleanup.length - 1; i >= 0; i--) {
+        this._errorForwardCleanup[i]();
+      }
+      this._errorForwardCleanup.length = 0;
+
       for (const t of transforms) {
         t.destroy(error);
       }
@@ -3784,16 +4016,9 @@ export function compose<T = any, R = any>(
   }
 
   const composed = new ComposedTransform({
-    objectMode: first?.objectMode ?? true,
-    transform: chunk => chunk as any as R
+    objectMode: (first as any)?.objectMode ?? true,
+    transform: chunk => chunk
   });
-
-  // Forward errors from any transform
-  for (const t of transforms as any[]) {
-    t.on("error", (err: Error) => {
-      composed.emit("error", err);
-    });
-  }
 
   // Reflect underlying readability/writability like the previous duck-typed wrapper
   Object.defineProperty(composed, "readable", {
@@ -3959,7 +4184,7 @@ export function setDefaultHighWaterMark(objectMode: boolean, value: number): voi
  * Check if a stream has been destroyed
  */
 export function isDestroyed(stream: { destroyed?: boolean } | null | undefined): boolean {
-  return !!(stream as any)?.destroyed;
+  return !!stream?.destroyed;
 }
 
 /**
@@ -3970,7 +4195,7 @@ export function isDisturbed(stream: unknown): boolean {
     return Readable.isDisturbed(stream);
   }
   if (stream instanceof Duplex) {
-    return Readable.isDisturbed((stream as any)._readable);
+    return Readable.isDisturbed(stream._readable);
   }
 
   const s = stream as any;
@@ -3986,7 +4211,7 @@ export function isDisturbed(stream: unknown): boolean {
  * Check if a stream has an error
  */
 export function isErrored(stream: { errored?: unknown } | null | undefined): boolean {
-  const err = (stream as any)?.errored;
+  const err = stream?.errored;
   return err !== null && err !== undefined;
 }
 
@@ -4001,7 +4226,7 @@ export function isReadable(stream: unknown): stream is ReadableLike {
     return true;
   }
   if (stream instanceof Duplex) {
-    return (stream as any)._readable instanceof Readable;
+    return stream._readable instanceof Readable;
   }
   const o = stream as Record<string, unknown>;
   return typeof o.read === "function" && typeof o.pipe === "function";
@@ -4018,7 +4243,7 @@ export function isWritable(stream: unknown): stream is WritableLike {
     return true;
   }
   if (stream instanceof Duplex) {
-    return (stream as any)._writable instanceof Writable;
+    return stream._writable instanceof Writable;
   }
   const o = stream as Record<string, unknown>;
   return typeof o.write === "function" && typeof o.end === "function";
@@ -4086,7 +4311,7 @@ async function collectStreamChunks(
   let totalLength = 0;
   let iterable: AsyncIterable<Uint8Array>;
   if (isReadableStream(stream)) {
-    iterable = Readable.fromWeb(stream as any);
+    iterable = Readable.fromWeb(stream);
   } else if (isAsyncIterable(stream)) {
     iterable = stream;
   } else {
