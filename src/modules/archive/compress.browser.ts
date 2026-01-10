@@ -97,12 +97,14 @@ export function compressSync(data: Uint8Array, options: CompressOptions = {}): U
  * The threshold is only useful for compression where the overhead matters more.
  *
  * @param data - Compressed data (deflate-raw format)
+ * @param options - Decompression options (kept for API parity; currently unused in browser)
  * @returns Decompressed data
  */
 export async function decompress(
   data: Uint8Array,
   _options: CompressOptions = {}
 ): Promise<Uint8Array> {
+  void _options;
   // Always use native DecompressionStream when available - it's much faster than JS
   if (hasDeflateRawDecompressionStream()) {
     return decompressWithStream(data);

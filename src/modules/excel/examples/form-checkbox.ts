@@ -4,7 +4,8 @@
  *
  * Generates an XLSX file with legacy Form Control Checkboxes that work in:
  * - Microsoft Excel 2007+
- * - Microsoft 365 (both desktop and online)
+ * - Microsoft 365 desktop
+ * - (Excel for the web support is limited and may not allow interaction)
  * - WPS Office
  * - LibreOffice Calc
  *

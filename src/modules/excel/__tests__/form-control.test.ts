@@ -179,6 +179,27 @@ describe("Form Control Checkbox", () => {
 
       // Should have worksheet relationships
       expect(entries.has("xl/worksheets/_rels/sheet1.xml.rels")).toBe(true);
+
+      // Should include <controls> entries that reference ctrlProp relationships
+      const sheetEntry = entries.get("xl/worksheets/sheet1.xml");
+      expect(sheetEntry).toBeDefined();
+      const sheetXml = new TextDecoder().decode(sheetEntry!.data);
+      expect(sheetXml).toContain("<controls");
+      expect(sheetXml).toContain("<control");
+
+      const controlRidMatch = sheetXml.match(/<control[^>]*\br:id="(rId\d+)"/);
+      const shapeIdMatch = sheetXml.match(/<control[^>]*\bshapeId="(\d+)"/);
+      expect(controlRidMatch).toBeTruthy();
+      expect(shapeIdMatch).toBeTruthy();
+      const controlRid = controlRidMatch![1];
+      const shapeId = Number(shapeIdMatch![1]);
+      expect(shapeId).toBe(1025);
+
+      const relsEntry = entries.get("xl/worksheets/_rels/sheet1.xml.rels");
+      expect(relsEntry).toBeDefined();
+      const relsXml = new TextDecoder().decode(relsEntry!.data);
+      expect(relsXml).toContain(`Id="${controlRid}"`);
+      expect(relsXml).toContain("/relationships/ctrlProp");
     });
 
     it("should write multiple checkboxes to xlsx", async () => {
@@ -335,8 +356,20 @@ describe("Form Control Checkbox", () => {
       const checkbox = ws.addFormCheckbox("A1:A1", {});
       expect(checkbox.model.tl.col).toBe(0);
       expect(checkbox.model.tl.row).toBe(0);
-      expect(checkbox.model.br.col).toBe(0);
-      expect(checkbox.model.br.row).toBe(0);
+      // Single-cell ranges are treated like single-cell references for sizing
+      expect(checkbox.model.br.col).toBe(2);
+      expect(checkbox.model.br.row).toBe(1);
+    });
+
+    it("should handle single cell reference", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1", {});
+      expect(checkbox.model.tl.col).toBe(0);
+      expect(checkbox.model.tl.row).toBe(0);
+      expect(checkbox.model.br.col).toBe(2);
+      expect(checkbox.model.br.row).toBe(1);
     });
 
     it("should handle empty text", () => {
