@@ -12,7 +12,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Our archive module
-import { ZipParser, extractAll, forEachEntry, createParse, type ZipEntry as StreamZipEntry } from "../src/modules/archive/index.js";
+import {
+  ZipParser,
+  extractAll,
+  forEachEntry,
+  createParse,
+  type ZipEntry as StreamZipEntry
+} from "../src/modules/archive/index.js";
 
 // AdmZip - install with: pnpm add -D adm-zip @types/adm-zip
 import AdmZip from "adm-zip";
@@ -462,7 +468,9 @@ async function runLargeFileBenchmark(name: string, buffer: Buffer): Promise<void
   if (streamSpeedup > 1) {
     console.log(`  ✅ createParse (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
   } else {
-    console.log(`  ⚠️  createParse (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`);
+    console.log(
+      `  ⚠️  createParse (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`
+    );
   }
 }
 

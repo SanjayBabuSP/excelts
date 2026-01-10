@@ -297,7 +297,13 @@ async function runScenario(scenarioName: string, files: TestFile[], level: numbe
   console.log(`  │ Method                │ Avg Time   │ Min Time   │ Max Time   │ Output     │`);
   console.log(`  ├───────────────────────┼────────────┼────────────┼────────────┼────────────┤`);
 
-  const results = [archiverResult, streamingZipResult, createZipResult, createZipSyncResult, zipBuilderResult];
+  const results = [
+    archiverResult,
+    streamingZipResult,
+    createZipResult,
+    createZipSyncResult,
+    zipBuilderResult
+  ];
   for (const r of results) {
     const name = r.name.padEnd(21);
     const avg = formatMs(r.avgTime).padStart(10);
