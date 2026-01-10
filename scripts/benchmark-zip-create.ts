@@ -390,7 +390,7 @@ async function main() {
   await runScenario("Large file (1 x 20MB, level=8)", generateTextFiles(1, 20 * 1024 * 1024), 8);
 
   // Scenario 8: Large files 20MB total (multiple files)
-  await runScenario("Large files (4 x 5MB, level=8)", generateTextFiles(4, 5 * 1024 * 1024), 8);
+  await runScenario("Large files (4 x 5MB, level=8)", generateTextFiles(4, 8 * 1024 * 1024), 8);
 
   // Scenario 9: Large binary file 20MB (less compressible)
   await runScenario("Large binary (1 x 20MB, level=8)", generateTestFiles(1, 20 * 1024 * 1024), 8);
