@@ -12,7 +12,12 @@ import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 
 // Our archive module (import directly from source files to avoid relying on tsconfig path aliases)
-import { createZip, createZipSync, ZipBuilder, type ZipEntry } from "../src/modules/archive/zip-builder.ts";
+import {
+  createZip,
+  createZipSync,
+  ZipBuilder,
+  type ZipEntry
+} from "../src/modules/archive/zip-builder.ts";
 import { StreamingZip, ZipDeflateFile } from "../src/modules/archive/streaming-zip.ts";
 
 // archiver - install with: pnpm add -D archiver @types/archiver
