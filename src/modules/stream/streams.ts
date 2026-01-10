@@ -74,21 +74,38 @@ export class Writable<T = Uint8Array> extends NodeWritable {
   constructor(options?: WritableOptions<T>) {
     // If wrapping an existing stream, proxy to it
     if (options?.stream) {
+      const underlying = options.stream;
+
       // Create a pass-through wrapper that proxies to the underlying stream
       super({
         highWaterMark: options?.highWaterMark,
         objectMode: options?.objectMode,
         write(chunk, encoding, callback) {
-          options.stream!.write(chunk, encoding, callback);
+          underlying.write(chunk, encoding, callback);
         },
         final(callback) {
-          options.stream!.end(callback);
+          underlying.end(callback);
         }
       });
 
-      // Proxy events from underlying stream
-      options.stream.on("error", err => this.emit("error", err));
-      options.stream.on("close", () => this.emit("close"));
+      // Proxy events from underlying stream, but ensure we clean up listeners so
+      // the underlying stream cannot retain this wrapper longer than necessary.
+      const onUnderlyingError = (err: Error): void => {
+        this.emit("error", err);
+      };
+      const onUnderlyingClose = (): void => {
+        this.emit("close");
+      };
+      const cleanup = (): void => {
+        underlying.off("error", onUnderlyingError);
+        underlying.off("close", onUnderlyingClose);
+      };
+
+      underlying.on("error", onUnderlyingError);
+      underlying.on("close", onUnderlyingClose);
+
+      this.once("close", cleanup);
+      this.once("finish", cleanup);
     } else {
       super({
         highWaterMark: options?.highWaterMark,
@@ -122,19 +139,18 @@ export function normalizeWritable<T = Uint8Array>(
     return stream;
   }
 
-  // Node.js Writable: accept structurally even if typed as unknown.
+  // Node.js Writable: already compatible, avoid extra wrapper allocation.
   if (stream instanceof (NodeWritable as any)) {
-    return new Writable<T>({ stream: stream as any });
+    return stream as unknown as WritableLike;
   }
 
   // Web WritableStream: detect by getWriter() (avoid relying on global WritableStream).
   if ((stream as any)?.getWriter) {
-    const nodeWritable = (NodeWritable as any).fromWeb(stream as any) as NodeWritable;
-    return new Writable<T>({ stream: nodeWritable });
+    return (NodeWritable as any).fromWeb(stream as any) as WritableLike;
   }
 
-  // Assume it structurally matches Node's Writable; wrap for consistent API.
-  return new Writable<T>({ stream: stream as any });
+  // Assume it structurally matches Node's Writable.
+  return stream as WritableLike;
 }
 
 // Import for internal use
@@ -304,11 +320,13 @@ export function finished(
   const promise = new Promise<void>((resolve, reject) => {
     const normalizedStream = toNodePipelineStream(stream);
     (nodeFinished as any)(normalizedStream, options, (err: Error | null) => {
-      if (err && !(options && options.error)) {
+      // Node.js semantics: options.error defaults to true (report errors).
+      // If options.error === false, ignore errors and resolve.
+      if (err && options?.error !== false) {
         reject(err);
-      } else {
-        resolve();
+        return;
       }
+      resolve();
     });
   });
 
@@ -734,15 +752,32 @@ export function addAbortSignal<
     return stream;
   }
 
+  const cleanup = (): void => {
+    signal.removeEventListener("abort", onAbort);
+    (stream as any).off?.("close", onDone);
+    (stream as any).off?.("end", onDone);
+    (stream as any).off?.("finish", onDone);
+    (stream as any).off?.("error", onError);
+  };
+
   const onAbort = (): void => {
+    cleanup();
     stream.destroy(new Error("Aborted"));
   };
 
-  signal.addEventListener("abort", onAbort, { once: true });
+  const onDone = (): void => {
+    cleanup();
+  };
 
-  stream.on("close", () => {
-    signal.removeEventListener("abort", onAbort);
-  });
+  const onError = (): void => {
+    cleanup();
+  };
+
+  signal.addEventListener("abort", onAbort, { once: true });
+  (stream as any).once?.("close", onDone);
+  (stream as any).once?.("end", onDone);
+  (stream as any).once?.("finish", onDone);
+  (stream as any).once?.("error", onError);
 
   return stream;
 }
@@ -801,71 +836,116 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
     return transforms[0];
   }
 
-  // Chain all transforms together
+  // Chain all transforms together once.
   for (let i = 0; i < len - 1; i++) {
-    transforms[i].pipe(transforms[i + 1]);
+    transforms[i]!.pipe(transforms[i + 1]!);
   }
 
-  // Create a Duplex that writes to first and reads from last
-  const first = transforms[0];
-  const last = transforms[len - 1];
+  const first = transforms[0]!;
+  const last = transforms[len - 1]!;
 
-  // Create a PassThrough as the composed stream
-  const composed = new PassThrough({ objectMode: first.readableObjectMode });
+  // Use a private output stream so we don't have to monkey-patch `write()` on the
+  // public composed stream (which would break piping into it).
+  const output = new PassThrough({ objectMode: (last as any).readableObjectMode ?? true });
+  last.pipe(output);
 
-  // Store original methods for forwarding
-  const passthroughWrite = composed.write.bind(composed);
-  const passthroughEnd = composed.end.bind(composed);
-
-  // Override write to write to first transform
-  composed.write = function (
-    chunk: any,
-    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    if (typeof encodingOrCallback === "function") {
-      return first.write(chunk, encodingOrCallback);
+  let outputEnded = false;
+  const pumpOutput = (target: Transform): void => {
+    if (outputEnded) {
+      return;
     }
-    return first.write(chunk, encodingOrCallback, callback);
-  };
-
-  // Override end to end first transform
-  composed.end = function (
-    chunkOrCallback?: any,
-    encodingOrCallback?: BufferEncoding | (() => void),
-    callback?: () => void
-  ): PassThrough {
-    if (typeof chunkOrCallback === "function") {
-      first.end(chunkOrCallback);
-    } else if (typeof encodingOrCallback === "function") {
-      first.end(chunkOrCallback, encodingOrCallback);
-    } else {
-      first.end(chunkOrCallback, encodingOrCallback, callback);
+    while (true) {
+      const chunk = output.read();
+      if (chunk === null) {
+        break;
+      }
+      if (!target.push(chunk)) {
+        break;
+      }
     }
-    return composed;
   };
 
-  // Override pipe to pipe from last transform
-  composed.pipe = function <T extends NodeJS.WritableStream>(dest: T): T {
-    return last.pipe(dest);
-  };
+  const composed = new Transform({
+    readableObjectMode: (last as any).readableObjectMode,
+    writableObjectMode: (first as any).writableObjectMode,
+    transform(chunk: any, encoding: BufferEncoding, callback: NodeTransformCallback) {
+      try {
+        // Forward writes into the head of the chain.
+        (first as any).write(chunk, encoding, callback);
+      } catch (err) {
+        callback(err as Error);
+      }
+    },
+    flush(callback: NodeTransformCallback) {
+      // End the head of the chain; readable completion is driven by `output` ending.
+      const onFinish = (): void => {
+        cleanupFlush();
+        callback();
+      };
+      const onError = (err: Error): void => {
+        cleanupFlush();
+        callback(err);
+      };
+      const cleanupFlush = (): void => {
+        (first as any).off?.("finish", onFinish);
+        (first as any).off?.("error", onError);
+      };
 
-  // Forward data from last to composed
-  last.on("data", (chunk: any) => {
-    passthroughWrite(chunk);
+      (first as any).once?.("finish", onFinish);
+      (first as any).once?.("error", onError);
+      (first as any).end();
+    },
+    read(this: Transform) {
+      pumpOutput(this);
+    },
+    destroy(this: Transform, err: Error | null, callback: (error: Error | null) => void) {
+      try {
+        output.destroy(err ?? undefined);
+        for (const t of transforms) {
+          (t as any).destroy?.(err ?? undefined);
+        }
+      } finally {
+        callback(err);
+      }
+    }
   });
 
-  // Forward end from last
-  last.on("end", () => {
-    passthroughEnd();
-  });
+  const onOutputReadable = (): void => {
+    pumpOutput(composed);
+  };
+  const onOutputEnd = (): void => {
+    cleanupListeners();
+    outputEnded = true;
+    composed.push(null);
+  };
+  const onAnyError = (err: Error): void => {
+    cleanupListeners();
+    composed.destroy(err);
+  };
 
-  // Forward errors from any transform
-  for (const transform of transforms) {
-    transform.on("error", (err: Error) => {
-      composed.emit("error", err);
-    });
+  const transformErrorListeners: Array<{ t: any; fn: (err: Error) => void }> = [];
+  const cleanupListeners = (): void => {
+    output.off("readable", onOutputReadable);
+    output.off("end", onOutputEnd);
+    output.off("error", onAnyError);
+    for (const { t, fn } of transformErrorListeners) {
+      t.off?.("error", fn);
+    }
+    transformErrorListeners.length = 0;
+  };
+
+  output.on("readable", onOutputReadable);
+  output.once("end", onOutputEnd);
+  output.once("error", onAnyError);
+  for (const t of transforms) {
+    const tt = t as any;
+    tt.once?.("error", onAnyError);
+    transformErrorListeners.push({ t: tt, fn: onAnyError });
   }
+
+  composed.once("close", () => {
+    cleanupListeners();
+  });
 
   return composed;
 }
@@ -968,7 +1048,7 @@ export function once(
         onAbort();
         return;
       }
-      options.signal.addEventListener("abort", onAbort);
+      options.signal.addEventListener("abort", onAbort, { once: true });
     }
   });
 }
