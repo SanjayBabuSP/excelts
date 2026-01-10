@@ -10,11 +10,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const cjsDir = path.join(__dirname, "../dist/cjs");
 
-function toPosixPath(p) {
+function toPosixPath(p: string): string {
   return p.split(path.sep).join("/");
 }
 
-function isSafeAliasCapture(value) {
+function isSafeAliasCapture(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -28,11 +28,11 @@ function isSafeAliasCapture(value) {
   return !normalized.startsWith("..") && !normalized.includes("../");
 }
 
-function replaceStarLiteral(pattern, replacement) {
+function replaceStarLiteral(pattern: string, replacement: string): string {
   return pattern.split("*").join(replacement);
 }
 
-function tryResolveFile(filePathWithoutExt) {
+function tryResolveFile(filePathWithoutExt: string): string | null {
   const candidates = [
     filePathWithoutExt,
     `${filePathWithoutExt}.ts`,
@@ -48,7 +48,11 @@ function tryResolveFile(filePathWithoutExt) {
   return null;
 }
 
-function loadTsconfigPaths() {
+interface TsconfigPaths {
+  [key: string]: string[];
+}
+
+function loadTsconfigPaths(): TsconfigPaths {
   const tsconfigPath = path.join(projectRoot, "tsconfig.json");
   const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf8"));
   return tsconfig?.compilerOptions?.paths ?? {};
@@ -56,7 +60,17 @@ function loadTsconfigPaths() {
 
 const tsconfigPaths = loadTsconfigPaths();
 
-function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
+interface ResolveAliasOptions {
+  specifier: string;
+  filePath: string;
+  distRoot: string;
+}
+
+function resolveAliasToRelativeImport({
+  specifier,
+  filePath,
+  distRoot
+}: ResolveAliasOptions): string | null {
   if (!specifier.startsWith("@")) {
     return null;
   }
@@ -66,7 +80,7 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
   for (const [aliasPattern, targetPatterns] of Object.entries(tsconfigPaths)) {
     const hasStar = aliasPattern.includes("*");
 
-    let captured = null;
+    let captured: string | null = null;
     if (hasStar) {
       const [prefix, suffix] = aliasPattern.split("*");
       if (specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
@@ -85,7 +99,7 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
     }
 
     for (const targetPattern of targetPatterns) {
-      const replaced = hasStar ? replaceStarLiteral(targetPattern, captured) : targetPattern;
+      const replaced = hasStar ? replaceStarLiteral(targetPattern, captured!) : targetPattern;
       const absTarget = path.resolve(projectRoot, replaced);
       const absSrcFile = tryResolveFile(absTarget) ?? absTarget;
 
@@ -117,8 +131,8 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot }) {
   return null;
 }
 
-function rewritePathAliasesInFile(filePath, distRoot) {
-  let content;
+function rewritePathAliasesInFile(filePath: string, distRoot: string): void {
+  let content: string;
   try {
     content = fs.readFileSync(filePath, "utf8");
   } catch {
@@ -155,8 +169,8 @@ function rewritePathAliasesInFile(filePath, distRoot) {
   }
 }
 
-function rewritePathAliases(dir, distRoot) {
-  let entries;
+function rewritePathAliases(dir: string, distRoot: string): void {
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {

@@ -14,12 +14,12 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
-function readArg(name) {
+function readArg(name: string): string | null {
   const idx = process.argv.indexOf(name);
   return idx === -1 ? null : (process.argv[idx + 1] ?? null);
 }
 
-function resolveDirArg(value) {
+function resolveDirArg(value: string | null): string | null {
   if (!value || typeof value !== "string") return null;
   return path.isAbsolute(value) ? value : path.resolve(projectRoot, value);
 }
@@ -34,37 +34,38 @@ let filesModified = 0;
 // Shared Utilities
 // ============================================================================
 
-function toPosixPath(p) {
+function toPosixPath(p: string): string {
   return p.split(path.sep).join("/");
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Shared regex patterns for import/export statements
 // Use functions to create fresh regex instances (avoid lastIndex issues with /g flag)
-const createStaticImportRe = () => /((?:import|export)\s*(?:[^'"]*\s+from\s+)?['"])([^'"]+)(['"])/g;
-const createDynamicImportRe = () => /(import\s*\(\s*['"])([^'"]+)(['"]\s*\))/g;
+const createStaticImportRe = (): RegExp =>
+  /((?:import|export)\s*(?:[^'"]*\s+from\s+)?['"])([^'"]+)(['"])/g;
+const createDynamicImportRe = (): RegExp => /(import\s*\(\s*['"])([^'"]+)(['"]\s*\))/g;
 const RELATIVE_PATH_RE = /^\.\.?\//;
 
-function isRelativeSpecifier(specifier) {
+function isRelativeSpecifier(specifier: string): boolean {
   return RELATIVE_PATH_RE.test(specifier);
 }
 
-function hasExtension(specifier) {
+function hasExtension(specifier: string): boolean {
   return Boolean(path.posix.extname(specifier));
 }
 
 /**
  * Walk directory and collect files matching filter
  */
-function walkDir(dir, filter) {
-  const results = [];
-  const stack = [dir];
+function walkDir(dir: string, filter: (name: string) => boolean): string[] {
+  const results: string[] = [];
+  const stack: string[] = [dir];
   while (stack.length) {
-    const current = stack.pop();
-    let entries;
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -86,8 +87,11 @@ function walkDir(dir, filter) {
  * Transform file content with a transformer function
  * Returns true if file was modified
  */
-function transformFile(filePath, transformer) {
-  let content;
+function transformFile(
+  filePath: string,
+  transformer: (content: string, filePath: string) => string
+): boolean {
+  let content: string;
   try {
     content = fs.readFileSync(filePath, "utf8");
   } catch {
@@ -105,7 +109,7 @@ function transformFile(filePath, transformer) {
 /**
  * Replace all import/export specifiers in content using a rewriter function
  */
-function rewriteSpecifiers(content, rewriter) {
+function rewriteSpecifiers(content: string, rewriter: (specifier: string) => string): string {
   // Static imports/exports
   content = content.replace(createStaticImportRe(), (match, prefix, specifier, suffix) => {
     const rewritten = rewriter(specifier);
@@ -123,7 +127,11 @@ function rewriteSpecifiers(content, rewriter) {
 // Path Alias Resolution
 // ============================================================================
 
-function loadTsconfigPaths() {
+interface TsconfigPaths {
+  [key: string]: string[];
+}
+
+function loadTsconfigPaths(): TsconfigPaths {
   const tsconfigPath = path.join(projectRoot, "tsconfig.json");
   const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf8"));
   return tsconfig?.compilerOptions?.paths ?? {};
@@ -131,7 +139,7 @@ function loadTsconfigPaths() {
 
 const tsconfigPaths = loadTsconfigPaths();
 
-function isSafeAliasCapture(value) {
+function isSafeAliasCapture(value: unknown): boolean {
   if (typeof value !== "string" || value.includes("\0") || value.includes("\\")) {
     return false;
   }
@@ -143,7 +151,7 @@ function isSafeAliasCapture(value) {
   );
 }
 
-function tryResolveFile(filePathWithoutExt) {
+function tryResolveFile(filePathWithoutExt: string): string | null {
   const candidates = [
     filePathWithoutExt,
     `${filePathWithoutExt}.ts`,
@@ -159,14 +167,26 @@ function tryResolveFile(filePathWithoutExt) {
   return null;
 }
 
-function resolveAliasToRelativeImport({ specifier, filePath, distRoot, outputExtension }) {
+interface ResolveAliasOptions {
+  specifier: string;
+  filePath: string;
+  distRoot: string;
+  outputExtension: string;
+}
+
+function resolveAliasToRelativeImport({
+  specifier,
+  filePath,
+  distRoot,
+  outputExtension
+}: ResolveAliasOptions): string | null {
   if (!specifier.startsWith("@")) return null;
 
   const srcRoot = path.join(projectRoot, "src");
 
   for (const [aliasPattern, targetPatterns] of Object.entries(tsconfigPaths)) {
     const hasStar = aliasPattern.includes("*");
-    let captured = null;
+    let captured: string | null = null;
 
     if (hasStar) {
       const [prefix, suffix] = aliasPattern.split("*");
@@ -182,7 +202,7 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot, outputExt
     }
 
     for (const targetPattern of targetPatterns) {
-      const replaced = hasStar ? targetPattern.split("*").join(captured) : targetPattern;
+      const replaced = hasStar ? targetPattern.split("*").join(captured!) : targetPattern;
       const absTarget = path.resolve(projectRoot, replaced);
       const absSrcFile = tryResolveFile(absTarget) ?? absTarget;
 
@@ -219,10 +239,19 @@ function resolveAliasToRelativeImport({ specifier, filePath, distRoot, outputExt
 // Transform Functions
 // ============================================================================
 
+interface RewritePathAliasesOptions {
+  fileExtensions: string[];
+  outputExtension: string;
+}
+
 /**
  * Rewrite path aliases to relative imports
  */
-function rewritePathAliases(dir, distRoot, { fileExtensions, outputExtension }) {
+function rewritePathAliases(
+  dir: string,
+  distRoot: string,
+  { fileExtensions, outputExtension }: RewritePathAliasesOptions
+): void {
   const files = walkDir(dir, name => fileExtensions.some(ext => name.endsWith(ext)));
   for (const filePath of files) {
     transformFile(filePath, content =>
@@ -242,7 +271,7 @@ function rewritePathAliases(dir, distRoot, { fileExtensions, outputExtension }) 
 /**
  * Normalize .d.ts specifiers: add .js extensions, convert .d.ts -> .js
  */
-function normalizeDeclarationSpecifiers(dir) {
+function normalizeDeclarationSpecifiers(dir: string): void {
   const files = walkDir(dir, name => name.endsWith(".d.ts"));
   for (const filePath of files) {
     transformFile(filePath, content =>
@@ -271,7 +300,7 @@ function normalizeDeclarationSpecifiers(dir) {
 /**
  * Add .js extensions to relative imports in JS files
  */
-function addJsExtensions(dir) {
+function addJsExtensions(dir: string): void {
   const files = walkDir(dir, name => name.endsWith(".js"));
   for (const filePath of files) {
     transformFile(filePath, content =>
@@ -295,7 +324,7 @@ function addJsExtensions(dir) {
 // Verification
 // ============================================================================
 
-function computeLineNumber(source, offset) {
+function computeLineNumber(source: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset; i++) {
     if (source.charCodeAt(i) === 10) line++;
@@ -305,12 +334,19 @@ function computeLineNumber(source, offset) {
 
 // More precise regex for verification to capture exact positions
 // Use functions to create fresh regex instances
-const createVerifyStaticRe = () =>
+const createVerifyStaticRe = (): RegExp =>
   /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](?<spec1>[^"']+)["']|\bimport\s*["'](?<spec2>[^"']+)["']/g;
-const createVerifyDynamicRe = () => /\bimport\s*\(\s*["'](?<spec>[^"']+)["']\s*\)/g;
+const createVerifyDynamicRe = (): RegExp => /\bimport\s*\(\s*["'](?<spec>[^"']+)["']\s*\)/g;
 
-function scanFileForIssues(filePath) {
-  let content;
+interface Issue {
+  filePath: string;
+  line: number;
+  kind: string;
+  specifier: string;
+}
+
+function scanFileForIssues(filePath: string): Issue[] {
+  let content: string;
   try {
     content = fs.readFileSync(filePath, "utf8");
   } catch {
@@ -322,7 +358,7 @@ function scanFileForIssues(filePath) {
     " ".repeat(match.length)
   );
 
-  const issues = [];
+  const issues: Issue[] = [];
 
   // Check static imports/exports
   for (const match of contentWithoutCodeBlocks.matchAll(createVerifyStaticRe())) {
@@ -357,11 +393,11 @@ function scanFileForIssues(filePath) {
   return issues;
 }
 
-function verifyEsmSpecifiers(dir) {
+function verifyEsmSpecifiers(dir: string): boolean {
   console.log(`Verifying ESM specifiers in ${toPosixPath(dir)}...`);
   const files = walkDir(dir, name => name.endsWith(".js") || name.endsWith(".d.ts"));
 
-  let issues = [];
+  let issues: Issue[] = [];
   for (const file of files) {
     issues = issues.concat(scanFileForIssues(file));
   }

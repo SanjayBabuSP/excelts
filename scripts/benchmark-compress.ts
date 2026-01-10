@@ -16,7 +16,12 @@ const DEFAULT_MARGIN = 0.05;
 
 const sizes = [256, 1024, 8 * 1024, 32 * 1024, 128 * 1024, 512 * 1024, 2 * 1024 * 1024];
 
-const patterns = [
+interface Pattern {
+  name: string;
+  make: (size: number) => Uint8Array;
+}
+
+const patterns: Pattern[] = [
   { name: "repeat", make: makeRepeating },
   { name: "pseudo-random", make: makePseudoRandom }
 ];
@@ -25,7 +30,7 @@ const runs = Number.parseInt(process.env.BENCH_RUNS ?? "50", 10);
 const warmupRuns = Number.parseInt(process.env.BENCH_WARMUP ?? "10", 10);
 const margin = Number.parseFloat(process.env.BENCH_MARGIN ?? String(DEFAULT_MARGIN));
 
-function resolveSizes() {
+function resolveSizes(): number[] {
   const raw = process.env.BENCH_SIZES;
   if (!raw) return sizes;
   return raw
@@ -34,14 +39,14 @@ function resolveSizes() {
     .filter(n => Number.isFinite(n) && n > 0);
 }
 
-function makeRepeating(size) {
+function makeRepeating(size: number): Uint8Array {
   const out = new Uint8Array(size);
   const text = new TextEncoder().encode("EXCELTS".repeat(64));
   for (let i = 0; i < out.length; i++) out[i] = text[i % text.length];
   return out;
 }
 
-function makePseudoRandom(size) {
+function makePseudoRandom(size: number): Uint8Array {
   const out = new Uint8Array(size);
   let x = 0x12345678;
   for (let i = 0; i < out.length; i++) {
@@ -54,45 +59,60 @@ function makePseudoRandom(size) {
   return out;
 }
 
-function fmtMs(ms) {
+function fmtMs(ms: number): string {
   return `${ms.toFixed(3)}ms`;
 }
 
-function fmtMBps(bytes, ms) {
+function fmtMBps(bytes: number, ms: number): string {
   const sec = ms / 1000;
   if (sec === 0) return "∞";
   return `${(bytes / 1024 / 1024 / sec).toFixed(1)} MB/s`;
 }
 
-async function timeAsync(fn, iters) {
+async function timeAsync(fn: () => Promise<unknown>, iters: number): Promise<number> {
   const t0 = performance.now();
   for (let i = 0; i < iters; i++) await fn();
   return performance.now() - t0;
 }
 
-function timeSync(fn, iters) {
+function timeSync(fn: () => unknown, iters: number): number {
   const t0 = performance.now();
   for (let i = 0; i < iters; i++) fn();
   return performance.now() - t0;
 }
 
-function gcIfAvailable() {
+function gcIfAvailable(): void {
   // `node --expose-gc` enables this (we use it in the npm script).
   if (typeof globalThis.gc === "function") globalThis.gc();
 }
 
-function findCrossoverBytes(rows, syncKey, asyncKey, marginRatio) {
+interface BenchmarkRow {
+  size: number;
+  cSync: number;
+  cAsync: number;
+  cAuto: number;
+  dSync: number;
+  dAsync: number;
+  dAuto: number;
+}
+
+function findCrossoverBytes(
+  rows: BenchmarkRow[],
+  syncKey: keyof BenchmarkRow,
+  asyncKey: keyof BenchmarkRow,
+  marginRatio: number
+): number | null {
   // Return the smallest size where async is clearly faster than sync.
   // We use a small margin to reduce noise-driven flips.
   for (const r of rows) {
-    const syncMs = r[syncKey];
-    const asyncMs = r[asyncKey];
+    const syncMs = r[syncKey] as number;
+    const asyncMs = r[asyncKey] as number;
     if (asyncMs <= syncMs * (1 - marginRatio)) return r.size;
   }
   return null;
 }
 
-async function run() {
+async function run(): Promise<void> {
   console.log("\n=== compress/decompress benchmark (Node) ===");
   console.log(`level=${DEFAULT_LEVEL}, thresholdBytes(default)=${DEFAULT_THRESHOLD_BYTES}`);
   console.log(
@@ -104,8 +124,7 @@ async function run() {
   for (const pattern of patterns) {
     console.log(`\n--- pattern: ${pattern.name} ---`);
 
-    /** @type {Array<{ size: number, cSync: number, cAsync: number, cAuto: number, dSync: number, dAsync: number, dAuto: number }>} */
-    const rows = [];
+    const rows: BenchmarkRow[] = [];
 
     for (const size of resolvedSizes) {
       const data = pattern.make(size);

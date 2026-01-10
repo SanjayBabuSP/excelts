@@ -7,7 +7,7 @@ import path from "node:path";
 
 const projectRoot = process.cwd();
 
-function readArg(name) {
+function readArg(name: string): string | null {
   const argv = process.argv;
   const idx = argv.indexOf(name);
   if (idx === -1) {
@@ -16,7 +16,7 @@ function readArg(name) {
   return argv[idx + 1] ?? null;
 }
 
-function resolveDirArg(value) {
+function resolveDirArg(value: string | null): string | null {
   if (!value || typeof value !== "string") {
     return null;
   }
@@ -30,12 +30,12 @@ if (!distDir) {
   process.exit();
 }
 
-function toPosixPath(p) {
+function toPosixPath(p: string): string {
   return p.split(path.sep).join("/");
 }
 
-function walk(dir, out = []) {
-  let entries;
+function walk(dir: string, out: string[] = []): string[] {
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
@@ -52,7 +52,15 @@ function walk(dir, out = []) {
   return out;
 }
 
-function preferBrowserSpecifier({ filePath, specifier }) {
+interface PreferBrowserSpecifierOptions {
+  filePath: string;
+  specifier: string;
+}
+
+function preferBrowserSpecifier({
+  filePath,
+  specifier
+}: PreferBrowserSpecifierOptions): string | null {
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
     return null;
   }
@@ -97,7 +105,7 @@ let specifiersRewritten = 0;
 
 const files = walk(distDir);
 for (const filePath of files) {
-  let content;
+  let content: string;
   try {
     content = fs.readFileSync(filePath, "utf8");
   } catch {

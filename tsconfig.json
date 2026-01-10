@@ -25,5 +25,5 @@
     "verbatimModuleSyntax": true,
     "types": ["vitest/globals", "node"]
   },
-  "exclude": ["node_modules", "tmp", "dist", "out"]
+  "exclude": ["node_modules", "tmp", "dist", "out", "scripts/benchmark*.ts"]
 }

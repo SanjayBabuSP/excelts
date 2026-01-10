@@ -3,7 +3,7 @@ import { WorkbookReader } from "../dist/esm/index.js";
 const runs = 3;
 
 await runProfiling("huge xlsx file streams", () => {
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     // Data taken from http://eforexcel.com/wp/downloads-18-sample-csv-files-data-sets-for-testing-sales/
     const workbookReader = new WorkbookReader(
       "./src/modules/excel/stream/__tests__/data/huge.xlsx"
@@ -12,7 +12,7 @@ await runProfiling("huge xlsx file streams", () => {
 
     let worksheetCount = 0;
     let rowCount = 0;
-    workbookReader.on("worksheet", worksheet => {
+    workbookReader.on("worksheet", (worksheet: any) => {
       worksheetCount += 1;
       console.log(`Reading worksheet ${worksheetCount}`);
       worksheet.on("row", () => {
@@ -46,7 +46,7 @@ await runProfiling("huge xlsx file async iteration", async () => {
   console.log(`Processed ${worksheetCount} worksheets and ${rowCount} rows`);
 });
 
-async function runProfiling(name, run) {
+async function runProfiling(name: string, run: () => Promise<void>): Promise<void> {
   console.log("");
   console.log("####################################################");
   console.log(
@@ -85,7 +85,7 @@ async function runProfiling(name, run) {
   }
 }
 
-function currentMemoryUsage({ runGarbageCollector }) {
-  if (runGarbageCollector) global.gc();
+function currentMemoryUsage({ runGarbageCollector }: { runGarbageCollector: boolean }): number {
+  if (runGarbageCollector) global.gc?.();
   return Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 100) / 100;
 }
