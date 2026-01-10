@@ -46,7 +46,7 @@ describe("browser compress benchmark (non-assertive)", () => {
     for (const size of sizes) {
       const data = makeData(size);
       const compressed = await compress(data, { level: 6, thresholdBytes: 1024 * 1024 * 1024 });
-      const decompressed = await decompress(compressed, { thresholdBytes: 1024 * 1024 * 1024 });
+      const decompressed = await decompress(compressed);
       assertBytesEqual(decompressed, data, "js-fallback");
     }
   });
@@ -70,10 +70,7 @@ describe("browser compress benchmark (non-assertive)", () => {
         );
       }
 
-      const decompressed = await withTimeout(
-        decompress(compressed, { thresholdBytes: 0 }),
-        nativeTimeoutMs
-      );
+      const decompressed = await withTimeout(decompress(compressed), nativeTimeoutMs);
       if (!decompressed) {
         throw new Error(
           `native DecompressionStream decompress timed out after ${nativeTimeoutMs}ms (deflate-raw)`
@@ -99,7 +96,7 @@ describe("browser compress benchmark (non-assertive)", () => {
 
         // thresholdBytes=0 would normally prefer native streams, but those are disabled.
         const compressed = await compress(data, { level: 6, thresholdBytes: 0 });
-        const decompressed = await decompress(compressed, { thresholdBytes: 0 });
+        const decompressed = await decompress(compressed);
         assertBytesEqual(decompressed, data, "simulated-old-browser");
       }
     } finally {

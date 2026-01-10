@@ -472,59 +472,62 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // is a valid destination.
     const dest: any = destination as any;
 
-    // Get the actual writable target.
-    // Prefer internal `_writable` (Transform/Duplex wrappers), else treat the destination as writable-like.
-    const candidate: any = dest?._writable ?? dest;
-    const hasWrite = typeof candidate?.write === "function";
-    const hasEnd = typeof candidate?.end === "function";
-    const hasOn = typeof candidate?.on === "function";
-    const hasOnce = typeof candidate?.once === "function";
-    const hasOff = typeof candidate?.off === "function";
+    // For event handling (drain, once, off), we need the object that emits events.
+    // For write/end, we must call the destination's own write()/end() methods,
+    // NOT the internal _writable, because Transform.write() has important logic
+    // (like auto-consume) that _writable.write() bypasses.
+    const eventTarget: any = dest;
 
-    if (!hasWrite || !hasEnd || (!hasOnce && !hasOn) || (!hasOff && !candidate?.removeListener)) {
+    const hasWrite = typeof dest?.write === "function";
+    const hasEnd = typeof dest?.end === "function";
+    const hasOn = typeof eventTarget?.on === "function";
+    const hasOnce = typeof eventTarget?.once === "function";
+    const hasOff = typeof eventTarget?.off === "function";
+
+    if (!hasWrite || !hasEnd || (!hasOnce && !hasOn) || (!hasOff && !eventTarget?.removeListener)) {
       throw new Error("Readable.pipe: invalid destination");
     }
 
-    const target: WritableLike = candidate;
-
-    this._pipeTo.push(target);
+    this._pipeTo.push(dest);
 
     // Create listeners that we can later remove
     const dataListener = (chunk: T): void => {
-      const canWrite = target.write(chunk);
+      // Call destination's write() method (not internal _writable.write())
+      // This ensures Transform.write() logic runs properly
+      const canWrite = dest.write(chunk);
       if (!canWrite) {
         this.pause();
-        if (typeof (target as any).once === "function") {
-          (target as any).once("drain", () => this.resume());
+        if (typeof eventTarget.once === "function") {
+          eventTarget.once("drain", () => this.resume());
         } else {
           const resumeOnce = (): void => {
-            if (typeof (target as any).off === "function") {
-              (target as any).off("drain", resumeOnce);
-            } else if (typeof (target as any).removeListener === "function") {
-              (target as any).removeListener("drain", resumeOnce);
+            if (typeof eventTarget.off === "function") {
+              eventTarget.off("drain", resumeOnce);
+            } else if (typeof eventTarget.removeListener === "function") {
+              eventTarget.removeListener("drain", resumeOnce);
             }
             this.resume();
           };
-          (target as any).on("drain", resumeOnce);
+          eventTarget.on("drain", resumeOnce);
         }
       }
     };
 
     const endListener = (): void => {
-      target.end();
+      dest.end();
     };
 
     const errorListener = (err: Error): void => {
-      if (typeof (target as any).destroy === "function") {
-        (target as any).destroy(err);
+      if (typeof dest.destroy === "function") {
+        dest.destroy(err);
       } else {
         // Best-effort: forward error to the destination if it supports events.
-        (target as any).emit?.("error", err);
+        eventTarget.emit?.("error", err);
       }
     };
 
     // Store listeners for later removal in unpipe
-    this._pipeListeners.set(target, {
+    this._pipeListeners.set(dest, {
       data: dataListener,
       end: endListener,
       error: errorListener
@@ -1987,10 +1990,18 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         for await (const chunk of this._readable) {
           // Buffer the data for later retrieval
           this._autoConsumedBuffer.push(chunk);
+          // Forward to any piped destinations
+          for (const dest of this._pipeDestinations) {
+            dest.write(chunk);
+          }
           // Also emit data event for listeners
           this.emit("data", chunk);
         }
         this._autoConsumeEnded = true;
+        // End all piped destinations
+        for (const dest of this._pipeDestinations) {
+          dest.end();
+        }
         this.emit("end");
       } catch (err) {
         this.emit("error", err);
@@ -2054,14 +2065,42 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     return this._readable.read(size);
   }
 
+  /** @internal - list of piped destinations for forwarding auto-consumed data */
+  private _pipeDestinations: WritableLike[] = [];
+
   /**
    * Pipe to another stream (writable, transform, or duplex)
    */
   pipe<W extends Writable<TOutput> | Transform<TOutput, any> | Duplex<any, TOutput>>(
     destination: W
   ): W {
-    // Mark as having consumer to prevent auto-consume conflict
+    // Mark as having consumer to prevent new auto-consume from starting
     this._hasDataConsumer = true;
+
+    // Get the writable target - handle both Transform (with internal _writable) and plain Writable
+    const dest = destination as any;
+    const target: WritableLike = dest?._writable ?? dest;
+
+    // Register destination for forwarding
+    this._pipeDestinations.push(target);
+
+    // If auto-consume is running or has run, we need to handle buffered data ourselves
+    if (this._readableConsuming) {
+      // Forward any buffered data from auto-consume to the destination
+      for (let i = 0; i < this._autoConsumedBuffer.length; i++) {
+        target.write(this._autoConsumedBuffer[i]!);
+      }
+
+      // If auto-consume has ended, end the destination too
+      if (this._autoConsumeEnded) {
+        target.end();
+      }
+      // Don't call _readable.pipe() - auto-consume already consumed _readable
+      // Future data will be forwarded via the 'data' event listener below
+      return destination;
+    }
+
+    // No auto-consume running - use normal pipe through _readable
     return this._readable.pipe(destination as any) as W;
   }
 

@@ -1,17 +1,25 @@
-import { parseDosDateTimeUTC, resolveZipLastModifiedDateFromUnixSeconds } from "@archive/utils/timestamps";
+import {
+  parseDosDateTimeUTC,
+  resolveZipLastModifiedDateFromUnixSeconds
+} from "@archive/utils/timestamps";
 import {
   Duplex,
   PassThrough,
   Transform,
   concatUint8Arrays,
   pipeline,
+  finished,
   type Readable
 } from "@stream";
 import { parseTyped as parseBuffer } from "@archive/utils/parse-buffer";
 import { ByteQueue } from "@archive/byte-queue";
 import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
 import { readUint32LE, writeUint32LE } from "@archive/utils/binary";
-import { parseZipExtraFields, type ZipExtraFields, type ZipVars } from "@archive/utils/zip-extra-fields";
+import {
+  parseZipExtraFields,
+  type ZipExtraFields,
+  type ZipVars
+} from "@archive/utils/zip-extra-fields";
 import {
   CENTRAL_DIR_HEADER_SIG,
   END_OF_CENTRAL_DIR_SIG,
@@ -736,6 +744,12 @@ export function streamUntilValidatedDataDescriptor(
 export interface ParseOptions {
   verbose?: boolean;
   forceStream?: boolean;
+  /**
+   * Threshold (in bytes) for small file optimization.
+   * Files smaller than this will use sync decompression (no stream overhead).
+   * Default: 5MB
+   */
+  thresholdBytes?: number;
 }
 
 export interface EntryVars {
@@ -797,6 +811,18 @@ export interface ParseEmitter {
 
 export type InflateFactory = () => Transform | Duplex | PassThrough;
 
+/**
+ * Synchronous inflate function type for small file optimization.
+ * When provided and file size is below threshold, this will be used
+ * instead of streaming decompression for better performance.
+ */
+export type InflateRawSync = (data: Uint8Array) => Uint8Array;
+
+/**
+ * Default threshold for small file optimization (8MB).
+ */
+export const DEFAULT_PARSE_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
 const endDirectorySignature = writeUint32LE(END_OF_CENTRAL_DIR_SIG);
 
 export async function runParseLoop(
@@ -804,8 +830,11 @@ export async function runParseLoop(
   io: ParseIO,
   emitter: ParseEmitter,
   inflateFactory: InflateFactory,
-  state: ParseDriverState
+  state: ParseDriverState,
+  inflateRawSync?: InflateRawSync
 ): Promise<void> {
+  const thresholdBytes = opts.thresholdBytes ?? DEFAULT_PARSE_THRESHOLD_BYTES;
+
   while (true) {
     const sigBytes = await io.pull(4);
     if (sigBytes.length === 0) {
@@ -822,7 +851,15 @@ export async function runParseLoop(
     }
 
     if (signature === LOCAL_FILE_HEADER_SIG) {
-      await readFileRecord(opts, io, emitter, inflateFactory, state);
+      await readFileRecord(
+        opts,
+        io,
+        emitter,
+        inflateFactory,
+        state,
+        thresholdBytes,
+        inflateRawSync
+      );
       continue;
     }
 
@@ -861,7 +898,9 @@ async function readFileRecord(
   io: ParseIO,
   emitter: ParseEmitter,
   inflateFactory: InflateFactory,
-  state: ParseDriverState
+  state: ParseDriverState,
+  thresholdBytes: number,
+  inflateRawSync?: InflateRawSync
 ): Promise<void> {
   const {
     vars: headerVars,
@@ -930,6 +969,28 @@ async function readFileRecord(
       vars: vars,
       extraFields: entry.extraFields
     });
+  }
+
+  // Small file optimization: use sync decompression if:
+  // 1. File size is known and below threshold
+  // 2. inflateRawSync is provided
+  // 3. File needs decompression (compressionMethod != 0)
+  // 4. Not autodraining
+  const useSmallFileOptimization =
+    fileSizeKnown &&
+    inflateRawSync &&
+    vars.compressionMethod !== 0 &&
+    !autodraining &&
+    (vars.compressedSize || 0) <= thresholdBytes;
+
+  if (useSmallFileOptimization) {
+    // Read compressed data directly and decompress synchronously
+    const compressedData = await io.pull(vars.compressedSize || 0);
+    const decompressedData = inflateRawSync!(compressedData);
+    entry.end(decompressedData);
+    // Wait for entry stream write to complete (not for read/consume)
+    await finished(entry, { readable: false });
+    return;
   }
 
   const inflater = vars.compressionMethod && !autodraining ? inflateFactory() : new PassThrough();

@@ -88,14 +88,19 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       };
 
       // Parse records as data arrives. Only emit `close` when parsing is complete.
-      runParseLoop(this._opts, io, emitter, createInflateRawFn, this._driverState).catch(
-        (e: Error) => {
-          if (!this.__emittedError || this.__emittedError !== e) {
-            this.emit("error", e);
-          }
-          this.emit("close");
+      runParseLoop(
+        this._opts,
+        io,
+        emitter,
+        createInflateRawFn,
+        this._driverState,
+        (data: Uint8Array) => zlib.inflateRawSync(data)
+      ).catch((e: Error) => {
+        if (!this.__emittedError || this.__emittedError !== e) {
+          this.emit("error", e);
         }
-      );
+        this.emit("close");
+      });
     }
 
     /**

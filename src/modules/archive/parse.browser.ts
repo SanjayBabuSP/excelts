@@ -414,12 +414,16 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       };
 
       queueMicrotask(() => {
+        // NOTE: We intentionally do NOT pass inflateRawSync to runParseLoop in browser.
+        // Browser's native DecompressionStream is faster than our pure-JS fallback,
+        // so we always use the streaming path for decompression in browsers.
         this._parsingDone = runParseLoop(
           this._opts,
           io,
           emitter,
           () => createInflateRawFn(),
           this._driverState
+          // No inflateRawSync - always use streaming DecompressionStream in browser
         );
         this._parsingDone.catch((e: Error) => {
           if (!this.__emittedError || this.__emittedError !== e) {

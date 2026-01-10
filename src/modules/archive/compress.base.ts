@@ -40,6 +40,7 @@ export interface CompressOptions {
  * Default threshold (in bytes) to choose the lower-overhead path.
  *
  * This is a performance knob, not a correctness requirement.
+ * Default: 8MB.
  */
 export const DEFAULT_COMPRESS_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
