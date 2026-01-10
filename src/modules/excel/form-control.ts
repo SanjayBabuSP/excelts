@@ -70,6 +70,8 @@ export interface FormCheckboxModel {
   shapeId: number;
   /** Control property ID (rId in relationships) */
   ctrlPropId: number;
+  /** Relationship id (e.g., rId5) in sheet rels for ctrlProp (set during XLSX prepare) */
+  ctrlPropRelId?: string;
   /** Top-left anchor */
   tl: FormControlAnchor;
   /** Bottom-right anchor */
@@ -216,25 +218,62 @@ class FormCheckbox {
     let br: FormControlAnchor;
 
     if (typeof range === "string") {
-      // Parse cell reference like "B2" or "B2:D3"
-      const decoded = colCache.decode(range);
+      // Parse cell reference like "B2" or range like "B2:D3"
+      const isRange = range.includes(":");
 
-      if ("top" in decoded) {
-        // It's a range like "B2:D3"
-        tl = {
-          col: decoded.left - 1, // Convert to 0-based
-          colOff: DEFAULT_COL_OFF,
-          row: decoded.top - 1,
-          rowOff: DEFAULT_ROW_OFF
-        };
-        br = {
-          col: decoded.right - 1,
-          colOff: DEFAULT_END_COL_OFF,
-          row: decoded.bottom - 1,
-          rowOff: DEFAULT_END_ROW_OFF
-        };
+      if (isRange) {
+        const decoded = colCache.decode(range);
+
+        if ("top" in decoded) {
+          // Treat 1-cell ranges (e.g., "J4:J4") as a single cell with default checkbox size.
+          if (decoded.left === decoded.right && decoded.top === decoded.bottom) {
+            const col = decoded.left - 1;
+            const row = decoded.top - 1;
+            tl = {
+              col,
+              colOff: DEFAULT_COL_OFF,
+              row,
+              rowOff: DEFAULT_ROW_OFF
+            };
+            br = {
+              col: col + 2,
+              colOff: DEFAULT_END_COL_OFF,
+              row: row + 1,
+              rowOff: DEFAULT_END_ROW_OFF
+            };
+          } else {
+            // Regular range
+            tl = {
+              col: decoded.left - 1, // Convert to 0-based
+              colOff: DEFAULT_COL_OFF,
+              row: decoded.top - 1,
+              rowOff: DEFAULT_ROW_OFF
+            };
+            br = {
+              col: decoded.right - 1,
+              colOff: DEFAULT_END_COL_OFF,
+              row: decoded.bottom - 1,
+              rowOff: DEFAULT_END_ROW_OFF
+            };
+          }
+        } else {
+          // Defensive fallback: if the cache returns an address, treat it like a single-cell ref.
+          tl = {
+            col: decoded.col - 1,
+            colOff: DEFAULT_COL_OFF,
+            row: decoded.row - 1,
+            rowOff: DEFAULT_ROW_OFF
+          };
+          br = {
+            col: decoded.col + 1,
+            colOff: DEFAULT_END_COL_OFF,
+            row: decoded.row,
+            rowOff: DEFAULT_END_ROW_OFF
+          };
+        }
       } else {
         // Single cell reference - create default size checkbox
+        const decoded = colCache.decodeAddress(range);
         tl = {
           col: decoded.col - 1,
           colOff: DEFAULT_COL_OFF,

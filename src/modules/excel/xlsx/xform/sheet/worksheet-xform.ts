@@ -333,8 +333,10 @@ class WorkSheetXform extends BaseXform {
       for (const control of model.formControls) {
         const globalCtrlPropId = options.formControlRefs.length + 1;
         control.ctrlPropId = globalCtrlPropId;
+        const relId = nextRid(rels);
+        control.ctrlPropRelId = relId;
         rels.push({
-          Id: nextRid(rels),
+          Id: relId,
           Type: RelType.CtrlProp,
           Target: ctrlPropRelTargetFromWorksheet(globalCtrlPropId)
         });
@@ -405,16 +407,29 @@ class WorkSheetXform extends BaseXform {
     this.map.picture.render(xmlStream, model.background); // Note: must be after drawing
     this.map.tableParts.render(xmlStream, model.tables);
 
-    this.map.extLst.render(xmlStream, model);
+    // Controls section for legacy form controls (checkboxes, etc.)
+    // Excel expects <controls> entries that reference ctrlProp relationships.
+    if (model.formControls && model.formControls.length > 0) {
+      xmlStream.openNode("controls");
+      for (const control of model.formControls) {
+        if (control.ctrlPropRelId) {
+          xmlStream.leafNode("control", { shapeId: control.shapeId, "r:id": control.ctrlPropRelId });
+        }
+      }
+      xmlStream.closeNode();
+    }
 
     if (model.rels) {
-      // add a <legacyDrawing /> node for each comment
+      // Add a <legacyDrawing /> node for each VML drawing relationship (comments and/or form controls).
       model.rels.forEach(rel => {
         if (rel.Type === RelType.VmlDrawing) {
           xmlStream.leafNode("legacyDrawing", { "r:id": rel.Id });
         }
       });
     }
+
+    // extLst should be the last element in the worksheet.
+    this.map.extLst.render(xmlStream, model);
 
     xmlStream.closeNode();
   }
