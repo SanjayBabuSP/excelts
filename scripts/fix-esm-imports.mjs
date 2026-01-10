@@ -56,12 +56,6 @@ function hasExtension(specifier) {
   return Boolean(path.posix.extname(specifier));
 }
 
-function hasJsOrJsonExtension(specifier) {
-  return (
-    specifier.endsWith(".js") || specifier.endsWith(".json") || specifier.endsWith("/index.js")
-  );
-}
-
 /**
  * Walk directory and collect files matching filter
  */
