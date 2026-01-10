@@ -747,6 +747,11 @@ export interface ParseOptions {
   /**
    * Threshold (in bytes) for small file optimization.
    * Files smaller than this will use sync decompression (no stream overhead).
+   *
+   * Note: the optimization is only applied when the entry sizes are trusted
+   * (i.e. no data descriptor) and BOTH compressedSize and uncompressedSize
+   * are below this threshold. This avoids buffering huge highly-compressible
+   * files (e.g. large XML) in memory, which would defeat streaming.
    * Default: 5MB
    */
   thresholdBytes?: number;
@@ -819,9 +824,9 @@ export type InflateFactory = () => Transform | Duplex | PassThrough;
 export type InflateRawSync = (data: Uint8Array) => Uint8Array;
 
 /**
- * Default threshold for small file optimization (8MB).
+ * Default threshold for small file optimization (5MB).
  */
-export const DEFAULT_PARSE_THRESHOLD_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_PARSE_THRESHOLD_BYTES = 5 * 1024 * 1024;
 
 const endDirectorySignature = writeUint32LE(END_OF_CENTRAL_DIR_SIG);
 
@@ -972,20 +977,31 @@ async function readFileRecord(
   }
 
   // Small file optimization: use sync decompression if:
-  // 1. File size is known and below threshold
-  // 2. inflateRawSync is provided
-  // 3. File needs decompression (compressionMethod != 0)
-  // 4. Not autodraining
+  // 1. Entry sizes are trusted (no data descriptor)
+  // 2. File size is known and below threshold
+  // 3. inflateRawSync is provided
+  // 4. File needs decompression (compressionMethod != 0)
+  // 5. Not autodraining
+  //
+  // We require BOTH compressedSize and uncompressedSize <= thresholdBytes.
+  // This prevents materializing large highly-compressible files in memory,
+  // which can cause massive peak RSS and negate streaming backpressure.
+  const sizesTrusted = !hasDataDescriptorFlag(vars.flags);
+  const compressedSize = vars.compressedSize || 0;
+  const uncompressedSize = vars.uncompressedSize || 0;
+
   const useSmallFileOptimization =
+    sizesTrusted &&
     fileSizeKnown &&
     inflateRawSync &&
     vars.compressionMethod !== 0 &&
     !autodraining &&
-    (vars.compressedSize || 0) <= thresholdBytes;
+    compressedSize <= thresholdBytes &&
+    uncompressedSize <= thresholdBytes;
 
   if (useSmallFileOptimization) {
     // Read compressed data directly and decompress synchronously
-    const compressedData = await io.pull(vars.compressedSize || 0);
+    const compressedData = await io.pull(compressedSize);
     const decompressedData = inflateRawSync!(compressedData);
     entry.end(decompressedData);
     // Wait for entry stream write to complete (not for read/consume)
