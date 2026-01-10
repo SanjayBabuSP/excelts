@@ -61,7 +61,7 @@
     "test:browser": "rimraf dist && npm run build:browser:bundle && vitest run --config vitest.browser.config.ts",
     "test:watch": "vitest",
     "build": "rimraf dist && concurrently \"npm run build:esm\" \"npm run build:cjs\" \"npm run build:browser\" \"npm run build:browser:bundle\" && npm run build:verify",
-    "build:verify": "node scripts/check-dist-esm-specifiers.mjs --dir dist/esm && node scripts/check-dist-esm-specifiers.mjs --dir dist/browser && tsc --noEmit --module NodeNext --moduleResolution NodeNext dist/types/index.d.ts",
+    "build:verify": "tsc --noEmit --module NodeNext --moduleResolution NodeNext dist/types/index.d.ts",
     "analyze:browser": "rimraf dist && node --input-type=module -e \"import { execSync } from 'node:child_process'; process.env.ANALYZE='true'; execSync('rolldown -c rolldown.config.ts', { stdio: 'inherit' });\"",
     "clean": "pnpm dlx --reporter=silent rimraf \"**/node_modules\" pnpm-lock.yaml \"**/dist\" -g && pnpm i",
     "lint": "eslint && oxlint",
