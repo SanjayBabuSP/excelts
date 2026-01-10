@@ -11,22 +11,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 
-// Our archive module
-import {
-  createZip,
-  createZipSync,
-  ZipBuilder,
-  StreamingZip,
-  ZipDeflateFile,
-  type ZipEntry
-} from "../src/modules/archive/index.js";
+// Our archive module (import directly from source files to avoid relying on tsconfig path aliases)
+import { createZip, createZipSync, ZipBuilder, type ZipEntry } from "../src/modules/archive/zip-builder.ts";
+import { StreamingZip, ZipDeflateFile } from "../src/modules/archive/streaming-zip.ts";
 
 // archiver - install with: pnpm add -D archiver @types/archiver
 import archiver from "archiver";
 
-// Configuration
-const WARMUP_RUNS = 3;
-const BENCHMARK_RUNS = 10;
+// Configuration (override via env for quick local runs)
+const WARMUP_RUNS = Number(process.env.WARMUP_RUNS ?? 3);
+const BENCHMARK_RUNS = Number(process.env.BENCHMARK_RUNS ?? 10);
+const ONLY_SCENARIO = (process.env.ONLY_SCENARIO ?? "").trim();
 
 // Test data - simulate S3 folder with multiple files
 interface TestFile {
@@ -138,7 +133,7 @@ async function benchmarkCreateZip(
     data: f.data
   }));
 
-  const zipBuffer = await createZip(entries, { level });
+  const zipBuffer = await createZip(entries, { level } as any);
 
   const time = performance.now() - start;
   return { time, outputSize: zipBuffer.length };
@@ -156,7 +151,7 @@ function benchmarkCreateZipSync(
     data: f.data
   }));
 
-  const zipBuffer = createZipSync(entries, { level });
+  const zipBuffer = createZipSync(entries, { level } as any);
 
   const time = performance.now() - start;
   return { time, outputSize: zipBuffer.length };
@@ -169,7 +164,7 @@ async function benchmarkZipBuilder(
 ): Promise<{ time: number; outputSize: number }> {
   const start = performance.now();
 
-  const builder = new ZipBuilder({ level });
+  const builder = new ZipBuilder({ level } as any);
   const chunks: Uint8Array[] = [];
 
   for (const file of files) {
@@ -264,6 +259,9 @@ async function runBenchmark(
 }
 
 async function runScenario(scenarioName: string, files: TestFile[], level: number): Promise<void> {
+  if (ONLY_SCENARIO && !scenarioName.toLowerCase().includes(ONLY_SCENARIO.toLowerCase())) {
+    return;
+  }
   const inputSize = files.reduce((sum, f) => sum + f.data.length, 0);
 
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -344,10 +342,22 @@ async function runScenario(scenarioName: string, files: TestFile[], level: numbe
     );
   }
 
-  // Compression ratio
-  const compressionRatio = (inputSize / archiverResult.outputSize).toFixed(2);
+  // Compression ratio (report per method to avoid confusion)
+  const ratio = (out: number): string => (inputSize / Math.max(1, out)).toFixed(2);
   console.log(
-    `  📦 Compression ratio: ${compressionRatio}x (${formatBytes(inputSize)} → ${formatBytes(archiverResult.outputSize)})`
+    `  📦 Compression ratio (archiver): ${ratio(archiverResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(archiverResult.outputSize)})`
+  );
+  console.log(
+    `  📦 Compression ratio (StreamingZip): ${ratio(streamingZipResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(streamingZipResult.outputSize)})`
+  );
+  console.log(
+    `  📦 Compression ratio (createZip): ${ratio(createZipResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(createZipResult.outputSize)})`
+  );
+  console.log(
+    `  📦 Compression ratio (createZipSync): ${ratio(createZipSyncResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(createZipSyncResult.outputSize)})`
+  );
+  console.log(
+    `  📦 Compression ratio (ZipBuilder): ${ratio(zipBuilderResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(zipBuilderResult.outputSize)})`
   );
   console.log();
 }
@@ -361,6 +371,9 @@ async function main() {
   console.log(`Configuration:`);
   console.log(`  Warmup runs: ${WARMUP_RUNS}`);
   console.log(`  Benchmark runs: ${BENCHMARK_RUNS}`);
+  if (ONLY_SCENARIO) {
+    console.log(`  Only scenario filter: ${ONLY_SCENARIO}`);
+  }
   console.log();
 
   // Scenario 1: Small files (like S3 folder download scenario)
