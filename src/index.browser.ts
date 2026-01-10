@@ -107,5 +107,10 @@ export {
   compress,
   compressSync,
   decompress,
-  decompressSync
+  decompressSync,
+  // Streaming ZIP parser
+  Parse,
+  createParse,
+  type ParseOptions,
+  type StreamZipEntry
 } from "@archive/index.browser";

@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Our archive module
-import { ZipParser, extractAll, forEachEntry } from "../src/modules/archive/index.js";
+import { ZipParser, extractAll, forEachEntry, createParse, type ZipEntry as StreamZipEntry } from "../src/modules/archive/index.js";
 
 // AdmZip - install with: pnpm add -D adm-zip @types/adm-zip
 import AdmZip from "adm-zip";
@@ -26,6 +26,31 @@ const TEST_FILES = [
   "./src/modules/excel/__tests__/data/gold.xlsx",
   "./src/modules/excel/stream/__tests__/data/huge.xlsx"
 ].filter(f => fs.existsSync(f));
+
+// Import createZipSync to generate large test ZIP files
+import { createZipSync, type ZipEntry } from "../src/modules/archive/index.js";
+
+// Generate a large ZIP buffer for testing
+function generateLargeZipBuffer(totalSizeMB: number, fileCount: number): Buffer {
+  const sizePerFile = Math.floor((totalSizeMB * 1024 * 1024) / fileCount);
+  const entries: ZipEntry[] = [];
+  const encoder = new TextEncoder();
+  const text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100);
+
+  for (let i = 0; i < fileCount; i++) {
+    let content = "";
+    while (content.length < sizePerFile) {
+      content += text + `\n--- File ${i}, Block ${content.length} ---\n`;
+    }
+    entries.push({
+      name: `document_${i.toString().padStart(3, "0")}.txt`,
+      data: encoder.encode(content.slice(0, sizePerFile))
+    });
+  }
+
+  const zipData = createZipSync(entries, { level: 6 });
+  return Buffer.from(zipData);
+}
 
 interface BenchmarkResult {
   name: string;
@@ -155,6 +180,38 @@ async function benchmarkForEachEntry(
   return { time, entriesCount };
 }
 
+// Streaming API benchmark using createParse
+async function benchmarkCreateParse(
+  buffer: Uint8Array
+): Promise<{ time: number; entriesCount: number }> {
+  const start = performance.now();
+
+  return new Promise((resolve, reject) => {
+    const parse = createParse();
+    let entriesCount = 0;
+
+    parse.on("entry", async (entry: StreamZipEntry) => {
+      if (!entry.isDirectory) {
+        // Get decompressed buffer using streaming
+        const _data = await entry.buffer();
+        entriesCount++;
+      } else {
+        entry.autodrain();
+      }
+    });
+
+    parse.on("close", () => {
+      const time = performance.now() - start;
+      resolve({ time, entriesCount });
+    });
+
+    parse.on("error", reject);
+
+    // Feed data to the stream
+    parse.end(buffer);
+  });
+}
+
 async function runBenchmark(
   name: string,
   filePath: string,
@@ -246,13 +303,20 @@ async function main() {
       buffer,
       benchmarkForEachEntry
     );
+    const createParseResult = await runBenchmark(
+      "createParse (stream)",
+      filePath,
+      buffer,
+      benchmarkCreateParse
+    );
 
     allResults.push(
       admZipResult,
       zipParserResult,
       zipParserSyncResult,
       extractAllResult,
-      forEachResult
+      forEachResult,
+      createParseResult
     );
 
     // Print results table
@@ -265,7 +329,8 @@ async function main() {
       zipParserResult,
       zipParserSyncResult,
       extractAllResult,
-      forEachResult
+      forEachResult,
+      createParseResult
     ];
     for (const r of results) {
       const name = r.name.padEnd(19);
@@ -323,6 +388,81 @@ async function main() {
     console.log(
       `  📊 Overall: ZipParser is ${(1 / overallSpeedup).toFixed(2)}x slower than AdmZip`
     );
+  }
+
+  // Run large file benchmarks
+  console.log();
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`LARGE FILE TESTS (20MB)`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+
+  // Test 1: Single 20MB file
+  console.log();
+  console.log(`Generating 20MB ZIP (1 file)...`);
+  const largeBuffer1 = generateLargeZipBuffer(20, 1);
+  console.log(`  Generated ZIP size: ${formatBytes(largeBuffer1.length)}`);
+  await runLargeFileBenchmark("20MB (1 file)", largeBuffer1);
+
+  // Test 2: 20MB split into 4 files
+  console.log();
+  console.log(`Generating 20MB ZIP (4 files)...`);
+  const largeBuffer4 = generateLargeZipBuffer(20, 4);
+  console.log(`  Generated ZIP size: ${formatBytes(largeBuffer4.length)}`);
+  await runLargeFileBenchmark("20MB (4 files)", largeBuffer4);
+
+  // Test 3: 20MB split into 10 files
+  console.log();
+  console.log(`Generating 20MB ZIP (10 files)...`);
+  const largeBuffer10 = generateLargeZipBuffer(20, 10);
+  console.log(`  Generated ZIP size: ${formatBytes(largeBuffer10.length)}`);
+  await runLargeFileBenchmark("20MB (10 files)", largeBuffer10);
+}
+
+async function runLargeFileBenchmark(name: string, buffer: Buffer): Promise<void> {
+  console.log(`  Testing: ${name}`);
+
+  const admZipResult = await runBenchmark("AdmZip", name, buffer, benchmarkAdmZip);
+  const zipParserSyncResult = await runBenchmark(
+    "ZipParser (sync)",
+    name,
+    buffer,
+    benchmarkZipParserSync
+  );
+  const zipParserResult = await runBenchmark("ZipParser (async)", name, buffer, benchmarkZipParser);
+  const createParseResult = await runBenchmark(
+    "createParse (stream)",
+    name,
+    buffer,
+    benchmarkCreateParse
+  );
+
+  console.log(`  ┌──────────────────────┬────────────┬────────────┬────────────┬─────────┐`);
+  console.log(`  │ Method               │ Avg Time   │ Min Time   │ Max Time   │ Entries │`);
+  console.log(`  ├──────────────────────┼────────────┼────────────┼────────────┼─────────┤`);
+
+  for (const r of [admZipResult, zipParserSyncResult, zipParserResult, createParseResult]) {
+    const rname = r.name.padEnd(20);
+    const avg = formatMs(r.avgTime).padStart(10);
+    const min = formatMs(r.minTime).padStart(10);
+    const max = formatMs(r.maxTime).padStart(10);
+    const entries = String(r.entriesCount).padStart(7);
+    console.log(`  │ ${rname} │ ${avg} │ ${min} │ ${max} │ ${entries} │`);
+  }
+
+  console.log(`  └──────────────────────┴────────────┴────────────┴────────────┴─────────┘`);
+
+  const speedup = admZipResult.avgTime / zipParserSyncResult.avgTime;
+  if (speedup > 1) {
+    console.log(`  ✅ ZipParser (sync) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
+  } else {
+    console.log(`  ⚠️  ZipParser (sync) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
+  }
+
+  const streamSpeedup = admZipResult.avgTime / createParseResult.avgTime;
+  if (streamSpeedup > 1) {
+    console.log(`  ✅ createParse (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
+  } else {
+    console.log(`  ⚠️  createParse (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`);
   }
 }
 
