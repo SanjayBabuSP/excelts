@@ -464,6 +464,13 @@ async function runLargeFileBenchmark(name: string, buffer: Buffer): Promise<void
     console.log(`  ⚠️  ZipParser (sync) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
   }
 
+  const asyncSpeedup = admZipResult.avgTime / zipParserResult.avgTime;
+  if (asyncSpeedup > 1) {
+    console.log(`  ✅ ZipParser (async) is ${asyncSpeedup.toFixed(2)}x FASTER than AdmZip`);
+  } else {
+    console.log(`  ⚠️  ZipParser (async) is ${(1 / asyncSpeedup).toFixed(2)}x slower than AdmZip`);
+  }
+
   const streamSpeedup = admZipResult.avgTime / createParseResult.avgTime;
   if (streamSpeedup > 1) {
     console.log(`  ✅ createParse (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
