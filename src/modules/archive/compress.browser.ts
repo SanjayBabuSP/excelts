@@ -16,8 +16,7 @@ import {
   compressWithStream,
   decompressWithStream,
   hasDeflateRawCompressionStream,
-  hasDeflateRawDecompressionStream,
-  resolveCompressThresholdBytes
+  hasDeflateRawDecompressionStream
 } from "@archive/compress.base";
 import { inflateRaw, deflateRawCompressed } from "@archive/deflate-fallback";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
@@ -38,6 +37,9 @@ export function hasCompressionStream(): boolean {
 /**
  * Compress data using browser's native CompressionStream or JS fallback
  *
+ * Note: We always prefer native CompressionStream when available because
+ * it's significantly faster than pure JS implementation.
+ *
  * @param data - Data to compress
  * @param options - Compression options
  * @returns Compressed data
@@ -53,19 +55,18 @@ export async function compress(
   options: CompressOptions = {}
 ): Promise<Uint8Array> {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  const thresholdBytes = resolveCompressThresholdBytes(options);
 
   // Level 0 means no compression
   if (level === 0) {
     return data;
   }
 
-  // Use native CompressionStream only for larger inputs.
-  if (hasDeflateRawCompressionStream() && data.byteLength > thresholdBytes) {
+  // Always use native CompressionStream when available - it's much faster than JS
+  if (hasDeflateRawCompressionStream()) {
     return compressWithStream(data);
   }
 
-  // Fallback to pure JS implementation
+  // Fallback to pure JS implementation only when native is unavailable
   return deflateRawCompressed(data);
 }
 
@@ -91,21 +92,20 @@ export function compressSync(data: Uint8Array, options: CompressOptions = {}): U
 /**
  * Decompress data using browser's native DecompressionStream or JS fallback
  *
+ * Note: We always prefer native DecompressionStream when available because
+ * it's significantly faster than pure JS implementation, regardless of data size.
+ * The threshold is only useful for compression where the overhead matters more.
+ *
  * @param data - Compressed data (deflate-raw format)
  * @returns Decompressed data
  */
-export async function decompress(
-  data: Uint8Array,
-  options: CompressOptions = {}
-): Promise<Uint8Array> {
-  const thresholdBytes = resolveCompressThresholdBytes(options);
-
-  // Use native DecompressionStream only for larger inputs.
-  if (hasDeflateRawDecompressionStream() && data.byteLength > thresholdBytes) {
+export async function decompress(data: Uint8Array): Promise<Uint8Array> {
+  // Always use native DecompressionStream when available - it's much faster than JS
+  if (hasDeflateRawDecompressionStream()) {
     return decompressWithStream(data);
   }
 
-  // Fallback to pure JS implementation
+  // Fallback to pure JS implementation only when native is unavailable
   return inflateRaw(data);
 }
 
