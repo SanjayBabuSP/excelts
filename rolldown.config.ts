@@ -24,10 +24,11 @@ const commonConfig = {
 const copyLicensePlugin = {
   name: "copy-license",
   writeBundle() {
-    if (!fs.existsSync("./dist")) {
-      fs.mkdirSync("./dist", { recursive: true });
+    if (!fs.existsSync("./dist/iife")) {
+      fs.mkdirSync("./dist/iife", { recursive: true });
     }
-    fs.copyFileSync("./LICENSE", "./dist/LICENSE");
+    fs.copyFileSync("./LICENSE", "./dist/iife/LICENSE");
+    fs.copyFileSync("./THIRD_PARTY_NOTICES.md", "./dist/iife/THIRD_PARTY_NOTICES.md");
   }
 };
 
