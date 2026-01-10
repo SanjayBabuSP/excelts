@@ -21,7 +21,9 @@ const RelType = {
   PivotCacheRecords:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords",
   PivotTable: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable",
-  FeaturePropertyBag: "http://schemas.microsoft.com/office/2022/11/relationships/FeaturePropertyBag"
+  FeaturePropertyBag:
+    "http://schemas.microsoft.com/office/2022/11/relationships/FeaturePropertyBag",
+  CtrlProp: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp"
 };
 
 export { RelType };

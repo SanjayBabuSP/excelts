@@ -7,6 +7,12 @@ import { Enums } from "@excel/enums";
 import { Image, type ImageModel } from "@excel/image";
 import { Table, type TableModel } from "@excel/table";
 import { DataValidations } from "@excel/data-validations";
+import {
+  FormCheckbox,
+  type FormCheckboxModel,
+  type FormCheckboxOptions,
+  type FormControlRange
+} from "@excel/form-control";
 import { Encryptor } from "@excel/utils/encryptor";
 import { uint8ArrayToBase64 } from "@utils/utils";
 import { makePivotTable, type PivotTable, type PivotTableModel } from "@excel/pivot-table";
@@ -127,6 +133,7 @@ interface WorksheetModel {
   tables: TableModel[];
   pivotTables: PivotTable[];
   conditionalFormattings: ConditionalFormattingOptions[];
+  formControls: FormCheckboxModel[];
   cols?: ColumnModel[];
   rows?: RowModel[];
   dimensions?: Range;
@@ -164,6 +171,7 @@ class Worksheet {
   declare public tables: { [key: string]: Table };
   declare public pivotTables: PivotTable[];
   declare public conditionalFormattings: ConditionalFormattingOptions[];
+  declare public formControls: FormCheckbox[];
   declare private _headerRowCount?: number;
 
   constructor(options: WorksheetOptions) {
@@ -275,6 +283,9 @@ class Worksheet {
     this.pivotTables = [];
 
     this.conditionalFormattings = [];
+
+    // for form controls (legacy checkboxes, etc.)
+    this.formControls = [];
   }
 
   get name(): string {
@@ -1015,6 +1026,46 @@ class Worksheet {
   }
 
   // =========================================================================
+  // Form Controls (Legacy Checkboxes)
+
+  /**
+   * Add a form control checkbox to the worksheet.
+   *
+   * Form control checkboxes are the legacy style that work in Office 2007+,
+   * WPS Office, LibreOffice, and other spreadsheet applications.
+   *
+   * Unlike modern in-cell checkboxes (which only work in Microsoft 365),
+   * form control checkboxes are floating controls positioned over cells.
+   *
+   * @param range - Cell reference (e.g., "B2") or range (e.g., "B2:D3") for positioning
+   * @param options - Checkbox options
+   * @returns The created FormCheckbox instance
+   *
+   * @example
+   * // Simple checkbox at B2
+   * ws.addFormCheckbox("B2");
+   *
+   * // Checkbox with label and linked cell
+   * ws.addFormCheckbox("B2:D3", {
+   *   text: "Accept terms",
+   *   link: "A2",
+   *   checked: false
+   * });
+   */
+  addFormCheckbox(range: FormControlRange, options?: FormCheckboxOptions): FormCheckbox {
+    const checkbox = new FormCheckbox(this, range, options);
+    this.formControls.push(checkbox);
+    return checkbox;
+  }
+
+  /**
+   * Get all form control checkboxes in the worksheet
+   */
+  getFormCheckboxes(): FormCheckbox[] {
+    return this.formControls;
+  }
+
+  // =========================================================================
   // Worksheet Protection
 
   /**
@@ -1149,7 +1200,8 @@ class Worksheet {
       sheetProtection: this.sheetProtection,
       tables: Object.values(this.tables).map(table => table.model),
       pivotTables: this.pivotTables,
-      conditionalFormattings: this.conditionalFormattings
+      conditionalFormattings: this.conditionalFormattings,
+      formControls: this.formControls.map(fc => fc.model)
     };
 
     // =================================================
@@ -1223,6 +1275,8 @@ class Worksheet {
     }, {});
     this.pivotTables = value.pivotTables;
     this.conditionalFormattings = value.conditionalFormattings;
+    // Form controls are currently write-only (not parsed from XLSX)
+    this.formControls = [];
   }
 }
 

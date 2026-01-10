@@ -31,7 +31,9 @@ import {
   type ParsedPivotTableModel
 } from "@excel/xlsx/xform/pivot-table/pivot-table-xform";
 import { CommentsXform } from "@excel/xlsx/xform/comment/comments-xform";
-import { VmlNotesXform } from "@excel/xlsx/xform/comment/vml-notes-xform";
+import { VmlDrawingXform } from "@excel/xlsx/xform/drawing/vml-drawing-xform";
+import { CtrlPropXform } from "@excel/xlsx/xform/drawing/ctrl-prop-xform";
+import type { FormCheckboxModel } from "@excel/form-control";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import { RelType } from "@excel/xlsx/rel-type";
 import { StreamBuf } from "@excel/utils/stream-buf";
@@ -43,6 +45,7 @@ import type { Workbook } from "@excel/workbook";
 import {
   commentsPath,
   commentsRelTargetFromWorksheetName,
+  ctrlPropPath,
   drawingPath,
   drawingRelsPath,
   OOXML_REL_TARGETS,
@@ -951,7 +954,7 @@ class XLSX {
   }
 
   async _processVmlDrawingEntry(entry: any, model: any, name: string): Promise<void> {
-    const xform = new VmlNotesXform();
+    const xform = new VmlDrawingXform();
     const vmlDrawing = await xform.parseStream(entry);
     model.vmlDrawings[vmlDrawingRelTargetFromWorksheetName(name)] = vmlDrawing;
   }
@@ -1336,7 +1339,8 @@ class XLSX {
     const worksheetXform = new WorkSheetXform();
     const relationshipsXform = new RelationshipsXform();
     const commentsXform = new CommentsXform();
-    const vmlNotesXform = new VmlNotesXform();
+    const vmlDrawingXform = new VmlDrawingXform();
+    const ctrlPropXform = new CtrlPropXform();
 
     model.worksheets.forEach((worksheet: any, index: number) => {
       const fileIndex = worksheet.fileIndex || index + 1;
@@ -1350,14 +1354,32 @@ class XLSX {
         zip.append(xmlStream.xml, { name: worksheetRelsPath(fileIndex) });
       }
 
+      // Generate comments XML (separate from VML)
       if (worksheet.comments.length > 0) {
         xmlStream = new XmlStream();
         commentsXform.render(xmlStream, worksheet);
         zip.append(xmlStream.xml, { name: commentsPath(fileIndex) });
+      }
 
+      // Generate unified VML drawing (contains both notes and form controls)
+      const hasComments = worksheet.comments.length > 0;
+      const hasFormControls = worksheet.formControls && worksheet.formControls.length > 0;
+
+      if (hasComments || hasFormControls) {
         xmlStream = new XmlStream();
-        vmlNotesXform.render(xmlStream, worksheet);
+        vmlDrawingXform.render(xmlStream, {
+          comments: hasComments ? worksheet.comments : [],
+          formControls: hasFormControls ? worksheet.formControls : []
+        });
         zip.append(xmlStream.xml, { name: vmlDrawingPath(fileIndex) });
+      }
+
+      // Generate ctrlProp files for form controls
+      if (hasFormControls) {
+        worksheet.formControls.forEach((control: FormCheckboxModel) => {
+          const xml = ctrlPropXform.toXml(control);
+          zip.append(xml, { name: ctrlPropPath(control.ctrlPropId) });
+        });
       }
     });
   }
@@ -1483,6 +1505,7 @@ class XLSX {
     };
     worksheetOptions.drawings = model.drawings = [];
     worksheetOptions.commentRefs = model.commentRefs = [];
+    worksheetOptions.formControlRefs = model.formControlRefs = [];
     let tableCount = 0;
     model.tables = [];
     model.worksheets.forEach((worksheet: any) => {

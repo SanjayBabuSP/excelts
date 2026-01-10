@@ -1,0 +1,358 @@
+import { describe, it, expect } from "vitest";
+import { Workbook } from "@excel/workbook";
+import { FormCheckbox } from "@excel/form-control";
+import { extractAll } from "@archive/extract";
+
+describe("Form Control Checkbox", () => {
+  describe("FormCheckbox class via worksheet", () => {
+    it("should create FormCheckbox with range string", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", {
+        checked: true,
+        link: "C1",
+        text: "Test Checkbox"
+      });
+
+      expect(checkbox.model.tl.col).toBe(0);
+      expect(checkbox.model.tl.row).toBe(0);
+      expect(checkbox.model.br.col).toBe(1);
+      expect(checkbox.model.br.row).toBe(1);
+      expect(checkbox.model.checked).toBe("Checked");
+      expect(checkbox.model.link).toBe("$C$1");
+      expect(checkbox.model.text).toBe("Test Checkbox");
+    });
+
+    it("should create FormCheckbox with range object", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox(
+        { startCol: 0, startRow: 0, endCol: 1, endRow: 1 },
+        { checked: false }
+      );
+
+      expect(checkbox.model.tl.col).toBe(0);
+      expect(checkbox.model.tl.row).toBe(0);
+      expect(checkbox.model.br.col).toBe(1);
+      expect(checkbox.model.br.row).toBe(1);
+      expect(checkbox.model.checked).toBe("Unchecked");
+    });
+
+    it("should default to unchecked", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", {});
+      expect(checkbox.model.checked).toBe("Unchecked");
+    });
+
+    it("should convert link cell to absolute reference", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", { link: "D5" });
+      expect(checkbox.model.link).toBe("$D$5");
+    });
+
+    it("should handle already absolute link cell", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", { link: "$E$10" });
+      expect(checkbox.model.link).toBe("$E$10");
+    });
+
+    it("should generate correct anchor for VML", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", {});
+      const model = checkbox.model;
+
+      // Anchor should have from and to positions
+      expect(model.tl).toBeDefined();
+      expect(model.tl.col).toBe(0);
+      expect(model.tl.row).toBe(0);
+      expect(model.br.col).toBe(1);
+      expect(model.br.row).toBe(1);
+    });
+
+    it("should generate VML anchor string", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", {});
+      const anchorString = checkbox.getVmlAnchor();
+
+      // Format: col1, colOff1, row1, rowOff1, col2, colOff2, row2, rowOff2
+      expect(anchorString).toMatch(/^\d+,\s*\d+,\s*\d+,\s*\d+,\s*\d+,\s*\d+,\s*\d+,\s*\d+$/);
+    });
+
+    it("should serialize to model correctly", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", {
+        checked: true,
+        link: "C1",
+        text: "My Checkbox"
+      });
+
+      const model = checkbox.model;
+      expect(model.checked).toBe("Checked");
+      expect(model.link).toBe("$C$1");
+      expect(model.text).toBe("My Checkbox");
+      expect(model.tl).toBeDefined();
+      expect(model.br).toBeDefined();
+    });
+  });
+
+  describe("Worksheet Form Control API", () => {
+    it("should add form checkbox to worksheet", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", { checked: true });
+
+      expect(ws.formControls).toHaveLength(1);
+      expect(ws.formControls[0]).toBeInstanceOf(FormCheckbox);
+      expect(ws.formControls[0].model.checked).toBe("Checked");
+    });
+
+    it("should add multiple form checkboxes", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", { checked: true, text: "Option 1" });
+      ws.addFormCheckbox("A3:B4", { checked: false, text: "Option 2" });
+      ws.addFormCheckbox("A5:B6", { checked: true, text: "Option 3" });
+
+      expect(ws.formControls).toHaveLength(3);
+      expect(ws.formControls[0].model.text).toBe("Option 1");
+      expect(ws.formControls[1].model.text).toBe("Option 2");
+      expect(ws.formControls[2].model.text).toBe("Option 3");
+    });
+
+    it("should return the created checkbox from addFormCheckbox", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", { text: "Test" });
+
+      expect(checkbox).toBeInstanceOf(FormCheckbox);
+      expect(checkbox.model.text).toBe("Test");
+    });
+
+    it("should get form checkboxes", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", {});
+      ws.addFormCheckbox("C1:D2", {});
+
+      const checkboxes = ws.getFormCheckboxes();
+      expect(checkboxes).toHaveLength(2);
+    });
+  });
+
+  describe("XLSX Serialization", () => {
+    it("should write form checkbox to xlsx", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", {
+        checked: true,
+        link: "C1",
+        text: "Test Checkbox"
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      // Should contain unified VML drawing file
+      expect(entries.has("xl/drawings/vmlDrawing1.vml")).toBe(true);
+
+      // Should contain ctrlProp file
+      expect(entries.has("xl/ctrlProps/ctrlProp1.xml")).toBe(true);
+
+      // Should have worksheet relationships
+      expect(entries.has("xl/worksheets/_rels/sheet1.xml.rels")).toBe(true);
+    });
+
+    it("should write multiple checkboxes to xlsx", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", { checked: true });
+      ws.addFormCheckbox("A3:B4", { checked: false });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      // Should contain unified VML drawing file
+      expect(entries.has("xl/drawings/vmlDrawing1.vml")).toBe(true);
+
+      // Should contain ctrlProp files for each checkbox
+      expect(entries.has("xl/ctrlProps/ctrlProp1.xml")).toBe(true);
+      expect(entries.has("xl/ctrlProps/ctrlProp2.xml")).toBe(true);
+    });
+
+    it("should generate valid VML structure", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", {
+        checked: true,
+        text: "Test Checkbox"
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      const vmlEntry = entries.get("xl/drawings/vmlDrawing1.vml");
+      expect(vmlEntry).toBeDefined();
+
+      const vmlContent = new TextDecoder().decode(vmlEntry!.data);
+
+      // Check VML structure
+      expect(vmlContent).toContain("<xml");
+      expect(vmlContent).toContain("v:shapetype");
+      expect(vmlContent).toContain("v:shape");
+      expect(vmlContent).toContain("x:ClientData");
+      expect(vmlContent).toContain('ObjectType="Checkbox"');
+      expect(vmlContent).toContain("x:Anchor");
+      expect(vmlContent).toContain("<x:Checked>");
+    });
+
+    it("should generate valid ctrlProp structure", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", {
+        checked: true,
+        link: "C1"
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      const ctrlPropEntry = entries.get("xl/ctrlProps/ctrlProp1.xml");
+      expect(ctrlPropEntry).toBeDefined();
+
+      const ctrlPropContent = new TextDecoder().decode(ctrlPropEntry!.data);
+
+      // Check ctrlProp structure
+      expect(ctrlPropContent).toContain('<?xml version="1.0"');
+      expect(ctrlPropContent).toContain("formControlPr");
+      expect(ctrlPropContent).toContain('objectType="CheckBox"');
+      expect(ctrlPropContent).toContain('checked="Checked"');
+      expect(ctrlPropContent).toContain('fmlaLink="$C$1"');
+    });
+
+    it("should include proper content types", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      ws.addFormCheckbox("A1:B2", { checked: true });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      const contentTypesEntry = entries.get("[Content_Types].xml");
+      expect(contentTypesEntry).toBeDefined();
+
+      const contentTypesContent = new TextDecoder().decode(contentTypesEntry!.data);
+
+      // Should include ctrlProp content type
+      expect(contentTypesContent).toContain("vnd.ms-excel.controlproperties+xml");
+    });
+
+    it("should not create VML files when no form controls exist", async () => {
+      const wb = new Workbook();
+      wb.addWorksheet("Sheet1");
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      // Should not contain VML drawing file for form controls
+      expect(entries.has("xl/drawings/vmlDrawingFC1.vml")).toBe(false);
+
+      // Should not contain ctrlProp file
+      expect(entries.has("xl/ctrlProps/ctrlProp1.xml")).toBe(false);
+    });
+
+    it("should handle worksheet with notes and form controls", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      // Add a note (which also uses VML)
+      ws.getCell("D1").note = { texts: [{ text: "This is a note" }] };
+
+      // Add a form checkbox
+      ws.addFormCheckbox("A1:B2", { checked: true });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const entries = await extractAll(buffer);
+
+      // Both notes and form controls should be in a single unified VML file
+      // This follows Excel's native behavior
+      expect(entries.has("xl/drawings/vmlDrawing1.vml")).toBe(true);
+      expect(entries.has("xl/drawings/vmlDrawingFC1.vml")).toBe(false);
+
+      // Verify the unified VML contains both shapetypes
+      const vmlEntry = entries.get("xl/drawings/vmlDrawing1.vml")!;
+      const vmlContent = new TextDecoder().decode(vmlEntry.data);
+
+      // Should contain shapetype for notes (id="_x0000_t202")
+      expect(vmlContent).toContain("_x0000_t202");
+      // Should contain shapetype for checkboxes (id="_x0000_t201")
+      expect(vmlContent).toContain("_x0000_t201");
+      // Should contain note shape
+      expect(vmlContent).toContain('type="#_x0000_t202"');
+      // Should contain checkbox shape
+      expect(vmlContent).toContain('type="#_x0000_t201"');
+    });
+  });
+
+  describe("Edge cases", () => {
+    it("should handle large range", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:Z100", {});
+      expect(checkbox.model.tl.col).toBe(0);
+      expect(checkbox.model.tl.row).toBe(0);
+      expect(checkbox.model.br.col).toBe(25); // Z is 26th column, 0-based is 25
+      expect(checkbox.model.br.row).toBe(99);
+    });
+
+    it("should handle single cell range", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:A1", {});
+      expect(checkbox.model.tl.col).toBe(0);
+      expect(checkbox.model.tl.row).toBe(0);
+      expect(checkbox.model.br.col).toBe(0);
+      expect(checkbox.model.br.row).toBe(0);
+    });
+
+    it("should handle empty text", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", { text: "" });
+      expect(checkbox.model.text).toBe("");
+    });
+
+    it("should handle unicode text", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+
+      const checkbox = ws.addFormCheckbox("A1:B2", { text: "测试复选框 🔲" });
+      expect(checkbox.model.text).toBe("测试复选框 🔲");
+    });
+  });
+});

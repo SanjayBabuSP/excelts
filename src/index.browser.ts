@@ -16,6 +16,7 @@ export { Image } from "@excel/image";
 export * from "@excel/anchor";
 export { Table } from "@excel/table";
 export { DataValidations } from "@excel/data-validations";
+export { FormCheckbox } from "@excel/form-control";
 
 // =============================================================================
 // Enums
@@ -40,6 +41,14 @@ export type {
   ParsedCacheDefinition,
   ParsedCacheRecords
 } from "@excel/pivot-table";
+
+// Form control types
+export type {
+  FormCheckboxModel,
+  FormCheckboxOptions,
+  FormControlRange,
+  FormControlAnchor
+} from "@excel/form-control";
 
 // =============================================================================
 // Streaming Writer (Browser-compatible)

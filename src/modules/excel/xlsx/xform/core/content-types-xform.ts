@@ -3,6 +3,7 @@ import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import {
   OOXML_PATHS,
   commentsPathFromName,
+  ctrlPropPath,
   drawingPath,
   pivotCacheDefinitionPath,
   pivotCacheRecordsPath,
@@ -130,6 +131,24 @@ class ContentTypesXform extends BaseXform {
           ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
         });
       });
+    }
+
+    // Add form control (ctrlProps) content types
+    if (model.formControlRefs) {
+      // Ensure vml extension is declared (may already be declared for comments)
+      if (!model.commentRefs) {
+        xmlStream.leafNode("Default", {
+          Extension: "vml",
+          ContentType: "application/vnd.openxmlformats-officedocument.vmlDrawing"
+        });
+      }
+
+      for (const ctrlPropId of model.formControlRefs) {
+        xmlStream.leafNode("Override", {
+          PartName: toContentTypesPartName(ctrlPropPath(ctrlPropId)),
+          ContentType: "application/vnd.ms-excel.controlproperties+xml"
+        });
+      }
     }
 
     xmlStream.leafNode("Override", {

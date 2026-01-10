@@ -28,6 +28,7 @@ import { ConditionalFormattingsXform } from "@excel/xlsx/xform/sheet/cf/conditio
 import { ExtLstXform } from "@excel/xlsx/xform/sheet/ext-lst-xform";
 import {
   commentsRelTargetFromWorksheet,
+  ctrlPropRelTargetFromWorksheet,
   drawingRelTargetFromWorksheet,
   mediaRelTargetFromRels,
   pivotTableRelTargetFromWorksheet,
@@ -315,6 +316,31 @@ class WorkSheetXform extends BaseXform {
         Target: pivotTableRelTargetFromWorksheet(pivotTable.tableNumber)
       });
     });
+
+    // prepare form controls (legacy checkboxes)
+    // Form controls share the VML file with comments, but need separate ctrlProp relationships
+    if (model.formControls && model.formControls.length > 0) {
+      // If no comments, we need to add the VML drawing relationship for form controls
+      if (model.comments.length === 0) {
+        rels.push({
+          Id: nextRid(rels),
+          Type: RelType.VmlDrawing,
+          Target: vmlDrawingRelTargetFromWorksheet(model.id)
+        });
+      }
+
+      // Add ctrlProp relationships for each form control
+      for (const control of model.formControls) {
+        const globalCtrlPropId = options.formControlRefs.length + 1;
+        control.ctrlPropId = globalCtrlPropId;
+        rels.push({
+          Id: nextRid(rels),
+          Type: RelType.CtrlProp,
+          Target: ctrlPropRelTargetFromWorksheet(globalCtrlPropId)
+        });
+        options.formControlRefs.push(globalCtrlPropId);
+      }
+    }
 
     // prepare ext items
     this.map.extLst.prepare(model, options);

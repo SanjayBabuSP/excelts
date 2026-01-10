@@ -264,3 +264,13 @@ export function mediaRelTargetFromRels(filename: string): string {
   // Target from a rels file located under xl/*/_rels (base is one level deeper than xl/)
   return `../media/${filename}`;
 }
+
+// Form Control (ctrlProps) path functions
+export function ctrlPropPath(id: number | string): string {
+  return `xl/ctrlProps/ctrlProp${id}.xml`;
+}
+
+export function ctrlPropRelTargetFromWorksheet(id: number | string): string {
+  // Target inside xl/worksheets/_rels/sheetN.xml.rels (base: xl/worksheets/)
+  return `../ctrlProps/ctrlProp${id}.xml`;
+}
