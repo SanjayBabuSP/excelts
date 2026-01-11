@@ -27,6 +27,8 @@ import { inflateRaw as fallbackInflateRaw } from "@archive/compression/deflate-f
 import { ByteQueue } from "@archive/internal/byte-queue";
 import { hasDeflateRawDecompressionStream } from "@archive/compression/compress.base";
 
+const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
+
 // =============================================================================
 // Browser InflateRaw using DecompressionStream
 // =============================================================================
@@ -773,7 +775,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     }
 
     private _streamFixedLength(length: number): PassThrough {
-      const output = new PassThrough();
+      const output = new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
       let remaining = length;
       let done = false;
       let waitingDrain = false;
@@ -820,7 +822,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     }
 
     private _streamUntilPattern(pattern: Uint8Array, includeEof = false): PassThrough {
-      const output = new PassThrough();
+      const output = new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
       let done = false;
       const patternLen = pattern.length;
       const scanner = new PatternScanner(pattern);
@@ -939,6 +941,8 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         source: {
           getLength: () => this._buffer.length,
           read: (length: number) => this._buffer.read(length),
+            peekChunks: (length: number) => this._buffer.peekChunks(length),
+            discard: (length: number) => this._buffer.discard(length),
           indexOfPattern: (pattern: Uint8Array, startIndex: number) =>
             this._buffer.indexOfPattern(pattern, startIndex),
           peekUint32LE: (offset: number) => this._buffer.peekUint32LE(offset),

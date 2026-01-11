@@ -153,6 +153,45 @@ export class ByteQueue {
     return out;
   }
 
+  /**
+   * Return a list of chunk views totaling `length` bytes without consuming.
+   *
+   * This avoids materializing a contiguous buffer for streaming write paths.
+   */
+  peekChunks(length: number): Uint8Array[] {
+    if (length <= 0) {
+      return [];
+    }
+    if (length > this._length) {
+      throw new RangeError("ByteQueue: peek beyond available data");
+    }
+
+    // Fast path: single chunk.
+    if (this._chunks.length === 1) {
+      const c = this._chunks[0]!;
+      const start = this._headOffset;
+      return [c.subarray(start, start + length)];
+    }
+
+    const parts: Uint8Array[] = [];
+    let remaining = length;
+
+    for (let i = 0; i < this._chunks.length && remaining > 0; i++) {
+      const c = this._chunks[i]!;
+      const start = i === 0 ? this._headOffset : 0;
+      const avail = c.length - start;
+      if (avail <= 0) {
+        continue;
+      }
+
+      const toTake = Math.min(avail, remaining);
+      parts.push(c.subarray(start, start + toTake));
+      remaining -= toTake;
+    }
+
+    return parts;
+  }
+
   discard(length: number): void {
     if (length <= 0) {
       return;
@@ -240,9 +279,25 @@ export class ByteQueue {
     const b2 = patLen >= 3 ? pattern[2] : 0;
     const b3 = patLen >= 4 ? pattern[3] : 0;
 
+    const chunks = this._chunks;
+
+    const peekByteAcrossChunks = (chunkIndex: number, absoluteIndex: number): number | null => {
+      let ci = chunkIndex;
+      let idx = absoluteIndex;
+      while (ci < chunks.length) {
+        const c = chunks[ci]!;
+        if (idx < c.length) {
+          return c[idx]! | 0;
+        }
+        idx -= c.length;
+        ci++;
+      }
+      return null;
+    };
+
     let globalBase = 0;
-    for (let ci = 0; ci < this._chunks.length; ci++) {
-      const c = this._chunks[ci];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const c = chunks[ci]!;
       const chunkOffset = ci === 0 ? this._headOffset : 0;
       const chunkLen = c.length - chunkOffset;
       if (chunkLen <= 0) {
@@ -277,21 +332,50 @@ export class ByteQueue {
           return globalPos;
         }
 
-        if (this.peekByte(globalPos + 1) !== b1) {
+        // Fast path: match stays fully inside the current chunk.
+        // Avoid calling peekByte() which walks the chunk list per byte.
+        const staysInChunk = i + patLen <= c.length;
+        if (staysInChunk) {
+          if (c[i + 1] !== b1) {
+            i = c.indexOf(b0, i + 1);
+            continue;
+          }
+          if (patLen === 2) {
+            return globalPos;
+          }
+          if (c[i + 2] !== b2) {
+            i = c.indexOf(b0, i + 1);
+            continue;
+          }
+          if (patLen === 3) {
+            return globalPos;
+          }
+          if (c[i + 3] !== b3) {
+            i = c.indexOf(b0, i + 1);
+            continue;
+          }
+          return globalPos;
+        }
+
+        // Slow path: pattern spans chunks.
+        const b1v = peekByteAcrossChunks(ci, i + 1);
+        if (b1v === null || b1v !== b1) {
           i = c.indexOf(b0, i + 1);
           continue;
         }
         if (patLen === 2) {
           return globalPos;
         }
-        if (this.peekByte(globalPos + 2) !== b2) {
+        const b2v = peekByteAcrossChunks(ci, i + 2);
+        if (b2v === null || b2v !== b2) {
           i = c.indexOf(b0, i + 1);
           continue;
         }
         if (patLen === 3) {
           return globalPos;
         }
-        if (this.peekByte(globalPos + 3) !== b3) {
+        const b3v = peekByteAcrossChunks(ci, i + 3);
+        if (b3v === null || b3v !== b3) {
           i = c.indexOf(b0, i + 1);
           continue;
         }
@@ -311,11 +395,58 @@ export class ByteQueue {
       return null;
     }
 
-    const b0 = this.peekByte(off);
-    const b1 = this.peekByte(off + 1);
-    const b2 = this.peekByte(off + 2);
-    const b3 = this.peekByte(off + 3);
-    return (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) >>> 0;
+    // Try to read contiguously from a single chunk to avoid 4x chunk-walk.
+    const chunks = this._chunks;
+    let remaining = off;
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i]!;
+      const start = i === 0 ? this._headOffset : 0;
+      const avail = c.length - start;
+      if (remaining < avail) {
+        const idx = start + remaining;
+        if (idx + 4 <= c.length) {
+          const b0 = c[idx] | 0;
+          const b1 = c[idx + 1] | 0;
+          const b2 = c[idx + 2] | 0;
+          const b3 = c[idx + 3] | 0;
+          return (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) >>> 0;
+        }
+
+        // Cross-chunk read (rare): walk forward across chunks once.
+        const b0 = c[idx] | 0;
+        let b1 = 0;
+        let b2 = 0;
+        let b3 = 0;
+
+        let ci = i;
+        let pos = idx + 1;
+        for (let k = 1; k < 4; k++) {
+          while (ci < chunks.length) {
+            const cc = chunks[ci]!;
+            if (pos < cc.length) {
+              const v = cc[pos]! | 0;
+              if (k === 1) {
+                b1 = v;
+              } else if (k === 2) {
+                b2 = v;
+              } else {
+                b3 = v;
+              }
+              pos++;
+              break;
+            }
+            ci++;
+            pos = 0;
+          }
+        }
+
+        return (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) >>> 0;
+      }
+      remaining -= avail;
+    }
+
+    // Should be unreachable due to bounds check above.
+    return null;
   }
 
   /** Peek a single byte at `offset` without consuming bytes. */

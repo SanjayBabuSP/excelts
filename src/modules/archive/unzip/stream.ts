@@ -110,6 +110,8 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         source: {
           getLength: () => this._queue.length,
           read: (length: number) => this._queue.read(length),
+          peekChunks: (length: number) => this._queue.peekChunks(length),
+          discard: (length: number) => this._queue.discard(length),
           indexOfPattern: (pattern: Uint8Array, startIndex: number) =>
             this._queue.indexOfPattern(pattern, startIndex),
           peekUint32LE: (offset: number) => this._queue.peekUint32LE(offset),
