@@ -14,6 +14,7 @@ import {
 import { parseTyped as parseBuffer } from "@archive/utils/parse-buffer";
 import { ByteQueue } from "@archive/internal/byte-queue";
 import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
+import { PatternScanner } from "@archive/utils/pattern-scanner";
 import { readUint32LE, writeUint32LE } from "@archive/utils/binary";
 import {
   parseZipExtraFields,
@@ -292,64 +293,97 @@ export class PullStream extends Duplex {
   stream(eof: number | Uint8Array, includeEof?: boolean): PassThrough {
     const p = new PassThrough();
     let done = false;
+    let waitingDrain = false;
+
+    const eofIsNumber = typeof eof === "number";
+    let remainingBytes = eofIsNumber ? (eof as number) : 0;
+    const pattern = eofIsNumber ? undefined : (eof as Uint8Array);
+    const patternLen = pattern ? pattern.length : 0;
+    const minTailBytes = eofIsNumber ? 0 : patternLen;
+
+    const scanner = eofIsNumber ? undefined : new PatternScanner(pattern!);
 
     const cb = (): void => {
       this._maybeReleaseWriteCallback();
     };
 
     const pull = (): void => {
-      let packet: Uint8Array | undefined;
-      const available = this._queue.length;
-      if (available) {
-        if (typeof eof === "number") {
-          const toRead = Math.min(eof, available);
+      if (done || waitingDrain) {
+        return;
+      }
+
+      while (true) {
+        const available = this._queue.length;
+        if (!available) {
+          break;
+        }
+
+        let packet: Uint8Array | undefined;
+
+        if (eofIsNumber) {
+          const toRead = Math.min(remainingBytes, available);
           if (toRead > 0) {
             packet = this._queue.read(toRead);
-            eof -= toRead;
+            remainingBytes -= toRead;
           }
-          done = done || eof === 0;
+          done = done || remainingBytes === 0;
         } else {
-          const view = this._queue.view();
-          let match = indexOfUint8ArrayPattern(view, eof);
+          const bufLen = this._queue.length;
+          const match = scanner!.find(this._queue);
           if (match !== -1) {
             // store signature match byte offset to allow us to reference
             // this for zip64 offset
             this.match = match;
-            if (includeEof) {
-              match = match + eof.length;
-            }
-            if (match > 0) {
-              packet = this._queue.read(match);
+            const toRead = includeEof ? match + patternLen : match;
+            if (toRead > 0) {
+              packet = this._queue.read(toRead);
+              scanner!.onConsume(toRead);
             }
             done = true;
           } else {
-            const len = view.length - eof.length;
+            // No match yet. Avoid rescanning bytes that can't start a match.
+            scanner!.onNoMatch(bufLen);
+
+            const len = bufLen - patternLen;
             if (len <= 0) {
-              cb();
+              // Keep enough bytes to detect a split signature.
+              if (
+                this._queue.length === 0 ||
+                (minTailBytes && this._queue.length <= minTailBytes)
+              ) {
+                cb();
+              }
             } else {
               packet = this._queue.read(len);
+              scanner!.onConsume(len);
             }
           }
         }
-        if (packet) {
-          p.write(packet, () => {
-            if (
-              this._queue.length === 0 ||
-              (typeof eof !== "number" && eof.length && this._queue.length <= eof.length)
-            ) {
-              cb();
-            }
 
-            if (done) {
-              cb();
-              this.removeListener("chunk", pull);
-              p.end();
-              return;
-            }
+        if (!packet) {
+          break;
+        }
 
-            // Continue draining regardless of downstream read timing.
-            queueMicrotask(pull);
+        const ok = p.write(packet);
+
+        // If we drained the internal buffer (or kept only a minimal tail), allow upstream to continue.
+        if (this._queue.length === 0 || (minTailBytes && this._queue.length <= minTailBytes)) {
+          cb();
+        }
+
+        if (!ok) {
+          waitingDrain = true;
+          p.once("drain", () => {
+            waitingDrain = false;
+            pull();
           });
+          return;
+        }
+
+        if (done) {
+          cb();
+          this.removeListener("chunk", pull);
+          p.end();
           return;
         }
       }
@@ -359,13 +393,13 @@ export class PullStream extends Duplex {
           this.removeListener("chunk", pull);
           cb();
           p.destroy(new Error("FILE_ENDED"));
-          return;
         }
-      } else {
-        this.removeListener("chunk", pull);
-        cb();
-        p.end();
+        return;
       }
+
+      this.removeListener("chunk", pull);
+      cb();
+      p.end();
     };
 
     this.on("chunk", pull);
@@ -383,42 +417,138 @@ export class PullStream extends Duplex {
     if (typeof eof === "number" && this._queue.length >= eof) {
       const data = this._queue.read(eof);
 
-      // If we drained the internal buffer, allow the upstream writer to continue.
-      if (this._queue.length === 0) {
-        this._maybeReleaseWriteCallback();
-      }
+      // Allow the upstream writer to continue once the consumer makes progress.
+      // Waiting for a full drain can deadlock when the producer must call `end()`
+      // but is blocked behind a deferred write callback.
+      this._maybeReleaseWriteCallback();
       return Promise.resolve(data);
     }
 
-    // Otherwise we stream until we have it
+    // Otherwise we wait for more data and fulfill directly from the internal queue.
+    // This avoids constructing intermediate streams for small pulls (hot path).
     const chunks: Uint8Array[] = [];
-    const concatStream = new Transform({
-      transform(d: Uint8Array, _encoding: string, cb: () => void) {
-        chunks.push(d);
-        cb();
-      }
-    });
-
     let pullStreamRejectHandler: (e: Error) => void;
 
+    // Pattern scanning state (only used when eof is a pattern)
+    const eofIsNumber = typeof eof === "number";
+    const pattern = eofIsNumber ? undefined : (eof as Uint8Array);
+    const patternLen = pattern ? pattern.length : 0;
+    const scanner = eofIsNumber ? undefined : new PatternScanner(pattern!);
+
     return new Promise<Uint8Array>((resolve, reject) => {
+      let settled = false;
       pullStreamRejectHandler = (e: Error) => {
         this.__emittedError = e;
+        cleanup();
         reject(e);
       };
+
       if (this.finished) {
-        return reject(new Error("FILE_ENDED"));
+        reject(new Error("FILE_ENDED"));
+        return;
       }
-      this.once("error", pullStreamRejectHandler); // reject any errors from pullstream itself
-      this.stream(eof, includeEof)
-        .on("error", reject)
-        .pipe(concatStream)
-        .on("finish", () => {
-          resolve(chunks.length === 1 ? chunks[0] : concatUint8Arrays(chunks));
-        })
-        .on("error", reject);
-    }).finally(() => {
-      this.removeListener("error", pullStreamRejectHandler);
+
+      const cleanup = (): void => {
+        this.removeListener("chunk", onChunk);
+        this.removeListener("finish", onFinish);
+        this.removeListener("error", pullStreamRejectHandler);
+      };
+
+      const finalize = (): void => {
+        cleanup();
+        settled = true;
+        if (chunks.length === 0) {
+          resolve(new Uint8Array(0));
+          return;
+        }
+        resolve(chunks.length === 1 ? chunks[0] : concatUint8Arrays(chunks));
+      };
+
+      const onFinish = (): void => {
+        if (settled) {
+          return;
+        }
+
+        // Try one last time to drain anything already buffered.
+        onChunk();
+
+        if (!settled) {
+          cleanup();
+          reject(new Error("FILE_ENDED"));
+        }
+      };
+
+      const onChunk = (): void => {
+        if (typeof eof === "number") {
+          const available = this._queue.length;
+          if (available <= 0) {
+            return;
+          }
+          const toRead = Math.min(eof, available);
+          if (toRead > 0) {
+            chunks.push(this._queue.read(toRead));
+            eof -= toRead;
+          }
+
+          // Allow upstream to continue as soon as we consume bytes.
+          // This avoids deadlocks when the last upstream chunk is waiting on its
+          // callback and the parser needs an EOF signal after draining buffered data.
+          this._maybeReleaseWriteCallback();
+
+          if (eof === 0) {
+            finalize();
+          }
+
+          return;
+        }
+
+        // eof is a pattern
+        while (this._queue.length > 0) {
+          const bufLen = this._queue.length;
+          const match = scanner!.find(this._queue);
+          if (match !== -1) {
+            // store signature match byte offset to allow us to reference
+            // this for zip64 offset
+            this.match = match;
+            const toRead = includeEof ? match + patternLen : match;
+            if (toRead > 0) {
+              chunks.push(this._queue.read(toRead));
+              scanner!.onConsume(toRead);
+            }
+
+            if (this._queue.length === 0 || (patternLen && this._queue.length <= patternLen)) {
+              this._maybeReleaseWriteCallback();
+            }
+            finalize();
+            return;
+          }
+
+          // No match yet. Avoid rescanning bytes that can't start a match.
+          scanner!.onNoMatch(bufLen);
+
+          const safeLen = bufLen - patternLen;
+          if (safeLen <= 0) {
+            // Keep enough bytes to detect a split signature.
+            this._maybeReleaseWriteCallback();
+            return;
+          }
+
+          chunks.push(this._queue.read(safeLen));
+          scanner!.onConsume(safeLen);
+
+          if (this._queue.length === 0 || (patternLen && this._queue.length <= patternLen)) {
+            this._maybeReleaseWriteCallback();
+            return;
+          }
+        }
+      };
+
+      this.once("error", pullStreamRejectHandler);
+      this.on("chunk", onChunk);
+      this.once("finish", onFinish);
+
+      // Attempt immediate fulfillment from any already-buffered data.
+      onChunk();
     });
   }
 
@@ -443,7 +573,8 @@ export type PullStreamPublicApi = {
 
 export async function readCrxHeader(pull: PullFn): Promise<CrxHeader> {
   const data = await pull(12);
-  const header = parseBuffer<CrxHeader>(data, CRX_HEADER_FORMAT);
+  const header =
+    data.length >= 12 ? parseCrxHeaderFast(data) : parseBuffer<CrxHeader>(data, CRX_HEADER_FORMAT);
   const pubKeyLength = header.pubKeyLength || 0;
   const signatureLength = header.signatureLength || 0;
 
@@ -459,7 +590,10 @@ export async function readLocalFileHeader(pull: PullFn): Promise<{
   extraFieldData: Uint8Array;
 }> {
   const data = await pull(26);
-  const vars = parseBuffer<EntryVars>(data, LOCAL_FILE_HEADER_FORMAT);
+  const vars =
+    data.length >= 26
+      ? parseLocalFileHeaderVarsFast(data)
+      : parseBuffer<EntryVars>(data, LOCAL_FILE_HEADER_FORMAT);
   const fileNameBuffer = await pull(vars.fileNameLength || 0);
   const extraFieldData = await pull(vars.extraFieldLength || 0);
   return { vars, fileNameBuffer, extraFieldData };
@@ -467,7 +601,9 @@ export async function readLocalFileHeader(pull: PullFn): Promise<{
 
 export async function readDataDescriptor(pull: PullFn): Promise<DataDescriptorVars> {
   const data = await pull(16);
-  return parseBuffer<DataDescriptorVars>(data, DATA_DESCRIPTOR_FORMAT);
+  return data.length >= 16
+    ? parseDataDescriptorVarsFast(data)
+    : parseBuffer<DataDescriptorVars>(data, DATA_DESCRIPTOR_FORMAT);
 }
 
 export async function consumeCentralDirectoryFileHeader(pull: PullFn): Promise<void> {
@@ -515,6 +651,42 @@ function readUint32LEFromBytes(view: Uint8Array, offset: number): number {
   );
 }
 
+function readUint16LEFromBytes(view: Uint8Array, offset: number): number {
+  return (view[offset] | ((view[offset + 1] | 0) << 8)) >>> 0;
+}
+
+function parseCrxHeaderFast(data: Uint8Array): CrxHeader {
+  return {
+    version: readUint32LEFromBytes(data, 0),
+    pubKeyLength: readUint32LEFromBytes(data, 4),
+    signatureLength: readUint32LEFromBytes(data, 8)
+  };
+}
+
+function parseLocalFileHeaderVarsFast(data: Uint8Array): EntryVars {
+  return {
+    versionsNeededToExtract: readUint16LEFromBytes(data, 0),
+    flags: readUint16LEFromBytes(data, 2),
+    compressionMethod: readUint16LEFromBytes(data, 4),
+    lastModifiedTime: readUint16LEFromBytes(data, 6),
+    lastModifiedDate: readUint16LEFromBytes(data, 8),
+    crc32: readUint32LEFromBytes(data, 10),
+    compressedSize: readUint32LEFromBytes(data, 14),
+    uncompressedSize: readUint32LEFromBytes(data, 18),
+    fileNameLength: readUint16LEFromBytes(data, 22),
+    extraFieldLength: readUint16LEFromBytes(data, 24)
+  };
+}
+
+function parseDataDescriptorVarsFast(data: Uint8Array): DataDescriptorVars {
+  return {
+    dataDescriptorSignature: readUint32LEFromBytes(data, 0),
+    crc32: readUint32LEFromBytes(data, 4),
+    compressedSize: readUint32LEFromBytes(data, 8),
+    uncompressedSize: readUint32LEFromBytes(data, 12)
+  };
+}
+
 function indexOf4BytesPattern(buffer: Uint8Array, pattern: Uint8Array, startIndex: number): number {
   if (pattern.length !== 4) {
     return indexOfUint8ArrayPattern(buffer, pattern, startIndex);
@@ -534,10 +706,13 @@ function indexOf4BytesPattern(buffer: Uint8Array, pattern: Uint8Array, startInde
     return -1;
   }
 
-  for (let i = start; i <= bufLen - 4; i++) {
-    if (buffer[i] === b0 && buffer[i + 1] === b1 && buffer[i + 2] === b2 && buffer[i + 3] === b3) {
+  const last = bufLen - 4;
+  let i = buffer.indexOf(b0, start);
+  while (i !== -1 && i <= last) {
+    if (buffer[i + 1] === b1 && buffer[i + 2] === b2 && buffer[i + 3] === b3) {
       return i;
     }
+    i = buffer.indexOf(b0, i + 1);
   }
 
   return -1;
@@ -576,12 +751,14 @@ export function scanValidatedDataDescriptor(
 ): ValidatedDataDescriptorScanResult {
   const result = initScanResult(out);
 
+  const viewLen = view.length;
+
   let searchFrom = startIndex | 0;
   if (searchFrom < 0) {
     searchFrom = 0;
   }
-  if (searchFrom > view.length) {
-    searchFrom = view.length;
+  if (searchFrom > viewLen) {
+    searchFrom = viewLen;
   }
 
   // To avoid missing a signature split across chunk boundaries, we may need
@@ -589,11 +766,13 @@ export function scanValidatedDataDescriptor(
   const sigLen = dataDescriptorSignature.length | 0;
   const overlap = sigLen > 0 ? sigLen - 1 : 0;
 
-  while (searchFrom < view.length) {
+  const viewLimit = Math.max(0, viewLen - overlap);
+
+  while (searchFrom < viewLen) {
     const match = indexOf4BytesPattern(view, dataDescriptorSignature, searchFrom);
     if (match === -1) {
       result.foundIndex = -1;
-      result.nextSearchFrom = Math.max(searchFrom, Math.max(0, view.length - overlap));
+      result.nextSearchFrom = Math.max(searchFrom, viewLimit);
       return result;
     }
 
@@ -601,7 +780,7 @@ export function scanValidatedDataDescriptor(
 
     // Need 16 bytes for descriptor + 4 bytes for next record signature.
     const nextSigOffset = idx + 16;
-    if (nextSigOffset + 4 <= view.length) {
+    if (nextSigOffset + 4 <= viewLen) {
       const nextSig = readUint32LEFromBytes(view, nextSigOffset);
 
       const descriptorCompressedSize = readUint32LEFromBytes(view, idx + 8);
@@ -627,14 +806,15 @@ export function scanValidatedDataDescriptor(
   }
 
   result.foundIndex = -1;
-  result.nextSearchFrom = Math.max(searchFrom, Math.max(0, view.length - overlap));
+  result.nextSearchFrom = Math.max(searchFrom, viewLimit);
   return result;
 }
 
 export interface StreamUntilValidatedDataDescriptorSource {
-  getView(): Uint8Array;
   getLength(): number;
   read(length: number): Uint8Array;
+  indexOfPattern(pattern: Uint8Array, startIndex: number): number;
+  peekUint32LE(offset: number): number | null;
   isFinished(): boolean;
   onDataAvailable(cb: () => void): () => void;
   maybeReleaseWriteCallback?: () => void;
@@ -663,11 +843,11 @@ export function streamUntilValidatedDataDescriptor(
   const output = new PassThrough();
   let done = false;
 
+  let waitingDrain = false;
+
   // Total number of compressed bytes already emitted for this entry.
   let bytesEmitted = 0;
-  let searchFrom = 0;
-
-  const scanResult: ValidatedDataDescriptorScanResult = { foundIndex: -1, nextSearchFrom: 0 };
+  const scanner = new PatternScanner(dataDescriptorSignature);
 
   let unsubscribe: (() => void) | undefined;
 
@@ -683,48 +863,101 @@ export function streamUntilValidatedDataDescriptor(
       return;
     }
 
-    while (source.getLength() > 0) {
-      const view = source.getView();
-      scanValidatedDataDescriptor(
-        view,
-        dataDescriptorSignature,
-        bytesEmitted,
-        searchFrom,
-        scanResult
-      );
-      const foundIndex = scanResult.foundIndex;
-      searchFrom = scanResult.nextSearchFrom;
+    if (waitingDrain) {
+      return;
+    }
 
-      if (foundIndex !== -1) {
-        if (foundIndex > 0) {
-          output.write(source.read(foundIndex));
-          bytesEmitted += foundIndex;
-          searchFrom = Math.max(0, searchFrom - foundIndex);
+    let available = source.getLength();
+    if (available === 0) {
+      // If we have no buffered data, ensure upstream isn't stuck behind a
+      // deferred write callback.
+      source.maybeReleaseWriteCallback?.();
+    }
+    while (available > 0) {
+      // Try to find and validate a descriptor candidate.
+      while (true) {
+        const idx = scanner.find(source);
+        if (idx === -1) {
+          break;
         }
 
-        done = true;
-        source.maybeReleaseWriteCallback?.();
-        cleanup();
-        output.end();
-        return;
+        // Need 16 bytes for descriptor + 4 bytes for next record signature.
+        const nextSigOffset = idx + 16;
+        if (nextSigOffset + 4 <= available) {
+          const nextSig = source.peekUint32LE(nextSigOffset);
+          const descriptorCompressedSize = source.peekUint32LE(idx + 8);
+          const expectedCompressedSize = (bytesEmitted + idx) >>> 0;
+
+          if (
+            nextSig !== null &&
+            descriptorCompressedSize !== null &&
+            isValidZipRecordSignature(nextSig) &&
+            descriptorCompressedSize === expectedCompressedSize
+          ) {
+            if (idx > 0) {
+              const ok = output.write(source.read(idx));
+              bytesEmitted += idx;
+              available -= idx;
+              scanner.onConsume(idx);
+
+              if (!ok) {
+                waitingDrain = true;
+                output.once("drain", () => {
+                  waitingDrain = false;
+                  pull();
+                });
+                return;
+              }
+            }
+
+            done = true;
+            source.maybeReleaseWriteCallback?.();
+            cleanup();
+            output.end();
+            return;
+          }
+
+          scanner.searchFrom = idx + 1;
+          continue;
+        }
+
+        // Not enough bytes to validate yet. Re-check this candidate once more bytes arrive.
+        scanner.searchFrom = idx;
+        break;
       }
+
+      // No validated match yet.
+      scanner.onNoMatch(available);
 
       // Flush most of the buffered data but keep a tail so a potential signature
       // split across chunks can still be detected/validated.
-      const flushLen = Math.max(0, view.length - keepTailBytes);
+      const flushLen = Math.max(0, available - keepTailBytes);
       if (flushLen > 0) {
-        output.write(source.read(flushLen));
+        const ok = output.write(source.read(flushLen));
         bytesEmitted += flushLen;
-        searchFrom = Math.max(0, searchFrom - flushLen);
+        available -= flushLen;
+        scanner.onConsume(flushLen);
 
-        if (source.getLength() <= keepTailBytes) {
+        if (available <= keepTailBytes) {
           source.maybeReleaseWriteCallback?.();
+        }
+
+        if (!ok) {
+          waitingDrain = true;
+          output.once("drain", () => {
+            waitingDrain = false;
+            pull();
+          });
         }
 
         return;
       }
 
       // Need more data.
+      // IMPORTANT: If we keep a tail and cannot flush anything yet, we must still
+      // release upstream write callbacks; otherwise the producer can deadlock waiting
+      // for backpressure while we wait for more bytes to arrive.
+      source.maybeReleaseWriteCallback?.();
       break;
     }
 
@@ -747,6 +980,34 @@ export function streamUntilValidatedDataDescriptor(
 export interface ParseOptions {
   verbose?: boolean;
   forceStream?: boolean;
+  /**
+   * Browser-only: use a Web Worker to run inflate off the main thread.
+   * Defaults to false.
+   */
+  useWorkerInflate?: boolean;
+  /**
+   * Browser-only: provide an explicit Worker script URL.
+   *
+   * Useful under strict CSP that blocks `blob:` workers. When set, the browser
+   * parser will try to construct `new Worker(workerInflateUrl)`.
+   */
+  workerInflateUrl?: string;
+  /**
+   * Input backpressure high-water mark (bytes).
+   *
+   * When provided, implementations may delay the writable callback until the
+   * internal input buffer drops below `inputLowWaterMarkBytes`.
+   *
+   * This is primarily used by the browser parser, because its writable side
+   * otherwise tends to accept unlimited data and can cause large memory spikes.
+   */
+  inputHighWaterMarkBytes?: number;
+  /**
+   * Input backpressure low-water mark (bytes).
+   * When the internal buffer drops to (or below) this value, a delayed writable
+   * callback may be released.
+   */
+  inputLowWaterMarkBytes?: number;
   /**
    * Threshold (in bytes) for small file optimization.
    * Files smaller than this will use sync decompression (no stream overhead).
@@ -901,6 +1162,149 @@ export async function runParseLoop(
   }
 }
 
+async function pumpKnownCompressedSizeToEntry(
+  io: ParseIO,
+  inflater: Transform | Duplex | PassThrough,
+  entry: ZipEntry,
+  compressedSize: number
+): Promise<void> {
+  // Keep chunks reasonably large to reduce per-await overhead.
+  const CHUNK_SIZE = 256 * 1024;
+
+  let remaining = compressedSize;
+  let err: Error | null = null;
+
+  const onError = (e: Error): void => {
+    err = e;
+  };
+
+  inflater.once("error", onError);
+  entry.once("error", onError);
+
+  let skipping = false;
+
+  const waitForDrainOrSkipSignal = async (): Promise<void> => {
+    await new Promise<void>(resolve => {
+      const anyInflater = inflater as any;
+
+      const cleanup = () => {
+        try {
+          anyInflater?.removeListener?.("drain", onDrain);
+        } catch {
+          // ignore
+        }
+        try {
+          entry.removeListener("__autodrain", onAutodrain);
+        } catch {
+          // ignore
+        }
+        try {
+          entry.removeListener("close", onClose);
+        } catch {
+          // ignore
+        }
+      };
+
+      const onDrain = () => {
+        cleanup();
+        resolve();
+      };
+      const onAutodrain = () => {
+        cleanup();
+        resolve();
+      };
+      const onClose = () => {
+        cleanup();
+        resolve();
+      };
+
+      if (typeof anyInflater?.once === "function") {
+        anyInflater.once("drain", onDrain);
+      }
+      entry.once("__autodrain", onAutodrain);
+      entry.once("close", onClose);
+    });
+  };
+
+  const switchToSkip = async (): Promise<void> => {
+    if (skipping) {
+      return;
+    }
+    skipping = true;
+
+    // Stop forwarding decompressed output. We only need to advance the ZIP cursor.
+    try {
+      const anyInflater = inflater as any;
+      if (typeof anyInflater.unpipe === "function") {
+        anyInflater.unpipe(entry as any);
+      }
+    } catch {
+      // ignore
+    }
+
+    // End the entry as early as possible so downstream drain resolves quickly.
+    try {
+      if (!(entry as any).writableEnded && !(entry as any).destroyed) {
+        entry.end();
+      }
+    } catch {
+      // ignore
+    }
+
+    // Stop the inflater to avoid work/backpressure.
+    try {
+      const anyInflater = inflater as any;
+      if (typeof anyInflater.destroy === "function") {
+        anyInflater.destroy();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    // Pipe decompressed output into the entry stream.
+    (inflater as any).pipe(entry as any);
+
+    while (remaining > 0) {
+      if (err) {
+        throw err;
+      }
+
+      // If downstream decides to autodrain mid-entry (common when a consumer bails out
+      // early due to a limit), stop inflating and just skip the remaining compressed bytes.
+      if (!skipping && (entry.__autodraining || (entry as any).destroyed)) {
+        await switchToSkip();
+      }
+
+      const toPull = Math.min(CHUNK_SIZE, remaining);
+      const chunk = await io.pull(toPull);
+      if (chunk.length !== toPull) {
+        throw new Error("FILE_ENDED");
+      }
+
+      remaining -= chunk.length;
+
+      if (!skipping) {
+        const ok = (inflater as any).write(chunk);
+        if (!ok) {
+          await waitForDrainOrSkipSignal();
+        }
+      }
+    }
+
+    if (!skipping) {
+      (inflater as any).end();
+    }
+
+    // Wait for all writes to complete (not for consumption).
+    await finished(entry, { readable: false });
+  } finally {
+    inflater.removeListener("error", onError);
+    entry.removeListener("error", onError);
+  }
+}
+
 async function readFileRecord(
   opts: ParseOptions,
   io: ParseIO,
@@ -929,6 +1333,9 @@ async function readFileRecord(
   entry.autodrain = function () {
     autodraining = true;
     entry.__autodraining = true;
+    // Signal producers that downstream has switched to drain mode.
+    // This helps avoid deadlocks if the producer is waiting on backpressure.
+    entry.emit("__autodrain");
     return autodrain(entry);
   };
 
@@ -1015,7 +1422,7 @@ async function readFileRecord(
   const inflater = vars.compressionMethod && !autodraining ? inflateFactory() : new PassThrough();
 
   if (fileSizeKnown) {
-    await pipeline(io.stream(vars.compressedSize || 0) as any, inflater as any, entry as any);
+    await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize || 0);
     return;
   }
 

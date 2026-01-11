@@ -1,27 +1,4 @@
 /**
- * Read unsigned little-endian integer from Uint8Array
- */
-function readUIntLE(buffer: Uint8Array, offset: number, size: number): number {
-  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  switch (size) {
-    case 1:
-      return view.getUint8(offset);
-    case 2:
-      return view.getUint16(offset, true);
-    case 4:
-      return view.getUint32(offset, true);
-    case 8: {
-      // Read as BigUint64 and convert to Number
-      const low = view.getUint32(offset, true);
-      const high = view.getUint32(offset + 4, true);
-      return high * 0x100000000 + low;
-    }
-    default:
-      throw new Error("Unsupported UInt LE size!");
-  }
-}
-
-/**
  * Parses sequential unsigned little endian numbers from the head of the passed buffer according to
  * the specified format passed. If the buffer is not large enough to satisfy the full format,
  * null values will be assigned to the remaining keys.
@@ -42,10 +19,30 @@ export function parse(
   format: [string, number][]
 ): Record<string, number | null> {
   const result: Record<string, number | null> = {};
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   let offset = 0;
   for (const [key, size] of format) {
     if (buffer.length >= offset + size) {
-      result[key] = readUIntLE(buffer, offset, size);
+      switch (size) {
+        case 1:
+          result[key] = view.getUint8(offset);
+          break;
+        case 2:
+          result[key] = view.getUint16(offset, true);
+          break;
+        case 4:
+          result[key] = view.getUint32(offset, true);
+          break;
+        case 8: {
+          // Keep behavior (Number) while avoiding BigInt costs.
+          const low = view.getUint32(offset, true);
+          const high = view.getUint32(offset + 4, true);
+          result[key] = high * 0x100000000 + low;
+          break;
+        }
+        default:
+          throw new Error("Unsupported UInt LE size!");
+      }
     } else {
       result[key] = null;
     }

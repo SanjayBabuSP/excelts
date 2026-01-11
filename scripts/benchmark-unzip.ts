@@ -10,41 +10,75 @@
 import { performance } from "node:perf_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
+import util from "node:util";
 
-// Our archive module (built ESM output)
-import { unzip, zip } from "../dist/esm/modules/archive/index.js";
+// Our archive module runtime functions (loaded from built ESM output).
+// This script benchmarks built output, so we intentionally load from dist.
+let unzip: any;
+let zip: any;
+
+async function loadBuiltArchiveModule(): Promise<void> {
+  // Built output exists after `npm run build:esm`.
+  // @ts-ignore - dist output is generated at build time.
+  const mod = await import("../dist/esm/modules/archive/index.js");
+  unzip = mod.unzip;
+  zip = mod.zip;
+}
 
 // AdmZip - install with: pnpm add -D adm-zip @types/adm-zip
 import AdmZip from "adm-zip";
 
 // Configuration
-const WARMUP_RUNS = 3;
-const BENCHMARK_RUNS = 10;
+const RUN_QUICK = process.argv.includes("--quick");
+const RUN_LARGE = !process.argv.includes("--no-large");
+const WARMUP_RUNS = RUN_QUICK ? 1 : 3;
+const BENCHMARK_RUNS = RUN_QUICK ? 3 : 10;
+const VERBOSE = process.argv.includes("--verbose");
+const RUN_ALL_MODES = process.argv.includes("--all-modes");
+
+const TIMEOUT_ARG_INDEX = process.argv.indexOf("--timeout-ms");
+const TIMEOUT_MS =
+  TIMEOUT_ARG_INDEX >= 0 && process.argv[TIMEOUT_ARG_INDEX + 1]
+    ? Number(process.argv[TIMEOUT_ARG_INDEX + 1])
+    : 120_000;
+
+const REPORT_ENABLED = !process.argv.includes("--no-report");
+const REPORT_ARG_INDEX = process.argv.indexOf("--report");
+const REPORT_PATH =
+  REPORT_ARG_INDEX >= 0 && process.argv[REPORT_ARG_INDEX + 1]
+    ? path.resolve(process.cwd(), process.argv[REPORT_ARG_INDEX + 1])
+    : path.resolve(process.cwd(), "tmp/benchmark-unzip-report.txt");
 
 // Test files - using existing xlsx files as they are zip archives
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TEST_FILES = [
-  "./src/modules/excel/__tests__/data/gold.xlsx",
-  "./src/modules/excel/stream/__tests__/data/huge.xlsx"
+  path.join(REPO_ROOT, "src/modules/excel/__tests__/data/gold.xlsx"),
+  path.join(REPO_ROOT, "src/modules/excel/stream/__tests__/data/huge.xlsx")
 ].filter(f => fs.existsSync(f));
 
 // Generate a large ZIP buffer for testing
 function generateLargeZipBuffer(totalSizeMB: number, fileCount: number): Buffer {
   const sizePerFile = Math.floor((totalSizeMB * 1024 * 1024) / fileCount);
   const encoder = new TextEncoder();
-  const text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100);
+  const pattern = encoder.encode(
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(64)
+  );
 
   const archive = zip({ level: 6 });
 
   for (let i = 0; i < fileCount; i++) {
-    let content = "";
-    while (content.length < sizePerFile) {
-      content += text + `\n--- File ${i}, Block ${content.length} ---\n`;
+    const content = new Uint8Array(sizePerFile);
+    // Fast O(n) fill with repeating bytes (avoid O(n^2) string concatenation)
+    let offset = 0;
+    while (offset < content.length) {
+      const toCopy = Math.min(pattern.length, content.length - offset);
+      content.set(pattern.subarray(0, toCopy), offset);
+      offset += toCopy;
     }
-    archive.add(
-      `document_${i.toString().padStart(3, "0")}.txt`,
-      encoder.encode(content.slice(0, sizePerFile))
-    );
+    if (content.length > 0) content[0] = i & 0xff;
+    archive.add(`document_${i.toString().padStart(3, "0")}.txt`, content);
   }
 
   const zipData = archive.bytesSync();
@@ -60,6 +94,7 @@ interface BenchmarkResult {
   maxTime: number;
   entriesCount: number;
   memoryUsed: number;
+  error?: string;
 }
 
 function formatBytes(bytes: number): string {
@@ -81,6 +116,33 @@ function gcIfAvailable(): void {
 function getMemoryUsage(): number {
   gcIfAvailable();
   return process.memoryUsage().heapUsed;
+}
+
+function safeDiv(numerator: number, denominator: number): number {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) return NaN;
+  return numerator / denominator;
+}
+
+function formatSpeedup(speedup: number): string {
+  if (!Number.isFinite(speedup) || speedup <= 0) return "n/a";
+  return `${speedup.toFixed(2)}x`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  let timeoutId: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Timeout after ${timeoutMs}ms (${label})`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 async function benchmarkAdmZip(buffer: Buffer): Promise<{ time: number; entriesCount: number }> {
@@ -112,6 +174,8 @@ async function benchmarkUnzipBuffer(
   let entriesCount = 0;
   for await (const entry of reader.entries()) {
     if (entry.isDirectory) {
+      // Always discard to avoid stalling the iterator.
+      entry.discard();
       continue;
     }
     const _data = await entry.bytes();
@@ -184,39 +248,130 @@ async function runBenchmark(
   const times: number[] = [];
   let entriesCount = 0;
 
-  // Warmup
-  for (let i = 0; i < WARMUP_RUNS; i++) {
-    await benchFn(buffer);
-    gcIfAvailable();
+  const label = `${name} @ ${path.basename(filePath)}`;
+
+  // Always show which method is running (even without --verbose)
+  console.log(`  → ${name}`);
+
+  try {
+    if (VERBOSE) console.log(`  → ${name} (warmup ${WARMUP_RUNS} + runs ${BENCHMARK_RUNS})`);
+
+    // Warmup
+    for (let i = 0; i < WARMUP_RUNS; i++) {
+      if (VERBOSE) console.log(`    warmup ${i + 1}/${WARMUP_RUNS}`);
+      await withTimeout(benchFn(buffer), TIMEOUT_MS, `${label} warmup ${i + 1}`);
+      gcIfAvailable();
+    }
+
+    // Benchmark runs
+    const memBefore = getMemoryUsage();
+    for (let i = 0; i < BENCHMARK_RUNS; i++) {
+      const result = await withTimeout(benchFn(buffer), TIMEOUT_MS, `${label} run ${i + 1}`);
+      times.push(result.time);
+      entriesCount = result.entriesCount;
+      if (VERBOSE) {
+        console.log(
+          `    run ${i + 1}/${BENCHMARK_RUNS}: ${formatMs(result.time)} entries=${entriesCount}`
+        );
+      }
+      gcIfAvailable();
+    }
+    const memAfter = getMemoryUsage();
+
+    return {
+      name,
+      file: path.basename(filePath),
+      fileSize,
+      avgTime: times.reduce((a, b) => a + b, 0) / times.length,
+      minTime: Math.min(...times),
+      maxTime: Math.max(...times),
+      entriesCount,
+      memoryUsed: Math.max(0, memAfter - memBefore)
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      name,
+      file: path.basename(filePath),
+      fileSize,
+      avgTime: Number.NaN,
+      minTime: Number.NaN,
+      maxTime: Number.NaN,
+      entriesCount,
+      memoryUsed: 0,
+      error: message
+    };
+  }
+}
+
+function printComparison(title: string, results: BenchmarkResult[]): void {
+  const adm = results.find(r => r.name === "AdmZip");
+  const admTime = adm?.avgTime ?? Number.NaN;
+
+  console.log(`  ${title}`);
+  console.log(`  ┌──────────────────────────┬────────────┬───────────────┬─────────┐`);
+  console.log(`  │ Method                   │ Avg Time   │ vs AdmZip      │ Entries │`);
+  console.log(`  ├──────────────────────────┼────────────┼───────────────┼─────────┤`);
+
+  for (const r of results) {
+    const name = r.name.padEnd(24);
+    const avg = Number.isFinite(r.avgTime) ? formatMs(r.avgTime).padStart(10) : "   (error)";
+    const entries = String(r.entriesCount).padStart(7);
+
+    let vs = "";
+    if (r.name === "AdmZip") {
+      vs = "1.00x";
+    } else if (r.error) {
+      vs = "ERROR";
+    } else {
+      const speedup = safeDiv(admTime, r.avgTime);
+      vs = formatSpeedup(speedup);
+      if (Number.isFinite(speedup)) {
+        vs = speedup >= 1 ? `${vs} faster` : `${formatSpeedup(1 / speedup)} slower`;
+      }
+    }
+    const vsCell = vs.padStart(13);
+
+    console.log(`  │ ${name} │ ${avg} │ ${vsCell} │ ${entries} │`);
   }
 
-  // Benchmark runs
-  const memBefore = getMemoryUsage();
-  for (let i = 0; i < BENCHMARK_RUNS; i++) {
-    const result = await benchFn(buffer);
-    times.push(result.time);
-    entriesCount = result.entriesCount;
-    gcIfAvailable();
-  }
-  const memAfter = getMemoryUsage();
+  console.log(`  └──────────────────────────┴────────────┴───────────────┴─────────┘`);
 
-  return {
-    name,
-    file: path.basename(filePath),
-    fileSize,
-    avgTime: times.reduce((a, b) => a + b, 0) / times.length,
-    minTime: Math.min(...times),
-    maxTime: Math.max(...times),
-    entriesCount,
-    memoryUsed: Math.max(0, memAfter - memBefore)
-  };
+  const failures = results.filter(r => r.error);
+  if (failures.length > 0) {
+    for (const f of failures) {
+      console.log(`  ❌ ${f.name} failed: ${f.error}`);
+    }
+  }
 }
 
 async function main() {
+  if (REPORT_ENABLED) {
+    fs.mkdirSync(path.dirname(REPORT_PATH), { recursive: true });
+    fs.writeFileSync(REPORT_PATH, "", "utf8");
+
+    const originalLog = console.log.bind(console);
+    const originalError = console.error.bind(console);
+
+    console.log = (...args: unknown[]) => {
+      const msg = util.format(...args);
+      originalLog(msg);
+      fs.appendFileSync(REPORT_PATH, msg + "\n", "utf8");
+    };
+
+    console.error = (...args: unknown[]) => {
+      const msg = util.format(...args);
+      originalError(msg);
+      fs.appendFileSync(REPORT_PATH, "[stderr] " + msg + "\n", "utf8");
+    };
+  }
+
   console.log("╔══════════════════════════════════════════════════════════════════╗");
   console.log("║           ZIP Extraction Benchmark: Archive vs AdmZip            ║");
   console.log("╚══════════════════════════════════════════════════════════════════╝");
   console.log();
+
+  await loadBuiltArchiveModule();
 
   if (TEST_FILES.length === 0) {
     console.error("No test files found!");
@@ -227,6 +382,12 @@ async function main() {
   console.log(`  Warmup runs: ${WARMUP_RUNS}`);
   console.log(`  Benchmark runs: ${BENCHMARK_RUNS}`);
   console.log(`  Test files: ${TEST_FILES.length}`);
+  console.log(`  Large tests: ${RUN_LARGE ? "enabled" : "disabled (--no-large)"}`);
+  if (RUN_QUICK) console.log(`  Mode: quick (--quick)`);
+  console.log(`  Modes: ${RUN_ALL_MODES ? "all (--all-modes)" : "head-to-head (default)"}`);
+  console.log(`  Timeout: ${TIMEOUT_MS}ms (--timeout-ms <n>)`);
+  console.log(`  Verbose: ${VERBOSE ? "on" : "off (--verbose)"}`);
+  console.log(`  Report file: ${REPORT_ENABLED ? REPORT_PATH : "disabled (--no-report)"}`);
   console.log();
 
   const allResults: BenchmarkResult[] = [];
@@ -239,64 +400,36 @@ async function main() {
     console.log(`  File size: ${formatBytes(buffer.length)}`);
     console.log();
 
-    // Run benchmarks
+    // Default: head-to-head
     const admZipResult = await runBenchmark("AdmZip", filePath, buffer, benchmarkAdmZip);
-    const unzipBufferResult = await runBenchmark(
-      "unzip() (buffer)",
-      filePath,
-      buffer,
-      benchmarkUnzipBuffer
-    );
-    const unzipStreamResult = await runBenchmark(
-      "unzip() (stream)",
-      filePath,
-      buffer,
-      benchmarkUnzipStream
-    );
-    const unzipForceStreamResult = await runBenchmark(
-      "unzip() (stream+forceStream)",
+    const unzipTrueStreamResult = await runBenchmark(
+      "unzip() (true stream)",
       filePath,
       buffer,
       benchmarkUnzipStreamForceStream
     );
 
-    allResults.push(admZipResult, unzipBufferResult, unzipStreamResult, unzipForceStreamResult);
+    const results: BenchmarkResult[] = [admZipResult, unzipTrueStreamResult];
 
-    // Print results table
-    console.log(`  ┌─────────────────────┬────────────┬────────────┬────────────┬─────────┐`);
-    console.log(`  │ Method              │ Avg Time   │ Min Time   │ Max Time   │ Entries │`);
-    console.log(`  ├─────────────────────┼────────────┼────────────┼────────────┼─────────┤`);
-
-    const results = [admZipResult, unzipBufferResult, unzipStreamResult, unzipForceStreamResult];
-    for (const r of results) {
-      const name = r.name.padEnd(19);
-      const avg = formatMs(r.avgTime).padStart(10);
-      const min = formatMs(r.minTime).padStart(10);
-      const max = formatMs(r.maxTime).padStart(10);
-      const entries = String(r.entriesCount).padStart(7);
-      console.log(`  │ ${name} │ ${avg} │ ${min} │ ${max} │ ${entries} │`);
-    }
-
-    console.log(`  └─────────────────────┴────────────┴────────────┴────────────┴─────────┘`);
-
-    // Performance comparison
-    const speedup = admZipResult.avgTime / unzipBufferResult.avgTime;
-    console.log();
-    if (speedup > 1) {
-      console.log(`  ✅ unzip() (buffer) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
-    } else {
-      console.log(`  ⚠️  unzip() (buffer) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
-    }
-
-    const streamSpeedup = admZipResult.avgTime / unzipStreamResult.avgTime;
-    if (streamSpeedup > 1) {
-      console.log(`  ✅ unzip() (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
-    } else {
-      console.log(
-        `  ⚠️  unzip() (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`
+    // Optional: include all modes for diagnosis
+    if (RUN_ALL_MODES) {
+      const unzipBufferResult = await runBenchmark(
+        "unzip() (buffer)",
+        filePath,
+        buffer,
+        benchmarkUnzipBuffer
       );
+      const unzipStreamResult = await runBenchmark(
+        "unzip() (stream)",
+        filePath,
+        buffer,
+        benchmarkUnzipStream
+      );
+      results.push(unzipBufferResult, unzipStreamResult);
     }
 
+    allResults.push(...results);
+    printComparison("Results", results);
     console.log();
   }
 
@@ -305,115 +438,122 @@ async function main() {
   console.log(`SUMMARY`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
-  // Calculate overall averages
-  const admZipAvg =
-    allResults.filter(r => r.name === "AdmZip").reduce((sum, r) => sum + r.avgTime, 0) /
-    TEST_FILES.length;
-  const unzipAvg =
-    allResults.filter(r => r.name === "unzip() (buffer)").reduce((sum, r) => sum + r.avgTime, 0) /
-    TEST_FILES.length;
+  // Calculate overall averages (ignore failures)
+  const admZipResults = allResults.filter(r => r.name === "AdmZip" && !r.error);
+  const unzipTrueStreamResults = allResults.filter(
+    r => r.name === "unzip() (true stream)" && !r.error
+  );
+  const unzipBufferResults = allResults.filter(r => r.name === "unzip() (buffer)" && !r.error);
+  const unzipStreamResults = allResults.filter(r => r.name === "unzip() (stream)" && !r.error);
 
-  console.log(`  AdmZip average:     ${formatMs(admZipAvg)}`);
-  console.log(`  unzip() average:    ${formatMs(unzipAvg)}`);
-  console.log();
+  const avgOf = (arr: BenchmarkResult[]) =>
+    arr.length ? arr.reduce((sum, r) => sum + r.avgTime, 0) / arr.length : Number.NaN;
 
-  const overallSpeedup = admZipAvg / unzipAvg;
-  if (overallSpeedup > 1) {
-    console.log(`  🏆 Overall: unzip() is ${overallSpeedup.toFixed(2)}x FASTER than AdmZip`);
-  } else {
-    console.log(`  📊 Overall: unzip() is ${(1 / overallSpeedup).toFixed(2)}x slower than AdmZip`);
+  const admZipAvg = avgOf(admZipResults);
+  const unzipTrueStreamAvg = avgOf(unzipTrueStreamResults);
+  const unzipBufferAvg = avgOf(unzipBufferResults);
+  const unzipStreamAvg = avgOf(unzipStreamResults);
+
+  const summaryRows: BenchmarkResult[] = [
+    {
+      name: "AdmZip",
+      file: "(overall)",
+      fileSize: 0,
+      avgTime: admZipAvg,
+      minTime: 0,
+      maxTime: 0,
+      entriesCount: 0,
+      memoryUsed: 0
+    },
+    {
+      name: "unzip() (true stream)",
+      file: "(overall)",
+      fileSize: 0,
+      avgTime: unzipTrueStreamAvg,
+      minTime: 0,
+      maxTime: 0,
+      entriesCount: 0,
+      memoryUsed: 0
+    }
+  ];
+
+  if (RUN_ALL_MODES) {
+    summaryRows.push(
+      {
+        name: "unzip() (buffer)",
+        file: "(overall)",
+        fileSize: 0,
+        avgTime: unzipBufferAvg,
+        minTime: 0,
+        maxTime: 0,
+        entriesCount: 0,
+        memoryUsed: 0
+      },
+      {
+        name: "unzip() (stream)",
+        file: "(overall)",
+        fileSize: 0,
+        avgTime: unzipStreamAvg,
+        minTime: 0,
+        maxTime: 0,
+        entriesCount: 0,
+        memoryUsed: 0
+      }
+    );
   }
 
+  printComparison("Overall (avg across files)", summaryRows);
+
   // Run large file benchmarks
-  console.log();
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`LARGE FILE TESTS (20MB)`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  if (RUN_LARGE) {
+    console.log();
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`LARGE FILE TESTS (20MB)`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
-  // Test 1: Single 20MB file
-  console.log();
-  console.log(`Generating 20MB ZIP (1 file)...`);
-  const largeBuffer1 = generateLargeZipBuffer(20, 1);
-  console.log(`  Generated ZIP size: ${formatBytes(largeBuffer1.length)}`);
-  await runLargeFileBenchmark("20MB (1 file)", largeBuffer1);
+    // Test 1: Single 20MB file
+    console.log();
+    console.log(`Generating 20MB ZIP (1 file)...`);
+    const largeBuffer1 = generateLargeZipBuffer(20, 1);
+    console.log(`  Generated ZIP size: ${formatBytes(largeBuffer1.length)}`);
+    await runLargeFileBenchmark("20MB (1 file)", largeBuffer1);
 
-  // Test 2: 20MB split into 4 files
-  console.log();
-  console.log(`Generating 20MB ZIP (4 files)...`);
-  const largeBuffer4 = generateLargeZipBuffer(20, 4);
-  console.log(`  Generated ZIP size: ${formatBytes(largeBuffer4.length)}`);
-  await runLargeFileBenchmark("20MB (4 files)", largeBuffer4);
+    // Test 2: 20MB split into 4 files
+    console.log();
+    console.log(`Generating 20MB ZIP (4 files)...`);
+    const largeBuffer4 = generateLargeZipBuffer(20, 4);
+    console.log(`  Generated ZIP size: ${formatBytes(largeBuffer4.length)}`);
+    await runLargeFileBenchmark("20MB (4 files)", largeBuffer4);
 
-  // Test 3: 20MB split into 10 files
-  console.log();
-  console.log(`Generating 20MB ZIP (10 files)...`);
-  const largeBuffer10 = generateLargeZipBuffer(20, 10);
-  console.log(`  Generated ZIP size: ${formatBytes(largeBuffer10.length)}`);
-  await runLargeFileBenchmark("20MB (10 files)", largeBuffer10);
+    // Test 3: 20MB split into 10 files
+    console.log();
+    console.log(`Generating 20MB ZIP (10 files)...`);
+    const largeBuffer10 = generateLargeZipBuffer(20, 10);
+    console.log(`  Generated ZIP size: ${formatBytes(largeBuffer10.length)}`);
+    await runLargeFileBenchmark("20MB (10 files)", largeBuffer10);
+  }
 }
 
 async function runLargeFileBenchmark(name: string, buffer: Buffer): Promise<void> {
   console.log(`  Testing: ${name}`);
 
   const admZipResult = await runBenchmark("AdmZip", name, buffer, benchmarkAdmZip);
-  const unzipBufferResult = await runBenchmark(
-    "unzip() (buffer)",
-    name,
-    buffer,
-    benchmarkUnzipBuffer
-  );
-  const unzipStreamResult = await runBenchmark(
-    "unzip() (stream)",
-    name,
-    buffer,
-    benchmarkUnzipStream
-  );
-  const unzipForceStreamResult = await runBenchmark(
-    "unzip() (stream+forceStream)",
+  const unzipTrueStreamResult = await runBenchmark(
+    "unzip() (true stream)",
     name,
     buffer,
     benchmarkUnzipStreamForceStream
   );
 
-  console.log(`  ┌──────────────────────┬────────────┬────────────┬────────────┬─────────┐`);
-  console.log(`  │ Method               │ Avg Time   │ Min Time   │ Max Time   │ Entries │`);
-  console.log(`  ├──────────────────────┼────────────┼────────────┼────────────┼─────────┤`);
-
-  for (const r of [admZipResult, unzipBufferResult, unzipStreamResult, unzipForceStreamResult]) {
-    const rname = r.name.padEnd(20);
-    const avg = formatMs(r.avgTime).padStart(10);
-    const min = formatMs(r.minTime).padStart(10);
-    const max = formatMs(r.maxTime).padStart(10);
-    const entries = String(r.entriesCount).padStart(7);
-    console.log(`  │ ${rname} │ ${avg} │ ${min} │ ${max} │ ${entries} │`);
-  }
-
-  console.log(`  └──────────────────────┴────────────┴────────────┴────────────┴─────────┘`);
-
-  const speedup = admZipResult.avgTime / unzipBufferResult.avgTime;
-  if (speedup > 1) {
-    console.log(`  ✅ unzip() (buffer) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
-  } else {
-    console.log(`  ⚠️  unzip() (buffer) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
-  }
-
-  const streamSpeedup = admZipResult.avgTime / unzipStreamResult.avgTime;
-  if (streamSpeedup > 1) {
-    console.log(`  ✅ unzip() (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
-  } else {
-    console.log(`  ⚠️  unzip() (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`);
-  }
-
-  const forceStreamSpeedup = admZipResult.avgTime / unzipForceStreamResult.avgTime;
-  if (forceStreamSpeedup > 1) {
-    console.log(
-      `  ✅ unzip() (stream+forceStream) is ${forceStreamSpeedup.toFixed(2)}x FASTER than AdmZip`
-    );
-  } else {
-    console.log(
-      `  ⚠️  unzip() (stream+forceStream) is ${(1 / forceStreamSpeedup).toFixed(2)}x slower than AdmZip`
+  const results: BenchmarkResult[] = [admZipResult, unzipTrueStreamResult];
+  if (RUN_ALL_MODES) {
+    results.push(
+      await runBenchmark("unzip() (buffer)", name, buffer, benchmarkUnzipBuffer),
+      await runBenchmark("unzip() (stream)", name, buffer, benchmarkUnzipStream)
     );
   }
+
+  printComparison("Results", results);
 }
 
 main().catch(console.error);

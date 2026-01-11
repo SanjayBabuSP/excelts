@@ -7,7 +7,6 @@
  */
 
 import { Duplex, PassThrough, concatUint8Arrays } from "@stream";
-import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
 import {
   DATA_DESCRIPTOR_SIGNATURE_BYTES,
   runParseLoop,
@@ -23,6 +22,7 @@ import {
   type ZipEntry,
   streamUntilValidatedDataDescriptor
 } from "@archive/unzip/stream.base";
+import { PatternScanner } from "@archive/utils/pattern-scanner";
 import { inflateRaw as fallbackInflateRaw } from "@archive/compression/deflate-fallback";
 import { ByteQueue } from "@archive/internal/byte-queue";
 import { hasDeflateRawDecompressionStream } from "@archive/compression/compress.base";
@@ -60,6 +60,9 @@ class BrowserInflateRaw extends Duplex {
     // Pass write handler to Duplex so pipe() calls our write method
     // Also pass final handler to close the DecompressionStream when _writable ends
     super({
+      // Keep the internal buffer bounded; this stream is used in tight parse loops.
+      writableHighWaterMark: 512 * 1024,
+      readableHighWaterMark: 512 * 1024,
       write: (chunk: Uint8Array, _encoding: string, callback: (error?: Error | null) => void) => {
         this._doWrite(chunk, callback);
       },
@@ -159,57 +162,6 @@ class BrowserInflateRaw extends Duplex {
     }
   }
 
-  // Override write to feed data into DecompressionStream
-  override write(
-    chunk: Uint8Array,
-    encodingOrCallback?: string | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    // Handle overload
-    let cb: ((error?: Error | null) => void) | undefined;
-    if (typeof encodingOrCallback === "function") {
-      cb = encodingOrCallback;
-    } else {
-      cb = callback;
-    }
-
-    this._doWrite(chunk, cb);
-    return true;
-  }
-
-  // Override end to close the DecompressionStream writer
-  override end(
-    chunkOrCallback?: Uint8Array | (() => void),
-    encodingOrCallback?: string | (() => void),
-    callback?: () => void
-  ): this {
-    // Handle overloads
-    let chunk: Uint8Array | undefined;
-    let cb: (() => void) | undefined;
-
-    if (typeof chunkOrCallback === "function") {
-      cb = chunkOrCallback;
-    } else if (chunkOrCallback !== undefined) {
-      chunk = chunkOrCallback;
-      if (typeof encodingOrCallback === "function") {
-        cb = encodingOrCallback;
-      } else {
-        cb = callback;
-      }
-    }
-
-    // Write final chunk if provided
-    if (chunk) {
-      this.write(chunk, () => {
-        this._closeWriter(cb);
-      });
-    } else {
-      this._closeWriter(cb);
-    }
-
-    return this;
-  }
-
   private _closeWriter(callback?: () => void): void {
     if (this.writeClosed) {
       this._readingDonePromise.then(() => {
@@ -240,7 +192,6 @@ class BrowserInflateRaw extends Duplex {
           if (callback) {
             callback();
           }
-          this.emit("finish");
         });
       });
   }
@@ -250,6 +201,251 @@ class BrowserInflateRaw extends Duplex {
       this.writer.abort(error || undefined).catch(() => {});
     }
     this.reader.cancel(error || undefined).catch(() => {});
+    return super.destroy(error);
+  }
+}
+
+// =============================================================================
+// Worker-based InflateRaw (optional)
+// =============================================================================
+
+let _inflateWorkerUrl: string | null = null;
+
+function getInflateWorkerUrl(customUrl?: string): string {
+  if (typeof customUrl === "string" && customUrl.length > 0) {
+    return customUrl;
+  }
+  if (_inflateWorkerUrl) {
+    return _inflateWorkerUrl;
+  }
+
+  // Inline worker to avoid bundler-specific worker loaders.
+  // It streams deflate-raw through DecompressionStream and posts decompressed chunks back.
+  const code = `
+let ds;
+let writer;
+let reader;
+let junkError = false;
+let pendingWrites = 0;
+
+function isJunkErrorMessage(msg) {
+  return typeof msg === 'string' && (msg.includes('Junk') || msg.includes('junk'));
+}
+
+async function ensureStarted() {
+  if (ds) return;
+  ds = new DecompressionStream('deflate-raw');
+  writer = ds.writable.getWriter();
+  reader = ds.readable.getReader();
+
+  (async () => {
+    try {
+      while (true) {
+        const r = await reader.read();
+        if (r.done) break;
+        const chunk = r.value;
+        postMessage({ t: 'data', chunk }, [chunk.buffer]);
+      }
+      postMessage({ t: 'end' });
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      if (isJunkErrorMessage(msg)) {
+        junkError = true;
+        postMessage({ t: 'end' });
+      } else {
+        postMessage({ t: 'error', message: msg });
+      }
+    }
+  })();
+}
+
+onmessage = async (ev) => {
+  const msg = ev.data;
+  try {
+    await ensureStarted();
+    if (msg.t === 'write') {
+      if (junkError) {
+        postMessage({ t: 'ack', id: msg.id });
+        return;
+      }
+      pendingWrites++;
+      await writer.write(msg.chunk);
+      pendingWrites--;
+      postMessage({ t: 'ack', id: msg.id });
+      return;
+    }
+    if (msg.t === 'close') {
+      // Wait for in-flight writes to finish (best-effort).
+      while (pendingWrites > 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+      try { await writer.close(); } catch (_) {}
+      postMessage({ t: 'closed' });
+      return;
+    }
+    if (msg.t === 'abort') {
+      try { await writer.abort(); } catch (_) {}
+      postMessage({ t: 'aborted' });
+      return;
+    }
+  } catch (e) {
+    const m = e && e.message ? e.message : String(e);
+    postMessage({ t: 'error', message: m, id: msg && msg.id });
+  }
+};
+`;
+
+  const blob = new Blob([code], { type: "text/javascript" });
+  _inflateWorkerUrl = URL.createObjectURL(blob);
+  return _inflateWorkerUrl;
+}
+
+class WorkerInflateRaw extends Duplex {
+  private readonly worker: Worker;
+  private _nextId = 1;
+  private _pendingAcks = new Map<number, (err?: Error | null) => void>();
+  private _closed = false;
+  private _junkError = false;
+  private _terminated = false;
+
+  constructor(workerUrl?: string) {
+    super({
+      write: (chunk: Uint8Array, _encoding: string, callback: (error?: Error | null) => void) => {
+        this._doWrite(chunk, callback);
+      },
+      final: (callback: (error?: Error | null) => void) => {
+        this._doClose(callback);
+      }
+    });
+
+    const url = getInflateWorkerUrl(workerUrl);
+    this.worker = new Worker(url);
+
+    this.worker.onmessage = (ev: MessageEvent) => {
+      const msg: any = ev.data;
+      if (!msg || typeof msg.t !== "string") {
+        return;
+      }
+
+      if (msg.t === "data") {
+        const chunk = msg.chunk as Uint8Array;
+        this.push(chunk);
+        return;
+      }
+
+      if (msg.t === "end") {
+        this.push(null);
+        this._terminateWorker();
+        return;
+      }
+
+      if (msg.t === "aborted") {
+        this._terminateWorker();
+        return;
+      }
+
+      if (msg.t === "ack") {
+        const id = msg.id as number;
+        const cb = this._pendingAcks.get(id);
+        if (cb) {
+          this._pendingAcks.delete(id);
+          cb();
+        }
+        return;
+      }
+
+      if (msg.t === "error") {
+        const message = typeof msg.message === "string" ? msg.message : "Worker inflate error";
+        if (message.includes("Junk") || message.includes("junk")) {
+          this._junkError = true;
+          // Treat as end-of-stream.
+          this.push(null);
+          this._terminateWorker();
+          // Resolve any pending writes.
+          for (const cb of this._pendingAcks.values()) {
+            cb();
+          }
+          this._pendingAcks.clear();
+          return;
+        }
+
+        const err = new Error(message);
+        // Fail any pending writes.
+        for (const cb of this._pendingAcks.values()) {
+          cb(err);
+        }
+        this._pendingAcks.clear();
+        this.emit("error", err);
+        this._terminateWorker();
+        return;
+      }
+    };
+
+    this.worker.onerror = (e: ErrorEvent) => {
+      const err = new Error(e.message || "Worker error");
+      for (const cb of this._pendingAcks.values()) {
+        cb(err);
+      }
+      this._pendingAcks.clear();
+      this.emit("error", err);
+      this._terminateWorker();
+    };
+  }
+
+  private _terminateWorker(): void {
+    if (this._terminated) {
+      return;
+    }
+    this._terminated = true;
+    try {
+      this.worker.terminate();
+    } catch {
+      // ignore
+    }
+  }
+
+  private _doWrite(chunk: Uint8Array, callback: (error?: Error | null) => void): void {
+    if (this._closed || this._junkError) {
+      callback();
+      return;
+    }
+
+    const id = this._nextId++;
+    this._pendingAcks.set(id, callback);
+
+    // Transfer the underlying ArrayBuffer to reduce copies.
+    // If chunk is a view into a larger buffer, slice to avoid transferring unrelated bytes.
+    const transferable =
+      chunk.byteOffset === 0 && chunk.byteLength === chunk.buffer.byteLength
+        ? chunk
+        : chunk.slice();
+
+    this.worker.postMessage({ t: "write", id, chunk: transferable }, [transferable.buffer]);
+  }
+
+  private _doClose(callback: (error?: Error | null) => void): void {
+    if (this._closed) {
+      callback();
+      return;
+    }
+    this._closed = true;
+
+    this.worker.postMessage({ t: "close" });
+    callback();
+  }
+
+  override destroy(error?: Error | null): this {
+    if (!this._closed) {
+      this._closed = true;
+      try {
+        this.worker.postMessage({ t: "abort" });
+      } catch {
+        // ignore
+      }
+    }
+
+    this._terminateWorker();
+
     return super.destroy(error);
   }
 }
@@ -355,6 +551,11 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     private _driverState: ParseDriverState = {};
     private _parsingDone: Promise<void> = Promise.resolve();
 
+    // Writable-side backpressure (browser-only)
+    private _writeCb?: (err?: Error | null) => void;
+    private readonly _inputHighWaterMarkBytes: number;
+    private readonly _inputLowWaterMarkBytes: number;
+
     crxHeader?: CrxHeader;
     __emittedError?: Error;
 
@@ -362,11 +563,11 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       super({
         objectMode: true,
         write: (chunk: Uint8Array, _encoding: string, callback: (err?: Error | null) => void) => {
-          this._handleWrite(chunk);
-          callback();
+          this._handleWrite(chunk, callback);
         },
         final: (callback: (err?: Error | null) => void) => {
           this.finished = true;
+          this._maybeReleaseWriteCallback();
           this._wakeUp();
           this.emit("data-available");
           this.emit("chunk", false);
@@ -375,6 +576,13 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       });
 
       this._opts = opts;
+
+      // Default values are intentionally conservative to avoid memory spikes
+      // when parsing large archives under slow consumers.
+      const hi = Math.max(64 * 1024, opts.inputHighWaterMarkBytes ?? 2 * 1024 * 1024);
+      const lo = Math.max(32 * 1024, opts.inputLowWaterMarkBytes ?? Math.floor(hi / 4));
+      this._inputHighWaterMarkBytes = hi;
+      this._inputLowWaterMarkBytes = Math.min(lo, hi);
 
       const io: ParseIO = {
         pull: (length: number) => this.pull(length),
@@ -405,6 +613,12 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         },
         emitError: (err: Error) => {
           this.__emittedError = err;
+          // Ensure upstream writers don't hang waiting for a deferred write callback.
+          if (this._writeCb) {
+            const cb = this._writeCb;
+            this._writeCb = undefined;
+            cb(err);
+          }
           this.emit("error", err);
         },
         emitClose: () => {
@@ -416,11 +630,26 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         // NOTE: We intentionally do NOT pass inflateRawSync to runParseLoop in browser.
         // Browser's native DecompressionStream is faster than our pure-JS fallback,
         // so we always use the streaming path for decompression in browsers.
+        const inflateFactory: InflateFactory = () => {
+          if (this._opts.useWorkerInflate && typeof Worker !== "undefined") {
+            // Worker path requires DecompressionStream support.
+            if (hasDeflateRawDecompressionStream()) {
+              try {
+                return new WorkerInflateRaw(this._opts.workerInflateUrl);
+              } catch {
+                // If Worker construction fails (e.g. CSP/CORS), fall back.
+                return createInflateRawFn();
+              }
+            }
+          }
+          return createInflateRawFn();
+        };
+
         this._parsingDone = runParseLoop(
           this._opts,
           io,
           emitter,
-          () => createInflateRawFn(),
+          inflateFactory,
           this._driverState
           // No inflateRawSync - always use streaming DecompressionStream in browser
         );
@@ -434,8 +663,17 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       });
     }
 
-    private _handleWrite(chunk: Uint8Array): void {
+    private _handleWrite(chunk: Uint8Array, callback: (err?: Error | null) => void): void {
       this._buffer.append(chunk);
+
+      // Apply writable backpressure by deferring the callback when the input buffer is large.
+      // The callback will be released once the parser drains the buffer.
+      if (this._buffer.length >= this._inputHighWaterMarkBytes) {
+        this._writeCb = callback;
+      } else {
+        callback();
+      }
+
       this._wakeUp();
       this.emit("data-available");
       this.emit("chunk");
@@ -457,6 +695,19 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       }
     }
 
+    private _maybeReleaseWriteCallback(): void {
+      if (!this._writeCb) {
+        return;
+      }
+      if (this._buffer.length > this._inputLowWaterMarkBytes) {
+        return;
+      }
+
+      const cb = this._writeCb;
+      this._writeCb = undefined;
+      cb();
+    }
+
     private _waitForData(): Promise<void> {
       return new Promise(resolve => {
         this._pendingResolve = resolve;
@@ -472,6 +723,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         if (this.finished) {
           if (this._buffer.length > 0) {
             const data = this._buffer.read(this._buffer.length);
+            this._maybeReleaseWriteCallback();
             return data;
           }
           throw new Error("FILE_ENDED");
@@ -479,29 +731,31 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         await this._waitForData();
       }
 
-      return this._buffer.read(length);
+      const out = this._buffer.read(length);
+      this._maybeReleaseWriteCallback();
+      return out;
     }
 
     private async _pullUntilInternal(pattern: Uint8Array, includeEof = false): Promise<Uint8Array> {
       const chunks: Uint8Array[] = [];
-      let searchFrom = 0;
-      const overlap = Math.max(0, pattern.length - 1);
+      const scanner = new PatternScanner(pattern);
 
       while (true) {
-        const view = this._buffer.view();
-        const match = indexOfUint8ArrayPattern(view, pattern, searchFrom);
+        const bufLen = this._buffer.length;
+        const match = scanner.find(this._buffer);
 
         if (match !== -1) {
           this.match = match;
           const toRead = match + (includeEof ? pattern.length : 0);
           if (toRead > 0) {
             chunks.push(this._buffer.read(toRead));
+            this._maybeReleaseWriteCallback();
           }
-          return concatUint8Arrays(chunks);
+          return chunks.length === 1 ? chunks[0] : concatUint8Arrays(chunks);
         }
 
         // No match yet. Avoid rescanning bytes that can't start a match.
-        searchFrom = Math.max(searchFrom, Math.max(0, view.length - overlap));
+        scanner.onNoMatch(bufLen);
 
         if (this.finished) {
           throw new Error("FILE_ENDED");
@@ -510,7 +764,8 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         const safeLen = Math.max(0, this._buffer.length - pattern.length);
         if (safeLen > 0) {
           chunks.push(this._buffer.read(safeLen));
-          searchFrom = Math.max(0, searchFrom - safeLen);
+          scanner.onConsume(safeLen);
+          this._maybeReleaseWriteCallback();
         }
 
         await this._waitForData();
@@ -521,9 +776,14 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       const output = new PassThrough();
       let remaining = length;
       let done = false;
+      let waitingDrain = false;
 
       const pull = (): void => {
         if (done) {
+          return;
+        }
+
+        if (waitingDrain) {
           return;
         }
 
@@ -531,7 +791,16 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
           const toRead = Math.min(remaining, this._buffer.length);
           const chunk = this._buffer.read(toRead);
           remaining -= toRead;
-          output.write(chunk);
+          const ok = output.write(chunk);
+          this._maybeReleaseWriteCallback();
+          if (!ok) {
+            waitingDrain = true;
+            output.once("drain", () => {
+              waitingDrain = false;
+              pull();
+            });
+            return;
+          }
         }
 
         if (remaining === 0) {
@@ -553,43 +822,76 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     private _streamUntilPattern(pattern: Uint8Array, includeEof = false): PassThrough {
       const output = new PassThrough();
       let done = false;
-      let searchFrom = 0;
-      const overlap = Math.max(0, pattern.length - 1);
+      const patternLen = pattern.length;
+      const scanner = new PatternScanner(pattern);
+      let waitingDrain = false;
 
       const pull = (): void => {
-        if (done) {
+        if (done || waitingDrain) {
           return;
         }
 
-        const view = this._buffer.view();
-        const match = indexOfUint8ArrayPattern(view, pattern, searchFrom);
-
-        if (match !== -1) {
-          this.match = match;
-          const endIndex = includeEof ? match + pattern.length : match;
-          if (endIndex > 0) {
-            output.write(this._buffer.read(endIndex));
+        while (true) {
+          if (this._buffer.length <= 0) {
+            break;
           }
-          done = true;
-          this.removeListener("data-available", pull);
-          output.end();
-          return;
-        }
 
-        // No match yet. Avoid rescanning bytes that can't start a match.
-        searchFrom = Math.max(searchFrom, Math.max(0, view.length - overlap));
+          const bufLen = this._buffer.length;
+          const match = scanner.find(this._buffer);
 
-        if (this.finished) {
-          done = true;
-          this.removeListener("data-available", pull);
-          output.destroy(new Error("FILE_ENDED"));
-          return;
-        }
+          if (match !== -1) {
+            this.match = match;
+            const endIndex = includeEof ? match + patternLen : match;
+            if (endIndex > 0) {
+              const ok = output.write(this._buffer.read(endIndex));
+              scanner.onConsume(endIndex);
+              this._maybeReleaseWriteCallback();
+              if (!ok) {
+                waitingDrain = true;
+                output.once("drain", () => {
+                  waitingDrain = false;
+                  pull();
+                });
+                return;
+              }
+            }
+            done = true;
+            this.removeListener("data-available", pull);
+            output.end();
+            return;
+          }
 
-        const safeLen = Math.max(0, this._buffer.length - pattern.length);
-        if (safeLen > 0) {
-          output.write(this._buffer.read(safeLen));
-          searchFrom = Math.max(0, searchFrom - safeLen);
+          // No match yet. Avoid rescanning bytes that can't start a match.
+          scanner.onNoMatch(bufLen);
+
+          if (this.finished) {
+            done = true;
+            this.removeListener("data-available", pull);
+            output.destroy(new Error("FILE_ENDED"));
+            return;
+          }
+
+          const safeLen = bufLen - patternLen;
+          if (safeLen <= 0) {
+            // Keep enough bytes to detect a split signature.
+            if (this._buffer.length <= patternLen) {
+              this._maybeReleaseWriteCallback();
+            }
+            break;
+          }
+
+          const ok = output.write(this._buffer.read(safeLen));
+          scanner.onConsume(safeLen);
+          this._maybeReleaseWriteCallback();
+
+          if (!ok) {
+            waitingDrain = true;
+            output.once("drain", () => {
+              waitingDrain = false;
+              pull();
+            });
+            return;
+          }
         }
       };
 
@@ -635,14 +937,17 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     private _streamUntilDataDescriptor(): PassThrough {
       return streamUntilValidatedDataDescriptor({
         source: {
-          getView: () => this._buffer.view(),
           getLength: () => this._buffer.length,
           read: (length: number) => this._buffer.read(length),
+          indexOfPattern: (pattern: Uint8Array, startIndex: number) =>
+            this._buffer.indexOfPattern(pattern, startIndex),
+          peekUint32LE: (offset: number) => this._buffer.peekUint32LE(offset),
           isFinished: () => this.finished,
           onDataAvailable: (cb: () => void) => {
             this.on("data-available", cb);
             return () => this.removeListener("data-available", cb);
-          }
+          },
+          maybeReleaseWriteCallback: () => this._maybeReleaseWriteCallback()
         },
         dataDescriptorSignature
       });
