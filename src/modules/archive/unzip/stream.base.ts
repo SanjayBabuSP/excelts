@@ -32,6 +32,8 @@ import {
 
 export const DATA_DESCRIPTOR_SIGNATURE_BYTES = writeUint32LE(DATA_DESCRIPTOR_SIG);
 
+const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
+
 // Shared parseBuffer() formats
 export const CRX_HEADER_FORMAT: [string, number][] = [
   ["version", 4],
@@ -291,7 +293,7 @@ export class PullStream extends Duplex {
    * otherwise (i.e. Uint8Array) it is interpreted as a pattern signaling end of stream
    */
   stream(eof: number | Uint8Array, includeEof?: boolean): PassThrough {
-    const p = new PassThrough();
+    const p = new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
     let done = false;
     let waitingDrain = false;
 
@@ -813,6 +815,10 @@ export function scanValidatedDataDescriptor(
 export interface StreamUntilValidatedDataDescriptorSource {
   getLength(): number;
   read(length: number): Uint8Array;
+  /** Optional: zero-copy chunk views for streaming writes. */
+  peekChunks?(length: number): Uint8Array[];
+  /** Optional: consume bytes previously written from peekChunks(). */
+  discard?(length: number): void;
   indexOfPattern(pattern: Uint8Array, startIndex: number): number;
   peekUint32LE(offset: number): number | null;
   isFinished(): boolean;
@@ -840,7 +846,7 @@ export function streamUntilValidatedDataDescriptor(
   const keepTailBytes = options.keepTailBytes ?? 20;
   const errorMessage = options.errorMessage ?? "FILE_ENDED: Data descriptor not found";
 
-  const output = new PassThrough();
+  const output = new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
   let done = false;
 
   let waitingDrain = false;
@@ -895,18 +901,44 @@ export function streamUntilValidatedDataDescriptor(
             descriptorCompressedSize === expectedCompressedSize
           ) {
             if (idx > 0) {
-              const ok = output.write(source.read(idx));
-              bytesEmitted += idx;
-              available -= idx;
-              scanner.onConsume(idx);
+              if (source.peekChunks && source.discard) {
+                const parts = source.peekChunks(idx);
+                let written = 0;
+                for (const part of parts) {
+                  const ok = output.write(part);
+                  written += part.length;
+                  if (!ok) {
+                    waitingDrain = true;
+                    output.once("drain", () => {
+                      waitingDrain = false;
+                      pull();
+                    });
+                    break;
+                  }
+                }
+                if (written > 0) {
+                  source.discard(written);
+                  bytesEmitted += written;
+                  available -= written;
+                  scanner.onConsume(written);
+                }
+                if (waitingDrain) {
+                  return;
+                }
+              } else {
+                const ok = output.write(source.read(idx));
+                bytesEmitted += idx;
+                available -= idx;
+                scanner.onConsume(idx);
 
-              if (!ok) {
-                waitingDrain = true;
-                output.once("drain", () => {
-                  waitingDrain = false;
-                  pull();
-                });
-                return;
+                if (!ok) {
+                  waitingDrain = true;
+                  output.once("drain", () => {
+                    waitingDrain = false;
+                    pull();
+                  });
+                  return;
+                }
               }
             }
 
@@ -933,6 +965,36 @@ export function streamUntilValidatedDataDescriptor(
       // split across chunks can still be detected/validated.
       const flushLen = Math.max(0, available - keepTailBytes);
       if (flushLen > 0) {
+        if (source.peekChunks && source.discard) {
+          const parts = source.peekChunks(flushLen);
+          let written = 0;
+          for (const part of parts) {
+            const ok = output.write(part);
+            written += part.length;
+            if (!ok) {
+              waitingDrain = true;
+              output.once("drain", () => {
+                waitingDrain = false;
+                pull();
+              });
+              break;
+            }
+          }
+
+          if (written > 0) {
+            source.discard(written);
+            bytesEmitted += written;
+            available -= written;
+            scanner.onConsume(written);
+          }
+
+          if (available <= keepTailBytes) {
+            source.maybeReleaseWriteCallback?.();
+          }
+
+          return;
+        }
+
         const ok = output.write(source.read(flushLen));
         bytesEmitted += flushLen;
         available -= flushLen;
@@ -1327,7 +1389,9 @@ async function readFileRecord(
 
   const fileName = decodeZipEntryPath(fileNameBuffer);
 
-  const entry = new PassThrough() as ZipEntry;
+  const entry = new PassThrough({
+    highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK
+  }) as ZipEntry;
   let autodraining = false;
 
   entry.autodrain = function () {
@@ -1419,7 +1483,10 @@ async function readFileRecord(
     return;
   }
 
-  const inflater = vars.compressionMethod && !autodraining ? inflateFactory() : new PassThrough();
+  const inflater =
+    vars.compressionMethod && !autodraining
+      ? inflateFactory()
+      : new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
 
   if (fileSizeKnown) {
     await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize || 0);
