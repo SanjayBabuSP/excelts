@@ -56,22 +56,19 @@ export function indexOfUint8ArrayPattern(
 
   // Fast paths for small patterns (very common in ZIP parsing: 2/3/4-byte signatures).
   if (patLen === 1) {
-    const p0 = pattern[0];
-    for (let i = start; i < bufLen; i++) {
-      if (buffer[i] === p0) {
-        return i;
-      }
-    }
-    return -1;
+    return buffer.indexOf(pattern[0], start);
   }
 
   if (patLen === 2) {
     const p0 = pattern[0];
     const p1 = pattern[1];
-    for (let i = start; i <= bufLen - 2; i++) {
-      if (buffer[i] === p0 && buffer[i + 1] === p1) {
+    const last = bufLen - 2;
+    let i = buffer.indexOf(p0, start);
+    while (i !== -1 && i <= last) {
+      if (buffer[i + 1] === p1) {
         return i;
       }
+      i = buffer.indexOf(p0, i + 1);
     }
     return -1;
   }
@@ -80,10 +77,13 @@ export function indexOfUint8ArrayPattern(
     const p0 = pattern[0];
     const p1 = pattern[1];
     const p2 = pattern[2];
-    for (let i = start; i <= bufLen - 3; i++) {
-      if (buffer[i] === p0 && buffer[i + 1] === p1 && buffer[i + 2] === p2) {
+    const last = bufLen - 3;
+    let i = buffer.indexOf(p0, start);
+    while (i !== -1 && i <= last) {
+      if (buffer[i + 1] === p1 && buffer[i + 2] === p2) {
         return i;
       }
+      i = buffer.indexOf(p0, i + 1);
     }
     return -1;
   }
@@ -93,15 +93,13 @@ export function indexOfUint8ArrayPattern(
     const p1 = pattern[1];
     const p2 = pattern[2];
     const p3 = pattern[3];
-    for (let i = start; i <= bufLen - 4; i++) {
-      if (
-        buffer[i] === p0 &&
-        buffer[i + 1] === p1 &&
-        buffer[i + 2] === p2 &&
-        buffer[i + 3] === p3
-      ) {
+    const last = bufLen - 4;
+    let i = buffer.indexOf(p0, start);
+    while (i !== -1 && i <= last) {
+      if (buffer[i + 1] === p1 && buffer[i + 2] === p2 && buffer[i + 3] === p3) {
         return i;
       }
+      i = buffer.indexOf(p0, i + 1);
     }
     return -1;
   }

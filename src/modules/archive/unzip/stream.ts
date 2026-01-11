@@ -108,9 +108,11 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     private _streamUntilValidatedDataDescriptor(): PassThrough {
       return streamUntilValidatedDataDescriptor({
         source: {
-          getView: () => this._queue.view(),
           getLength: () => this._queue.length,
           read: (length: number) => this._queue.read(length),
+          indexOfPattern: (pattern: Uint8Array, startIndex: number) =>
+            this._queue.indexOfPattern(pattern, startIndex),
+          peekUint32LE: (offset: number) => this._queue.peekUint32LE(offset),
           isFinished: () => this.finished,
           onDataAvailable: (cb: () => void) => {
             this.on("chunk", cb);
