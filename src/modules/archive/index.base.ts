@@ -6,27 +6,10 @@
  * from this file and then layer their platform-specific bindings.
  */
 
-// ZIP builders
-export {
-  createZip,
-  createZipSync,
-  ZipBuilder,
-  type ZipEntry,
-  type ZipOptions
-} from "@archive/zip-builder";
+// Unified archive I/O
+export type { ArchiveSource } from "@archive/io/archive-source";
+export type { ArchiveSink } from "@archive/io/archive-sink";
 
-// Streaming ZIP (fflate-like API)
-export { StreamingZip, ZipDeflateFile, Zip, ZipDeflate } from "@archive/streaming-zip";
-
-// Buffer-based unzip API (cross-platform)
-export {
-  extractAll,
-  extractFile,
-  listFiles,
-  forEachEntry,
-  ZipParser,
-  type ExtractedFile,
-  type ZipParseOptions
-} from "@archive/extract";
-
-export type { ZipEntryInfo } from "@archive/zip-entry-info";
+// High-level APIs
+export { zip, ZipArchive, type ZipOptions, type ZipEntryOptions } from "@archive/zip";
+export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip";

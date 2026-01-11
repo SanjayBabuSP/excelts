@@ -17,7 +17,7 @@
 import fs from "fs";
 import { fileExists } from "@utils/utils";
 import { XLSX as XLSXBase } from "@excel/xlsx/xlsx.browser";
-import { Parse, type StreamZipEntry as ZipEntry } from "@archive";
+import { Parse, type ZipEntry } from "@archive/unzip/stream";
 import { Writable, pipeline } from "@stream";
 
 class XLSX extends XLSXBase {

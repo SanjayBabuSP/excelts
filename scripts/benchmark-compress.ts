@@ -7,7 +7,7 @@ import {
   compressSync,
   decompress,
   decompressSync
-} from "../dist/esm/modules/archive/compress.js";
+} from "../dist/esm/modules/archive/compression/compress.js";
 
 const DEFAULT_LEVEL = 6;
 const DEFAULT_THRESHOLD_BYTES = 8 * 1024 * 1024;

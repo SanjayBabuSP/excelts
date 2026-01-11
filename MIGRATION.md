@@ -98,6 +98,23 @@ This reduces memory usage and avoids work proportional to the number of cells in
 - Prefer `worksheet.getCell(address).dataValidation` (or `worksheet.dataValidations.find(address)`) for lookups.
 - If you need to iterate validations, iterate over the model entries and handle `range:` keys.
 
+## Archive/ZIP: timestamp defaults are now reproducible-friendly
+
+### What changed
+
+When creating ZIPs, the default timestamp mode is now `"dos"` (DOS date/time only).
+Previously, the default was `"dos+utc"`, which additionally writes a UTC mtime in the Info-ZIP extended timestamp extra field (0x5455).
+
+### Why
+
+- Omitting the UTC extra field makes output smaller and more stable.
+- It avoids cross-machine differences when callers provide a `Date` interpreted in local time.
+
+### How to migrate
+
+- If you need the UTC timestamp extra field for interoperability or precision, pass `timestamps: "dos+utc"`.
+- If you need stable hashes/byte-for-byte output across runs, use `reproducible: true` (or pass a fixed `modTime`).
+
 ## Cell: removed `HyperlinkValueData` type alias
 
 ### What changed

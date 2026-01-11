@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "@excel/workbook";
 import { FormCheckbox } from "@excel/form-control";
-import { extractAll } from "@archive/extract";
+import { extractAll } from "@archive/unzip/extract";
 
 describe("Form Control Checkbox", () => {
   describe("FormCheckbox class via worksheet", () => {

@@ -9,13 +9,12 @@
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  createDeflateStream,
-  createInflateStream,
-  hasDeflateRaw,
-  Zip,
-  ZipDeflate
-} from "@archive";
+import { createDeflateStream, createInflateStream, hasDeflateRaw } from "@archive";
+import { Zip as _Zip, ZipDeflate as _ZipDeflate } from "@archive/zip/stream";
+
+// Keep the rest of the test unchanged while sourcing Zip/ZipDeflate from the streaming-zip module.
+const Zip = _Zip;
+const ZipDeflate = _ZipDeflate;
 
 function hasNativeDeflateRawWebStreams(): boolean {
   if (typeof CompressionStream === "undefined" || typeof DecompressionStream === "undefined") {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { createParse, createZipSync, type StreamZipEntry } from "@archive/index.browser";
-import { DEFAULT_COMPRESS_THRESHOLD_BYTES } from "@archive/compress.base";
+import { unzip, zip } from "@archive";
+import { DEFAULT_COMPRESS_THRESHOLD_BYTES } from "@archive/compression/compress.base";
 import { Readable } from "@stream";
 
 describe("parse threshold optimization (browser)", () => {
@@ -14,27 +14,22 @@ describe("parse threshold optimization (browser)", () => {
       const smallContent = "Hello, World! This is a test file.";
       const smallContentBytes = new TextEncoder().encode(smallContent);
 
-      const zipBuffer = createZipSync([{ name: "small.txt", data: smallContentBytes }], {
-        level: 6
-      });
-
-      const parse = createParse({ forceStream: true });
+      const zipBuffer = zip({ level: 6 }).add("small.txt", smallContentBytes).bytesSync();
 
       // Create a readable stream from the buffer
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      const reader = unzip(readable, { parse: { forceStream: true } });
 
       let extractedContent = "";
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        if (zipEntry.path === "small.txt") {
-          const buffer = await zipEntry.buffer();
-          extractedContent = new TextDecoder().decode(buffer);
+      for await (const entry of reader.entries()) {
+        if (entry.path === "small.txt") {
+          extractedContent = await entry.text("utf-8");
         } else {
-          zipEntry.autodrain();
+          entry.discard();
         }
       }
 
@@ -46,24 +41,21 @@ describe("parse threshold optimization (browser)", () => {
       const content = "Uncompressed content for STORE mode test.";
       const contentBytes = new TextEncoder().encode(content);
 
-      const zipBuffer = createZipSync([{ name: "store.txt", data: contentBytes }], { level: 0 }); // level 0 = STORE
-
-      const parse = createParse({ forceStream: true });
+      const zipBuffer = zip({ level: 0 }).add("store.txt", contentBytes).bytesSync();
 
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      const reader = unzip(readable, { parse: { forceStream: true } });
 
       let extractedContent = "";
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        if (zipEntry.path === "store.txt") {
-          const buffer = await zipEntry.buffer();
-          extractedContent = new TextDecoder().decode(buffer);
+      for await (const entry of reader.entries()) {
+        if (entry.path === "store.txt") {
+          extractedContent = await entry.text("utf-8");
         } else {
-          zipEntry.autodrain();
+          entry.discard();
         }
       }
 
@@ -77,24 +69,22 @@ describe("parse threshold optimization (browser)", () => {
         { name: "file3.txt", content: "Content of file 3" }
       ];
 
-      const zipBuffer = createZipSync(
-        files.map(f => ({ name: f.name, data: new TextEncoder().encode(f.content) })),
-        { level: 6 }
-      );
-
-      const parse = createParse({ forceStream: true });
+      const z = zip({ level: 6 });
+      for (const f of files) {
+        z.add(f.name, new TextEncoder().encode(f.content));
+      }
+      const zipBuffer = z.bytesSync();
 
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      const reader = unzip(readable, { parse: { forceStream: true } });
 
       const extracted: Record<string, string> = {};
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        const buffer = await zipEntry.buffer();
-        extracted[zipEntry.path] = new TextDecoder().decode(buffer);
+      for await (const entry of reader.entries()) {
+        extracted[entry.path] = await entry.text("utf-8");
       }
 
       for (const file of files) {
@@ -107,28 +97,22 @@ describe("parse threshold optimization (browser)", () => {
       const content = "x".repeat(1000); // 1KB
       const contentBytes = new TextEncoder().encode(content);
 
-      const zipBuffer = createZipSync([{ name: "test.txt", data: contentBytes }], { level: 6 });
-
-      // Set threshold to 500 bytes - file should use streaming path
-      const parse = createParse({
-        forceStream: true,
-        thresholdBytes: 500
-      });
+      const zipBuffer = zip({ level: 6 }).add("test.txt", contentBytes).bytesSync();
 
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      // Set threshold to 500 bytes - file should use streaming path
+      const reader = unzip(readable, { parse: { forceStream: true, thresholdBytes: 500 } });
 
       let extractedContent = "";
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        if (zipEntry.path === "test.txt") {
-          const buffer = await zipEntry.buffer();
-          extractedContent = new TextDecoder().decode(buffer);
+      for await (const entry of reader.entries()) {
+        if (entry.path === "test.txt") {
+          extractedContent = await entry.text("utf-8");
         } else {
-          zipEntry.autodrain();
+          entry.discard();
         }
       }
 
@@ -143,23 +127,21 @@ describe("parse threshold optimization (browser)", () => {
         binaryData[i] = i;
       }
 
-      const zipBuffer = createZipSync([{ name: "binary.bin", data: binaryData }], { level: 6 });
-
-      const parse = createParse({ forceStream: true });
+      const zipBuffer = zip({ level: 6 }).add("binary.bin", binaryData).bytesSync();
 
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      const reader = unzip(readable, { parse: { forceStream: true } });
 
       let extractedData: Uint8Array | null = null;
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        if (zipEntry.path === "binary.bin") {
-          extractedData = await zipEntry.buffer();
+      for await (const entry of reader.entries()) {
+        if (entry.path === "binary.bin") {
+          extractedData = await entry.bytes();
         } else {
-          zipEntry.autodrain();
+          entry.discard();
         }
       }
 
@@ -173,25 +155,21 @@ describe("parse threshold optimization (browser)", () => {
 
   describe("threshold boundary conditions", () => {
     it("should handle empty files", async () => {
-      const zipBuffer = createZipSync([{ name: "empty.txt", data: new Uint8Array(0) }], {
-        level: 6
-      });
-
-      const parse = createParse({ forceStream: true });
+      const zipBuffer = zip({ level: 6 }).add("empty.txt", new Uint8Array(0)).bytesSync();
 
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      const reader = unzip(readable, { parse: { forceStream: true } });
 
       let extractedData: Uint8Array | null = null;
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        if (zipEntry.path === "empty.txt") {
-          extractedData = await zipEntry.buffer();
+      for await (const entry of reader.entries()) {
+        if (entry.path === "empty.txt") {
+          extractedData = await entry.bytes();
         } else {
-          zipEntry.autodrain();
+          entry.discard();
         }
       }
 
@@ -205,27 +183,21 @@ describe("parse threshold optimization (browser)", () => {
       const content = "x".repeat(thresholdBytes);
       const contentBytes = new TextEncoder().encode(content);
 
-      const zipBuffer = createZipSync([{ name: "boundary.txt", data: contentBytes }], { level: 6 });
-
-      const parse = createParse({
-        forceStream: true,
-        thresholdBytes
-      });
+      const zipBuffer = zip({ level: 6 }).add("boundary.txt", contentBytes).bytesSync();
 
       const readable = new Readable();
       readable.push(zipBuffer);
       readable.push(null);
-      readable.pipe(parse);
+
+      const reader = unzip(readable, { parse: { forceStream: true, thresholdBytes } });
 
       let extractedContent = "";
 
-      for await (const entry of parse) {
-        const zipEntry = entry as StreamZipEntry;
-        if (zipEntry.path === "boundary.txt") {
-          const buffer = await zipEntry.buffer();
-          extractedContent = new TextDecoder().decode(buffer);
+      for await (const entry of reader.entries()) {
+        if (entry.path === "boundary.txt") {
+          extractedContent = await entry.text("utf-8");
         } else {
-          zipEntry.autodrain();
+          entry.discard();
         }
       }
 

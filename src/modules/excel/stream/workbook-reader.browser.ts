@@ -10,7 +10,7 @@
  */
 
 import { EventEmitter, Readable } from "@stream";
-import { createParse } from "@archive/parse";
+import { createParse } from "@archive/unzip/stream";
 import { iterateStream } from "@excel/utils/iterate-stream";
 import {
   getWorksheetNoFromWorksheetPath,

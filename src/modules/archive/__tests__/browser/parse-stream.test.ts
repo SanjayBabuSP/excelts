@@ -6,18 +6,18 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { createZipSync, type ZipEntry as ZipCreateEntry } from "@archive/index.browser";
-import { createParse, type ZipEntry } from "@archive/parse.browser";
+import { zip } from "@archive";
+import { createParse, type ZipEntry } from "@archive/unzip/stream.browser";
 
 describe("parse.browser - createParse streaming", () => {
   // Helper to create a test ZIP with known content
   function createTestZip(files: Array<{ name: string; content: string }>): Uint8Array {
     const encoder = new TextEncoder();
-    const entries: ZipCreateEntry[] = files.map(f => ({
-      name: f.name,
-      data: encoder.encode(f.content)
-    }));
-    return createZipSync(entries, { level: 6 });
+    const z = zip({ level: 6 });
+    for (const f of files) {
+      z.add(f.name, encoder.encode(f.content));
+    }
+    return z.bytesSync();
   }
 
   it("should parse entries and get buffer content", async () => {

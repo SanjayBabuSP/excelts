@@ -83,3 +83,39 @@ export { CsvParserStream, CsvFormatterStream } from "@csv/csv.browser";
 // Utilities
 // =============================================================================
 export * from "@excel/utils/sheet-utils";
+
+// =============================================================================
+// Archive (ZIP) support (Browser-compatible)
+// =============================================================================
+export {
+  // High-level archive API
+  zip,
+  unzip,
+  ZipArchive,
+  ZipReader,
+  UnzipEntry,
+  type ZipOptions,
+  type ZipEntryOptions,
+  type UnzipOptions,
+  type ArchiveSource,
+  type ArchiveSink,
+
+  // CRC32
+  crc32,
+  crc32Update,
+  crc32Finalize,
+
+  // Compression utilities
+  compress,
+  compressSync,
+  decompress,
+  decompressSync,
+  hasCompressionStream,
+  type CompressOptions,
+
+  // Streaming compression
+  createDeflateStream,
+  createInflateStream,
+  hasDeflateRaw,
+  type StreamCompressOptions
+} from "@archive/index.browser";

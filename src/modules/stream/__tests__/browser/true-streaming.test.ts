@@ -7,14 +7,17 @@
 
 import { describe, beforeAll, expect, it } from "vitest";
 import { createTrueStreamingTests } from "@stream/__tests__/streaming/true-streaming-tests";
-import { yieldToEventLoop, generateLargeText } from "@stream/__tests__/streaming/streaming-test-base";
+import {
+  yieldToEventLoop,
+  generateLargeText
+} from "@stream/__tests__/streaming/streaming-test-base";
 
 // Lazy import to avoid Node.js module resolution issues
 let WorkbookWriter: any;
 let WorkbookReader: any;
 let StreamingZip: any;
 let ZipDeflateFile: any;
-let unzip: any;
+let ZipParser: any;
 
 beforeAll(async () => {
   // Dynamic imports for browser environment - use index.browser directly
@@ -22,12 +25,12 @@ beforeAll(async () => {
   WorkbookWriter = excelModule.WorkbookWriter;
   WorkbookReader = excelModule.WorkbookReader;
 
-  const zipModule = await import("@archive/streaming-zip");
+  const zipModule = await import("@archive/zip/stream");
   StreamingZip = zipModule.StreamingZip;
   ZipDeflateFile = zipModule.ZipDeflateFile;
 
-  const unzipModule = await import("@archive");
-  unzip = unzipModule;
+  const zipParserModule = await import("@archive/unzip/zip-parser");
+  ZipParser = zipParserModule.ZipParser;
 });
 
 // ============================================================================
@@ -76,7 +79,7 @@ function getBrowserContext() {
       zipData: Uint8Array,
       onEntry: (entry: { path: string; stream: () => AsyncIterable<Uint8Array> }) => Promise<void>
     ) => {
-      const parser = new unzip.ZipParser(zipData);
+      const parser = new ZipParser(zipData);
       const entries = parser.getEntries();
 
       for (const entry of entries) {

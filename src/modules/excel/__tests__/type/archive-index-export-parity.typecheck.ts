@@ -20,24 +20,20 @@ import type {
   CompressOptions as NodeCompressOptions,
   StreamCompressOptions as NodeStreamCompressOptions,
   ZipOptions as NodeZipOptions,
-  ZipEntry as NodeZipEntry,
-  ParseOptions as NodeParseOptions,
-  StreamZipEntry as NodeStreamZipEntry,
-  ZipParseOptions as NodeZipParseOptions,
-  ExtractedFile as NodeExtractedFile,
-  ZipEntryInfo as NodeZipEntryInfo
+  ZipEntryOptions as NodeZipEntryOptions,
+  UnzipOptions as NodeUnzipOptions,
+  ArchiveSource as NodeArchiveSource,
+  ArchiveSink as NodeArchiveSink
 } from "@archive";
 
 import type {
   CompressOptions as BrowserCompressOptions,
   StreamCompressOptions as BrowserStreamCompressOptions,
   ZipOptions as BrowserZipOptions,
-  ZipEntry as BrowserZipEntry,
-  ParseOptions as BrowserParseOptions,
-  StreamZipEntry as BrowserStreamZipEntry,
-  ZipParseOptions as BrowserZipParseOptions,
-  ExtractedFile as BrowserExtractedFile,
-  ZipEntryInfo as BrowserZipEntryInfo
+  ZipEntryOptions as BrowserZipEntryOptions,
+  UnzipOptions as BrowserUnzipOptions,
+  ArchiveSource as BrowserArchiveSource,
+  ArchiveSink as BrowserArchiveSink
 } from "@archive/index.browser";
 
 type NodeRuntime = typeof NodeIndexModule;
@@ -125,32 +121,12 @@ type _NonClass_hasDeflateRaw = Assert<
   IsEqualStrict<NodeRuntimeNonClass["hasDeflateRaw"], BrowserRuntimeNonClass["hasDeflateRaw"]>
 >;
 
-type _NonClass_createZip = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["createZip"], BrowserRuntimeNonClass["createZip"]>
+type _NonClass_zip = Assert<
+  IsEqualStrict<NodeRuntimeNonClass["zip"], BrowserRuntimeNonClass["zip"]>
 >;
 
-type _NonClass_createZipSync = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["createZipSync"], BrowserRuntimeNonClass["createZipSync"]>
->;
-
-type _NonClass_createParse = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["createParse"], BrowserRuntimeNonClass["createParse"]>
->;
-
-type _NonClass_extractAll = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["extractAll"], BrowserRuntimeNonClass["extractAll"]>
->;
-
-type _NonClass_extractFile = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["extractFile"], BrowserRuntimeNonClass["extractFile"]>
->;
-
-type _NonClass_listFiles = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["listFiles"], BrowserRuntimeNonClass["listFiles"]>
->;
-
-type _NonClass_forEachEntry = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["forEachEntry"], BrowserRuntimeNonClass["forEachEntry"]>
+type _NonClass_unzip = Assert<
+  IsEqualStrict<NodeRuntimeNonClass["unzip"], BrowserRuntimeNonClass["unzip"]>
 >;
 
 // Exported type parity
@@ -163,16 +139,12 @@ type _Type_StreamCompressOptions = Assert<
 
 type _Type_ZipOptions = Assert<IsEqual<NodeZipOptions, BrowserZipOptions>>;
 
-type _Type_ZipEntry = Assert<IsEqual<NodeZipEntry, BrowserZipEntry>>;
+type _Type_ZipEntryOptions = Assert<IsEqual<NodeZipEntryOptions, BrowserZipEntryOptions>>;
 
-type _Type_ParseOptions = Assert<IsEqual<NodeParseOptions, BrowserParseOptions>>;
+type _Type_UnzipOptions = Assert<IsEqual<NodeUnzipOptions, BrowserUnzipOptions>>;
 
-type _Type_StreamZipEntry = Assert<IsEqual<NodeStreamZipEntry, BrowserStreamZipEntry>>;
+type _Type_ArchiveSource = Assert<IsEqual<NodeArchiveSource, BrowserArchiveSource>>;
 
-type _Type_ZipParseOptions = Assert<IsEqual<NodeZipParseOptions, BrowserZipParseOptions>>;
-
-type _Type_ExtractedFile = Assert<IsEqual<NodeExtractedFile, BrowserExtractedFile>>;
-
-type _Type_ZipEntryInfo = Assert<IsEqual<NodeZipEntryInfo, BrowserZipEntryInfo>>;
+type _Type_ArchiveSink = Assert<IsEqual<NodeArchiveSink, BrowserArchiveSink>>;
 
 export {};

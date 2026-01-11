@@ -8,7 +8,7 @@
 export * from "@archive/index.base";
 
 // CRC32
-export { crc32, crc32Update, crc32Finalize } from "@archive/crc32";
+export { crc32, crc32Update, crc32Finalize } from "@archive/compression/crc32";
 
 // Compression
 export {
@@ -18,7 +18,7 @@ export {
   decompressSync,
   hasCompressionStream,
   type CompressOptions
-} from "@archive/compress";
+} from "@archive/compression/compress";
 
 // Streaming compression
 export {
@@ -26,7 +26,4 @@ export {
   createInflateStream,
   hasDeflateRaw,
   type StreamCompressOptions
-} from "@archive/streaming-compress";
-
-// Stream-based unzip API (Node.js; browser build aliases to ./parse.browser.ts)
-export { Parse, createParse, type ParseOptions, type ZipEntry as StreamZipEntry } from "@archive/parse";
+} from "@archive/compression/streaming-compress";

@@ -4,7 +4,7 @@ import { testUtils } from "@excel/__tests__/shared";
 import { Workbook, type CsvStreamReadOptions } from "../../../index";
 import { ValueType } from "@excel/enums";
 import { makeTestDataPath, testFilePath } from "@test/utils";
-import { extractAll } from "@archive/extract";
+import { extractAll } from "@archive/unzip/extract";
 
 const excelTestDataPath = makeTestDataPath(import.meta.url, "./data");
 

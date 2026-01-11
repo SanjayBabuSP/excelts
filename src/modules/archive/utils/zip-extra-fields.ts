@@ -1,11 +1,38 @@
 /**
  * ZIP extra field parsing helpers.
  *
- * Kept standalone so both streaming parser (`parse.base.ts`) and buffer parser
+ * Kept standalone so both streaming parser (`stream.base.ts`) and buffer parser
  * (`zip-parser.ts`) can share ZIP64 + Info-ZIP timestamp handling.
  */
 
-import { parseExtendedTimestampMtimeUnixSeconds } from "@archive/utils/zip-extra";
+const EXTENDED_TIMESTAMP_ID = 0x5455;
+
+function parseExtendedTimestampMtimeUnixSeconds(extraField: Uint8Array): number | undefined {
+  const view = new DataView(extraField.buffer, extraField.byteOffset, extraField.byteLength);
+  let offset = 0;
+
+  while (offset + 4 <= extraField.length) {
+    const headerId = view.getUint16(offset, true);
+    const dataSize = view.getUint16(offset + 2, true);
+    const dataStart = offset + 4;
+    const dataEnd = dataStart + dataSize;
+
+    if (dataEnd > extraField.length) {
+      break;
+    }
+
+    if (headerId === EXTENDED_TIMESTAMP_ID && dataSize >= 1) {
+      const flags = extraField[dataStart];
+      if ((flags & 0x01) !== 0 && dataSize >= 5) {
+        return view.getUint32(dataStart + 1, true) >>> 0;
+      }
+    }
+
+    offset = dataEnd;
+  }
+
+  return undefined;
+}
 
 export interface ZipVars {
   uncompressedSize: number;
@@ -65,19 +92,11 @@ export function parseZipExtraFields(extraField: Uint8Array, vars: ZipVars): ZipE
         extra.offsetToLocalFileHeader = readUint64LE(view, cursor);
       }
     } else if (signature === 0x5455) {
-      // Fast-path parse for Info-ZIP extended timestamp (mtime only).
-      if (partSize >= 1) {
-        const flags = extraField[dataStart];
-        if ((flags & 0x01) !== 0 && partSize >= 5) {
-          extra.mtimeUnixSeconds = view.getUint32(dataStart + 1, true) >>> 0;
-        } else {
-          const unixSeconds = parseExtendedTimestampMtimeUnixSeconds(
-            extraField.subarray(offset, dataEnd)
-          );
-          if (unixSeconds !== undefined) {
-            extra.mtimeUnixSeconds = unixSeconds;
-          }
-        }
+      const unixSeconds = parseExtendedTimestampMtimeUnixSeconds(
+        extraField.subarray(offset, dataEnd)
+      );
+      if (unixSeconds !== undefined) {
+        extra.mtimeUnixSeconds = unixSeconds;
       }
     }
 

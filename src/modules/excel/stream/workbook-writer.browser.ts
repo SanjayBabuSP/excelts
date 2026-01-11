@@ -8,7 +8,7 @@
  * with filesystem-specific features (filename output + image loading).
  */
 
-import { Zip, ZipDeflate } from "@archive/streaming-zip";
+import { Zip, ZipDeflate } from "@archive/zip/stream";
 import { StreamBuf } from "@excel/utils/stream-buf";
 import { base64ToUint8Array } from "@utils/utils";
 import { RelType } from "@excel/xlsx/rel-type";

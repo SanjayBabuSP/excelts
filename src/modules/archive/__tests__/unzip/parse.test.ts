@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createReadStream } from "fs";
 import { join } from "path";
 import { PassThrough } from "@stream";
-import { Parse, createParse, type ZipEntry } from "@archive/parse";
+import { Parse, createParse, type ZipEntry } from "@archive/unzip/stream";
 
 // Path to test xlsx file (xlsx files are zip archives)
 const testFilePath = join(__dirname, "./data/formulas.xlsx");

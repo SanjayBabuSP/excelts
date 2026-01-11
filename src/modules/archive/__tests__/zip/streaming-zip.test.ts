@@ -5,9 +5,13 @@
  */
 
 import { describe } from "vitest";
-import { Zip, ZipDeflate, createDeflateStream } from "@archive";
-import { ZipParser } from "@archive/zip-parser";
-import { runStreamingZipTests, type StreamingZipModuleImports } from "@archive/__tests__/zip/streaming-zip.shared";
+import { createDeflateStream } from "@archive";
+import { Zip, ZipDeflate } from "@archive/zip/stream";
+import { ZipParser } from "@archive/unzip/zip-parser";
+import {
+  runStreamingZipTests,
+  type StreamingZipModuleImports
+} from "@archive/__tests__/zip/streaming-zip.shared";
 
 // =============================================================================
 // Run Shared Tests
