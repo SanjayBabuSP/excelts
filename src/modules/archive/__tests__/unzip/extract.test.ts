@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractAll, extractFile, listFiles, forEachEntry } from "@archive/extract";
+import { extractAll, extractFile, listFiles, forEachEntry } from "@archive/unzip/extract";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 

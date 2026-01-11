@@ -3,8 +3,8 @@
  * ZIP files created by StreamingZip
  */
 import { describe, it, expect } from "vitest";
-import { StreamingZip, ZipDeflateFile } from "@archive/streaming-zip";
-import { Parse } from "@archive/parse.browser";
+import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
+import { Parse } from "@archive/unzip/stream.browser";
 
 // Type helper for browser Parse which has different methods than Node version
 type BrowserParse = Parse & {

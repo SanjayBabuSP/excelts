@@ -1,24 +1,19 @@
 /**
- * Benchmark: Archive (ZipParser) vs AdmZip
+ * Benchmark: Archive (unzip) vs AdmZip
  *
  * Compares performance of our built-in archive module against adm-zip package.
  *
- * Run with: npx tsx scripts/benchmark-unzip.ts
- * Or after build: node --expose-gc scripts/benchmark-unzip.ts
+ * Note: this benchmark expects `npm run build:esm` to have been run.
+ * It imports the built ESM output to benchmark the real published code.
  */
 
 import { performance } from "node:perf_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 
-// Our archive module
-import {
-  ZipParser,
-  extractAll,
-  forEachEntry,
-  createParse,
-  type ZipEntry as StreamZipEntry
-} from "../src/modules/archive/index.js";
+// Our archive module (built ESM output)
+import { unzip, zip } from "../dist/esm/modules/archive/index.js";
 
 // AdmZip - install with: pnpm add -D adm-zip @types/adm-zip
 import AdmZip from "adm-zip";
@@ -33,28 +28,26 @@ const TEST_FILES = [
   "./src/modules/excel/stream/__tests__/data/huge.xlsx"
 ].filter(f => fs.existsSync(f));
 
-// Import createZipSync to generate large test ZIP files
-import { createZipSync, type ZipEntry } from "../src/modules/archive/index.js";
-
 // Generate a large ZIP buffer for testing
 function generateLargeZipBuffer(totalSizeMB: number, fileCount: number): Buffer {
   const sizePerFile = Math.floor((totalSizeMB * 1024 * 1024) / fileCount);
-  const entries: ZipEntry[] = [];
   const encoder = new TextEncoder();
   const text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100);
+
+  const archive = zip({ level: 6 });
 
   for (let i = 0; i < fileCount; i++) {
     let content = "";
     while (content.length < sizePerFile) {
       content += text + `\n--- File ${i}, Block ${content.length} ---\n`;
     }
-    entries.push({
-      name: `document_${i.toString().padStart(3, "0")}.txt`,
-      data: encoder.encode(content.slice(0, sizePerFile))
-    });
+    archive.add(
+      `document_${i.toString().padStart(3, "0")}.txt`,
+      encoder.encode(content.slice(0, sizePerFile))
+    );
   }
 
-  const zipData = createZipSync(entries, { level: 6 });
+  const zipData = archive.bytesSync();
   return Buffer.from(zipData);
 }
 
@@ -109,113 +102,76 @@ async function benchmarkAdmZip(buffer: Buffer): Promise<{ time: number; entriesC
   return { time, entriesCount };
 }
 
-async function benchmarkZipParser(
+async function benchmarkUnzipBuffer(
   buffer: Uint8Array
 ): Promise<{ time: number; entriesCount: number }> {
   const start = performance.now();
 
-  const parser = new ZipParser(buffer);
-  const entries = parser.getEntries();
+  const reader = unzip(buffer);
 
   let entriesCount = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory) {
-      // Extract data
-      const _data = await parser.extract(entry.path);
-      entriesCount++;
+  for await (const entry of reader.entries()) {
+    if (entry.isDirectory) {
+      continue;
     }
+    const _data = await entry.bytes();
+    entriesCount++;
   }
 
   const time = performance.now() - start;
   return { time, entriesCount };
 }
 
-async function benchmarkZipParserSync(
-  buffer: Uint8Array
-): Promise<{ time: number; entriesCount: number }> {
-  const start = performance.now();
-
-  const parser = new ZipParser(buffer);
-  const entries = parser.getEntries();
-
-  let entriesCount = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory) {
-      // Extract data synchronously
-      const _data = parser.extractSync(entry.path);
-      entriesCount++;
-    }
-  }
-
-  const time = performance.now() - start;
-  return { time, entriesCount };
-}
-
-async function benchmarkExtractAll(
-  buffer: Uint8Array
-): Promise<{ time: number; entriesCount: number }> {
-  const start = performance.now();
-
-  const files = await extractAll(buffer);
-  let entriesCount = 0;
-  for (const [_path, file] of files) {
-    if (!file.isDirectory) {
-      entriesCount++;
-    }
-  }
-
-  const time = performance.now() - start;
-  return { time, entriesCount };
-}
-
-async function benchmarkForEachEntry(
-  buffer: Uint8Array
-): Promise<{ time: number; entriesCount: number }> {
-  const start = performance.now();
-
-  let entriesCount = 0;
-  await forEachEntry(buffer, async (_path, getData, entry) => {
-    if (!entry.isDirectory) {
-      const _data = await getData();
-      entriesCount++;
-    }
-    return true;
-  });
-
-  const time = performance.now() - start;
-  return { time, entriesCount };
-}
-
-// Streaming API benchmark using createParse
-async function benchmarkCreateParse(
-  buffer: Uint8Array
-): Promise<{ time: number; entriesCount: number }> {
-  const start = performance.now();
-
-  return new Promise((resolve, reject) => {
-    const parse = createParse();
-    let entriesCount = 0;
-
-    parse.on("entry", async (entry: StreamZipEntry) => {
-      if (!entry.isDirectory) {
-        // Get decompressed buffer using streaming
-        const _data = await entry.buffer();
-        entriesCount++;
-      } else {
-        entry.autodrain();
+function bufferAsReadable(buffer: Uint8Array, chunkSize = 64 * 1024): Readable {
+  return Readable.from(
+    (function* (): Generator<Uint8Array> {
+      for (let i = 0; i < buffer.length; i += chunkSize) {
+        yield buffer.subarray(i, Math.min(buffer.length, i + chunkSize));
       }
-    });
+    })()
+  );
+}
 
-    parse.on("close", () => {
-      const time = performance.now() - start;
-      resolve({ time, entriesCount });
-    });
+async function benchmarkUnzipStream(
+  buffer: Uint8Array
+): Promise<{ time: number; entriesCount: number }> {
+  const start = performance.now();
 
-    parse.on("error", reject);
+  const reader = unzip(bufferAsReadable(buffer));
 
-    // Feed data to the stream
-    parse.end(buffer);
-  });
+  let entriesCount = 0;
+  for await (const entry of reader.entries()) {
+    if (entry.isDirectory) {
+      entry.discard();
+      continue;
+    }
+    const _data = await entry.bytes();
+    entriesCount++;
+  }
+
+  const time = performance.now() - start;
+  return { time, entriesCount };
+}
+
+async function benchmarkUnzipStreamForceStream(
+  buffer: Uint8Array
+): Promise<{ time: number; entriesCount: number }> {
+  const start = performance.now();
+
+  const reader = unzip(bufferAsReadable(buffer), { parse: { forceStream: true } });
+
+  let entriesCount = 0;
+  for await (const entry of reader.entries()) {
+    if (entry.isDirectory) {
+      entry.discard();
+      continue;
+    }
+    const _data = await entry.bytes();
+    entriesCount++;
+  }
+
+  const time = performance.now() - start;
+  return { time, entriesCount };
 }
 
 async function runBenchmark(
@@ -285,59 +241,33 @@ async function main() {
 
     // Run benchmarks
     const admZipResult = await runBenchmark("AdmZip", filePath, buffer, benchmarkAdmZip);
-    const zipParserResult = await runBenchmark(
-      "ZipParser (async)",
+    const unzipBufferResult = await runBenchmark(
+      "unzip() (buffer)",
       filePath,
       buffer,
-      benchmarkZipParser
+      benchmarkUnzipBuffer
     );
-    const zipParserSyncResult = await runBenchmark(
-      "ZipParser (sync)",
+    const unzipStreamResult = await runBenchmark(
+      "unzip() (stream)",
       filePath,
       buffer,
-      benchmarkZipParserSync
+      benchmarkUnzipStream
     );
-    const extractAllResult = await runBenchmark(
-      "extractAll",
+    const unzipForceStreamResult = await runBenchmark(
+      "unzip() (stream+forceStream)",
       filePath,
       buffer,
-      benchmarkExtractAll
-    );
-    const forEachResult = await runBenchmark(
-      "forEachEntry",
-      filePath,
-      buffer,
-      benchmarkForEachEntry
-    );
-    const createParseResult = await runBenchmark(
-      "createParse (stream)",
-      filePath,
-      buffer,
-      benchmarkCreateParse
+      benchmarkUnzipStreamForceStream
     );
 
-    allResults.push(
-      admZipResult,
-      zipParserResult,
-      zipParserSyncResult,
-      extractAllResult,
-      forEachResult,
-      createParseResult
-    );
+    allResults.push(admZipResult, unzipBufferResult, unzipStreamResult, unzipForceStreamResult);
 
     // Print results table
     console.log(`  ┌─────────────────────┬────────────┬────────────┬────────────┬─────────┐`);
     console.log(`  │ Method              │ Avg Time   │ Min Time   │ Max Time   │ Entries │`);
     console.log(`  ├─────────────────────┼────────────┼────────────┼────────────┼─────────┤`);
 
-    const results = [
-      admZipResult,
-      zipParserResult,
-      zipParserSyncResult,
-      extractAllResult,
-      forEachResult,
-      createParseResult
-    ];
+    const results = [admZipResult, unzipBufferResult, unzipStreamResult, unzipForceStreamResult];
     for (const r of results) {
       const name = r.name.padEnd(19);
       const avg = formatMs(r.avgTime).padStart(10);
@@ -350,20 +280,20 @@ async function main() {
     console.log(`  └─────────────────────┴────────────┴────────────┴────────────┴─────────┘`);
 
     // Performance comparison
-    const speedup = admZipResult.avgTime / zipParserSyncResult.avgTime;
+    const speedup = admZipResult.avgTime / unzipBufferResult.avgTime;
     console.log();
     if (speedup > 1) {
-      console.log(`  ✅ ZipParser (sync) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
+      console.log(`  ✅ unzip() (buffer) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
     } else {
-      console.log(`  ⚠️  ZipParser (sync) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
+      console.log(`  ⚠️  unzip() (buffer) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
     }
 
-    const asyncSpeedup = admZipResult.avgTime / zipParserResult.avgTime;
-    if (asyncSpeedup > 1) {
-      console.log(`  ✅ ZipParser (async) is ${asyncSpeedup.toFixed(2)}x FASTER than AdmZip`);
+    const streamSpeedup = admZipResult.avgTime / unzipStreamResult.avgTime;
+    if (streamSpeedup > 1) {
+      console.log(`  ✅ unzip() (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
     } else {
       console.log(
-        `  ⚠️  ZipParser (async) is ${(1 / asyncSpeedup).toFixed(2)}x slower than AdmZip`
+        `  ⚠️  unzip() (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`
       );
     }
 
@@ -379,21 +309,19 @@ async function main() {
   const admZipAvg =
     allResults.filter(r => r.name === "AdmZip").reduce((sum, r) => sum + r.avgTime, 0) /
     TEST_FILES.length;
-  const zipParserAvg =
-    allResults.filter(r => r.name === "ZipParser (sync)").reduce((sum, r) => sum + r.avgTime, 0) /
+  const unzipAvg =
+    allResults.filter(r => r.name === "unzip() (buffer)").reduce((sum, r) => sum + r.avgTime, 0) /
     TEST_FILES.length;
 
   console.log(`  AdmZip average:     ${formatMs(admZipAvg)}`);
-  console.log(`  ZipParser average:  ${formatMs(zipParserAvg)}`);
+  console.log(`  unzip() average:    ${formatMs(unzipAvg)}`);
   console.log();
 
-  const overallSpeedup = admZipAvg / zipParserAvg;
+  const overallSpeedup = admZipAvg / unzipAvg;
   if (overallSpeedup > 1) {
-    console.log(`  🏆 Overall: ZipParser is ${overallSpeedup.toFixed(2)}x FASTER than AdmZip`);
+    console.log(`  🏆 Overall: unzip() is ${overallSpeedup.toFixed(2)}x FASTER than AdmZip`);
   } else {
-    console.log(
-      `  📊 Overall: ZipParser is ${(1 / overallSpeedup).toFixed(2)}x slower than AdmZip`
-    );
+    console.log(`  📊 Overall: unzip() is ${(1 / overallSpeedup).toFixed(2)}x slower than AdmZip`);
   }
 
   // Run large file benchmarks
@@ -428,25 +356,30 @@ async function runLargeFileBenchmark(name: string, buffer: Buffer): Promise<void
   console.log(`  Testing: ${name}`);
 
   const admZipResult = await runBenchmark("AdmZip", name, buffer, benchmarkAdmZip);
-  const zipParserSyncResult = await runBenchmark(
-    "ZipParser (sync)",
+  const unzipBufferResult = await runBenchmark(
+    "unzip() (buffer)",
     name,
     buffer,
-    benchmarkZipParserSync
+    benchmarkUnzipBuffer
   );
-  const zipParserResult = await runBenchmark("ZipParser (async)", name, buffer, benchmarkZipParser);
-  const createParseResult = await runBenchmark(
-    "createParse (stream)",
+  const unzipStreamResult = await runBenchmark(
+    "unzip() (stream)",
     name,
     buffer,
-    benchmarkCreateParse
+    benchmarkUnzipStream
+  );
+  const unzipForceStreamResult = await runBenchmark(
+    "unzip() (stream+forceStream)",
+    name,
+    buffer,
+    benchmarkUnzipStreamForceStream
   );
 
   console.log(`  ┌──────────────────────┬────────────┬────────────┬────────────┬─────────┐`);
   console.log(`  │ Method               │ Avg Time   │ Min Time   │ Max Time   │ Entries │`);
   console.log(`  ├──────────────────────┼────────────┼────────────┼────────────┼─────────┤`);
 
-  for (const r of [admZipResult, zipParserSyncResult, zipParserResult, createParseResult]) {
+  for (const r of [admZipResult, unzipBufferResult, unzipStreamResult, unzipForceStreamResult]) {
     const rname = r.name.padEnd(20);
     const avg = formatMs(r.avgTime).padStart(10);
     const min = formatMs(r.minTime).padStart(10);
@@ -457,26 +390,28 @@ async function runLargeFileBenchmark(name: string, buffer: Buffer): Promise<void
 
   console.log(`  └──────────────────────┴────────────┴────────────┴────────────┴─────────┘`);
 
-  const speedup = admZipResult.avgTime / zipParserSyncResult.avgTime;
+  const speedup = admZipResult.avgTime / unzipBufferResult.avgTime;
   if (speedup > 1) {
-    console.log(`  ✅ ZipParser (sync) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
+    console.log(`  ✅ unzip() (buffer) is ${speedup.toFixed(2)}x FASTER than AdmZip`);
   } else {
-    console.log(`  ⚠️  ZipParser (sync) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
+    console.log(`  ⚠️  unzip() (buffer) is ${(1 / speedup).toFixed(2)}x slower than AdmZip`);
   }
 
-  const asyncSpeedup = admZipResult.avgTime / zipParserResult.avgTime;
-  if (asyncSpeedup > 1) {
-    console.log(`  ✅ ZipParser (async) is ${asyncSpeedup.toFixed(2)}x FASTER than AdmZip`);
-  } else {
-    console.log(`  ⚠️  ZipParser (async) is ${(1 / asyncSpeedup).toFixed(2)}x slower than AdmZip`);
-  }
-
-  const streamSpeedup = admZipResult.avgTime / createParseResult.avgTime;
+  const streamSpeedup = admZipResult.avgTime / unzipStreamResult.avgTime;
   if (streamSpeedup > 1) {
-    console.log(`  ✅ createParse (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
+    console.log(`  ✅ unzip() (stream) is ${streamSpeedup.toFixed(2)}x FASTER than AdmZip`);
+  } else {
+    console.log(`  ⚠️  unzip() (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`);
+  }
+
+  const forceStreamSpeedup = admZipResult.avgTime / unzipForceStreamResult.avgTime;
+  if (forceStreamSpeedup > 1) {
+    console.log(
+      `  ✅ unzip() (stream+forceStream) is ${forceStreamSpeedup.toFixed(2)}x FASTER than AdmZip`
+    );
   } else {
     console.log(
-      `  ⚠️  createParse (stream) is ${(1 / streamSpeedup).toFixed(2)}x slower than AdmZip`
+      `  ⚠️  unzip() (stream+forceStream) is ${(1 / forceStreamSpeedup).toFixed(2)}x slower than AdmZip`
     );
   }
 }

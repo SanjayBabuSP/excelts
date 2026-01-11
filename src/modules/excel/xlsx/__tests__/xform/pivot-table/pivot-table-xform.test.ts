@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "@excel/workbook";
-import { ZipParser } from "@archive/zip-parser";
+import { ZipParser } from "@archive/unzip/zip-parser";
 
 describe("PivotTableXform - renderPivotFields", () => {
   describe("dataField attribute", () => {

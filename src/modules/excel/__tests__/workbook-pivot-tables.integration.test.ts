@@ -3,7 +3,7 @@ import fs from "fs";
 import { promisify } from "util";
 
 const fsReadFileAsync = promisify(fs.readFile);
-import { ZipParser } from "@archive/zip-parser";
+import { ZipParser } from "@archive/unzip/zip-parser";
 import { Workbook } from "../../../index";
 
 const PIVOT_TABLE_FILEPATHS = [

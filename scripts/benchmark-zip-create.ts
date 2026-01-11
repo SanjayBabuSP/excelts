@@ -1,24 +1,18 @@
 /**
- * Benchmark: Archive (createZip/ZipBuilder) vs archiver
+ * Benchmark: Archive (zip) vs archiver
  *
  * Compares performance of ZIP creation between our built-in archive module and archiver package.
  *
- * Run with: npx tsx scripts/benchmark-zip-create.ts
+ * Note: this benchmark expects `npm run build:esm` to have been run.
+ * It imports the built ESM output to benchmark the real published code.
  */
 
+import { Buffer } from "node:buffer";
 import { performance } from "node:perf_hooks";
-import fs from "node:fs";
-import path from "node:path";
-import { PassThrough, Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 
-// Our archive module (import directly from source files to avoid relying on tsconfig path aliases)
-import {
-  createZip,
-  createZipSync,
-  ZipBuilder,
-  type ZipEntry
-} from "../src/modules/archive/zip-builder.ts";
-import { StreamingZip, ZipDeflateFile } from "../src/modules/archive/streaming-zip.ts";
+// Our archive module (built ESM output)
+import { zip } from "../dist/esm/modules/archive/index.js";
 
 // archiver - install with: pnpm add -D archiver @types/archiver
 import archiver from "archiver";
@@ -31,7 +25,16 @@ const ONLY_SCENARIO = (process.env.ONLY_SCENARIO ?? "").trim();
 // Test data - simulate S3 folder with multiple files
 interface TestFile {
   name: string;
-  data: Uint8Array;
+  data: Uint8Array | string;
+  comment?: string;
+}
+
+function inputSizeOf(files: TestFile[]): number {
+  let total = 0;
+  for (const f of files) {
+    total += typeof f.data === "string" ? Buffer.byteLength(f.data, "utf8") : f.data.length;
+  }
+  return total;
 }
 
 function generateTestFiles(count: number, sizePerFile: number): TestFile[] {
@@ -73,6 +76,29 @@ function generateTextFiles(count: number, sizePerFile: number): TestFile[] {
   return files;
 }
 
+function generateTinyTextStringFiles(count: number, sizePerFile: number): TestFile[] {
+  const files: TestFile[] = [];
+  const text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(4);
+
+  for (let i = 0; i < count; i++) {
+    let content = "";
+    while (content.length < sizePerFile) {
+      content += text + `\n--- File ${i}, Block ${content.length} ---\n`;
+    }
+    files.push({
+      name: `document_${i.toString().padStart(5, "0")}.txt`,
+      data: content.slice(0, sizePerFile)
+    });
+  }
+
+  return files;
+}
+
+function withEntryComments(files: TestFile[], commentBytes: number): TestFile[] {
+  const comment = "c".repeat(commentBytes);
+  return files.map(f => ({ ...f, comment }));
+}
+
 interface BenchmarkResult {
   name: string;
   scenario: string;
@@ -111,14 +137,19 @@ async function benchmarkArchiver(
   const stream = new PassThrough();
   stream.on("data", (chunk: Buffer) => chunks.push(chunk));
 
-  const zip = archiver("zip", { zlib: { level, memLevel: 9 } });
-  zip.pipe(stream);
+  const archive = archiver("zip", { zlib: { level, memLevel: 9 } });
+  archive.pipe(stream);
 
   for (const file of files) {
-    zip.append(Buffer.from(file.data), { name: file.name });
+    const buffer =
+      typeof file.data === "string" ? Buffer.from(file.data, "utf8") : Buffer.from(file.data);
+    archive.append(buffer, {
+      name: file.name,
+      ...(file.comment ? { comment: file.comment } : {})
+    } as any);
   }
 
-  await zip.finalize();
+  await archive.finalize();
 
   const outputSize = chunks.reduce((sum, c) => sum + c.length, 0);
   const time = performance.now() - start;
@@ -126,103 +157,57 @@ async function benchmarkArchiver(
   return { time, outputSize };
 }
 
-// Benchmark: createZip (async)
-async function benchmarkCreateZip(
+function buildZip(files: TestFile[], level: number, smartStore = true) {
+  const archive = zip({ level, smartStore });
+  for (const file of files) {
+    archive.add(file.name, file.data as any, file.comment ? { comment: file.comment } : undefined);
+  }
+  return archive;
+}
+
+// Benchmark: zip().bytes() (async)
+async function benchmarkZipBytes(
   files: TestFile[],
-  level: number
+  level: number,
+  smartStore: boolean
 ): Promise<{ time: number; outputSize: number }> {
   const start = performance.now();
 
-  const entries: ZipEntry[] = files.map(f => ({
-    name: f.name,
-    data: f.data
-  }));
-
-  const zipBuffer = await createZip(entries, { level } as any);
+  const zipBuffer = await buildZip(files, level, smartStore).bytes();
 
   const time = performance.now() - start;
   return { time, outputSize: zipBuffer.length };
 }
 
-// Benchmark: createZipSync
-function benchmarkCreateZipSync(
+// Benchmark: zip().bytesSync()
+function benchmarkZipBytesSync(
   files: TestFile[],
-  level: number
+  level: number,
+  smartStore: boolean
 ): { time: number; outputSize: number } {
   const start = performance.now();
 
-  const entries: ZipEntry[] = files.map(f => ({
-    name: f.name,
-    data: f.data
-  }));
-
-  const zipBuffer = createZipSync(entries, { level } as any);
+  const zipBuffer = buildZip(files, level, smartStore).bytesSync();
 
   const time = performance.now() - start;
   return { time, outputSize: zipBuffer.length };
 }
 
-// Benchmark: ZipBuilder (streaming-like)
-async function benchmarkZipBuilder(
+// Benchmark: zip().stream() (true streaming, like archiver)
+async function benchmarkZipStream(
   files: TestFile[],
-  level: number
+  level: number,
+  smartStore: boolean
 ): Promise<{ time: number; outputSize: number }> {
   const start = performance.now();
 
-  const builder = new ZipBuilder({ level } as any);
-  const chunks: Uint8Array[] = [];
-
-  for (const file of files) {
-    const fileChunks = await builder.addFile({ name: file.name, data: file.data });
-    chunks.push(...fileChunks);
-  }
-
-  chunks.push(...builder.finalize());
-
-  // Simulate concatenation like archiver does
   let totalSize = 0;
-  for (const chunk of chunks) {
+  for await (const chunk of buildZip(files, level, smartStore).stream()) {
     totalSize += chunk.length;
   }
 
   const time = performance.now() - start;
   return { time, outputSize: totalSize };
-}
-
-// Benchmark: StreamingZip (true streaming, like archiver)
-async function benchmarkStreamingZip(
-  files: TestFile[],
-  level: number
-): Promise<{ time: number; outputSize: number }> {
-  const start = performance.now();
-
-  return new Promise((resolve, reject) => {
-    const chunks: Uint8Array[] = [];
-    let totalSize = 0;
-
-    const zip = new StreamingZip((err: Error | null, data: Uint8Array, final: boolean) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      chunks.push(data);
-      totalSize += data.length;
-
-      if (final) {
-        const time = performance.now() - start;
-        resolve({ time, outputSize: totalSize });
-      }
-    });
-
-    // Add all files
-    for (const file of files) {
-      const zipFile = new ZipDeflateFile(file.name, { level });
-      zip.add(zipFile);
-      zipFile.push(file.data, true);
-    }
-
-    zip.end();
-  });
 }
 
 async function runBenchmark(
@@ -233,7 +218,7 @@ async function runBenchmark(
     | Promise<{ time: number; outputSize: number }>
     | { time: number; outputSize: number }
 ): Promise<BenchmarkResult> {
-  const inputSize = files.reduce((sum, f) => sum + f.data.length, 0);
+  const inputSize = inputSizeOf(files);
   const times: number[] = [];
   let outputSize = 0;
 
@@ -263,11 +248,17 @@ async function runBenchmark(
   };
 }
 
-async function runScenario(scenarioName: string, files: TestFile[], level: number): Promise<void> {
+async function runScenario(
+  scenarioName: string,
+  files: TestFile[],
+  level: number,
+  options: { smartStore?: boolean } = {}
+): Promise<void> {
   if (ONLY_SCENARIO && !scenarioName.toLowerCase().includes(ONLY_SCENARIO.toLowerCase())) {
     return;
   }
-  const inputSize = files.reduce((sum, f) => sum + f.data.length, 0);
+  const smartStore = options.smartStore ?? true;
+  const inputSize = inputSizeOf(files);
 
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`Scenario: ${scenarioName}`);
@@ -279,20 +270,16 @@ async function runScenario(scenarioName: string, files: TestFile[], level: numbe
     benchmarkArchiver(files, level)
   );
 
-  const streamingZipResult = await runBenchmark("StreamingZip (stream)", scenarioName, files, () =>
-    benchmarkStreamingZip(files, level)
+  const zipStreamResult = await runBenchmark("zip().stream()", scenarioName, files, () =>
+    benchmarkZipStream(files, level, smartStore)
   );
 
-  const createZipResult = await runBenchmark("createZip (async)", scenarioName, files, () =>
-    benchmarkCreateZip(files, level)
+  const zipBytesResult = await runBenchmark("zip().bytes()", scenarioName, files, () =>
+    benchmarkZipBytes(files, level, smartStore)
   );
 
-  const createZipSyncResult = await runBenchmark("createZipSync", scenarioName, files, () =>
-    benchmarkCreateZipSync(files, level)
-  );
-
-  const zipBuilderResult = await runBenchmark("ZipBuilder", scenarioName, files, () =>
-    benchmarkZipBuilder(files, level)
+  const zipBytesSyncResult = await runBenchmark("zip().bytesSync()", scenarioName, files, () =>
+    benchmarkZipBytesSync(files, level, smartStore)
   );
 
   // Print results table
@@ -300,13 +287,7 @@ async function runScenario(scenarioName: string, files: TestFile[], level: numbe
   console.log(`  │ Method                │ Avg Time   │ Min Time   │ Max Time   │ Output     │`);
   console.log(`  ├───────────────────────┼────────────┼────────────┼────────────┼────────────┤`);
 
-  const results = [
-    archiverResult,
-    streamingZipResult,
-    createZipResult,
-    createZipSyncResult,
-    zipBuilderResult
-  ];
+  const results = [archiverResult, zipStreamResult, zipBytesResult, zipBytesSyncResult];
   for (const r of results) {
     const name = r.name.padEnd(21);
     const avg = formatMs(r.avgTime).padStart(10);
@@ -319,32 +300,30 @@ async function runScenario(scenarioName: string, files: TestFile[], level: numbe
   console.log(`  └───────────────────────┴────────────┴────────────┴────────────┴────────────┘`);
 
   // Performance comparison - Stream vs Stream
-  const streamSpeedup = archiverResult.avgTime / streamingZipResult.avgTime;
+  const streamSpeedup = archiverResult.avgTime / zipStreamResult.avgTime;
   console.log();
   console.log(`  📊 Stream vs Stream:`);
   if (streamSpeedup > 1) {
-    console.log(`  ✅ StreamingZip is ${streamSpeedup.toFixed(2)}x FASTER than archiver`);
+    console.log(`  ✅ zip().stream() is ${streamSpeedup.toFixed(2)}x FASTER than archiver`);
   } else {
-    console.log(`  ⚠️  StreamingZip is ${(1 / streamSpeedup).toFixed(2)}x slower than archiver`);
+    console.log(`  ⚠️  zip().stream() is ${(1 / streamSpeedup).toFixed(2)}x slower than archiver`);
   }
 
   // Memory vs Stream comparison
-  const speedup = archiverResult.avgTime / createZipSyncResult.avgTime;
+  const speedup = archiverResult.avgTime / zipBytesSyncResult.avgTime;
   console.log();
   console.log(`  📊 Memory vs Stream:`);
   if (speedup > 1) {
-    console.log(`  ✅ createZipSync is ${speedup.toFixed(2)}x FASTER than archiver`);
+    console.log(`  ✅ zip().bytesSync() is ${speedup.toFixed(2)}x FASTER than archiver`);
   } else {
-    console.log(`  ⚠️  createZipSync is ${(1 / speedup).toFixed(2)}x slower than archiver`);
+    console.log(`  ⚠️  zip().bytesSync() is ${(1 / speedup).toFixed(2)}x slower than archiver`);
   }
 
-  const asyncSpeedup = archiverResult.avgTime / createZipResult.avgTime;
+  const asyncSpeedup = archiverResult.avgTime / zipBytesResult.avgTime;
   if (asyncSpeedup > 1) {
-    console.log(`  ✅ createZip (async) is ${asyncSpeedup.toFixed(2)}x FASTER than archiver`);
+    console.log(`  ✅ zip().bytes() is ${asyncSpeedup.toFixed(2)}x FASTER than archiver`);
   } else {
-    console.log(
-      `  ⚠️  createZip (async) is ${(1 / asyncSpeedup).toFixed(2)}x slower than archiver`
-    );
+    console.log(`  ⚠️  zip().bytes() is ${(1 / asyncSpeedup).toFixed(2)}x slower than archiver`);
   }
 
   // Compression ratio (report per method to avoid confusion)
@@ -353,16 +332,13 @@ async function runScenario(scenarioName: string, files: TestFile[], level: numbe
     `  📦 Compression ratio (archiver): ${ratio(archiverResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(archiverResult.outputSize)})`
   );
   console.log(
-    `  📦 Compression ratio (StreamingZip): ${ratio(streamingZipResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(streamingZipResult.outputSize)})`
+    `  📦 Compression ratio (zip().stream()): ${ratio(zipStreamResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(zipStreamResult.outputSize)})`
   );
   console.log(
-    `  📦 Compression ratio (createZip): ${ratio(createZipResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(createZipResult.outputSize)})`
+    `  📦 Compression ratio (zip().bytes()): ${ratio(zipBytesResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(zipBytesResult.outputSize)})`
   );
   console.log(
-    `  📦 Compression ratio (createZipSync): ${ratio(createZipSyncResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(createZipSyncResult.outputSize)})`
-  );
-  console.log(
-    `  📦 Compression ratio (ZipBuilder): ${ratio(zipBuilderResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(zipBuilderResult.outputSize)})`
+    `  📦 Compression ratio (zip().bytesSync()): ${ratio(zipBytesSyncResult.outputSize)}x (${formatBytes(inputSize)} → ${formatBytes(zipBytesSyncResult.outputSize)})`
   );
   console.log();
 }
@@ -401,6 +377,14 @@ async function main() {
   // 10 files, 100KB each
   await runScenario("Binary data (10 x 100KB, level=8)", generateTestFiles(10, 100 * 1024), 8);
 
+  // Scenario 5b: Fair DEFLATE-vs-DEFLATE on incompressible data (disable smart STORE)
+  await runScenario(
+    "Binary data (10 x 100KB, level=8, smartStore=false)",
+    generateTestFiles(10, 100 * 1024),
+    8,
+    { smartStore: false }
+  );
+
   // Scenario 6: No compression (level=0)
   await runScenario("No compression (10 x 100KB, level=0)", generateTextFiles(10, 100 * 1024), 0);
 
@@ -412,6 +396,24 @@ async function main() {
 
   // Scenario 9: Large binary file 20MB (less compressible)
   await runScenario("Large binary (1 x 20MB, level=8)", generateTestFiles(1, 20 * 1024 * 1024), 8);
+
+  // Scenario 10: Tiny files (stress per-entry overhead and metadata)
+  // 2000 files, 256B each ~= 500KB total
+  await runScenario("Tiny files (2000 x 256B text, level=0)", generateTextFiles(2000, 256), 0);
+
+  // Scenario 11: Tiny files from string sources (stress source normalization/UTF-8 encoding)
+  await runScenario(
+    "Tiny files (2000 x 256B text as string, level=0)",
+    generateTinyTextStringFiles(2000, 256),
+    0
+  );
+
+  // Scenario 12: Tiny files with per-entry comments (stress comment encoding/headers)
+  await runScenario(
+    "Tiny files (2000 x 256B text + 64B comment, level=0)",
+    withEntryComments(generateTextFiles(2000, 256), 64),
+    0
+  );
 
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`SUMMARY`);

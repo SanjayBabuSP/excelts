@@ -1,7 +1,7 @@
 /**
  * Verify if TRUE STREAMING really works for row data
  */
-import { StreamingZip, ZipDeflateFile } from "@archive/streaming-zip";
+import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 
 async function testTrueStreaming() {
   console.log("=== Testing TRUE STREAMING for Row Data ===\n");

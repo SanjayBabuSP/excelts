@@ -38,8 +38,8 @@ import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import { RelType } from "@excel/xlsx/rel-type";
 import { StreamBuf } from "@excel/utils/stream-buf";
 import { bufferToString, base64ToUint8Array } from "@utils/utils";
-import { StreamingZip, ZipDeflateFile } from "@archive/streaming-zip";
-import { ZipParser } from "@archive";
+import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
+import { ZipParser } from "@archive/unzip/zip-parser";
 import { PassThrough, concatUint8Arrays, type IEventEmitter } from "@stream";
 import type { Workbook } from "@excel/workbook";
 import {
@@ -219,10 +219,7 @@ class StreamingZipWriterAdapter implements IZipWriter {
     });
     this.zip.add(file);
 
-    const pushResult = (file as any).push(buffer, true);
-    if (pushResult && typeof pushResult.catch === "function") {
-      pushResult.catch((err: unknown) => this._emit("error", err));
-    }
+    file.push(buffer, true);
   }
 
   finalize(): void {

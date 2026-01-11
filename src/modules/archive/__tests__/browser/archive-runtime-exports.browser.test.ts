@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import * as archive from "@archive";
-import { ARCHIVE_RUNTIME_EXPORTS, getRuntimeExportKeys } from "@archive/__tests__/contract/archive-runtime-exports";
+import {
+  ARCHIVE_RUNTIME_EXPORTS,
+  getRuntimeExportKeys
+} from "@archive/__tests__/runtime/archive-runtime-exports";
 
 describe("archive/index runtime exports (browser)", () => {
   it("should match the export contract", () => {

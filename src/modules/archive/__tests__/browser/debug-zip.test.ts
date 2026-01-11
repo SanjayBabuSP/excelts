@@ -2,7 +2,7 @@
  * Debug test to verify StreamingZip produces correct ZIP files
  */
 import { describe, it, expect } from "vitest";
-import { StreamingZip, ZipDeflateFile } from "@archive/streaming-zip";
+import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 
 describe("Debug ZIP output", () => {
   it("should produce ZIP with data descriptor", async () => {

@@ -88,29 +88,34 @@ export * from "@excel/utils/sheet-utils";
 // Archive (ZIP) support (Browser-compatible)
 // =============================================================================
 export {
-  // ZIP creation
-  createZip,
-  createZipSync,
-  ZipBuilder,
-  type ZipEntry,
+  // High-level archive API
+  zip,
+  unzip,
+  ZipArchive,
+  ZipReader,
+  UnzipEntry,
   type ZipOptions,
-  // ZIP extraction
-  ZipParser,
-  extractAll,
-  extractFile,
-  listFiles,
-  forEachEntry,
-  type ZipEntryInfo,
-  type ExtractedFile,
-  type ZipParseOptions,
+  type ZipEntryOptions,
+  type UnzipOptions,
+  type ArchiveSource,
+  type ArchiveSink,
+
+  // CRC32
+  crc32,
+  crc32Update,
+  crc32Finalize,
+
   // Compression utilities
   compress,
   compressSync,
   decompress,
   decompressSync,
-  // Streaming ZIP parser
-  Parse,
-  createParse,
-  type ParseOptions,
-  type StreamZipEntry
+  hasCompressionStream,
+  type CompressOptions,
+
+  // Streaming compression
+  createDeflateStream,
+  createInflateStream,
+  hasDeflateRaw,
+  type StreamCompressOptions
 } from "@archive/index.browser";

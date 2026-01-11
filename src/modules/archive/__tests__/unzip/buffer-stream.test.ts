@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bufferStream } from "@archive/parse.base";
+import { bufferStream } from "@archive/unzip/stream.base";
 import { Readable } from "@stream";
 
 const decoder = new TextDecoder();
