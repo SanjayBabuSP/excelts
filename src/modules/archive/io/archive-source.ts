@@ -1,4 +1,5 @@
 import { encodeUtf8 } from "@archive/utils/text";
+import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
 
 export type ArchiveSource =
   | Uint8Array
@@ -8,18 +9,6 @@ export type ArchiveSource =
   | AsyncIterable<unknown>
   | ReadableStream<unknown>
   | { [Symbol.asyncIterator](): AsyncIterator<unknown> };
-
-export function isReadableStream(value: unknown): value is ReadableStream<unknown> {
-  return !!value && typeof value === "object" && typeof (value as any).getReader === "function";
-}
-
-export function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return (
-    !!value &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as any)[Symbol.asyncIterator] === "function"
-  );
-}
 
 function normalizeChunk(value: unknown): Uint8Array | null {
   if (!value) {

@@ -5,12 +5,9 @@
  * implementation selected by `./streams` (Node.js or browser).
  */
 
-import { createReadableFromArray, createTransform } from "@stream/streams";
+import { consumers, createReadableFromArray, createTransform } from "@stream/streams";
 import type { IReadable, ITransform } from "@stream/types";
-import {
-  stringToUint8Array as _stringToUint8Array,
-  uint8ArrayToString as _uint8ArrayToString
-} from "@stream/shared";
+import { stringToUint8Array as _stringToUint8Array } from "@stream/shared";
 
 // =============================================================================
 // High-Level Stream Consumers
@@ -29,52 +26,19 @@ export async function collect<T>(stream: {
 export async function text(stream: {
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array>;
 }): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-    totalLength += chunk.length;
-  }
-  if (chunks.length === 1) {
-    return _uint8ArrayToString(chunks[0]);
-  }
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (let i = 0, len = chunks.length; i < len; i++) {
-    const c = chunks[i];
-    result.set(c, offset);
-    offset += c.length;
-  }
-  return _uint8ArrayToString(result);
+  return consumers.text(stream as AsyncIterable<Uint8Array>);
 }
 
 export async function json<T = unknown>(stream: {
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array>;
 }): Promise<T> {
-  const str = await text(stream);
-  return JSON.parse(str) as T;
+  return consumers.json(stream as AsyncIterable<Uint8Array>) as Promise<T>;
 }
 
 export async function bytes(stream: {
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array>;
 }): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-    totalLength += chunk.length;
-  }
-  if (chunks.length === 1) {
-    return chunks[0];
-  }
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (let i = 0, len = chunks.length; i < len; i++) {
-    const c = chunks[i];
-    result.set(c, offset);
-    offset += c.length;
-  }
-  return result;
+  return consumers.buffer(stream as AsyncIterable<Uint8Array>);
 }
 
 // =============================================================================

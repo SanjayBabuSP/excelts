@@ -7,15 +7,9 @@
 
 import { EventEmitter } from "@stream/event-emitter";
 import { textEncoder } from "@stream/shared";
+import type { BufferedStreamOptions, DataChunk } from "@stream/types";
 
-/**
- * Represents a chunk of data with copy capabilities
- */
-export interface DataChunk {
-  readonly length: number;
-  copy(target: Uint8Array, targetOffset: number, offset: number, length: number): number;
-  toUint8Array(): Uint8Array;
-}
+export type { BufferedStreamOptions, DataChunk } from "@stream/types";
 
 /**
  * String chunk implementation
@@ -130,11 +124,6 @@ class ReadWriteBuffer {
     // Use subarray for zero-copy view when returning whole remaining buffer
     return this.buffer.subarray(this.iRead, this.iWrite);
   }
-}
-
-export interface BufferedStreamOptions {
-  /** Batch size for internal read-write buffers */
-  batchSize?: number;
 }
 
 /**

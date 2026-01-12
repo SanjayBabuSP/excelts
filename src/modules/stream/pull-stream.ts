@@ -6,20 +6,23 @@
  */
 
 import { EventEmitter } from "@stream/event-emitter";
-import { concatUint8Arrays } from "@stream/shared";
+import type { PullStreamOptions } from "@stream/types";
 
-export interface PullStreamOptions {
-  /** Enable object mode */
-  objectMode?: boolean;
-}
+export type { PullStreamOptions } from "@stream/types";
+
+const EMPTY_U8 = new Uint8Array(0);
 
 /**
  * Browser-compatible Pull Stream - Read data from buffer on demand with pattern matching
  */
 export class PullStream extends EventEmitter {
-  // Use chunked buffer storage to avoid repeated concat
-  private _bufferChunks: Uint8Array[] = [];
-  private _totalLength: number = 0;
+  // Single growable buffer with read/write cursors.
+  // IMPORTANT: never mutate bytes that have already been returned via subarray
+  // (to keep views stable). When we need to reclaim prefix space, we allocate
+  // a new buffer and copy the remaining bytes.
+  private _buffer: Uint8Array = new Uint8Array(0);
+  private _bufferReadIndex: number = 0;
+  private _bufferWriteIndex: number = 0;
   protected finished: boolean = false;
   protected _match?: number;
   private _destroyed: boolean = false;
@@ -28,24 +31,26 @@ export class PullStream extends EventEmitter {
     super();
   }
 
-  // Consolidate chunks into single buffer when needed
+  // Maintain legacy protected accessor for subclasses.
+  // Returned value is a view of the readable region.
   protected get buffer(): Uint8Array {
-    const len = this._bufferChunks.length;
-    if (len === 0) {
-      return new Uint8Array(0);
+    if (this._bufferReadIndex === this._bufferWriteIndex) {
+      return EMPTY_U8;
     }
-    if (len === 1) {
-      return this._bufferChunks[0];
-    }
-    // Consolidate multiple chunks
-    const buf = concatUint8Arrays(this._bufferChunks);
-    this._bufferChunks = [buf];
-    return buf;
+    return this._buffer.subarray(this._bufferReadIndex, this._bufferWriteIndex);
   }
 
   protected set buffer(buf: Uint8Array) {
-    this._bufferChunks = buf.length > 0 ? [buf] : [];
-    this._totalLength = buf.length;
+    if (buf.length === 0) {
+      this._buffer = EMPTY_U8;
+      this._bufferReadIndex = 0;
+      this._bufferWriteIndex = 0;
+      return;
+    }
+
+    this._buffer = buf;
+    this._bufferReadIndex = 0;
+    this._bufferWriteIndex = buf.length;
   }
 
   /**
@@ -57,8 +62,42 @@ export class PullStream extends EventEmitter {
       return false;
     }
 
-    this._bufferChunks.push(chunk);
-    this._totalLength += chunk.length;
+    const chunkLen = chunk.length;
+    if (chunkLen === 0) {
+      this.emit("chunk");
+      return true;
+    }
+
+    // Fast path: first write can reuse caller buffer without copy.
+    if (this._buffer.length === 0) {
+      this._buffer = chunk;
+      this._bufferReadIndex = 0;
+      this._bufferWriteIndex = chunkLen;
+      this.emit("chunk");
+      return true;
+    }
+
+    const required = this._bufferWriteIndex + chunkLen;
+    if (required <= this._buffer.length) {
+      this._buffer.set(chunk, this._bufferWriteIndex);
+      this._bufferWriteIndex += chunkLen;
+      this.emit("chunk");
+      return true;
+    }
+
+    // Need a new buffer. We keep previously returned views stable by allocating.
+    const remaining = this._bufferWriteIndex - this._bufferReadIndex;
+    const nextLength = remaining + chunkLen;
+    const prevCap = this._buffer.length;
+    // Grow exponentially to avoid O(n^2) copying on many small writes.
+    const nextCap = Math.max(nextLength, prevCap > 0 ? prevCap * 2 : 1024);
+    const next = new Uint8Array(nextCap);
+    next.set(this._buffer.subarray(this._bufferReadIndex, this._bufferWriteIndex), 0);
+    next.set(chunk, remaining);
+
+    this._buffer = next;
+    this._bufferReadIndex = 0;
+    this._bufferWriteIndex = nextLength;
     this.emit("chunk");
     return true;
   }
@@ -85,8 +124,9 @@ export class PullStream extends EventEmitter {
     }
 
     this._destroyed = true;
-    this._bufferChunks = [];
-    this._totalLength = 0;
+    this._buffer = EMPTY_U8;
+    this._bufferReadIndex = 0;
+    this._bufferWriteIndex = 0;
 
     if (error) {
       this.emit("error", error);
@@ -122,20 +162,37 @@ export class PullStream extends EventEmitter {
           return;
         }
 
-        // Use _totalLength for fast check before consolidating
-        if (this._totalLength >= size) {
-          const buf = this.buffer;
-          const result = buf.subarray(0, size);
-          this.buffer = buf.subarray(size);
+        if (size === 0) {
+          resolve(this._buffer.subarray(this._bufferReadIndex, this._bufferReadIndex));
+          return;
+        }
+
+        const available = this._bufferWriteIndex - this._bufferReadIndex;
+        if (available >= size) {
+          const start = this._bufferReadIndex;
+          const end = start + size;
+          const result = this._buffer.subarray(start, end);
+          this._bufferReadIndex = end;
+
+          if (this._bufferReadIndex === this._bufferWriteIndex) {
+            this._buffer = EMPTY_U8;
+            this._bufferReadIndex = 0;
+            this._bufferWriteIndex = 0;
+          }
+
           resolve(result);
           return;
         }
 
         if (this.finished) {
           // Return whatever we have
-          const result = this.buffer;
-          this._bufferChunks = [];
-          this._totalLength = 0;
+          const result =
+            this._bufferReadIndex === this._bufferWriteIndex
+              ? EMPTY_U8
+              : this._buffer.subarray(this._bufferReadIndex, this._bufferWriteIndex);
+          this._buffer = EMPTY_U8;
+          this._bufferReadIndex = 0;
+          this._bufferWriteIndex = 0;
           resolve(result);
           return;
         }
@@ -156,24 +213,48 @@ export class PullStream extends EventEmitter {
           return;
         }
 
-        const buf = this.buffer;
-        const matchIndex = this._indexOf(buf, pattern);
+        // Match empty pattern without consuming anything.
+        if (pattern.length === 0) {
+          this._match = 0;
+          resolve(this._buffer.subarray(this._bufferReadIndex, this._bufferReadIndex));
+          return;
+        }
 
-        if (matchIndex !== -1) {
-          this._match = matchIndex;
+        const matchIndexAbs = this._indexOf(
+          this._buffer,
+          this._bufferReadIndex,
+          this._bufferWriteIndex,
+          pattern
+        );
 
-          const endIndex = includePattern ? matchIndex + pattern.length : matchIndex;
-          const result = buf.subarray(0, endIndex);
-          this.buffer = buf.subarray(includePattern ? endIndex : matchIndex + pattern.length);
+        if (matchIndexAbs !== -1) {
+          this._match = matchIndexAbs - this._bufferReadIndex;
+
+          const patternLen = pattern.length;
+          const resultEndAbs = includePattern ? matchIndexAbs + patternLen : matchIndexAbs;
+          const consumeTo = matchIndexAbs + patternLen;
+
+          const result = this._buffer.subarray(this._bufferReadIndex, resultEndAbs);
+
+          this._bufferReadIndex = consumeTo;
+          if (this._bufferReadIndex === this._bufferWriteIndex) {
+            this._buffer = EMPTY_U8;
+            this._bufferReadIndex = 0;
+            this._bufferWriteIndex = 0;
+          }
           resolve(result);
           return;
         }
 
         if (this.finished) {
           // Pattern not found, return everything
-          const result = buf;
-          this._bufferChunks = [];
-          this._totalLength = 0;
+          const result =
+            this._bufferReadIndex === this._bufferWriteIndex
+              ? EMPTY_U8
+              : this._buffer.subarray(this._bufferReadIndex, this._bufferWriteIndex);
+          this._buffer = EMPTY_U8;
+          this._bufferReadIndex = 0;
+          this._bufferWriteIndex = 0;
           resolve(result);
           return;
         }
@@ -197,7 +278,7 @@ export class PullStream extends EventEmitter {
    * Get remaining buffer length
    */
   get length(): number {
-    return this._totalLength;
+    return this._bufferWriteIndex - this._bufferReadIndex;
   }
 
   /**
@@ -217,13 +298,14 @@ export class PullStream extends EventEmitter {
   /**
    * Find pattern in Uint8Array (like Buffer.indexOf)
    */
-  private _indexOf(haystack: Uint8Array, needle: Uint8Array, start = 0): number {
+  private _indexOf(haystack: Uint8Array, start: number, end: number, needle: Uint8Array): number {
     const needleLen = needle.length;
     if (needleLen === 0) {
       return start;
     }
-    const haystackLen = haystack.length;
-    if (needleLen > haystackLen) {
+
+    const haystackLen = end;
+    if (needleLen > haystackLen - start) {
       return -1;
     }
 

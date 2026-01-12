@@ -63,7 +63,7 @@ export function uint8ArrayToString(arr: Uint8Array, encoding?: string): string {
 /**
  * Concatenate multiple Uint8Arrays efficiently
  */
-export function concatUint8Arrays(arrays: readonly Uint8Array[]): Uint8Array {
+export function concatUint8Arrays(arrays: readonly Uint8Array[], totalLength?: number): Uint8Array {
   const len = arrays.length;
   if (len === 0) {
     return new Uint8Array(0);
@@ -73,9 +73,12 @@ export function concatUint8Arrays(arrays: readonly Uint8Array[]): Uint8Array {
   }
 
   // Calculate total length with for loop for better performance
-  let totalLength = 0;
-  for (let i = 0; i < len; i++) {
-    totalLength += arrays[i].length;
+  if (totalLength === undefined) {
+    let sum = 0;
+    for (let i = 0; i < len; i++) {
+      sum += arrays[i].length;
+    }
+    totalLength = sum;
   }
 
   const result = new Uint8Array(totalLength);

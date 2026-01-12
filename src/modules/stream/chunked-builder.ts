@@ -62,7 +62,7 @@ export class ChunkedBuilder {
   private _consolidate(): void {
     if (this._pieces.length > 0) {
       this._chunks.push(this._pieces.join(""));
-      this._pieces = [];
+      this._pieces.length = 0;
     }
   }
 
@@ -98,8 +98,8 @@ export class ChunkedBuilder {
    * Clear all content
    */
   clear(): void {
-    this._pieces = [];
-    this._chunks = [];
+    this._pieces.length = 0;
+    this._chunks.length = 0;
     this._totalLength = 0;
   }
 
@@ -124,7 +124,7 @@ export class ChunkedBuilder {
     // Has chunks - consolidate and join
     if (piecesLen > 0) {
       this._chunks.push(this._pieces.join(""));
-      this._pieces = [];
+      this._pieces.length = 0;
     }
 
     if (this._chunks.length === 1) {
