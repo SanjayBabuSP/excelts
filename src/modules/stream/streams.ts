@@ -22,7 +22,6 @@ import type {
   DuplexStreamOptions,
   PullStreamOptions,
   BufferedStreamOptions,
-  DataChunk,
   ICollector,
   IDuplex,
   IEventEmitter,
@@ -35,12 +34,14 @@ import type {
   WritableLike
 } from "@stream/types";
 
+import { BufferedStream, BufferChunk, StringChunk } from "@stream/buffered-stream";
+import { PullStream } from "@stream/pull-stream";
 import {
-  BufferedStream as StandaloneBufferedStream,
-  StringChunk as StandaloneStringChunk,
-  BufferChunk as StandaloneBufferChunk
-} from "@stream/buffered-stream";
-import { PullStream as StandalonePullStream } from "@stream/pull-stream";
+  isAsyncIterable,
+  isReadableStream,
+  isTransformStream,
+  isWritableStream
+} from "@stream/internal/type-guards";
 
 // =============================================================================
 // Unified Writable class (compatible with browser API)
@@ -123,6 +124,9 @@ export class Writable<T = Uint8Array> extends NodeWritable {
 
 export { Readable, Transform, Duplex, PassThrough };
 
+// Standalone cross-platform helpers
+export { PullStream, BufferedStream, StringChunk, BufferChunk };
+
 // =============================================================================
 // Cross-environment stream normalization
 // =============================================================================
@@ -172,37 +176,14 @@ export interface PipelineOptions {
   end?: boolean;
 }
 
-const isReadableStream = (value: unknown): value is ReadableStream<any> =>
-  !!value && typeof value === "object" && typeof (value as any).getReader === "function";
-
-const isAsyncIterable = (value: unknown): value is AsyncIterable<unknown> => {
-  if (!value || (typeof value !== "object" && typeof value !== "function")) {
-    return false;
-  }
-  return typeof (value as any)[Symbol.asyncIterator] === "function";
-};
-
-const isWritableStream = (value: unknown): value is WritableStream<any> =>
-  !!value && typeof value === "object" && typeof (value as any).getWriter === "function";
-
-const isTransformStream = (value: unknown): value is TransformStream<any, any> =>
-  !!value &&
-  typeof value === "object" &&
-  !!(value as any).readable &&
-  !!(value as any).writable &&
-  isReadableStream((value as any).readable) &&
-  isWritableStream((value as any).writable);
-
 const isPipelineOptions = (value: unknown): value is PipelineOptions => {
   if (!value || typeof value !== "object") {
     return false;
   }
-  // IMPORTANT:
-  // Do NOT use `"end" in obj` here because streams have `.end()` and would be
-  // misclassified as options, breaking argument parsing and potentially hanging.
+
+  // Avoid treating streams as options objects.
   if (
     typeof (value as any).pipe === "function" ||
-    typeof (value as any).write === "function" ||
     typeof (value as any).end === "function" ||
     typeof (value as any).getReader === "function" ||
     typeof (value as any).getWriter === "function"
@@ -605,8 +586,6 @@ export function createCollector<T = Uint8Array>(options?: WritableStreamOptions)
 // Pull Stream - Read data on demand with pattern matching
 // =============================================================================
 
-export class PullStream extends StandalonePullStream {}
-
 /**
  * Create a pull stream
  */
@@ -617,21 +596,6 @@ export function createPullStream(options?: PullStreamOptions): PullStream {
 // =============================================================================
 // Buffered Stream - Efficient chunk management
 // =============================================================================
-
-/**
- * String chunk implementation
- */
-export class StringChunk extends StandaloneStringChunk implements DataChunk {}
-
-/**
- * Buffer chunk implementation
- */
-export class BufferChunk extends StandaloneBufferChunk implements DataChunk {}
-
-/**
- * Buffered stream with efficient chunk management
- */
-export class BufferedStream extends StandaloneBufferedStream {}
 
 /**
  * Create a buffered stream

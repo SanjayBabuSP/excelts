@@ -1,41 +1,11 @@
 /**
- * Stream Module (browser type surface)
+ * Stream Module (browser entry)
  *
- * Mirrors [src/modules/stream/index.ts] but explicitly re-exports from
- * ./streams.browser so we can enforce index export-surface parity.
+ * Mirrors the public surface of `./index.ts`, but exports the browser
+ * implementation from `./streams.browser`.
+ *
+ * This file is intentionally export-only (tree-shaking friendly).
  */
-
-// =============================================================================
-// Types (shared between Node.js and Browser)
-// =============================================================================
-
-import type {
-  ReadableStreamOptions,
-  WritableStreamOptions,
-  TransformStreamOptions,
-  DuplexStreamOptions,
-  PullStreamOptions,
-  BufferedStreamOptions,
-  TransformCallback,
-  FlushCallback,
-  WriteCallback,
-  DestroyCallback,
-  IEventEmitter,
-  IReadable,
-  IWritable,
-  ITransform,
-  IDuplex,
-  IPullStream,
-  IBufferedStream,
-  IPassThrough,
-  ICollector,
-  DataChunk,
-  EventListener,
-  PipelineSource,
-  PipelineTransform,
-  PipelineDestination,
-  ReadWriteBufferOptions
-} from "@stream/types";
 
 export type {
   ReadableStreamOptions,
@@ -63,13 +33,9 @@ export type {
   PipelineTransform,
   PipelineDestination,
   ReadWriteBufferOptions
-};
+} from "@stream/types";
 
-// =============================================================================
-// Native Stream Classes and Functions (browser)
-// =============================================================================
-
-import {
+export {
   Readable,
   Writable,
   Transform,
@@ -123,82 +89,12 @@ import {
   promises
 } from "@stream/streams.browser";
 
-import type { PipelineOptions, FinishedOptions } from "@stream/streams.browser";
+export type { PipelineOptions, FinishedOptions } from "@stream/streams.browser";
 
+export { EventEmitter } from "@stream/event-emitter";
+export { ChunkedBuilder, TransactionalChunkedBuilder } from "@stream/chunked-builder";
+export type { ChunkedBuilderOptions, BuilderSnapshot } from "@stream/chunked-builder";
 export {
-  Readable,
-  Writable,
-  Transform,
-  Duplex,
-  PassThrough,
-  Collector,
-  PullStream,
-  BufferedStream,
-  StringChunk,
-  BufferChunk,
-  createReadable,
-  createWritable,
-  createTransform,
-  createCollector,
-  createPassThrough,
-  createPullStream,
-  createBufferedStream,
-  createReadableFromArray,
-  createReadableFromAsyncIterable,
-  createReadableFromGenerator,
-  createReadableFromPromise,
-  createDuplex,
-  createEmptyReadable,
-  createNullWritable,
-  pipeline,
-  finished,
-  streamToPromise,
-  streamToUint8Array,
-  streamToBuffer,
-  streamToString,
-  drainStream,
-  copyStream,
-  addAbortSignal,
-  compose,
-  finishedAll,
-  once,
-  promisify,
-  isReadable,
-  isWritable,
-  isTransform,
-  isDuplex,
-  isStream,
-  isDestroyed,
-  isDisturbed,
-  isErrored,
-  getDefaultHighWaterMark,
-  setDefaultHighWaterMark,
-  duplexPair,
-  Writeable,
-  consumers,
-  promises
-};
-
-export type { PipelineOptions, FinishedOptions };
-
-import { EventEmitter } from "@stream/event-emitter";
-export { EventEmitter };
-
-// =============================================================================
-// ChunkedBuilder (platform-independent)
-// =============================================================================
-
-import { ChunkedBuilder, TransactionalChunkedBuilder } from "@stream/chunked-builder";
-import type { ChunkedBuilderOptions, BuilderSnapshot } from "@stream/chunked-builder";
-
-export { ChunkedBuilder, TransactionalChunkedBuilder };
-export type { ChunkedBuilderOptions, BuilderSnapshot };
-
-// =============================================================================
-// Utility Functions (platform-independent)
-// =============================================================================
-
-import {
   textEncoder,
   textDecoder,
   stringToUint8Array,
@@ -212,19 +108,6 @@ import {
 } from "@stream/shared";
 
 export {
-  textEncoder,
-  textDecoder,
-  stringToUint8Array,
-  uint8ArrayToString,
-  uint8ArrayEquals,
-  uint8ArrayIndexOf,
-  uint8ArraySlice,
-  toUint8Array,
-  bufferToString,
-  concatUint8Arrays
-};
-
-import {
   collect,
   text,
   json,
@@ -235,5 +118,3 @@ import {
   transform,
   filter
 } from "@stream/utils";
-
-export { collect, text, json, bytes, fromString, fromJSON, fromBytes, transform, filter };

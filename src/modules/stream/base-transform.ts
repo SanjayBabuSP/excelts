@@ -31,6 +31,8 @@ export abstract class BaseTransform<
   protected _errorEmitted: boolean = false;
   protected _objectMode: boolean;
   protected _highWaterMark: number;
+  private _ending: boolean = false;
+  private _flushInProgress: boolean = false;
 
   constructor(options: BaseTransformOptions = {}) {
     super();
@@ -73,25 +75,8 @@ export abstract class BaseTransform<
       this.write(chunk);
     }
 
-    // Wait for buffer to drain, then flush
-    const checkAndFlush = (): void => {
-      if (this._buffer.length === this._bufferIndex && !this._isProcessing) {
-        this.processFlush((err, data) => {
-          if (err) {
-            this._emitError(err);
-          } else if (data !== undefined) {
-            this.emit("data", data);
-          }
-          this._isFinished = true;
-          this.emit("finish");
-          this.emit("end");
-        });
-      } else {
-        setTimeout(checkAndFlush, 0);
-      }
-    };
-
-    checkAndFlush();
+    this._ending = true;
+    this._maybeFlush();
   }
 
   /**
@@ -147,12 +132,45 @@ export abstract class BaseTransform<
           }
           // Process next chunk
           this._processNext();
+          this._maybeFlush();
         }
       });
     } catch (err) {
       this._isProcessing = false;
       this._emitError(err as Error);
+      this._maybeFlush();
     }
+  }
+
+  private _maybeFlush(): void {
+    if (!this._ending || this._isDestroyed || this._isFinished || this._flushInProgress) {
+      return;
+    }
+
+    // If an error was emitted, stop flushing to avoid hanging end().
+    if (this._errorEmitted) {
+      this._isFinished = true;
+      this.emit("finish");
+      this.emit("end");
+      return;
+    }
+
+    if (this._isProcessing || this._bufferIndex < this._buffer.length) {
+      return;
+    }
+
+    this._flushInProgress = true;
+    this.processFlush((err, data) => {
+      this._flushInProgress = false;
+      if (err) {
+        this._emitError(err);
+      } else if (data !== undefined) {
+        this.emit("data", data);
+      }
+      this._isFinished = true;
+      this.emit("finish");
+      this.emit("end");
+    });
   }
 
   /**

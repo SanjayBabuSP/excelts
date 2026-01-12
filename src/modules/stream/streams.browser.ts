@@ -18,7 +18,6 @@ import type {
   DuplexStreamOptions,
   PullStreamOptions,
   BufferedStreamOptions,
-  DataChunk,
   ICollector,
   IDuplex,
   IEventEmitter,
@@ -34,17 +33,16 @@ import type {
 import type { Writable as NodeWritable } from "stream";
 
 import { EventEmitter } from "@stream/event-emitter";
-import {
-  PullStream as StandalonePullStream,
-  type PullStreamOptions as StandalonePullStreamOptions
-} from "@stream/pull-stream";
-import {
-  BufferedStream as StandaloneBufferedStream,
-  StringChunk as StandaloneStringChunk,
-  BufferChunk as StandaloneBufferChunk
-} from "@stream/buffered-stream";
+import { PullStream } from "@stream/pull-stream";
+import { BufferedStream, BufferChunk, StringChunk } from "@stream/buffered-stream";
 
 import { concatUint8Arrays, getTextDecoder, textDecoder } from "@stream/shared";
+import {
+  isAsyncIterable,
+  isReadableStream,
+  isTransformStream,
+  isWritableStream
+} from "@stream/internal/type-guards";
 
 // =============================================================================
 // Shared event listener helpers
@@ -3083,20 +3081,8 @@ export class Collector<T = Uint8Array> extends Writable<T> {
 // PullStream / BufferedStream / DataChunk helpers
 // =============================================================================
 
-export class PullStream extends StandalonePullStream {
-  // Keep constructor signature aligned with streams.browser.ts public API
-  constructor(options?: PullStreamOptions | StandalonePullStreamOptions) {
-    super(options);
-  }
-}
-
-export class StringChunk extends StandaloneStringChunk implements DataChunk {}
-export class BufferChunk extends StandaloneBufferChunk implements DataChunk {}
-export class BufferedStream extends StandaloneBufferedStream {
-  constructor(options?: BufferedStreamOptions) {
-    super(options);
-  }
-}
+// Standalone cross-platform helpers
+export { PullStream, BufferedStream, StringChunk, BufferChunk };
 
 // =============================================================================
 // Stream Creation Functions
@@ -3232,27 +3218,6 @@ export interface PipelineOptions {
 
 type PipelineStream = PipelineStreamLike;
 type PipelineCallback = (err?: Error | null) => void;
-
-const isReadableStream = (value: unknown): value is ReadableStream<any> =>
-  !!value && typeof value === "object" && typeof (value as any).getReader === "function";
-
-const isAsyncIterable = (value: unknown): value is AsyncIterable<unknown> => {
-  if (!value || (typeof value !== "object" && typeof value !== "function")) {
-    return false;
-  }
-  return typeof value[Symbol.asyncIterator] === "function";
-};
-
-const isWritableStream = (value: unknown): value is WritableStream<any> =>
-  !!value && typeof value === "object" && typeof (value as any).getWriter === "function";
-
-const isTransformStream = (value: unknown): value is TransformStream<any, any> =>
-  !!value &&
-  typeof value === "object" &&
-  !!(value as any).readable &&
-  !!(value as any).writable &&
-  isReadableStream((value as any).readable) &&
-  isWritableStream((value as any).writable);
 
 const isPipelineOptions = (value: unknown): value is PipelineOptions => {
   if (!value || typeof value !== "object") {
@@ -3590,8 +3555,8 @@ export async function streamToPromise(stream: PipelineStream): Promise<void> {
 export async function streamToUint8Array(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
 ): Promise<Uint8Array> {
-  const { chunks, totalLength } = await collectStreamChunks(stream);
-  return concatWithLength(chunks, totalLength);
+  const [chunks, totalLength] = await collectStreamChunks(stream);
+  return concatUint8Arrays(chunks, totalLength);
 }
 
 /**
@@ -3606,8 +3571,8 @@ export async function streamToString(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   encoding?: string
 ): Promise<string> {
-  const { chunks, totalLength } = await collectStreamChunks(stream);
-  const combined = concatWithLength(chunks, totalLength);
+  const [chunks, totalLength] = await collectStreamChunks(stream);
+  const combined = concatUint8Arrays(chunks, totalLength);
   const decoder = encoding ? getTextDecoder(encoding) : textDecoder;
   return decoder.decode(combined);
 }
@@ -3618,14 +3583,7 @@ export async function streamToString(
 export async function drainStream(
   stream: AsyncIterable<unknown> | ReadableStream<unknown>
 ): Promise<void> {
-  let iterable: AsyncIterable<unknown>;
-  if (isReadableStream(stream)) {
-    iterable = Readable.fromWeb(stream);
-  } else if (isAsyncIterable(stream)) {
-    iterable = stream;
-  } else {
-    throw new Error("drainStream: unsupported stream type");
-  }
+  const iterable = toReadableAsyncIterable(stream, "drainStream");
 
   for await (const _chunk of iterable) {
     // Consume data
@@ -3911,114 +3869,141 @@ export function compose<T = any, R = any>(
     transforms[i].pipe(transforms[i + 1]);
   }
 
-  class ComposedTransform extends Transform<T, R> {
-    private _dataForwarding: boolean = false;
-    private _endForwarding: boolean = false;
-
-    private _dataForwardCleanup: (() => void) | null = null;
-    private _endForwardCleanup: (() => void) | null = null;
-    private _errorForwardCleanup: Array<() => void> = [];
-
-    constructor(options: any) {
-      super(options);
-      for (const t of transforms) {
-        const onError = (err: Error): void => {
-          this.emit("error", err);
-        };
-        this._errorForwardCleanup.push(addEmitterListener(t as any, "error", onError));
-      }
-    }
-
-    override on(event: string | symbol, listener: (...args: any[]) => void): this {
-      if (event === "data" && !this._dataForwarding) {
-        this._dataForwarding = true;
-        const onData = (chunk: R): void => {
-          this.emit("data", chunk);
-        };
-        this._dataForwardCleanup = addEmitterListener(last as any, "data", onData);
-      }
-      if (event === "end" && !this._endForwarding) {
-        this._endForwarding = true;
-        const onEnd = (): void => {
-          this.emit("end");
-        };
-        this._endForwardCleanup = addEmitterListener(last as any, "end", onEnd, { once: true });
-      }
-      return super.on(event, listener);
-    }
-
-    override write(
-      chunk: T,
-      encodingOrCallback?: string | ((error?: Error | null) => void),
-      callback?: (error?: Error | null) => void
-    ): boolean {
-      if (typeof encodingOrCallback === "function") {
-        return first.write(chunk, encodingOrCallback);
-      }
-      return first.write(chunk, encodingOrCallback, callback);
-    }
-
-    override end(
-      chunkOrCallback?: T | (() => void),
-      encodingOrCallback?: string | (() => void),
-      callback?: () => void
-    ): this {
-      if (typeof chunkOrCallback === "function") {
-        first.end(chunkOrCallback);
-        return this;
-      }
-      if (typeof encodingOrCallback === "function") {
-        first.end(chunkOrCallback, encodingOrCallback);
-        return this;
-      }
-      first.end(chunkOrCallback, encodingOrCallback, callback);
-      return this;
-    }
-
-    override pipe<W extends Writable<R> | Transform<R, any> | Duplex<any, R>>(destination: W): W {
-      return last.pipe(destination) as W;
-    }
-
-    override destroy(error?: Error): void {
-      if (this._dataForwardCleanup) {
-        this._dataForwardCleanup();
-        this._dataForwardCleanup = null;
-      }
-      if (this._endForwardCleanup) {
-        this._endForwardCleanup();
-        this._endForwardCleanup = null;
-      }
-      for (let i = this._errorForwardCleanup.length - 1; i >= 0; i--) {
-        this._errorForwardCleanup[i]();
-      }
-      this._errorForwardCleanup.length = 0;
-
-      for (const t of transforms) {
-        t.destroy(error);
-      }
-      super.destroy(error);
-    }
-
-    read(size?: number): R | null {
-      return typeof last.read === "function" ? (last.read(size) as R | null) : null;
-    }
-
-    async *[Symbol.asyncIterator](): AsyncIterableIterator<R> {
-      const it = (last as any)?.[Symbol.asyncIterator]?.();
-      if (it) {
-        for await (const chunk of it as AsyncIterable<R>) {
-          yield chunk;
-        }
-        return;
-      }
-      yield* super[Symbol.asyncIterator]();
-    }
-  }
-
-  const composed = new ComposedTransform({
+  // A lightweight Transform wrapper that delegates:
+  // - writable side to `first`
+  // - readable side to `last`
+  // It forwards relevant events lazily to avoid per-chunk overhead when unused.
+  const composed = new Transform<T, R>({
     objectMode: (first as any)?.objectMode ?? true,
     transform: chunk => chunk
   });
+
+  const registry = createListenerRegistry();
+
+  // Always forward errors; they are critical for pipeline semantics.
+  for (const t of transforms) {
+    registry.add(t as any, "error", (err: Error) => composed.emit("error", err));
+  }
+
+  // Forward writable-side backpressure/completion events from `first`.
+  registry.add(first as any, "drain", () => composed.emit("drain"));
+  registry.once(first as any, "finish", () => composed.emit("finish"));
+
+  // Forward readable-side events from `last` lazily.
+  let forwardData = false;
+  let forwardEnd = false;
+  let forwardReadable = false;
+
+  const ensureDataForwarding = (): void => {
+    if (forwardData) {
+      return;
+    }
+    forwardData = true;
+    registry.add(last as any, "data", (chunk: R) => composed.emit("data", chunk));
+  };
+
+  const ensureEndForwarding = (): void => {
+    if (forwardEnd) {
+      return;
+    }
+    forwardEnd = true;
+    registry.once(last as any, "end", () => composed.emit("end"));
+  };
+
+  const ensureReadableForwarding = (): void => {
+    if (forwardReadable) {
+      return;
+    }
+    forwardReadable = true;
+    registry.add(last as any, "readable", () => composed.emit("readable"));
+  };
+
+  const originalOn = composed.on.bind(composed);
+  const originalOnce = composed.once.bind(composed);
+
+  (composed as any).on = (event: string | symbol, listener: (...args: any[]) => void): any => {
+    if (event === "data") {
+      ensureDataForwarding();
+    } else if (event === "end") {
+      ensureEndForwarding();
+    } else if (event === "readable") {
+      ensureReadableForwarding();
+    }
+    return originalOn(event, listener);
+  };
+
+  (composed as any).once = (event: string | symbol, listener: (...args: any[]) => void): any => {
+    if (event === "data") {
+      ensureDataForwarding();
+    } else if (event === "end") {
+      ensureEndForwarding();
+    } else if (event === "readable") {
+      ensureReadableForwarding();
+    }
+    return originalOnce(event, listener);
+  };
+
+  // Delegate core stream methods
+  const firstAny = first as any;
+  const lastAny = last as any;
+
+  (composed as any).write = (
+    chunk: T,
+    encodingOrCallback?: string | ((error?: Error | null) => void),
+    callback?: (error?: Error | null) => void
+  ): boolean => {
+    if (typeof encodingOrCallback === "function") {
+      return firstAny.write(chunk, encodingOrCallback);
+    }
+    return firstAny.write(chunk, encodingOrCallback, callback);
+  };
+
+  (composed as any).end = (
+    chunkOrCallback?: T | (() => void),
+    encodingOrCallback?: string | (() => void),
+    callback?: () => void
+  ): any => {
+    if (typeof chunkOrCallback === "function") {
+      firstAny.end(chunkOrCallback);
+      return composed;
+    }
+    if (typeof encodingOrCallback === "function") {
+      firstAny.end(chunkOrCallback, encodingOrCallback);
+      return composed;
+    }
+    firstAny.end(chunkOrCallback, encodingOrCallback, callback);
+    return composed;
+  };
+
+  (composed as any).pipe = <W extends Writable<R> | Transform<R, any> | Duplex<any, R>>(
+    destination: W
+  ): W => {
+    return lastAny.pipe(destination) as W;
+  };
+
+  (composed as any).read = (size?: number): R | null => {
+    return typeof lastAny.read === "function" ? (lastAny.read(size) as R | null) : null;
+  };
+
+  (composed as any)[Symbol.asyncIterator] = async function* (): AsyncIterableIterator<R> {
+    const it = lastAny?.[Symbol.asyncIterator]?.();
+    if (it) {
+      for await (const chunk of it as AsyncIterable<R>) {
+        yield chunk;
+      }
+      return;
+    }
+    yield* Transform.prototype[Symbol.asyncIterator].call(composed);
+  };
+
+  const originalDestroy = composed.destroy.bind(composed);
+  composed.destroy = ((error?: Error) => {
+    registry.cleanup();
+    for (const t of transforms) {
+      t.destroy(error);
+    }
+    originalDestroy(error);
+  }) as any;
 
   // Reflect underlying readability/writability like the previous duck-typed wrapper
   Object.defineProperty(composed, "readable", {
@@ -4306,41 +4291,32 @@ export function duplexPair<T = Uint8Array>(
 // Helper function to collect stream chunks with total length tracking
 async function collectStreamChunks(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
-): Promise<{ chunks: Uint8Array[]; totalLength: number }> {
+): Promise<[chunks: Uint8Array[], totalLength: number]> {
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
-  let iterable: AsyncIterable<Uint8Array>;
-  if (isReadableStream(stream)) {
-    iterable = Readable.fromWeb(stream);
-  } else if (isAsyncIterable(stream)) {
-    iterable = stream;
-  } else {
-    throw new Error("collectStreamChunks: unsupported stream type");
-  }
+  const iterable = toReadableAsyncIterable(
+    stream,
+    "collectStreamChunks"
+  ) as AsyncIterable<Uint8Array>;
 
   for await (const chunk of iterable) {
     chunks.push(chunk);
     totalLength += chunk.length;
   }
-  return { chunks, totalLength };
+  return [chunks, totalLength];
 }
 
-// Helper to concatenate with known length (faster)
-function concatWithLength(chunks: Uint8Array[], totalLength: number): Uint8Array {
-  const len = chunks.length;
-  if (len === 0) {
-    return new Uint8Array(0);
+function toReadableAsyncIterable<T>(
+  stream: AsyncIterable<T> | ReadableStream<T>,
+  name: string
+): AsyncIterable<T> {
+  if (isReadableStream(stream)) {
+    return Readable.fromWeb(stream as any) as unknown as AsyncIterable<T>;
   }
-  if (len === 1) {
-    return chunks[0];
+  if (isAsyncIterable(stream)) {
+    return stream;
   }
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (let i = 0; i < len; i++) {
-    result.set(chunks[i], offset);
-    offset += chunks[i].length;
-  }
-  return result;
+  throw new Error(`${name}: unsupported stream type`);
 }
 
 export const consumers = {
@@ -4350,12 +4326,8 @@ export const consumers = {
   async arrayBuffer(
     stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
   ): Promise<ArrayBuffer> {
-    const { chunks, totalLength } = await collectStreamChunks(stream);
-    const combined = concatWithLength(chunks, totalLength);
-    return combined.buffer.slice(
-      combined.byteOffset,
-      combined.byteOffset + combined.byteLength
-    ) as ArrayBuffer;
+    const bytes = await streamToUint8Array(stream);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   },
 
   /**
@@ -4365,7 +4337,7 @@ export const consumers = {
     stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
     options?: BlobPropertyBag
   ): Promise<Blob> {
-    const { chunks } = await collectStreamChunks(stream);
+    const [chunks] = await collectStreamChunks(stream);
     return new Blob(chunks as any, options);
   },
 
@@ -4375,16 +4347,14 @@ export const consumers = {
   async buffer(
     stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
   ): Promise<Uint8Array> {
-    const { chunks, totalLength } = await collectStreamChunks(stream);
-    return concatWithLength(chunks, totalLength);
+    return streamToUint8Array(stream);
   },
 
   /**
    * Consume entire stream as JSON
    */
   async json(stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>): Promise<any> {
-    const text = await consumers.text(stream);
-    return JSON.parse(text);
+    return JSON.parse(await streamToString(stream));
   },
 
   /**
@@ -4394,10 +4364,7 @@ export const consumers = {
     stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
     encoding?: string
   ): Promise<string> {
-    const { chunks, totalLength } = await collectStreamChunks(stream);
-    const combined = concatWithLength(chunks, totalLength);
-    const decoder = encoding ? getTextDecoder(encoding) : textDecoder;
-    return decoder.decode(combined);
+    return streamToString(stream, encoding);
   }
 };
 

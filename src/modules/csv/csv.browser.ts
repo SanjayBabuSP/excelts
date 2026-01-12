@@ -7,7 +7,11 @@
 
 import { DateParser, DateFormatter, type DateFormat } from "@utils/datetime";
 import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "@csv/csv-core";
-import { CsvParserStream, CsvFormatterStream, type CsvFormatterStreamOptions } from "@csv/csv-stream";
+import {
+  CsvParserStream,
+  CsvFormatterStream,
+  type CsvFormatterStreamOptions
+} from "@csv/csv-stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "@csv/csv-number";
 import { pipeline } from "@stream";
 import type { IReadable, IWritable } from "@stream/types";
