@@ -9,10 +9,13 @@ const expectations = [
     preparedModel: {
       paperSize: 9,
       orientation: "portrait",
+      // 4294967295 is a sentinel value used when parsing missing DPI attributes;
+      // it should NOT be emitted back to XML.
       horizontalDpi: 4294967295,
       verticalDpi: 4294967295
     },
-    xml: '<pageSetup paperSize="9" orientation="portrait" horizontalDpi="4294967295" verticalDpi="4294967295"/>',
+    // Note: DPI 4294967295 sentinel values are filtered out during render.
+    xml: '<pageSetup paperSize="9" orientation="portrait"/>',
     parsedModel: {
       paperSize: 9,
       orientation: "portrait",

@@ -222,8 +222,11 @@ class Worksheet {
       {
         margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
         orientation: "portrait",
-        horizontalDpi: 4294967295,
-        verticalDpi: 4294967295,
+        // Excel does not normally write these unless explicitly set.
+        // Historically we used 4294967295 as a sentinel when parsing, but emitting it
+        // can cause strict Excel parsers to treat the workbook as corrupted.
+        horizontalDpi: undefined,
+        verticalDpi: undefined,
         fitToPage: !!(
           options.pageSetup &&
           (options.pageSetup.fitToWidth || options.pageSetup.fitToHeight) &&

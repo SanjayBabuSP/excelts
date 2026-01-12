@@ -145,15 +145,25 @@ class VmlDrawingXform extends BaseXform {
     // ClientData - the core of the checkbox control
     xmlStream.openNode("x:ClientData", { ObjectType: "Checkbox" });
 
+    // Match Excel's VML patterns (similar to Note ClientData): include positioning and cell address.
+    // Omitting these can cause Excel to repair the sheet by dropping all legacy controls.
+    xmlStream.leafNode("x:MoveWithCells");
+    xmlStream.leafNode("x:SizeWithCells");
+
     // Anchor position
     xmlStream.openNode("x:Anchor");
     xmlStream.writeText(FormCheckbox.getVmlAnchor(control));
     xmlStream.closeNode();
 
+    // Protection / text locking
+    xmlStream.leafNode("x:Locked", undefined, "False");
+    xmlStream.leafNode("x:LockText", undefined, "True");
+
     // Print settings
     xmlStream.leafNode("x:PrintObject", undefined, control.print ? "True" : "False");
     xmlStream.leafNode("x:AutoFill", undefined, "False");
     xmlStream.leafNode("x:AutoLine", undefined, "False");
+    xmlStream.leafNode("x:TextHAlign", undefined, "Left");
     xmlStream.leafNode("x:TextVAlign", undefined, "Center");
 
     // Linked cell
@@ -168,6 +178,10 @@ class VmlDrawingXform extends BaseXform {
 
     // Checked state (0 = unchecked, 1 = checked, 2 = mixed)
     xmlStream.leafNode("x:Checked", undefined, String(FormCheckbox.getVmlCheckedValue(control)));
+
+    // Cell address (0-based row/column)
+    xmlStream.leafNode("x:Row", undefined, String(control.tl.row));
+    xmlStream.leafNode("x:Column", undefined, String(control.tl.col));
 
     xmlStream.closeNode(); // x:ClientData
     xmlStream.closeNode(); // v:shape

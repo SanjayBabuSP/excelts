@@ -58,13 +58,28 @@ class PageSetupXform extends BaseXform {
     return "pageSetup";
   }
 
+  private _dpiToXml(value: number | undefined): number | undefined {
+    // Excel commonly omits these attributes. 4294967295 is used as a sentinel default
+    // when parsing missing values; it should never be serialized back out.
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    if (value === 4294967295) {
+      return undefined;
+    }
+    return value;
+  }
+
   render(xmlStream: any, model: PageSetupModel): void {
     if (model) {
       const attributes = {
         paperSize: model.paperSize,
         orientation: model.orientation,
-        horizontalDpi: model.horizontalDpi,
-        verticalDpi: model.verticalDpi,
+        horizontalDpi: this._dpiToXml(model.horizontalDpi),
+        verticalDpi: this._dpiToXml(model.verticalDpi),
         pageOrder: pageOrderToXml(model.pageOrder!),
         blackAndWhite: booleanToXml(model.blackAndWhite!),
         draft: booleanToXml(model.draft!),
