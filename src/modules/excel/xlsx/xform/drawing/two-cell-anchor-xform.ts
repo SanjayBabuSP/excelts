@@ -2,6 +2,7 @@ import { BaseCellAnchorXform } from "@excel/xlsx/xform/drawing/base-cell-anchor-
 import { StaticXform } from "@excel/xlsx/xform/static-xform";
 import { CellPositionXform } from "@excel/xlsx/xform/drawing/cell-position-xform";
 import { PicXform } from "@excel/xlsx/xform/drawing/pic-xform";
+import { SpXform } from "@excel/xlsx/xform/drawing/sp-xform";
 
 interface TwoCellModel {
   range: {
@@ -9,7 +10,10 @@ interface TwoCellModel {
     tl: any;
     br: any;
   };
-  picture: any;
+  picture?: any;
+  shape?: any;
+  /** Wrap the anchor in mc:AlternateContent for modern drawing clients */
+  alternateContent?: { requires: string };
 }
 
 class TwoCellAnchorXform extends BaseCellAnchorXform {
@@ -20,6 +24,7 @@ class TwoCellAnchorXform extends BaseCellAnchorXform {
       "xdr:from": new CellPositionXform({ tag: "xdr:from" }),
       "xdr:to": new CellPositionXform({ tag: "xdr:to" }),
       "xdr:pic": new PicXform(),
+      "xdr:sp": new SpXform(),
       "xdr:clientData": new StaticXform({ tag: "xdr:clientData" })
     };
   }
@@ -29,18 +34,45 @@ class TwoCellAnchorXform extends BaseCellAnchorXform {
   }
 
   prepare(model: TwoCellModel, options: { index: number }): void {
-    this.map["xdr:pic"].prepare(model.picture, options);
+    if (model.picture) {
+      this.map["xdr:pic"].prepare(model.picture, options);
+    }
   }
 
   render(xmlStream: any, model: TwoCellModel): void {
+    const wrapAlternateContent = !!model.alternateContent;
+    if (wrapAlternateContent) {
+      xmlStream.openNode("mc:AlternateContent", {
+        "xmlns:mc": "http://schemas.openxmlformats.org/markup-compatibility/2006"
+      });
+      xmlStream.openNode("mc:Choice", {
+        Requires: model.alternateContent?.requires,
+        ...(model.alternateContent?.requires === "a14"
+          ? {
+              "xmlns:a14": "http://schemas.microsoft.com/office/drawing/2010/main"
+            }
+          : {})
+      });
+    }
+
     xmlStream.openNode(this.tag, { editAs: model.range.editAs || "oneCell" });
 
     this.map["xdr:from"].render(xmlStream, model.range.tl);
     this.map["xdr:to"].render(xmlStream, model.range.br);
-    this.map["xdr:pic"].render(xmlStream, model.picture);
+    if (model.picture) {
+      this.map["xdr:pic"].render(xmlStream, model.picture);
+    } else if (model.shape) {
+      this.map["xdr:sp"].render(xmlStream, model.shape);
+    }
     this.map["xdr:clientData"].render(xmlStream, {});
 
     xmlStream.closeNode();
+
+    if (wrapAlternateContent) {
+      xmlStream.closeNode(); // mc:Choice
+      xmlStream.leafNode("mc:Fallback");
+      xmlStream.closeNode(); // mc:AlternateContent
+    }
   }
 
   parseClose(name: string): boolean {

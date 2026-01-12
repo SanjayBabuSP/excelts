@@ -166,6 +166,15 @@ class WorkSheetXform extends BaseXform {
     model.hyperlinks = options.hyperlinks = [];
     model.comments = options.comments = [];
 
+    // Some Excel builds are surprisingly strict when legacy form controls exist.
+    // Emitting a default sheetView (workbookViewId=0) matches typical Excel output
+    // and avoids relying on optional element handling.
+    if (model.formControls && model.formControls.length > 0) {
+      if (!model.views || model.views.length === 0) {
+        model.views = [{ workbookViewId: 0 }];
+      }
+    }
+
     options.formulae = {};
     options.siFormulae = 0;
     this.map.cols.prepare(model.cols, options);
@@ -320,6 +329,24 @@ class WorkSheetXform extends BaseXform {
     // prepare form controls (legacy checkboxes)
     // Form controls share the VML file with comments, but need separate ctrlProp relationships
     if (model.formControls && model.formControls.length > 0) {
+      // Ensure a DrawingML drawing part exists for form controls.
+      // Excel often repairs sheets that have legacy controls but no <drawing> part.
+      let { drawing } = model;
+      if (!drawing) {
+        drawing = model.drawing = {
+          rId: nextRid(rels),
+          name: `drawing${++options.drawingsCount}`,
+          anchors: [],
+          rels: []
+        };
+        options.drawings.push(drawing);
+        rels.push({
+          Id: drawing.rId,
+          Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+          Target: drawingRelTargetFromWorksheet(drawing.name)
+        });
+      }
+
       // If no comments, we need to add the VML drawing relationship for form controls
       if (model.comments.length === 0) {
         rels.push({
@@ -328,6 +355,15 @@ class WorkSheetXform extends BaseXform {
           Target: vmlDrawingRelTargetFromWorksheet(model.id)
         });
       }
+
+      // Add hidden DrawingML shapes that bridge to the VML shape ids.
+      // This mirrors what Excel writes when it "repairs" legacy form controls.
+      const toNativePos = (p: any) => ({
+        nativeCol: p.col,
+        nativeColOff: p.colOff,
+        nativeRow: p.row,
+        nativeRowOff: p.rowOff
+      });
 
       // Add ctrlProp relationships for each form control
       for (const control of model.formControls) {
@@ -341,6 +377,23 @@ class WorkSheetXform extends BaseXform {
           Target: ctrlPropRelTargetFromWorksheet(globalCtrlPropId)
         });
         options.formControlRefs.push(globalCtrlPropId);
+
+        const defaultName = `Check Box ${Math.max(1, control.shapeId - 1024)}`;
+        drawing.anchors.push({
+          range: {
+            editAs: "absolute",
+            tl: toNativePos(control.tl),
+            br: toNativePos(control.br)
+          },
+          alternateContent: { requires: "a14" },
+          shape: {
+            cNvPrId: control.shapeId,
+            name: (control as any).name || defaultName,
+            hidden: true,
+            spid: `_x0000_s${control.shapeId}`,
+            text: control.text
+          }
+        });
       }
     }
 
@@ -350,7 +403,14 @@ class WorkSheetXform extends BaseXform {
 
   render(xmlStream, model) {
     xmlStream.openXml(XmlStream.StdDocAttributes);
-    xmlStream.openNode("worksheet", WorkSheetXform.WORKSHEET_ATTRIBUTES);
+    const worksheetAttrs: any = { ...WorkSheetXform.WORKSHEET_ATTRIBUTES };
+    if (model.formControls && model.formControls.length > 0) {
+      worksheetAttrs["xmlns:x14"] = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+      worksheetAttrs["xmlns:xdr"] =
+        "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+      worksheetAttrs["mc:Ignorable"] = `${worksheetAttrs["mc:Ignorable"]} x14`;
+    }
+    xmlStream.openNode("worksheet", worksheetAttrs);
 
     const sheetFormatPropertiesModel: any = model.properties
       ? {
@@ -405,28 +465,74 @@ class WorkSheetXform extends BaseXform {
     this.map.colBreaks.render(xmlStream, model.colBreaks);
     this.map.drawing.render(xmlStream, model.drawing); // Note: must be after rowBreaks/colBreaks
     this.map.picture.render(xmlStream, model.background); // Note: must be after drawing
-    this.map.tableParts.render(xmlStream, model.tables);
-
-    // Controls section for legacy form controls (checkboxes, etc.)
-    // Excel expects <controls> entries that reference ctrlProp relationships.
-    if (model.formControls && model.formControls.length > 0) {
-      xmlStream.openNode("controls");
-      for (const control of model.formControls) {
-        if (control.ctrlPropRelId) {
-          xmlStream.leafNode("control", { shapeId: control.shapeId, "r:id": control.ctrlPropRelId });
-        }
-      }
-      xmlStream.closeNode();
-    }
 
     if (model.rels) {
       // Add a <legacyDrawing /> node for each VML drawing relationship (comments and/or form controls).
+      // NOTE: Excel is picky about worksheet child element order; legacyDrawing must come before controls.
       model.rels.forEach(rel => {
         if (rel.Type === RelType.VmlDrawing) {
           xmlStream.leafNode("legacyDrawing", { "r:id": rel.Id });
         }
       });
     }
+
+    // Controls section for legacy form controls (checkboxes, etc.)
+    // Excel expects <controls> entries that reference ctrlProp relationships.
+    if (model.formControls && model.formControls.length > 0) {
+      xmlStream.openNode("mc:AlternateContent");
+      xmlStream.openNode("mc:Choice", { Requires: "x14" });
+      xmlStream.openNode("controls");
+
+      for (const control of model.formControls) {
+        if (!control.ctrlPropRelId) {
+          continue;
+        }
+
+        const defaultName = `Check Box ${Math.max(1, control.shapeId - 1024)}`;
+        xmlStream.openNode("mc:AlternateContent");
+        xmlStream.openNode("mc:Choice", { Requires: "x14" });
+        xmlStream.openNode("control", {
+          shapeId: control.shapeId,
+          "r:id": control.ctrlPropRelId,
+          name: (control as any).name || defaultName
+        });
+        xmlStream.openNode("controlPr", {
+          locked: 0,
+          defaultSize: 0,
+          print: control.print ? 1 : 0,
+          autoFill: 0,
+          autoLine: 0,
+          autoPict: 0
+        });
+        xmlStream.openNode("anchor");
+        xmlStream.openNode("from");
+        xmlStream.leafNode("xdr:col", undefined, control.tl.col);
+        xmlStream.leafNode("xdr:colOff", undefined, control.tl.colOff);
+        xmlStream.leafNode("xdr:row", undefined, control.tl.row);
+        xmlStream.leafNode("xdr:rowOff", undefined, control.tl.rowOff);
+        xmlStream.closeNode();
+        xmlStream.openNode("to");
+        xmlStream.leafNode("xdr:col", undefined, control.br.col);
+        xmlStream.leafNode("xdr:colOff", undefined, control.br.colOff);
+        xmlStream.leafNode("xdr:row", undefined, control.br.row);
+        xmlStream.leafNode("xdr:rowOff", undefined, control.br.rowOff);
+        xmlStream.closeNode(); // to
+        xmlStream.closeNode(); // anchor
+        xmlStream.closeNode(); // controlPr
+        xmlStream.closeNode(); // control
+        xmlStream.closeNode(); // mc:Choice
+        xmlStream.leafNode("mc:Fallback");
+        xmlStream.closeNode(); // mc:AlternateContent
+      }
+
+      xmlStream.closeNode();
+      xmlStream.closeNode();
+      xmlStream.leafNode("mc:Fallback");
+      xmlStream.closeNode();
+    }
+
+    // Table parts must come after <controls> in worksheet element order.
+    this.map.tableParts.render(xmlStream, model.tables);
 
     // extLst should be the last element in the worksheet.
     this.map.extLst.render(xmlStream, model);

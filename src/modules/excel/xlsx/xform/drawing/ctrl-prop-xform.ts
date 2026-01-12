@@ -12,6 +12,18 @@ import type { FormCheckboxModel } from "@excel/form-control";
 class CtrlPropXform extends BaseXform {
   declare public model: FormCheckboxModel;
 
+  private _checkedToXmlValue(checked: FormCheckboxModel["checked"]): string {
+    switch (checked) {
+      case "Checked":
+        return "1";
+      case "Mixed":
+        return "2";
+      case "Unchecked":
+      default:
+        return "0";
+    }
+  }
+
   get tag(): string {
     return "formControlPr";
   }
@@ -22,7 +34,8 @@ class CtrlPropXform extends BaseXform {
     const attrs: Record<string, string> = {
       xmlns: "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
       objectType: "CheckBox",
-      checked: renderModel.checked,
+      // Excel tends to serialize this as numeric state (0/1/2), matching VML x:Checked.
+      checked: this._checkedToXmlValue(renderModel.checked),
       lockText: "1"
     };
 
