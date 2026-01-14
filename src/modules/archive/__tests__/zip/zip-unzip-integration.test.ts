@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { zip, unzip } from "@archive";
+import { concatChunks } from "@archive/__tests__/zip/zip-test-utils";
 
 // Helper to decode Uint8Array to string
 const decode = (data: Uint8Array): string => new TextDecoder().decode(data);
@@ -29,13 +30,7 @@ describe("zip/unzip integration", () => {
       chunks.push(chunk);
     }
 
-    const totalSize = chunks.reduce((sum, c) => sum + c.length, 0);
-    const zipData = new Uint8Array(totalSize);
-    let offset = 0;
-    for (const chunk of chunks) {
-      zipData.set(chunk, offset);
-      offset += chunk.length;
-    }
+    const zipData = concatChunks(chunks);
 
     const files = new Map<string, Uint8Array>();
     for await (const entry of unzip(zipData).entries()) {

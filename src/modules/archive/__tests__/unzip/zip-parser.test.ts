@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ZipParser } from "@archive/unzip/zip-parser";
 import { createZip, type ZipEntry } from "@archive/zip/zip-bytes";
+import { CENTRAL_DIR_SIG, findSignatureFromEnd } from "@archive/__tests__/zip/zip-test-utils";
 
 // Helper to convert object to ZipEntry array
 function toEntries(files: Record<string, Uint8Array>): ZipEntry[] {
@@ -34,6 +35,71 @@ describe("ZipParser", () => {
       const parser = new ZipParser(zipData);
       const entries = parser.getEntries();
       expect(entries.length).toBe(0);
+    });
+
+    it("should preserve ZIP64 BigInt sizes beyond JS safe integers", async () => {
+      const zipData = await createZip([{ name: "a.txt", data: new TextEncoder().encode("a") }], {
+        level: 0,
+        reproducible: true,
+        zip64: true
+      });
+
+      // Mutate the ZIP64 extra field in the *central directory* to contain an
+      // unrepresentable-by-Number size, without changing the actual stored data.
+      // This validates that the parser can still list entries and expose exact
+      // ZIP64 metadata via BigInt.
+      const tooLarge = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+
+      const view = new DataView(zipData.buffer, zipData.byteOffset, zipData.byteLength);
+
+      // Find the first central directory header (search from end).
+      const cdOffset = findSignatureFromEnd(zipData, CENTRAL_DIR_SIG, 1024 * 1024);
+      expect(cdOffset).toBeGreaterThanOrEqual(0);
+
+      const fileNameLength = view.getUint16(cdOffset + 28, true);
+      const extraFieldLength = view.getUint16(cdOffset + 30, true);
+      expect(extraFieldLength).toBeGreaterThan(0);
+
+      const extraStart = cdOffset + 46 + fileNameLength;
+      const extraEnd = extraStart + extraFieldLength;
+
+      let cursor = extraStart;
+      let patched = false;
+      while (cursor + 4 <= extraEnd) {
+        const headerId = view.getUint16(cursor, true);
+        const dataSize = view.getUint16(cursor + 2, true);
+        const dataStart = cursor + 4;
+        const dataEnd = dataStart + dataSize;
+        if (dataEnd > extraEnd) {
+          break;
+        }
+
+        if (headerId === 0x0001) {
+          // ZIP64 extra field: [uSize(8), cSize(8), offset(8)] depending on sentinels.
+          // For forced ZIP64 from our writer, the first 16 bytes are sizes.
+          view.setBigUint64(dataStart, tooLarge, true);
+          view.setBigUint64(dataStart + 8, tooLarge, true);
+          patched = true;
+          break;
+        }
+
+        cursor = dataEnd;
+      }
+      expect(patched).toBe(true);
+
+      const parser = new ZipParser(zipData);
+      const entry = parser.getEntry("a.txt");
+      expect(entry).toBeDefined();
+
+      // Unsafe values: number fields remain at sentinel values.
+      expect(entry!.uncompressedSize).toBe(0xffffffff);
+      expect(entry!.compressedSize).toBe(0xffffffff);
+      // Exact values are preserved as BigInt.
+      expect(entry!.uncompressedSize64).toBe(tooLarge);
+      expect(entry!.compressedSize64).toBe(tooLarge);
+
+      // Extraction via the in-memory parser should fail clearly.
+      await expect(parser.extract("a.txt")).rejects.toThrow(/too large to extract into memory/i);
     });
   });
 

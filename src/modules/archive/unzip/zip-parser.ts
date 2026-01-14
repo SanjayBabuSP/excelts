@@ -13,11 +13,41 @@ import {
   CENTRAL_DIR_HEADER_SIG,
   COMPRESSION_DEFLATE,
   COMPRESSION_STORE,
+  FLAG_UTF8,
   LOCAL_FILE_HEADER_SIG,
   UINT16_MAX,
   UINT32_MAX,
   ZIP64_END_OF_CENTRAL_DIR_SIG
 } from "@archive/zip-spec/zip-records";
+
+const EMPTY = new Uint8Array(0);
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function assertEntryExtractableInMemory(entry: ZipEntryInfo): void {
+  // This parser extracts into memory. If ZIP64 values exceed JS safe integers,
+  // callers need a random-access + streaming extraction path (not implemented here).
+  if (
+    entry.uncompressedSize64 !== undefined &&
+    entry.uncompressedSize64 > MAX_SAFE_INTEGER_BIGINT
+  ) {
+    throw new Error(
+      `File "${entry.path}" is too large to extract into memory (ZIP64 size > 2^53-1)`
+    );
+  }
+  if (entry.compressedSize64 !== undefined && entry.compressedSize64 > MAX_SAFE_INTEGER_BIGINT) {
+    throw new Error(
+      `File "${entry.path}" is too large to extract into memory (ZIP64 size > 2^53-1)`
+    );
+  }
+  if (
+    entry.localHeaderOffset64 !== undefined &&
+    entry.localHeaderOffset64 > MAX_SAFE_INTEGER_BIGINT
+  ) {
+    throw new Error(
+      `File "${entry.path}" has a ZIP64 offset > 2^53-1 and cannot be extracted by the in-memory parser`
+    );
+  }
+}
 
 export type { ZipEntryInfo };
 
@@ -126,6 +156,12 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
       zip64Reader.skip(2); // version needed
       zip64Reader.skip(4); // disk number
       zip64Reader.skip(4); // disk with central dir
+      // ZIP64 EOCD layout (after disk fields):
+      // - entryCountOnDisk (u64)
+      // - entryCountTotal (u64)
+      // - centralDirSize (u64)
+      // - centralDirOffset (u64)
+      zip64Reader.skip(8); // entry count on this disk (unused for single-disk)
       const zip64TotalEntries = Number(zip64Reader.readBigUint64());
       zip64Reader.skip(8); // central directory size (unused)
       const zip64CentralDirOffset = Number(zip64Reader.readBigUint64());
@@ -195,7 +231,7 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
     let localHeaderOffset = centralReader.readUint32();
 
     // Check for UTF-8 flag (bit 11)
-    const isUtf8 = (flags & 0x800) !== 0;
+    const isUtf8 = (flags & FLAG_UTF8) !== 0;
     const useUtf8 = decodeStrings && isUtf8;
 
     const fileName = fileNameLength > 0 ? centralReader.readString(fileNameLength, useUtf8) : "";
@@ -231,11 +267,14 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
       path: fileName,
       isDirectory,
       compressedSize,
+      compressedSize64: extraFields.compressedSize64,
       uncompressedSize,
+      uncompressedSize64: extraFields.uncompressedSize64,
       compressionMethod,
       crc32,
       lastModified,
       localHeaderOffset,
+      localHeaderOffset64: extraFields.offsetToLocalFileHeader64,
       comment,
       externalAttributes,
       isEncrypted
@@ -250,8 +289,10 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
  */
 async function extractEntryData(data: Uint8Array, entry: ZipEntryInfo): Promise<Uint8Array> {
   if (entry.isDirectory) {
-    return new Uint8Array(0);
+    return EMPTY;
   }
+
+  assertEntryExtractableInMemory(entry);
 
   if (entry.isEncrypted) {
     throw new Error(`File "${entry.path}" is encrypted and cannot be extracted`);
@@ -273,8 +314,10 @@ async function extractEntryData(data: Uint8Array, entry: ZipEntryInfo): Promise<
  */
 function extractEntryDataSync(data: Uint8Array, entry: ZipEntryInfo): Uint8Array {
   if (entry.isDirectory) {
-    return new Uint8Array(0);
+    return EMPTY;
   }
+
+  assertEntryExtractableInMemory(entry);
 
   if (entry.isEncrypted) {
     throw new Error(`File "${entry.path}" is encrypted and cannot be extracted`);

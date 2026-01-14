@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 import { Parse } from "@archive/unzip/stream.browser";
+import { concatChunks } from "@archive/__tests__/zip/zip-test-utils";
 
 // Type helper for browser Parse which has different methods than Node version
 type BrowserParse = Parse & {
@@ -12,6 +13,40 @@ type BrowserParse = Parse & {
   write(chunk: Uint8Array): void;
   end(): void;
 };
+
+async function createZipBytesWithStreamingZip(
+  entries: Array<{ name: string; content: Uint8Array; level?: number }>
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+
+  let resolveFinish: (() => void) | null = null;
+  const finishPromise = new Promise<void>(resolve => {
+    resolveFinish = resolve;
+  });
+
+  const zip = new StreamingZip((err: Error | null, data: Uint8Array, final: boolean) => {
+    if (err) {
+      throw err;
+    }
+    if (data && data.length > 0) {
+      chunks.push(data);
+    }
+    if (final) {
+      resolveFinish?.();
+    }
+  });
+
+  for (const entry of entries) {
+    const file = new ZipDeflateFile(entry.name, { level: entry.level ?? 6 });
+    zip.add(file);
+    file.push(entry.content, true);
+    await file.complete();
+  }
+
+  zip.end();
+  await finishPromise;
+  return concatChunks(chunks);
+}
 
 describe("FallbackInflateRaw", () => {
   it("should fall back to non-streaming DEFLATE when CompressionStream is unavailable", async () => {
@@ -23,48 +58,15 @@ describe("FallbackInflateRaw", () => {
     globalThis.DecompressionStream = undefined;
 
     try {
-      const chunks: Uint8Array[] = [];
-
-      let resolveFinish: () => void;
-      const finishPromise = new Promise<void>(resolve => {
-        resolveFinish = resolve;
-      });
-
-      const zip = new StreamingZip((err: Error | null, data: Uint8Array, final: boolean) => {
-        if (err) {
-          throw err;
-        }
-        if (data && data.length > 0) {
-          chunks.push(data);
-        }
-        if (final) {
-          resolveFinish();
-        }
-      });
-
       const encoder = new TextEncoder();
       const payload = encoder.encode("stream-me");
-
-      const file = new ZipDeflateFile("test.txt", { level: 6 });
-      zip.add(file);
 
       // In old browsers without CompressionStream, StreamingZip should still work.
       // It will fall back to buffered (non-streaming) DEFLATE, so output may not be
       // emitted until end(), but the resulting ZIP must be valid.
-      file.push(payload, true);
-      await file.complete();
-
-      zip.end();
-      await finishPromise;
-
-      // Concatenate ZIP chunks
-      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-      const fullZip = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        fullZip.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const fullZip = await createZipBytesWithStreamingZip([
+        { name: "test.txt", content: payload, level: 6 }
+      ]);
 
       // Parse the ZIP to ensure it's valid and content matches.
       const parser = new Parse() as BrowserParse;
@@ -78,13 +80,7 @@ describe("FallbackInflateRaw", () => {
               readChunks.push(chunk);
             });
             entry.on("end", () => {
-              const len = readChunks.reduce((acc, c) => acc + c.length, 0);
-              const combined = new Uint8Array(len);
-              let pos = 0;
-              for (const c of readChunks) {
-                combined.set(c, pos);
-                pos += c.length;
-              }
+              const combined = concatChunks(readChunks);
               entries.push({
                 name: entry.path,
                 content: new TextDecoder().decode(combined)
@@ -113,42 +109,9 @@ describe("FallbackInflateRaw", () => {
   }, 30000);
 
   it("should parse ZIP created by StreamingZip", async () => {
-    // Create a ZIP file with StreamingZip/ZipDeflateFile
-    const chunks: Uint8Array[] = [];
-
-    let resolveFinish: () => void;
-    const finishPromise = new Promise<void>(resolve => {
-      resolveFinish = resolve;
-    });
-
-    const zip = new StreamingZip((err: Error | null, data: Uint8Array, final: boolean) => {
-      if (err) {
-        throw err;
-      }
-      if (data && data.length > 0) {
-        chunks.push(data);
-      }
-      if (final) {
-        resolveFinish();
-      }
-    });
-
-    const file = new ZipDeflateFile("test.txt", { level: 6 });
-    zip.add(file);
-    file.push(new TextEncoder().encode("Hello, World!"), true);
-    await file.complete();
-
-    zip.end();
-    await finishPromise;
-
-    // Concatenate all chunks
-    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-    const fullZip = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      fullZip.set(chunk, offset);
-      offset += chunk.length;
-    }
+    const fullZip = await createZipBytesWithStreamingZip([
+      { name: "test.txt", content: new TextEncoder().encode("Hello, World!"), level: 6 }
+    ]);
 
     console.log("ZIP size:", fullZip.length);
 
@@ -172,13 +135,7 @@ describe("FallbackInflateRaw", () => {
 
           entry.on("end", () => {
             console.log("Entry stream ended, total chunks:", readChunks.length);
-            const totalLen = readChunks.reduce((acc, c) => acc + c.length, 0);
-            const combined = new Uint8Array(totalLen);
-            let pos = 0;
-            for (const c of readChunks) {
-              combined.set(c, pos);
-              pos += c.length;
-            }
+            const combined = concatChunks(readChunks);
             const content = new TextDecoder().decode(combined);
             entries.push({
               name: entry.path,
@@ -218,54 +175,13 @@ describe("FallbackInflateRaw", () => {
   }, 30000);
 
   it("should parse ZIP with multiple files", async () => {
-    // Create a ZIP file with multiple files
-    const chunks: Uint8Array[] = [];
-
-    let resolveFinish: () => void;
-    const finishPromise = new Promise<void>(resolve => {
-      resolveFinish = resolve;
-    });
-
-    const zip = new StreamingZip((err: Error | null, data: Uint8Array, final: boolean) => {
-      if (err) {
-        throw err;
-      }
-      if (data && data.length > 0) {
-        chunks.push(data);
-      }
-      if (final) {
-        resolveFinish();
-      }
-    });
-
     const encoder = new TextEncoder();
 
-    const file1 = new ZipDeflateFile("file1.txt", { level: 6 });
-    zip.add(file1);
-    file1.push(encoder.encode("File 1 content"), true);
-    await file1.complete();
-
-    const file2 = new ZipDeflateFile("file2.txt", { level: 6 });
-    zip.add(file2);
-    file2.push(encoder.encode("File 2 content"), true);
-    await file2.complete();
-
-    const file3 = new ZipDeflateFile("dir/file3.txt", { level: 6 });
-    zip.add(file3);
-    file3.push(encoder.encode("File 3 content"), true);
-    await file3.complete();
-
-    zip.end();
-    await finishPromise;
-
-    // Concatenate all chunks
-    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-    const fullZip = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      fullZip.set(chunk, offset);
-      offset += chunk.length;
-    }
+    const fullZip = await createZipBytesWithStreamingZip([
+      { name: "file1.txt", content: encoder.encode("File 1 content"), level: 6 },
+      { name: "file2.txt", content: encoder.encode("File 2 content"), level: 6 },
+      { name: "dir/file3.txt", content: encoder.encode("File 3 content"), level: 6 }
+    ]);
 
     console.log("Multi-file ZIP size:", fullZip.length);
 
@@ -286,13 +202,7 @@ describe("FallbackInflateRaw", () => {
           });
 
           entry.on("end", () => {
-            const totalLen = readChunks.reduce((acc, c) => acc + c.length, 0);
-            const combined = new Uint8Array(totalLen);
-            let pos = 0;
-            for (const c of readChunks) {
-              combined.set(c, pos);
-              pos += c.length;
-            }
+            const combined = concatChunks(readChunks);
             entries.push({
               name: entry.path,
               content: new TextDecoder().decode(combined)

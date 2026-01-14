@@ -20,15 +20,26 @@ import {
 } from "@archive/zip/zip-entry-metadata";
 import {
   FLAG_UTF8,
+  UINT16_MAX,
+  UINT32_MAX,
   ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE,
   ZIP_END_OF_CENTRAL_DIR_FIXED_SIZE,
   ZIP_LOCAL_FILE_HEADER_FIXED_SIZE,
+  ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE,
+  ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE,
+  buildZip64EndOfCentralDirectory,
+  buildZip64EndOfCentralDirectoryLocator,
+  buildZip64ExtraField,
+  concatExtraFields,
+  VERSION_ZIP64,
   writeCentralDirectoryHeaderInto,
   writeEndOfCentralDirectoryInto,
   writeLocalFileHeaderInto
 } from "@archive/zip-spec/zip-records";
+import type { Zip64Mode } from "./zip64-mode";
 
 const REPRODUCIBLE_ZIP_MOD_TIME = new Date(1980, 0, 1, 0, 0, 0);
+const EMPTY = new Uint8Array(0);
 
 interface ProcessedEntry {
   name: Uint8Array;
@@ -67,7 +78,7 @@ interface ZipBuildSettings {
 
 function encodeZipComment(comment?: string): Uint8Array {
   // Keep empty comment as empty bytes (no encoding surprises).
-  return comment ? encodeUtf8(comment) : new Uint8Array(0);
+  return comment ? encodeUtf8(comment) : EMPTY;
 }
 
 function shouldDeflate(level: number, data: Uint8Array): boolean {
@@ -129,27 +140,8 @@ function compressEntryMaybeSync(
   return { compressedData: compressed, deflate: true };
 }
 
-function computeLocalRecordSize(entry: ProcessedEntry): number {
-  return (
-    ZIP_LOCAL_FILE_HEADER_FIXED_SIZE +
-    entry.name.length +
-    entry.extraField.length +
-    entry.compressedData.length
-  );
-}
-
-function computeCentralDirHeaderSize(entry: ProcessedEntry): number {
-  return (
-    ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE +
-    entry.name.length +
-    entry.extraField.length +
-    entry.comment.length
-  );
-}
-
 function buildProcessedEntry(
   entry: ZipEntry,
-  offset: number,
   settings: ZipBuildSettings,
   compressedData: Uint8Array,
   deflate: boolean
@@ -174,29 +166,7 @@ function buildProcessedEntry(
     modDate: metadata.dosDate,
     extraField: metadata.extraField,
     comment: metadata.commentBytes,
-    offset
-  };
-}
-
-function appendProcessedEntry(
-  processedEntries: ProcessedEntry[],
-  entry: ZipEntry,
-  compressedData: Uint8Array,
-  deflate: boolean,
-  currentOffset: number,
-  settings: ZipBuildSettings
-): { processedEntry: ProcessedEntry; nextOffset: number } {
-  const processedEntry = buildProcessedEntry(
-    entry,
-    currentOffset,
-    settings,
-    compressedData,
-    deflate
-  );
-  processedEntries.push(processedEntry);
-  return {
-    processedEntry,
-    nextOffset: currentOffset + computeLocalRecordSize(processedEntry)
+    offset: 0
   };
 }
 
@@ -241,60 +211,177 @@ export interface ZipOptions extends CompressOptions {
    * - "dos+utc": also write UTC mtime in 0x5455 extra field
    */
   timestamps?: ZipTimestampMode;
+
+  /**
+   * ZIP64 mode:
+   * - "auto" (default): write ZIP64 only when required by limits (e.g. >65535 entries).
+   * - true: force ZIP64 structures even for small archives (less legacy compatibility).
+   * - false: forbid ZIP64; throws if ZIP64 is required.
+   */
+  zip64?: Zip64Mode;
 }
 
-function finalizeZip(processedEntries: ProcessedEntry[], zipComment: Uint8Array): Uint8Array {
-  // Assemble ZIP into a single buffer to reduce allocations and copying.
+function finalizeZip(
+  processedEntries: ProcessedEntry[],
+  zipComment: Uint8Array,
+  zip64Mode: Zip64Mode = "auto"
+): Uint8Array {
+  const forceZip64 = zip64Mode === true;
+  const forbidZip64 = zip64Mode === false;
+
+  // Precompute offsets and effective extra fields (local vs central can differ for ZIP64).
+  const localExtraFields: Uint8Array[] = new Array(processedEntries.length);
+  const centralExtraFields: Uint8Array[] = new Array(processedEntries.length);
+  const zip64EntryNeeded: boolean[] = new Array(processedEntries.length);
+  const compressedSizes: number[] = new Array(processedEntries.length);
+
   let localSectionSize = 0;
-  let centralDirSize = 0;
-  for (const entry of processedEntries) {
-    localSectionSize += computeLocalRecordSize(entry);
-    centralDirSize += computeCentralDirHeaderSize(entry);
+  for (let i = 0; i < processedEntries.length; i++) {
+    const entry = processedEntries[i]!;
+    entry.offset = localSectionSize;
+
+    const compressedSize = entry.compressedData.length;
+    compressedSizes[i] = compressedSize;
+    const needsZip64Entry =
+      forceZip64 ||
+      entry.offset > UINT32_MAX ||
+      compressedSize > UINT32_MAX ||
+      entry.uncompressedSize > UINT32_MAX;
+    zip64EntryNeeded[i] = needsZip64Entry;
+
+    const zip64LocalExtra = needsZip64Entry
+      ? buildZip64ExtraField({
+          uncompressedSize: entry.uncompressedSize,
+          compressedSize
+        })
+      : EMPTY;
+    const zip64CentralExtra = needsZip64Entry
+      ? buildZip64ExtraField({
+          uncompressedSize: entry.uncompressedSize,
+          compressedSize,
+          localHeaderOffset: entry.offset
+        })
+      : EMPTY;
+
+    localExtraFields[i] = needsZip64Entry
+      ? concatExtraFields(entry.extraField, zip64LocalExtra)
+      : entry.extraField;
+    centralExtraFields[i] = needsZip64Entry
+      ? concatExtraFields(entry.extraField, zip64CentralExtra)
+      : entry.extraField;
+
+    const localHeaderSize =
+      ZIP_LOCAL_FILE_HEADER_FIXED_SIZE + entry.name.length + localExtraFields[i]!.length;
+    localSectionSize += localHeaderSize + compressedSize;
   }
 
-  // The central directory should start immediately after local section.
   const centralDirOffset = localSectionSize;
 
+  let centralDirSize = 0;
+  for (let i = 0; i < processedEntries.length; i++) {
+    const entry = processedEntries[i]!;
+    const size =
+      ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE +
+      entry.name.length +
+      centralExtraFields[i]!.length +
+      entry.comment.length;
+    centralDirSize += size;
+  }
+  const needsZip64FromArchive =
+    processedEntries.length > UINT16_MAX ||
+    centralDirOffset > UINT32_MAX ||
+    centralDirSize > UINT32_MAX;
+  const needsZip64 = forceZip64 || needsZip64FromArchive;
+  if (forbidZip64 && needsZip64) {
+    throw new Error("ZIP64 is required but zip64=false");
+  }
+
+  const zip64TrailerSize = needsZip64
+    ? ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE + ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE
+    : 0;
+
   const totalSize =
-    localSectionSize + centralDirSize + ZIP_END_OF_CENTRAL_DIR_FIXED_SIZE + zipComment.length;
+    localSectionSize +
+    centralDirSize +
+    zip64TrailerSize +
+    ZIP_END_OF_CENTRAL_DIR_FIXED_SIZE +
+    zipComment.length;
   const out = new Uint8Array(totalSize);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
 
   let offset = 0;
 
   // Local file headers and data
-  for (const entry of processedEntries) {
+  for (let i = 0; i < processedEntries.length; i++) {
+    const entry = processedEntries[i]!;
+    const compressedSize = compressedSizes[i]!;
+    const needsZip64Entry = zip64EntryNeeded[i]!;
+
     offset += writeLocalFileHeaderInto(out, view, offset, {
       fileName: entry.name,
-      extraField: entry.extraField,
+      extraField: localExtraFields[i]!,
       flags: FLAG_UTF8,
       compressionMethod: entry.compressionMethod,
       dosTime: entry.modTime,
       dosDate: entry.modDate,
       crc32: entry.crc,
-      compressedSize: entry.compressedData.length,
-      uncompressedSize: entry.uncompressedSize
+      compressedSize: needsZip64Entry ? UINT32_MAX : compressedSize,
+      uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
+      versionNeeded: needsZip64Entry ? VERSION_ZIP64 : undefined
     });
 
     out.set(entry.compressedData, offset);
-    offset += entry.compressedData.length;
+    offset += compressedSize;
   }
 
   // Central directory headers
-  for (const entry of processedEntries) {
+  for (let i = 0; i < processedEntries.length; i++) {
+    const entry = processedEntries[i]!;
+    const compressedSize = compressedSizes[i]!;
+    const needsZip64Entry = zip64EntryNeeded[i]!;
+
     offset += writeCentralDirectoryHeaderInto(out, view, offset, {
       fileName: entry.name,
-      extraField: entry.extraField,
+      extraField: centralExtraFields[i]!,
       comment: entry.comment,
       flags: FLAG_UTF8,
       compressionMethod: entry.compressionMethod,
       dosTime: entry.modTime,
       dosDate: entry.modDate,
       crc32: entry.crc,
-      compressedSize: entry.compressedData.length,
-      uncompressedSize: entry.uncompressedSize,
-      localHeaderOffset: entry.offset
+      compressedSize: needsZip64Entry ? UINT32_MAX : compressedSize,
+      uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
+      localHeaderOffset: needsZip64Entry ? UINT32_MAX : entry.offset,
+      versionNeeded: needsZip64Entry ? VERSION_ZIP64 : undefined
     });
+  }
+
+  if (needsZip64) {
+    const zip64EocdOffset = offset;
+    const zip64Eocd = buildZip64EndOfCentralDirectory({
+      entryCountOnDisk: processedEntries.length,
+      entryCountTotal: processedEntries.length,
+      centralDirSize,
+      centralDirOffset
+    });
+    out.set(zip64Eocd, offset);
+    offset += zip64Eocd.length;
+
+    const zip64Locator = buildZip64EndOfCentralDirectoryLocator({
+      zip64EndOfCentralDirectoryOffset: zip64EocdOffset,
+      totalDisks: 1
+    });
+    out.set(zip64Locator, offset);
+    offset += zip64Locator.length;
+
+    // End of central directory (classic) uses sentinel values.
+    writeEndOfCentralDirectoryInto(out, view, offset, {
+      entryCount: UINT16_MAX,
+      centralDirSize: UINT32_MAX,
+      centralDirOffset: UINT32_MAX,
+      comment: zipComment
+    });
+    return out;
   }
 
   // End of central directory
@@ -331,6 +418,7 @@ export async function createZip(
   };
 
   const thresholdBytes = options.thresholdBytes;
+  const zip64Mode = options.zip64 ?? "auto";
 
   const limit = Math.max(1, Math.floor(concurrency));
   const processedEntries = new Array<ProcessedEntry>(entries.length);
@@ -357,21 +445,14 @@ export async function createZip(
           compressOptions,
           smartStore
         );
-        processedEntries[idx] = buildProcessedEntry(entry, 0, settings, compressedData, deflate);
+        processedEntries[idx] = buildProcessedEntry(entry, settings, compressedData, deflate);
       }
     });
 
     await Promise.all(workers);
   }
 
-  // Compute offsets in original order.
-  let currentOffset = 0;
-  for (let i = 0; i < processedEntries.length; i++) {
-    const processedEntry = processedEntries[i]!;
-    processedEntry.offset = currentOffset;
-    currentOffset += computeLocalRecordSize(processedEntry);
-  }
-  return finalizeZip(processedEntries, zipComment);
+  return finalizeZip(processedEntries, zipComment, zip64Mode);
 }
 
 /**
@@ -395,9 +476,9 @@ export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Ui
   };
 
   const thresholdBytes = options.thresholdBytes;
+  const zip64Mode = options.zip64 ?? "auto";
 
   const processedEntries: ProcessedEntry[] = [];
-  let currentOffset = 0;
 
   for (const entry of entries) {
     const entryLevel = entry.level ?? level;
@@ -412,15 +493,7 @@ export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Ui
       smartStore
     );
 
-    const result = appendProcessedEntry(
-      processedEntries,
-      entry,
-      compressedData,
-      deflate,
-      currentOffset,
-      settings
-    );
-    currentOffset = result.nextOffset;
+    processedEntries.push(buildProcessedEntry(entry, settings, compressedData, deflate));
   }
-  return finalizeZip(processedEntries, zipComment);
+  return finalizeZip(processedEntries, zipComment, zip64Mode);
 }

@@ -8,6 +8,8 @@
 // ZIP format constants (PKWARE APPNOTE)
 // =============================================================================
 
+const EMPTY = new Uint8Array(0);
+
 // Signatures
 export const LOCAL_FILE_HEADER_SIG = 0x04034b50;
 export const CENTRAL_DIR_HEADER_SIG = 0x02014b50;
@@ -20,6 +22,7 @@ export const ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG = 0x07064b50;
 // Versions
 export const VERSION_NEEDED = 20; // 2.0 - supports DEFLATE
 export const VERSION_MADE_BY = 20; // 2.0
+export const VERSION_ZIP64 = 45; // 4.5 - supports ZIP64
 
 // Compression methods
 export const COMPRESSION_STORE = 0;
@@ -36,6 +39,11 @@ export const UINT32_MAX = 0xffffffff;
 export const ZIP_LOCAL_FILE_HEADER_FIXED_SIZE = 30;
 export const ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE = 46;
 export const ZIP_END_OF_CENTRAL_DIR_FIXED_SIZE = 22;
+
+export const ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE = 56;
+export const ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE = 20;
+
+export const ZIP64_EXTRA_FIELD_ID = 0x0001;
 
 export interface ZipLocalFileHeaderInput {
   fileName: Uint8Array;
@@ -213,4 +221,154 @@ export function buildDataDescriptor(
   view.setUint32(12, uncompressedSize, true);
 
   return descriptor;
+}
+
+function writeUint64LE(view: DataView, offset: number, value: number): void {
+  // ZIP64 values fit within JS safe integer for our use cases (<= 2^53-1).
+  const lo = value >>> 0;
+  const hi = Math.floor(value / 0x100000000) >>> 0;
+  view.setUint32(offset, lo, true);
+  view.setUint32(offset + 4, hi, true);
+}
+
+export function buildDataDescriptorZip64(
+  crc32: number,
+  compressedSize: number,
+  uncompressedSize: number
+): Uint8Array {
+  // Signature(4) + CRC32(4) + compressedSize(8) + uncompressedSize(8)
+  const descriptor = new Uint8Array(24);
+  const view = new DataView(descriptor.buffer, descriptor.byteOffset, descriptor.byteLength);
+
+  view.setUint32(0, DATA_DESCRIPTOR_SIG, true);
+  view.setUint32(4, crc32, true);
+  writeUint64LE(view, 8, compressedSize);
+  writeUint64LE(view, 16, uncompressedSize);
+
+  return descriptor;
+}
+
+export function buildZip64ExtraField(input: {
+  uncompressedSize?: number;
+  compressedSize?: number;
+  localHeaderOffset?: number;
+  diskNumberStart?: number;
+}): Uint8Array {
+  const includeUncompressed = input.uncompressedSize !== undefined;
+  const includeCompressed = input.compressedSize !== undefined;
+  const includeOffset = input.localHeaderOffset !== undefined;
+  const includeDisk = input.diskNumberStart !== undefined;
+
+  let dataLen = 0;
+  if (includeUncompressed) {
+    dataLen += 8;
+  }
+  if (includeCompressed) {
+    dataLen += 8;
+  }
+  if (includeOffset) {
+    dataLen += 8;
+  }
+  if (includeDisk) {
+    dataLen += 4;
+  }
+
+  if (dataLen === 0) {
+    return EMPTY;
+  }
+
+  const out = new Uint8Array(4 + dataLen);
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  view.setUint16(0, ZIP64_EXTRA_FIELD_ID, true);
+  view.setUint16(2, dataLen, true);
+
+  let off = 4;
+  if (includeUncompressed) {
+    writeUint64LE(view, off, input.uncompressedSize!);
+    off += 8;
+  }
+  if (includeCompressed) {
+    writeUint64LE(view, off, input.compressedSize!);
+    off += 8;
+  }
+  if (includeOffset) {
+    writeUint64LE(view, off, input.localHeaderOffset!);
+    off += 8;
+  }
+  if (includeDisk) {
+    view.setUint32(off, input.diskNumberStart!, true);
+  }
+
+  return out;
+}
+
+export function concatExtraFields(a: Uint8Array, b: Uint8Array): Uint8Array {
+  if (a.length === 0) {
+    return b;
+  }
+  if (b.length === 0) {
+    return a;
+  }
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+export interface Zip64EndOfCentralDirectoryInput {
+  versionMadeBy?: number;
+  versionNeeded?: number;
+  diskNumber?: number;
+  centralDirectoryDiskNumber?: number;
+  entryCountOnDisk: number;
+  entryCountTotal: number;
+  centralDirSize: number;
+  centralDirOffset: number;
+}
+
+export function buildZip64EndOfCentralDirectory(
+  input: Zip64EndOfCentralDirectoryInput
+): Uint8Array {
+  const versionMadeBy = input.versionMadeBy ?? VERSION_MADE_BY;
+  const versionNeeded = input.versionNeeded ?? VERSION_ZIP64;
+  const diskNumber = input.diskNumber ?? 0;
+  const centralDirectoryDiskNumber = input.centralDirectoryDiskNumber ?? 0;
+
+  const out = new Uint8Array(ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE);
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+
+  view.setUint32(0, ZIP64_END_OF_CENTRAL_DIR_SIG, true);
+  // Size of ZIP64 EOCD record (excluding signature + this 8-byte field)
+  writeUint64LE(view, 4, 44);
+  view.setUint16(12, versionMadeBy, true);
+  view.setUint16(14, versionNeeded, true);
+  view.setUint32(16, diskNumber, true);
+  view.setUint32(20, centralDirectoryDiskNumber, true);
+  writeUint64LE(view, 24, input.entryCountOnDisk);
+  writeUint64LE(view, 32, input.entryCountTotal);
+  writeUint64LE(view, 40, input.centralDirSize);
+  writeUint64LE(view, 48, input.centralDirOffset);
+
+  return out;
+}
+
+export interface Zip64EndOfCentralDirectoryLocatorInput {
+  zip64EndOfCentralDirectoryDiskNumber?: number;
+  zip64EndOfCentralDirectoryOffset: number;
+  totalDisks?: number;
+}
+
+export function buildZip64EndOfCentralDirectoryLocator(
+  input: Zip64EndOfCentralDirectoryLocatorInput
+): Uint8Array {
+  const zip64EndOfCentralDirectoryDiskNumber = input.zip64EndOfCentralDirectoryDiskNumber ?? 0;
+  const totalDisks = input.totalDisks ?? 1;
+
+  const out = new Uint8Array(ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE);
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  view.setUint32(0, ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG, true);
+  view.setUint32(4, zip64EndOfCentralDirectoryDiskNumber, true);
+  writeUint64LE(view, 8, input.zip64EndOfCentralDirectoryOffset);
+  view.setUint32(16, totalDisks, true);
+  return out;
 }

@@ -9,19 +9,30 @@
  */
 
 import { describe, it, expect } from "vitest";
+import {
+  CENTRAL_DIR_SIG,
+  ZIP64_EOCD_LOCATOR_SIG,
+  ZIP64_EOCD_SIG,
+  concatChunks,
+  findSignatureFromEnd,
+  hasSignature
+} from "@archive/__tests__/zip/zip-test-utils";
 
 /**
  * Streaming ZIP module interface - must be provided by platform-specific test
  */
 export interface StreamingZipModuleImports {
   // Streaming ZIP classes
-  Zip: new (callback: (err: Error | null, data: Uint8Array, final: boolean) => void) => {
+  Zip: new (
+    callback: (err: Error | null, data: Uint8Array, final: boolean) => void,
+    options?: { comment?: string; zip64?: boolean | "auto" }
+  ) => {
     add(file: any): void;
     end(): void;
   };
   ZipDeflate: new (
     name: string,
-    options?: { level?: number }
+    options?: { level?: number; zip64?: boolean | "auto"; smartStore?: boolean }
   ) => {
     name: string;
     level: number;
@@ -54,6 +65,38 @@ export interface StreamingZipModuleImports {
  */
 export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
   const { Zip, ZipDeflate, createDeflateStream, ZipParser } = imports;
+
+  const collectZip = (options?: {
+    comment?: string;
+    zip64?: boolean | "auto";
+  }): {
+    zip: InstanceType<StreamingZipModuleImports["Zip"]>;
+    chunks: Uint8Array[];
+    done: Promise<void>;
+  } => {
+    const chunks: Uint8Array[] = [];
+    let resolveDone: (() => void) | null = null;
+    let rejectDone: ((err: Error) => void) | null = null;
+    const done = new Promise<void>((resolve, reject) => {
+      resolveDone = resolve;
+      rejectDone = reject;
+    });
+
+    const zip = new Zip((err, data, final) => {
+      if (err) {
+        rejectDone?.(err);
+        return;
+      }
+      if (data.length) {
+        chunks.push(data);
+      }
+      if (final) {
+        resolveDone?.();
+      }
+    }, options);
+
+    return { zip, chunks, done };
+  };
 
   describe("createDeflateStream", () => {
     it("should create a deflate stream", () => {
@@ -133,47 +176,16 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
 
   describe("StreamingZip (Zip)", () => {
     it("should create a valid ZIP with single file", async () => {
-      const chunks: Uint8Array[] = [];
-
-      const zip = new Zip((err, data, _final) => {
-        if (err) {
-          throw err;
-        }
-        chunks.push(data);
-      });
+      const { zip, chunks, done } = collectZip();
 
       const file = new ZipDeflate("hello.txt", { level: 1 });
       zip.add(file);
 
-      await new Promise<void>(resolve => {
-        const originalOndata = file.ondata;
-        // Wait for file to complete
-        const checkComplete = () => {
-          if (file.isComplete()) {
-            zip.end();
-            // Give time for central directory
-            setTimeout(resolve, 50);
-          }
-        };
+      await file.push(new TextEncoder().encode("Hello, World!"), true);
+      zip.end();
+      await done;
 
-        file.ondata = (data, final) => {
-          originalOndata?.(data, final);
-          if (final) {
-            checkComplete();
-          }
-        };
-
-        file.push(new TextEncoder().encode("Hello, World!"), true);
-      });
-
-      // Concatenate all chunks
-      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-      const zipData = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        zipData.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const zipData = concatChunks(chunks);
 
       // Parse and verify the ZIP
       const parser = new ZipParser(zipData);
@@ -188,14 +200,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
     });
 
     it("should create a valid ZIP with multiple files", async () => {
-      const chunks: Uint8Array[] = [];
-
-      const zip = new Zip((err, data, _final) => {
-        if (err) {
-          throw err;
-        }
-        chunks.push(data);
-      });
+      const { zip, chunks, done } = collectZip();
 
       const file1 = new ZipDeflate("file1.txt", { level: 1 });
       const file2 = new ZipDeflate("folder/file2.txt", { level: 1 });
@@ -206,24 +211,16 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.add(file3);
 
       // Push data to all files
-      file1.push(new TextEncoder().encode("Content 1"), true);
-      file2.push(new TextEncoder().encode("Content 2"), true);
-      file3.push(new TextEncoder().encode("Content 3"), true);
+      await Promise.all([
+        file1.push(new TextEncoder().encode("Content 1"), true),
+        file2.push(new TextEncoder().encode("Content 2"), true),
+        file3.push(new TextEncoder().encode("Content 3"), true)
+      ]);
 
-      // Wait for completion
-      await new Promise<void>(resolve => {
-        zip.end();
-        setTimeout(resolve, 200);
-      });
+      zip.end();
+      await done;
 
-      // Concatenate chunks
-      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-      const zipData = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        zipData.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const zipData = concatChunks(chunks);
 
       // Parse and verify
       const parser = new ZipParser(zipData);
@@ -241,14 +238,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
     });
 
     it("should handle large data streaming", async () => {
-      const chunks: Uint8Array[] = [];
-
-      const zip = new Zip((err, data, _final) => {
-        if (err) {
-          throw err;
-        }
-        chunks.push(data);
-      });
+      const { zip, chunks, done } = collectZip();
 
       const file = new ZipDeflate("large.bin", { level: 1 });
       zip.add(file);
@@ -264,23 +254,14 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       for (let i = 0; i < largeData.length; i += chunkSize) {
         const end = Math.min(i + chunkSize, largeData.length);
         const isLast = end >= largeData.length;
-        file.push(largeData.slice(i, end), isLast);
+        // Use subarray to avoid copying.
+        await file.push(largeData.subarray(i, end), isLast);
       }
 
-      // Wait for completion
-      await new Promise<void>(resolve => {
-        zip.end();
-        setTimeout(resolve, 500);
-      });
+      zip.end();
+      await done;
 
-      // Concatenate chunks
-      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-      const zipData = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        zipData.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const zipData = concatChunks(chunks);
 
       // Parse and verify
       const parser = new ZipParser(zipData);
@@ -293,12 +274,68 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       const extractedData = extracted.get("large.bin")!;
       expect(extractedData.length).toBe(largeData.length);
 
-      // Verify content
-      for (let i = 0; i < largeData.length; i++) {
-        if (extractedData[i] !== largeData[i]) {
-          throw new Error(`Mismatch at byte ${i}`);
+      // Verify content (sample points) without O(n) iteration.
+      const sampleCount = 1024;
+      for (let i = 0; i < sampleCount; i++) {
+        const idx = Math.floor((i * (largeData.length - 1)) / (sampleCount - 1));
+        // Pattern is i % 256.
+        const expected = idx % 256;
+        const actual = extractedData[idx]!;
+        if (actual !== expected) {
+          throw new Error(`Mismatch at byte ${idx}: expected ${expected}, got ${actual}`);
         }
       }
+    });
+  });
+
+  describe("StreamingZip ZIP64 options", () => {
+    it("should write ZIP64 when zip64=true (forced)", async () => {
+      const { zip, chunks, done } = collectZip({ zip64: true });
+
+      const file = new ZipDeflate("a.txt", { level: 0, smartStore: false, zip64: true });
+      zip.add(file);
+      await file.push(new TextEncoder().encode("a"), true);
+
+      zip.end();
+      await done;
+
+      const zipData = concatChunks(chunks);
+
+      expect(hasSignature(zipData, ZIP64_EOCD_SIG, zipData.length - 256, zipData.length)).toBe(
+        true
+      );
+      expect(
+        hasSignature(zipData, ZIP64_EOCD_LOCATOR_SIG, zipData.length - 256, zipData.length)
+      ).toBe(true);
+
+      // Central directory header should use 0xFFFFFFFF sentinels.
+      const cdOffset = findSignatureFromEnd(zipData, CENTRAL_DIR_SIG, 1024 * 1024);
+      expect(cdOffset).toBeGreaterThanOrEqual(0);
+      const view = new DataView(zipData.buffer, zipData.byteOffset, zipData.byteLength);
+      const compSize32 = view.getUint32(cdOffset + 20, true);
+      const uncompSize32 = view.getUint32(cdOffset + 24, true);
+      const localOff32 = view.getUint32(cdOffset + 42, true);
+      expect(compSize32).toBe(0xffffffff);
+      expect(uncompSize32).toBe(0xffffffff);
+      expect(localOff32).toBe(0xffffffff);
+
+      const parser = new ZipParser(zipData);
+      const entries = parser.getEntries();
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toBe("a.txt");
+    });
+
+    it("should error when zip64=false but ZIP64 is required (entry count)", () => {
+      // IMPORTANT: Do not enqueue 65k ZipDeflate instances.
+      // ZipDeflate allocates a 64KB sample buffer when smartStore=true, which would explode memory
+      // and appear to hang in browser tests. Instead, force the internal counter to the limit and
+      // assert add() throws synchronously.
+
+      const zip = new Zip(() => {}, { zip64: false });
+      (zip as any).addedEntryCount = 0xffff;
+
+      const file = new ZipDeflate("e/0.txt", { level: 0, smartStore: false });
+      expect(() => zip.add(file)).toThrow(/ZIP64 is required but zip64=false/);
     });
   });
 

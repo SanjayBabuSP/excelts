@@ -10,6 +10,7 @@ import {
   type ArchiveSource
 } from "@archive/io/archive-source";
 import { createAsyncQueue } from "@archive/utils/async-queue";
+import type { Zip64Mode } from "./zip64-mode";
 
 const REPRODUCIBLE_ZIP_MOD_TIME = new Date(1980, 0, 1, 0, 0, 0);
 
@@ -17,6 +18,14 @@ export interface ZipOptions {
   level?: number;
   timestamps?: ZipTimestampMode;
   comment?: string;
+
+  /**
+   * ZIP64 mode:
+   * - "auto" (default): write ZIP64 only when required by limits.
+   * - true: force ZIP64 structures even for small archives.
+   * - false: forbid ZIP64; throws if ZIP64 is required.
+   */
+  zip64?: Zip64Mode;
 
   /**
    * Default modification time for entries that don't specify `modTime`.
@@ -42,6 +51,9 @@ export interface ZipEntryOptions {
   level?: number;
   modTime?: Date;
   comment?: string;
+
+  /** Per-entry ZIP64 override. Defaults to the archive-level zip64 mode. */
+  zip64?: Zip64Mode;
 }
 
 type ZipInput = {
@@ -55,6 +67,7 @@ export class ZipArchive {
     comment?: string;
     modTime: Date;
     smartStore: boolean;
+    zip64: Zip64Mode;
   };
   private readonly _entries: ZipInput[] = [];
   private _sealed = false;
@@ -66,7 +79,8 @@ export class ZipArchive {
       timestamps: options.timestamps ?? (reproducible ? "dos" : DEFAULT_ZIP_TIMESTAMPS),
       comment: options.comment,
       modTime: options.modTime ?? (reproducible ? REPRODUCIBLE_ZIP_MOD_TIME : new Date()),
-      smartStore: options.smartStore ?? true
+      smartStore: options.smartStore ?? true,
+      zip64: options.zip64 ?? "auto"
     };
   }
 
@@ -99,19 +113,21 @@ export class ZipArchive {
           queue.close();
         }
       },
-      { comment: this._options.comment }
+      { comment: this._options.comment, zip64: this._options.zip64 }
     );
 
     (async () => {
       try {
         for (const entry of this._entries) {
           const level = entry.options?.level ?? this._options.level;
+          const zip64 = entry.options?.zip64 ?? this._options.zip64;
           const file = new ZipDeflateFile(entry.name, {
             level,
             modTime: entry.options?.modTime ?? this._options.modTime,
             timestamps: this._options.timestamps,
             comment: entry.options?.comment,
-            smartStore: this._options.smartStore
+            smartStore: this._options.smartStore,
+            zip64
           });
 
           zip.add(file);
@@ -178,7 +194,8 @@ export class ZipArchive {
           timestamps: this._options.timestamps,
           modTime: this._options.modTime,
           comment: this._options.comment,
-          smartStore: this._options.smartStore
+          smartStore: this._options.smartStore,
+          zip64: this._options.zip64
         });
       }
 
@@ -197,7 +214,8 @@ export class ZipArchive {
         timestamps: this._options.timestamps,
         modTime: this._options.modTime,
         comment: this._options.comment,
-        smartStore: this._options.smartStore
+        smartStore: this._options.smartStore,
+        zip64: this._options.zip64
       });
     }
 
@@ -228,7 +246,8 @@ export class ZipArchive {
       timestamps: this._options.timestamps,
       modTime: this._options.modTime,
       comment: this._options.comment,
-      smartStore: this._options.smartStore
+      smartStore: this._options.smartStore,
+      zip64: this._options.zip64
     });
   }
 

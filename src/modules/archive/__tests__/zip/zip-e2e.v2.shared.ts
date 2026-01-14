@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { ArchiveSource, UnzipOptions, ZipArchive, ZipOptions, ZipReader } from "@archive";
+import { hasSignature } from "@archive/__tests__/zip/zip-test-utils";
 
 export interface ZipE2EModuleImports {
   zip: (options?: ZipOptions) => ZipArchive;
@@ -15,18 +16,6 @@ export interface ZipE2EModuleImports {
 
 const LOCAL_FILE_HEADER_SIG = 0x04034b50;
 const END_OF_CENTRAL_DIR_SIG = 0x06054b50;
-
-function hasSignature(data: Uint8Array, signature: number, start: number, end: number): boolean {
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const min = Math.max(0, start);
-  const max = Math.min(data.length - 4, end);
-  for (let i = min; i <= max; i++) {
-    if (view.getUint32(i, true) === signature) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function makeTestEntries(): Array<{ name: string; data: Uint8Array }> {
   const text = new TextEncoder();
