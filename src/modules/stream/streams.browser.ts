@@ -1021,10 +1021,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           yield chunk as T;
         }
       }
-
-      if (streamError) {
-        throw streamError;
-      }
     } finally {
       this.off("data", dataHandler);
       this.off("end", endHandler);
