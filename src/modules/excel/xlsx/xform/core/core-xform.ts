@@ -23,6 +23,26 @@ interface CoreModel {
   modified?: Date;
 }
 
+// Rendering uses namespace prefixes, parsing uses unqualified names (SAX strips prefixes)
+const PROPS = {
+  creator: "dc:creator",
+  title: "dc:title",
+  subject: "dc:subject",
+  description: "dc:description",
+  identifier: "dc:identifier",
+  language: "dc:language",
+  keywords: "cp:keywords",
+  category: "cp:category",
+  lastModifiedBy: "cp:lastModifiedBy",
+  lastPrinted: "cp:lastPrinted",
+  revision: "cp:revision",
+  version: "cp:version",
+  contentStatus: "cp:contentStatus",
+  contentType: "cp:contentType",
+  created: "dcterms:created",
+  modified: "dcterms:modified"
+} as const;
+
 class CoreXform extends BaseXform {
   declare public map: { [key: string]: any };
   declare public parser: any;
@@ -31,27 +51,27 @@ class CoreXform extends BaseXform {
     super();
 
     this.map = {
-      "dc:creator": new StringXform({ tag: "dc:creator" }),
-      "dc:title": new StringXform({ tag: "dc:title" }),
-      "dc:subject": new StringXform({ tag: "dc:subject" }),
-      "dc:description": new StringXform({ tag: "dc:description" }),
-      "dc:identifier": new StringXform({ tag: "dc:identifier" }),
-      "dc:language": new StringXform({ tag: "dc:language" }),
-      "cp:keywords": new StringXform({ tag: "cp:keywords" }),
-      "cp:category": new StringXform({ tag: "cp:category" }),
-      "cp:lastModifiedBy": new StringXform({ tag: "cp:lastModifiedBy" }),
-      "cp:lastPrinted": new DateXform({ tag: "cp:lastPrinted", format: CoreXform.DateFormat }),
-      "cp:revision": new IntegerXform({ tag: "cp:revision" }),
-      "cp:version": new StringXform({ tag: "cp:version" }),
-      "cp:contentStatus": new StringXform({ tag: "cp:contentStatus" }),
-      "cp:contentType": new StringXform({ tag: "cp:contentType" }),
-      "dcterms:created": new DateXform({
-        tag: "dcterms:created",
+      creator: new StringXform({ tag: PROPS.creator }),
+      title: new StringXform({ tag: PROPS.title }),
+      subject: new StringXform({ tag: PROPS.subject }),
+      description: new StringXform({ tag: PROPS.description }),
+      identifier: new StringXform({ tag: PROPS.identifier }),
+      language: new StringXform({ tag: PROPS.language }),
+      keywords: new StringXform({ tag: PROPS.keywords }),
+      category: new StringXform({ tag: PROPS.category }),
+      lastModifiedBy: new StringXform({ tag: PROPS.lastModifiedBy }),
+      lastPrinted: new DateXform({ tag: PROPS.lastPrinted, format: CoreXform.DateFormat }),
+      revision: new IntegerXform({ tag: PROPS.revision }),
+      version: new StringXform({ tag: PROPS.version }),
+      contentStatus: new StringXform({ tag: PROPS.contentStatus }),
+      contentType: new StringXform({ tag: PROPS.contentType }),
+      created: new DateXform({
+        tag: PROPS.created,
         attrs: CoreXform.DateAttrs,
         format: CoreXform.DateFormat
       }),
-      "dcterms:modified": new DateXform({
-        tag: "dcterms:modified",
+      modified: new DateXform({
+        tag: PROPS.modified,
         attrs: CoreXform.DateAttrs,
         format: CoreXform.DateFormat
       })
@@ -60,25 +80,11 @@ class CoreXform extends BaseXform {
 
   render(xmlStream: any, model: CoreModel): void {
     xmlStream.openXml(XmlStream.StdDocAttributes);
-
     xmlStream.openNode("cp:coreProperties", CoreXform.CORE_PROPERTY_ATTRIBUTES);
 
-    this.map["dc:creator"].render(xmlStream, model.creator);
-    this.map["dc:title"].render(xmlStream, model.title);
-    this.map["dc:subject"].render(xmlStream, model.subject);
-    this.map["dc:description"].render(xmlStream, model.description);
-    this.map["dc:identifier"].render(xmlStream, model.identifier);
-    this.map["dc:language"].render(xmlStream, model.language);
-    this.map["cp:keywords"].render(xmlStream, model.keywords);
-    this.map["cp:category"].render(xmlStream, model.category);
-    this.map["cp:lastModifiedBy"].render(xmlStream, model.lastModifiedBy);
-    this.map["cp:lastPrinted"].render(xmlStream, model.lastPrinted);
-    this.map["cp:revision"].render(xmlStream, model.revision);
-    this.map["cp:version"].render(xmlStream, model.version);
-    this.map["cp:contentStatus"].render(xmlStream, model.contentStatus);
-    this.map["cp:contentType"].render(xmlStream, model.contentType);
-    this.map["dcterms:created"].render(xmlStream, model.created);
-    this.map["dcterms:modified"].render(xmlStream, model.modified);
+    for (const key of Object.keys(PROPS)) {
+      this.map[key].render(xmlStream, model[key as keyof CoreModel]);
+    }
 
     xmlStream.closeNode();
   }
@@ -88,18 +94,13 @@ class CoreXform extends BaseXform {
       this.parser.parseOpen(node);
       return true;
     }
-    switch (node.name) {
-      case "cp:coreProperties":
-      case "coreProperties":
-        return true;
-      default:
-        this.parser = this.map[node.name];
-        if (this.parser) {
-          this.parser.parseOpen(node);
-          return true;
-        }
-        throw new Error(`Unexpected xml node in parseOpen: ${JSON.stringify(node)}`);
+    if (node.name !== "coreProperties") {
+      this.parser = this.map[node.name];
+      if (this.parser) {
+        this.parser.parseOpen(node);
+      }
     }
+    return true;
   }
 
   parseText(text: string): void {
@@ -115,30 +116,17 @@ class CoreXform extends BaseXform {
       }
       return true;
     }
-    switch (name) {
-      case "cp:coreProperties":
-      case "coreProperties":
-        this.model = {
-          creator: this.map["dc:creator"].model,
-          title: this.map["dc:title"].model,
-          subject: this.map["dc:subject"].model,
-          description: this.map["dc:description"].model,
-          identifier: this.map["dc:identifier"].model,
-          language: this.map["dc:language"].model,
-          keywords: this.map["cp:keywords"].model,
-          category: this.map["cp:category"].model,
-          lastModifiedBy: this.map["cp:lastModifiedBy"].model,
-          lastPrinted: this.map["cp:lastPrinted"].model,
-          revision: this.map["cp:revision"].model,
-          contentStatus: this.map["cp:contentStatus"].model,
-          contentType: this.map["cp:contentType"].model,
-          created: this.map["dcterms:created"].model,
-          modified: this.map["dcterms:modified"].model
-        };
-        return false;
-      default:
-        throw new Error(`Unexpected xml node in parseClose: ${name}`);
+    if (name === "coreProperties") {
+      this.model = {};
+      for (const key of Object.keys(PROPS)) {
+        const val = this.map[key].model;
+        if (val !== undefined && val !== "") {
+          this.model[key] = val;
+        }
+      }
+      return false;
     }
+    return true;
   }
 
   static DateFormat = function (dt: Date): string {

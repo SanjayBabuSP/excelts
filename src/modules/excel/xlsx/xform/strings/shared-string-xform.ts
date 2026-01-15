@@ -54,16 +54,15 @@ class SharedStringXform extends BaseXform {
   }
 
   parseOpen(node: any): boolean {
-    const { name } = node;
     if (this.parser) {
       this.parser.parseOpen(node);
       return true;
     }
-    if (name === this.tag) {
+    if (node.name === this.tag) {
       this.model = {};
       return true;
     }
-    this.parser = this.map[name];
+    this.parser = this.map[node.name];
     if (this.parser) {
       this.parser.parseOpen(node);
       return true;

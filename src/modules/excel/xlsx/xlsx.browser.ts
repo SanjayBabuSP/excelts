@@ -541,8 +541,10 @@ class XLSX {
           case OOXML_PATHS.docPropsApp: {
             const appXform = new AppXform();
             const appProperties = await appXform.parseStream(stream);
-            model.company = appProperties.company;
-            model.manager = appProperties.manager;
+            if (appProperties) {
+              model.company = appProperties.company;
+              model.manager = appProperties.manager;
+            }
             break;
           }
           case OOXML_PATHS.docPropsCore: {
@@ -1105,8 +1107,10 @@ class XLSX {
             case OOXML_PATHS.docPropsApp: {
               const appXform = new AppXform();
               const appProperties = await appXform.parseStream(stream);
-              model.company = appProperties.company;
-              model.manager = appProperties.manager;
+              if (appProperties) {
+                model.company = appProperties.company;
+                model.manager = appProperties.manager;
+              }
               break;
             }
             case OOXML_PATHS.docPropsCore: {

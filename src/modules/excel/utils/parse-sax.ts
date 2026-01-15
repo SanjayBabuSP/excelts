@@ -192,6 +192,13 @@ const XML_ENTITIES: Record<string, string> = {
   apos: "'"
 };
 
+// HAN CELL namespace prefix normalization
+// HAN CELL uses non-standard namespace prefixes (ep:, cp:, dc:, etc.)
+// The x: prefix for spreadsheetml is detected dynamically from xmlns declarations
+// See: https://github.com/exceljs/exceljs/issues/3014
+const HAN_CELL_PREFIXES = /^(ep|cp|dc|dcterms|dcmitype|vt):/;
+const SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
 // ============================================================================
 // Parser States
 // ============================================================================
@@ -263,6 +270,9 @@ export class SaxesParser {
   // Entity storage
   ENTITIES: Record<string, string> = { ...XML_ENTITIES };
 
+  // HAN CELL compatibility: spreadsheetml namespace prefix (e.g., "x")
+  private nsPrefix: string | null = null;
+
   // Event handlers
   private textHandler?: TextHandler;
   private openTagHandler?: OpenTagHandler;
@@ -307,6 +317,15 @@ export class SaxesParser {
     this.chunk = "";
     this.i = 0;
     this.prevI = 0;
+    this.nsPrefix = null;
+  }
+
+  // Strip HAN CELL namespace prefixes from element names
+  private stripNsPrefix(name: string): string {
+    const n = name.replace(HAN_CELL_PREFIXES, "");
+    return this.nsPrefix && n.startsWith(this.nsPrefix + ":")
+      ? n.slice(this.nsPrefix.length + 1)
+      : n;
   }
 
   // Event registration
@@ -767,9 +786,8 @@ export class SaxesParser {
       return;
     }
 
-    // Tag name complete
     this.tag = {
-      name: this.name,
+      name: this.stripNsPrefix(this.name),
       attributes: Object.create(null) as Record<string, string>,
       isSelfClosing: false
     };
@@ -1221,12 +1239,7 @@ export class SaxesParser {
     const tag = this.tag!;
     tag.isSelfClosing = false;
 
-    // Copy attributes from list to object
-    for (const { name, value } of this.attribList) {
-      tag.attributes[name] = value;
-    }
-    this.attribList = [];
-
+    this.processAttributes(tag);
     this.openTagHandler?.(tag);
     this.tags.push(tag);
     this.name = "";
@@ -1236,12 +1249,7 @@ export class SaxesParser {
   private openSelfClosingTag(): void {
     const tag = this.tag!;
     tag.isSelfClosing = true;
-
-    // Copy attributes from list to object
-    for (const { name, value } of this.attribList) {
-      tag.attributes[name] = value;
-    }
-    this.attribList = [];
+    this.processAttributes(tag);
 
     this.openTagHandler?.(tag);
     this.closeTagHandler?.(tag);
@@ -1253,8 +1261,21 @@ export class SaxesParser {
     this.state = S_TEXT;
   }
 
+  // Process attributes and detect spreadsheetml namespace prefix
+  private processAttributes(tag: SaxesTagPlain): void {
+    for (const { name, value } of this.attribList) {
+      tag.attributes[name] = value;
+      if (name.startsWith("xmlns:") && value === SPREADSHEETML_NS) {
+        this.nsPrefix = name.slice(6);
+        tag.name = this.stripNsPrefix(tag.name);
+      }
+    }
+    this.attribList = [];
+  }
+
   private closeTag(): void {
-    const { tags, name } = this;
+    const { tags } = this;
+    const name = this.stripNsPrefix(this.name);
     this.state = S_TEXT;
     this.name = "";
 

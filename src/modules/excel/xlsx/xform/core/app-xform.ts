@@ -21,7 +21,7 @@ class AppXform extends BaseXform {
       Company: new StringXform({ tag: "Company" }),
       Manager: new StringXform({ tag: "Manager" }),
       HeadingPairs: new AppHeadingPairsXform(),
-      TitleOfParts: new AppTitlesOfPartsXform()
+      TitlesOfParts: new AppTitlesOfPartsXform()
     };
   }
 
@@ -35,7 +35,7 @@ class AppXform extends BaseXform {
     xmlStream.leafNode("ScaleCrop", undefined, "false");
 
     this.map.HeadingPairs.render(xmlStream, model.worksheets);
-    this.map.TitleOfParts.render(xmlStream, model.worksheets);
+    this.map.TitlesOfParts.render(xmlStream, model.worksheets);
     this.map.Company.render(xmlStream, model.company || "");
     this.map.Manager.render(xmlStream, model.manager);
 
@@ -83,7 +83,7 @@ class AppXform extends BaseXform {
     switch (name) {
       case "Properties":
         this.model = {
-          worksheets: this.map.TitleOfParts.model,
+          worksheets: this.map.TitlesOfParts.model,
           company: this.map.Company.model,
           manager: this.map.Manager.model
         };
