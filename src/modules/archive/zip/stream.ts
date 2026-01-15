@@ -8,6 +8,19 @@
 
 import { crc32Update, crc32Finalize } from "@archive/compression/crc32";
 import { createDeflateStream } from "@archive/compression/streaming-compress";
+import {
+  zipCryptoInitKeys,
+  zipCryptoCreateHeader,
+  zipCryptoEncryptByte,
+  aesEncrypt,
+  buildAesExtraField,
+  randomBytes,
+  type ZipCryptoState,
+  type AesKeyStrength,
+  type ZipEncryptionMethod,
+  isAesEncryption,
+  getAesKeyStrength
+} from "@archive/crypto";
 import type { ZipTimestampMode } from "@archive/utils/timestamps";
 import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
 import {
@@ -32,7 +45,9 @@ import {
   buildLocalFileHeader,
   VERSION_ZIP64,
   VERSION_MADE_BY,
-  VERSION_NEEDED
+  VERSION_NEEDED,
+  FLAG_ENCRYPTED,
+  COMPRESSION_AES
 } from "@archive/zip-spec/zip-records";
 import type { Zip64Mode } from "./zip64-mode";
 
@@ -60,6 +75,16 @@ interface ZipEntryInfo {
 }
 
 type CentralDirectoryEntryInfo = ZipEntryInfo;
+
+/**
+ * Encryption options for streaming ZIP creation.
+ */
+export interface StreamingZipEncryptionOptions {
+  /** Encryption method to use */
+  encryptionMethod?: ZipEncryptionMethod;
+  /** Password for encryption */
+  password?: string | Uint8Array;
+}
 
 /**
  * True Streaming ZIP File - compresses chunk by chunk
@@ -92,6 +117,19 @@ export class ZipDeflateFile {
   private _completePromise: Promise<void> | null = null;
   private _completeError: Error | null = null;
 
+  // Encryption state
+  private _encryptionMethod: ZipEncryptionMethod = "none";
+  private _password: string | Uint8Array | undefined;
+  private _zipCryptoState: ZipCryptoState | null = null;
+  private _aesKeyStrength: AesKeyStrength | undefined;
+  // For AES, we need to buffer compressed data before encryption (HMAC requires full ciphertext)
+  private _aesBuffer: Uint8Array[] = [];
+  private _aesBufferSize = 0;
+  // Original compression method for AES extra field
+  private _originalCompressionMethod: number = 0;
+  // Cached AES extra field (built once, reused for local header and central directory)
+  private _aesExtraField: Uint8Array | null = null;
+
   // Queue for incoming data before ondata is set
   private _dataQueue: Uint8Array[] = [];
   private _finalQueued = false;
@@ -105,8 +143,8 @@ export class ZipDeflateFile {
   readonly commentBytes: Uint8Array;
   readonly dosTime: number;
   readonly dosDate: number;
-  readonly extraField: Uint8Array;
-  private readonly _flags: number;
+  extraField: Uint8Array;
+  private _flags: number;
   private _compressionMethod: number;
   private readonly _modTime: Date;
 
@@ -119,6 +157,10 @@ export class ZipDeflateFile {
       comment?: string;
       smartStore?: boolean;
       zip64?: Zip64Mode;
+      /** Encryption method to use */
+      encryptionMethod?: ZipEncryptionMethod;
+      /** Password for encryption */
+      password?: string | Uint8Array;
     }
   ) {
     this.name = name;
@@ -130,6 +172,16 @@ export class ZipDeflateFile {
 
     this._zip64Mode = options?.zip64 ?? "auto";
     this._zip64 = this._zip64Mode === true;
+
+    // Encryption setup
+    this._encryptionMethod = options?.encryptionMethod ?? "none";
+    this._password = options?.password;
+    if (this._encryptionMethod !== "none" && !this._password) {
+      throw new Error("Password is required for encryption");
+    }
+    if (isAesEncryption(this._encryptionMethod)) {
+      this._aesKeyStrength = getAesKeyStrength(this._encryptionMethod);
+    }
 
     // Smart-store sampling does not allocate a contiguous buffer.
 
@@ -149,6 +201,11 @@ export class ZipDeflateFile {
     this.extraField = metadata.extraField;
     this._flags = metadata.flags;
     this._compressionMethod = metadata.compressionMethod;
+
+    // Set encryption flag
+    if (this._encryptionMethod !== "none") {
+      this._flags |= FLAG_ENCRYPTED;
+    }
 
     // If smart store is disabled, decide method upfront and keep true streaming semantics.
     if (!this._smartStore) {
@@ -172,6 +229,60 @@ export class ZipDeflateFile {
     return resolveZipCompressionMethod(deflate);
   }
 
+  /**
+   * Get or build the AES extra field (cached for reuse).
+   */
+  private _getAesExtraField(): Uint8Array {
+    if (!this._aesKeyStrength) {
+      return EMPTY;
+    }
+    if (!this._aesExtraField) {
+      this._aesExtraField = buildAesExtraField(
+        2,
+        this._aesKeyStrength,
+        this._originalCompressionMethod
+      );
+    }
+    return this._aesExtraField;
+  }
+
+  /**
+   * Initialize ZipCrypto encryption state and emit header.
+   * Called once before first data write.
+   */
+  private _initZipCryptoEncryption(): void {
+    if (this._zipCryptoState || this._encryptionMethod !== "zipcrypto") {
+      return;
+    }
+
+    this._zipCryptoState = zipCryptoInitKeys(this._password!);
+
+    // Create and emit encryption header (12 bytes)
+    // Note: We use CRC=0 here since we don't know it yet (data descriptor mode)
+    // The check byte will be based on DOS time instead
+    const dosTimeForCheck = (this.dosTime << 16) | this.dosDate;
+    const header = zipCryptoCreateHeader(this._zipCryptoState, dosTimeForCheck, randomBytes);
+
+    this._compressedSize += header.length;
+    this._enqueueData(header, false);
+  }
+
+  /**
+   * Encrypt data chunk using ZipCrypto (streaming).
+   * Uses the exported zipCryptoEncryptByte for each byte.
+   */
+  private _zipCryptoEncryptChunk(data: Uint8Array): Uint8Array {
+    if (!this._zipCryptoState) {
+      return data;
+    }
+
+    const output = new Uint8Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      output[i] = zipCryptoEncryptByte(this._zipCryptoState, data[i]!);
+    }
+    return output;
+  }
+
   private _initDeflateStream(): void {
     if (this._deflate) {
       return;
@@ -185,6 +296,23 @@ export class ZipDeflateFile {
 
     // Handle compressed output - this is true streaming!
     this._deflate.on("data", (chunk: Uint8Array) => {
+      // For AES, buffer compressed data (HMAC needs full ciphertext)
+      if (this._aesKeyStrength) {
+        this._aesBuffer.push(chunk);
+        this._aesBufferSize += chunk.length;
+        return;
+      }
+
+      // For ZipCrypto, encrypt and emit immediately (true streaming)
+      if (this._encryptionMethod === "zipcrypto") {
+        this._initZipCryptoEncryption();
+        const encrypted = this._zipCryptoEncryptChunk(chunk);
+        this._compressedSize += encrypted.length;
+        this._enqueueData(encrypted, false);
+        return;
+      }
+
+      // No encryption
       this._compressedSize += chunk.length;
       this._enqueueData(chunk, false);
     });
@@ -195,18 +323,71 @@ export class ZipDeflateFile {
     this._deflate.on("end", () => {
       if (this._pendingEnd && !this._emittedDataDescriptor) {
         this._emittedDataDescriptor = true;
-        this._emitDataDescriptor();
+        this._finalizeEncryptionAndEmitDescriptor();
       }
     });
   }
 
+  /**
+   * Finalize encryption (if needed) and emit data descriptor.
+   */
+  private _finalizeEncryptionAndEmitDescriptor(): void {
+    // AES: encrypt buffered data and emit
+    if (this._aesKeyStrength && this._aesBuffer.length > 0) {
+      this._finalizeAesEncryption()
+        .then(() => this._emitDataDescriptor())
+        .catch(err => this._rejectComplete(err));
+      return;
+    }
+
+    this._emitDataDescriptor();
+  }
+
+  /**
+   * Finalize AES encryption: encrypt buffered data and emit.
+   */
+  private async _finalizeAesEncryption(): Promise<void> {
+    if (!this._aesKeyStrength || this._aesBufferSize === 0) {
+      return;
+    }
+
+    // Concatenate all buffered chunks
+    const compressedData = new Uint8Array(this._aesBufferSize);
+    let offset = 0;
+    for (const chunk of this._aesBuffer) {
+      compressedData.set(chunk, offset);
+      offset += chunk.length;
+    }
+    this._aesBuffer = [];
+    this._aesBufferSize = 0;
+
+    // Encrypt using AES
+    const encrypted = await aesEncrypt(compressedData, this._password!, this._aesKeyStrength);
+
+    this._compressedSize = encrypted.length;
+    this._enqueueData(encrypted, false);
+  }
+
   private _buildLocalHeader(): Uint8Array {
+    // For AES encryption, add AES extra field
+    let extraField = this.extraField;
+    let compressionMethod = this._compressionMethod;
+
+    if (this._aesKeyStrength) {
+      // Store original compression method for AES extra field
+      this._originalCompressionMethod = this._compressionMethod;
+      // Set compression method to AES indicator
+      compressionMethod = COMPRESSION_AES;
+      // Use cached AES extra field
+      extraField = concatExtraFields(this.extraField, this._getAesExtraField());
+    }
+
     // CRC + sizes are written via data descriptor for true streaming.
     return buildLocalFileHeader({
       fileName: this.nameBytes,
-      extraField: this.extraField,
+      extraField,
       flags: this._flags,
-      compressionMethod: this._compressionMethod,
+      compressionMethod,
       dosTime: this.dosTime,
       dosDate: this.dosDate,
       crc32: 0,
@@ -409,7 +590,24 @@ export class ZipDeflateFile {
       });
     }
 
-    // STORE mode - pass through
+    // STORE mode - handle encryption
+    if (this._aesKeyStrength) {
+      // For AES in STORE mode, buffer data for later encryption
+      this._aesBuffer.push(data);
+      this._aesBufferSize += data.length;
+      return Promise.resolve();
+    }
+
+    if (this._encryptionMethod === "zipcrypto") {
+      // For ZipCrypto in STORE mode, encrypt and emit immediately
+      this._initZipCryptoEncryption();
+      const encrypted = this._zipCryptoEncryptChunk(data);
+      this._compressedSize += encrypted.length;
+      this._enqueueData(encrypted, false);
+      return Promise.resolve();
+    }
+
+    // STORE mode without encryption - pass through
     this._compressedSize += data.length;
     this._enqueueData(data, false);
     return Promise.resolve();
@@ -444,6 +642,15 @@ export class ZipDeflateFile {
     const completePromise = this._ensureCompletePromise();
     if (this._deflate) {
       return writePromise.then(() => this._endDeflateAndWait()).then(() => completePromise);
+    }
+
+    // STORE mode - handle AES encryption before emitting data descriptor
+    if (this._aesKeyStrength && this._aesBufferSize > 0) {
+      this._emittedDataDescriptor = true;
+      this._finalizeAesEncryption()
+        .then(() => this._emitDataDescriptor())
+        .catch(err => this._rejectComplete(err));
+      return completePromise;
     }
 
     // STORE mode - emit data descriptor directly
@@ -550,16 +757,26 @@ export class ZipDeflateFile {
       ? buildDataDescriptorZip64(crcValue, this._compressedSize, this._uncompressedSize)
       : buildDataDescriptor(crcValue, this._compressedSize, this._uncompressedSize);
 
+    // Determine compression method and extra field for central directory
+    let cdCompressionMethod = this._compressionMethod;
+    let cdExtraField = this.extraField;
+
+    if (this._aesKeyStrength) {
+      // For AES, use COMPRESSION_AES and reuse cached AES extra field
+      cdCompressionMethod = COMPRESSION_AES;
+      cdExtraField = concatExtraFields(this.extraField, this._getAesExtraField());
+    }
+
     // Store entry info for central directory
     this._centralDirEntryInfo = {
       name: this.nameBytes,
-      extraField: this.extraField,
+      extraField: cdExtraField,
       comment: this.commentBytes,
       flags: this._flags,
       crc: crcValue,
       compressedSize: this._compressedSize,
       uncompressedSize: this._uncompressedSize,
-      compressionMethod: this._compressionMethod,
+      compressionMethod: cdCompressionMethod,
       dosTime: this.dosTime,
       dosDate: this.dosDate,
       offset: -1,
@@ -602,7 +819,14 @@ export class ZipDeflateFile {
       localHeaderOffset: this._centralDirEntryInfo.offset,
       comment: decodeUtf8(this._centralDirEntryInfo.comment),
       externalAttributes: 0,
-      isEncrypted: false
+      isEncrypted: this._encryptionMethod !== "none",
+      encryptionMethod: this._aesKeyStrength
+        ? "aes"
+        : this._encryptionMethod === "zipcrypto"
+          ? "zipcrypto"
+          : undefined,
+      aesKeyStrength: this._aesKeyStrength,
+      originalCompressionMethod: this._aesKeyStrength ? this._originalCompressionMethod : undefined
     };
   }
 

@@ -1,4 +1,4 @@
-const EXTENDED_TIMESTAMP_ID = 0x5455;
+export const EXTENDED_TIMESTAMP_ID = 0x5455;
 
 function clampUint32(value: number): number {
   if (!Number.isFinite(value)) {

@@ -2,10 +2,16 @@
  * ZIP extra field parsing helpers.
  *
  * Kept standalone so both streaming parser (`stream.base.ts`) and buffer parser
- * (`zip-parser.ts`) can share ZIP64 + Info-ZIP timestamp handling.
+ * (`zip-parser.ts`) can share ZIP64 + Info-ZIP timestamp + AES handling.
  */
 
-const EXTENDED_TIMESTAMP_ID = 0x5455;
+import {
+  AES_VENDOR_ID,
+  AES_EXTRA_FIELD_ID,
+  AES_STRENGTH_FROM_BYTE,
+  type AesKeyStrength
+} from "@archive/crypto/aes";
+import { EXTENDED_TIMESTAMP_ID } from "@archive/utils/timestamps";
 
 export interface ZipVars {
   uncompressedSize: number;
@@ -16,6 +22,15 @@ export interface ZipVars {
   uncompressedSize64?: bigint;
   compressedSize64?: bigint;
   offsetToLocalFileHeader64?: bigint;
+}
+
+export interface AesExtraFieldInfo {
+  /** AE format version (1 or 2) */
+  version: 1 | 2;
+  /** Key strength (128, 192, or 256) */
+  keyStrength: AesKeyStrength;
+  /** Original compression method */
+  compressionMethod: number;
 }
 
 export interface ZipExtraFields {
@@ -30,6 +45,9 @@ export interface ZipExtraFields {
 
   /** Info-ZIP extended timestamp (0x5455) mtime, Unix seconds (UTC). */
   mtimeUnixSeconds?: number;
+
+  /** AES encryption info (0x9901) when present */
+  aesInfo?: AesExtraFieldInfo;
 }
 
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -112,6 +130,26 @@ export function parseZipExtraFields(extraField: Uint8Array, vars: ZipVars): ZipE
         const flags = extraField[dataStart]!;
         if ((flags & 0x01) !== 0 && partSize >= 5) {
           extra.mtimeUnixSeconds = view.getUint32(dataStart + 1, true) >>> 0;
+        }
+      }
+    } else if (signature === AES_EXTRA_FIELD_ID) {
+      // AES Encryption Info (0x9901)
+      // Data: [version:2][vendorId:2][strength:1][compressionMethod:2]
+      if (partSize >= 7) {
+        const version = view.getUint16(dataStart, true);
+        const vendorId = view.getUint16(dataStart + 2, true);
+        const strengthByte = extraField[dataStart + 4]!;
+        const compressionMethod = view.getUint16(dataStart + 5, true);
+
+        if (vendorId === AES_VENDOR_ID) {
+          const keyStrength = AES_STRENGTH_FROM_BYTE[strengthByte];
+          if (keyStrength && (version === 1 || version === 2)) {
+            extra.aesInfo = {
+              version: version as 1 | 2,
+              keyStrength,
+              compressionMethod
+            };
+          }
         }
       }
     }

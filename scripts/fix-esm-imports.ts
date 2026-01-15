@@ -429,12 +429,16 @@ function verifyEsmSpecifiers(dir: string): boolean {
 
 console.log(`Rewriting tsconfig path aliases in ESM output (${toPosixPath(esmDir)})...`);
 rewritePathAliases(esmDir, esmDir, { fileExtensions: [".js"], outputExtension: ".js" });
+rewritePathAliases(esmDir, esmDir, { fileExtensions: [".d.ts"], outputExtension: ".js" });
 
 console.log(`Rewriting tsconfig path aliases in declaration output (${toPosixPath(typesDir)})...`);
 rewritePathAliases(typesDir, typesDir, { fileExtensions: [".d.ts"], outputExtension: ".d.ts" });
 
 console.log(`Normalizing declaration specifiers for Node16/NodeNext (${toPosixPath(typesDir)})...`);
 normalizeDeclarationSpecifiers(typesDir);
+
+console.log(`Normalizing declaration specifiers in ESM output (${toPosixPath(esmDir)})...`);
+normalizeDeclarationSpecifiers(esmDir);
 
 console.log("Adding .js extensions to ESM imports for Node.js compatibility...");
 addJsExtensions(esmDir);

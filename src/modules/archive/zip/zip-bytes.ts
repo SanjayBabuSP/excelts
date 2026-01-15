@@ -10,6 +10,15 @@
 
 import { compress, compressSync, type CompressOptions } from "@archive/compression/compress";
 import { crc32 } from "@archive/compression/crc32";
+import {
+  zipCryptoEncrypt,
+  aesEncrypt,
+  buildAesExtraField,
+  randomBytes,
+  type ZipEncryptionMethod,
+  isAesEncryption,
+  getAesKeyStrength
+} from "@archive/crypto";
 import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
 import { isProbablyIncompressible } from "@archive/utils/compressibility";
 import { encodeUtf8 } from "@archive/utils/text";
@@ -20,6 +29,8 @@ import {
 } from "@archive/zip/zip-entry-metadata";
 import {
   FLAG_UTF8,
+  FLAG_ENCRYPTED,
+  COMPRESSION_AES,
   UINT16_MAX,
   UINT32_MAX,
   ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE,
@@ -52,6 +63,7 @@ interface ProcessedEntry {
   extraField: Uint8Array;
   comment: Uint8Array;
   offset: number;
+  flags: number;
 }
 
 /**
@@ -68,12 +80,67 @@ export interface ZipEntry {
   modTime?: Date;
   /** File comment (optional) */
   comment?: string;
+  /** Per-entry encryption method override */
+  encryptionMethod?: ZipEncryptionMethod;
+  /** Per-entry password override */
+  password?: string | Uint8Array;
 }
 
 interface ZipBuildSettings {
   level: number;
   timestamps: ZipTimestampMode;
   defaultModTime: Date;
+  encryptionMethod: ZipEncryptionMethod;
+  password?: string | Uint8Array;
+}
+
+/**
+ * Validate encryption options and throw if invalid.
+ */
+function validateEncryptionOptions(
+  encryptionMethod: ZipEncryptionMethod,
+  password: string | Uint8Array | undefined,
+  isSync: boolean
+): void {
+  if (encryptionMethod !== "none" && !password) {
+    throw new Error("Password is required when encryption is enabled");
+  }
+  if (isSync && isAesEncryption(encryptionMethod)) {
+    throw new Error(
+      "AES encryption requires async API. Use createZip() instead of createZipSync()."
+    );
+  }
+}
+
+/**
+ * Parse common ZIP options into build settings.
+ */
+function parseZipBuildOptions(options: ZipOptions): {
+  settings: ZipBuildSettings;
+  zipComment: Uint8Array;
+  zip64Mode: Zip64Mode;
+  smartStore: boolean;
+  thresholdBytes: number | undefined;
+} {
+  const reproducible = options.reproducible ?? false;
+  const level = options.level ?? DEFAULT_ZIP_LEVEL;
+  const timestamps: ZipTimestampMode =
+    options.timestamps ?? (reproducible ? "dos" : DEFAULT_ZIP_TIMESTAMPS);
+  const defaultModTime = options.modTime ?? (reproducible ? REPRODUCIBLE_ZIP_MOD_TIME : new Date());
+
+  return {
+    settings: {
+      level,
+      timestamps,
+      defaultModTime,
+      encryptionMethod: options.encryptionMethod ?? "none",
+      password: options.password
+    },
+    zipComment: encodeZipComment(options.comment),
+    zip64Mode: options.zip64 ?? "auto",
+    smartStore: options.smartStore ?? true,
+    thresholdBytes: options.thresholdBytes
+  };
 }
 
 function encodeZipComment(comment?: string): Uint8Array {
@@ -144,7 +211,8 @@ function buildProcessedEntry(
   entry: ZipEntry,
   settings: ZipBuildSettings,
   compressedData: Uint8Array,
-  deflate: boolean
+  deflate: boolean,
+  encryptionResult?: { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }
 ): ProcessedEntry {
   const modDate = entry.modTime ?? settings.defaultModTime;
   const metadata = buildZipEntryMetadata({
@@ -156,17 +224,36 @@ function buildProcessedEntry(
     deflate
   });
 
+  // Determine final data and compression method based on encryption
+  let finalData: Uint8Array;
+  let finalCompressionMethod: number;
+  let finalExtraField: Uint8Array = metadata.extraField;
+  let flags = FLAG_UTF8;
+
+  if (encryptionResult) {
+    finalData = encryptionResult.data;
+    finalCompressionMethod = encryptionResult.compressionMethod;
+    flags |= FLAG_ENCRYPTED;
+    if (encryptionResult.extraField) {
+      finalExtraField = concatExtraFields(metadata.extraField, encryptionResult.extraField);
+    }
+  } else {
+    finalData = compressedData;
+    finalCompressionMethod = resolveZipCompressionMethod(deflate);
+  }
+
   return {
     name: metadata.nameBytes,
     uncompressedSize: entry.data.length,
-    compressedData,
+    compressedData: finalData,
     crc: crc32(entry.data),
-    compressionMethod: resolveZipCompressionMethod(deflate),
+    compressionMethod: finalCompressionMethod,
     modTime: metadata.dosTime,
     modDate: metadata.dosDate,
-    extraField: metadata.extraField,
+    extraField: finalExtraField,
     comment: metadata.commentBytes,
-    offset: 0
+    offset: 0,
+    flags
   };
 }
 
@@ -219,6 +306,87 @@ export interface ZipOptions extends CompressOptions {
    * - false: forbid ZIP64; throws if ZIP64 is required.
    */
   zip64?: Zip64Mode;
+
+  /**
+   * Encryption method for all entries:
+   * - "none" (default): no encryption
+   * - "zipcrypto": Traditional PKWARE encryption (weak, for compatibility)
+   * - "aes-128", "aes-192", "aes-256": WinZip AES encryption (recommended)
+   */
+  encryptionMethod?: ZipEncryptionMethod;
+
+  /**
+   * Password for encryption. Required when encryptionMethod is not "none".
+   */
+  password?: string | Uint8Array;
+}
+
+/**
+ * Encrypt compressed data using the specified method.
+ */
+async function encryptData(
+  compressedData: Uint8Array,
+  originalCrc: number,
+  encryptionMethod: ZipEncryptionMethod,
+  password: string | Uint8Array,
+  originalCompressionMethod: number
+): Promise<{ data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }> {
+  if (encryptionMethod === "zipcrypto") {
+    // ZipCrypto encryption
+    const encrypted = zipCryptoEncrypt(compressedData, password, originalCrc, randomBytes);
+    return {
+      data: encrypted,
+      compressionMethod: originalCompressionMethod
+    };
+  }
+
+  if (isAesEncryption(encryptionMethod)) {
+    // AES encryption
+    const keyStrength = getAesKeyStrength(encryptionMethod)!;
+    const encrypted = await aesEncrypt(compressedData, password, keyStrength);
+    const aesExtraField = buildAesExtraField(2, keyStrength, originalCompressionMethod);
+    return {
+      data: encrypted,
+      extraField: aesExtraField,
+      compressionMethod: COMPRESSION_AES
+    };
+  }
+
+  // No encryption
+  return {
+    data: compressedData,
+    compressionMethod: originalCompressionMethod
+  };
+}
+
+/**
+ * Encrypt compressed data synchronously (ZipCrypto only).
+ */
+function encryptDataSync(
+  compressedData: Uint8Array,
+  originalCrc: number,
+  encryptionMethod: ZipEncryptionMethod,
+  password: string | Uint8Array,
+  originalCompressionMethod: number
+): { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number } {
+  if (encryptionMethod === "zipcrypto") {
+    const encrypted = zipCryptoEncrypt(compressedData, password, originalCrc, randomBytes);
+    return {
+      data: encrypted,
+      compressionMethod: originalCompressionMethod
+    };
+  }
+
+  if (isAesEncryption(encryptionMethod)) {
+    throw new Error(
+      "AES encryption requires async API. Use createZip() instead of createZipSync()."
+    );
+  }
+
+  return {
+    data: compressedData,
+    compressionMethod: originalCompressionMethod
+  };
 }
 
 function finalizeZip(
@@ -320,7 +488,7 @@ function finalizeZip(
     offset += writeLocalFileHeaderInto(out, view, offset, {
       fileName: entry.name,
       extraField: localExtraFields[i]!,
-      flags: FLAG_UTF8,
+      flags: entry.flags,
       compressionMethod: entry.compressionMethod,
       dosTime: entry.modTime,
       dosDate: entry.modDate,
@@ -344,7 +512,7 @@ function finalizeZip(
       fileName: entry.name,
       extraField: centralExtraFields[i]!,
       comment: entry.comment,
-      flags: FLAG_UTF8,
+      flags: entry.flags,
       compressionMethod: entry.compressionMethod,
       dosTime: entry.modTime,
       dosDate: entry.modDate,
@@ -402,24 +570,11 @@ export async function createZip(
   entries: ZipEntry[],
   options: ZipOptions = {}
 ): Promise<Uint8Array> {
-  const reproducible = options.reproducible ?? false;
-  const level = options.level ?? DEFAULT_ZIP_LEVEL;
-  const smartStore = options.smartStore ?? true;
+  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes } =
+    parseZipBuildOptions(options);
+  validateEncryptionOptions(settings.encryptionMethod, settings.password, false);
+
   const concurrency = options.concurrency ?? 4;
-  const timestamps: ZipTimestampMode =
-    options.timestamps ?? (reproducible ? "dos" : DEFAULT_ZIP_TIMESTAMPS);
-  const zipComment = encodeZipComment(options.comment);
-  const defaultModTime = options.modTime ?? (reproducible ? REPRODUCIBLE_ZIP_MOD_TIME : new Date());
-
-  const settings: ZipBuildSettings = {
-    level,
-    timestamps,
-    defaultModTime
-  };
-
-  const thresholdBytes = options.thresholdBytes;
-  const zip64Mode = options.zip64 ?? "auto";
-
   const limit = Math.max(1, Math.floor(concurrency));
   const processedEntries = new Array<ProcessedEntry>(entries.length);
 
@@ -434,7 +589,7 @@ export async function createZip(
           return;
         }
         const entry = entries[idx]!;
-        const entryLevel = entry.level ?? level;
+        const entryLevel = entry.level ?? settings.level;
         const compressOptions: CompressOptions = {
           level: entryLevel,
           thresholdBytes
@@ -445,7 +600,33 @@ export async function createZip(
           compressOptions,
           smartStore
         );
-        processedEntries[idx] = buildProcessedEntry(entry, settings, compressedData, deflate);
+
+        // Handle encryption
+        const entryEncMethod = entry.encryptionMethod ?? settings.encryptionMethod;
+        const entryPassword = entry.password ?? settings.password;
+        let encryptionResult:
+          | { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }
+          | undefined;
+
+        if (entryEncMethod !== "none" && entryPassword) {
+          const originalCrc = crc32(entry.data);
+          const originalCompressionMethod = resolveZipCompressionMethod(deflate);
+          encryptionResult = await encryptData(
+            compressedData,
+            originalCrc,
+            entryEncMethod,
+            entryPassword,
+            originalCompressionMethod
+          );
+        }
+
+        processedEntries[idx] = buildProcessedEntry(
+          entry,
+          settings,
+          compressedData,
+          deflate,
+          encryptionResult
+        );
       }
     });
 
@@ -459,29 +640,17 @@ export async function createZip(
  * Create a ZIP file from entries (sync)
  *
  * This is supported in both Node.js and browser builds.
+ * Note: AES encryption is not supported in sync mode.
  */
 export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Uint8Array {
-  const reproducible = options.reproducible ?? false;
-  const level = options.level ?? DEFAULT_ZIP_LEVEL;
-  const smartStore = options.smartStore ?? true;
-  const timestamps: ZipTimestampMode =
-    options.timestamps ?? (reproducible ? "dos" : DEFAULT_ZIP_TIMESTAMPS);
-  const zipComment = encodeZipComment(options.comment);
-  const defaultModTime = options.modTime ?? (reproducible ? REPRODUCIBLE_ZIP_MOD_TIME : new Date());
-
-  const settings: ZipBuildSettings = {
-    level,
-    timestamps,
-    defaultModTime
-  };
-
-  const thresholdBytes = options.thresholdBytes;
-  const zip64Mode = options.zip64 ?? "auto";
+  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes } =
+    parseZipBuildOptions(options);
+  validateEncryptionOptions(settings.encryptionMethod, settings.password, true);
 
   const processedEntries: ProcessedEntry[] = [];
 
   for (const entry of entries) {
-    const entryLevel = entry.level ?? level;
+    const entryLevel = entry.level ?? settings.level;
     const compressOptions: CompressOptions = {
       level: entryLevel,
       thresholdBytes
@@ -493,7 +662,28 @@ export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Ui
       smartStore
     );
 
-    processedEntries.push(buildProcessedEntry(entry, settings, compressedData, deflate));
+    // Handle encryption
+    const entryEncMethod = entry.encryptionMethod ?? settings.encryptionMethod;
+    const entryPassword = entry.password ?? settings.password;
+    let encryptionResult:
+      | { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }
+      | undefined;
+
+    if (entryEncMethod !== "none" && entryPassword) {
+      const originalCrc = crc32(entry.data);
+      const originalCompressionMethod = resolveZipCompressionMethod(deflate);
+      encryptionResult = encryptDataSync(
+        compressedData,
+        originalCrc,
+        entryEncMethod,
+        entryPassword,
+        originalCompressionMethod
+      );
+    }
+
+    processedEntries.push(
+      buildProcessedEntry(entry, settings, compressedData, deflate, encryptionResult)
+    );
   }
   return finalizeZip(processedEntries, zipComment, zip64Mode);
 }

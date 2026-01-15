@@ -35,3 +35,21 @@ export function decodeLatin1(bytes: Uint8Array): string {
   }
   return out;
 }
+
+/**
+ * Convert a Uint8Array to an ArrayBuffer suitable for Web Crypto API.
+ * This handles views that may be backed by SharedArrayBuffer or ArrayBuffer with non-zero offset.
+ */
+export function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+  // Only return directly if it's exactly an ArrayBuffer (not SharedArrayBuffer or other)
+  // with no offset and covering the full buffer.
+  if (
+    data.byteOffset === 0 &&
+    data.byteLength === data.buffer.byteLength &&
+    data.buffer.constructor === ArrayBuffer
+  ) {
+    return data.buffer;
+  }
+  // Otherwise, create a copy to get a clean ArrayBuffer
+  return data.slice().buffer as ArrayBuffer;
+}

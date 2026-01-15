@@ -4,6 +4,13 @@
  * This is intentionally platform-agnostic and does not depend on Node.js streams.
  */
 
+import type { AesKeyStrength } from "@archive/crypto/aes";
+
+/**
+ * Encryption method used for a ZIP entry.
+ */
+export type ZipEntryEncryptionMethod = "none" | "zipcrypto" | "aes";
+
 export interface ZipEntryInfo {
   /** File path within the ZIP */
   path: string;
@@ -17,7 +24,7 @@ export interface ZipEntryInfo {
   uncompressedSize: number;
   /** ZIP64 exact uncompressed size (when present in the ZIP64 extra field). */
   uncompressedSize64?: bigint;
-  /** Compression method (0 = stored, 8 = deflate) */
+  /** Compression method (0 = stored, 8 = deflate, 99 = AES-encrypted) */
   compressionMethod: number;
   /** CRC-32 checksum */
   crc32: number;
@@ -33,4 +40,21 @@ export interface ZipEntryInfo {
   externalAttributes: number;
   /** Is encrypted */
   isEncrypted: boolean;
+
+  // Encryption-specific fields
+
+  /** Encryption method (none, zipcrypto, or aes) */
+  encryptionMethod?: ZipEntryEncryptionMethod;
+
+  /** For AES: the AE version (1 or 2) */
+  aesVersion?: 1 | 2;
+
+  /** For AES: the key strength (128, 192, or 256) */
+  aesKeyStrength?: AesKeyStrength;
+
+  /** For AES: the original compression method before encryption */
+  originalCompressionMethod?: number;
+
+  /** DOS time field (used for ZipCrypto verification fallback) */
+  dosTime?: number;
 }

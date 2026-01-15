@@ -5,12 +5,14 @@
  */
 
 import { decompress, decompressSync } from "@archive/compression/compress";
+import { zipCryptoDecrypt, aesDecrypt } from "@archive/crypto";
 import { BinaryReader } from "@archive/utils/binary";
 import { resolveZipLastModifiedDateFromUnixSeconds } from "@archive/utils/timestamps";
 import { parseZipExtraFields } from "@archive/utils/zip-extra-fields";
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import {
   CENTRAL_DIR_HEADER_SIG,
+  COMPRESSION_AES,
   COMPRESSION_DEFLATE,
   COMPRESSION_STORE,
   FLAG_UTF8,
@@ -57,6 +59,9 @@ export type { ZipEntryInfo };
 export interface ZipParseOptions {
   /** Whether to decode file names as UTF-8 (default: true) */
   decodeStrings?: boolean;
+
+  /** Password for encrypted entries */
+  password?: string | Uint8Array;
 }
 
 /**
@@ -263,6 +268,25 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
       unixSecondsMtime
     );
 
+    // Determine encryption method and populate encryption-specific fields
+    let encryptionMethod: ZipEntryInfo["encryptionMethod"] = "none";
+    let aesVersion: ZipEntryInfo["aesVersion"];
+    let aesKeyStrength: ZipEntryInfo["aesKeyStrength"];
+    let originalCompressionMethod: ZipEntryInfo["originalCompressionMethod"];
+
+    if (isEncrypted) {
+      if (compressionMethod === COMPRESSION_AES && extraFields.aesInfo) {
+        // AES encryption
+        encryptionMethod = "aes";
+        aesVersion = extraFields.aesInfo.version;
+        aesKeyStrength = extraFields.aesInfo.keyStrength;
+        originalCompressionMethod = extraFields.aesInfo.compressionMethod;
+      } else {
+        // Traditional PKWARE ZipCrypto
+        encryptionMethod = "zipcrypto";
+      }
+    }
+
     entries[i] = {
       path: fileName,
       isDirectory,
@@ -277,7 +301,12 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
       localHeaderOffset64: extraFields.offsetToLocalFileHeader64,
       comment,
       externalAttributes,
-      isEncrypted
+      isEncrypted,
+      encryptionMethod,
+      aesVersion,
+      aesKeyStrength,
+      originalCompressionMethod,
+      dosTime: lastModTime
     };
   }
 
@@ -285,21 +314,77 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
 }
 
 /**
- * Extract file data for a specific entry
+ * Extraction options with optional password support.
  */
-async function extractEntryData(data: Uint8Array, entry: ZipEntryInfo): Promise<Uint8Array> {
+export interface ExtractOptions {
+  /** Password for encrypted entries */
+  password?: string | Uint8Array;
+}
+
+/**
+ * Extract file data for a specific entry (async)
+ */
+async function extractEntryData(
+  data: Uint8Array,
+  entry: ZipEntryInfo,
+  options: ExtractOptions = {}
+): Promise<Uint8Array> {
   if (entry.isDirectory) {
     return EMPTY;
   }
 
   assertEntryExtractableInMemory(entry);
 
-  if (entry.isEncrypted) {
-    throw new Error(`File "${entry.path}" is encrypted and cannot be extracted`);
-  }
-
   const compressedData = readEntryCompressedData(data, entry);
 
+  // Handle encrypted entries
+  if (entry.isEncrypted) {
+    if (!options.password) {
+      throw new Error(`File "${entry.path}" is encrypted. Please provide a password to extract.`);
+    }
+
+    if (entry.encryptionMethod === "aes" && entry.aesKeyStrength) {
+      // AES decryption
+      const decrypted = await aesDecrypt(compressedData, options.password, entry.aesKeyStrength);
+      if (!decrypted) {
+        throw new Error(`Failed to decrypt "${entry.path}": incorrect password or corrupted data`);
+      }
+
+      // Decompress if needed (use original compression method)
+      const compressionMethod = entry.originalCompressionMethod ?? COMPRESSION_STORE;
+      if (compressionMethod === COMPRESSION_STORE) {
+        return decrypted;
+      }
+      if (compressionMethod === COMPRESSION_DEFLATE) {
+        return decompress(decrypted);
+      }
+      throw new Error(`Unsupported compression method: ${compressionMethod}`);
+    } else if (entry.encryptionMethod === "zipcrypto") {
+      // ZipCrypto decryption
+      const decrypted = zipCryptoDecrypt(
+        compressedData,
+        options.password,
+        entry.crc32,
+        entry.dosTime
+      );
+      if (!decrypted) {
+        throw new Error(`Failed to decrypt "${entry.path}": incorrect password or corrupted data`);
+      }
+
+      // Decompress if needed
+      if (entry.compressionMethod === COMPRESSION_STORE) {
+        return decrypted;
+      }
+      if (entry.compressionMethod === COMPRESSION_DEFLATE) {
+        return decompress(decrypted);
+      }
+      throw new Error(`Unsupported compression method: ${entry.compressionMethod}`);
+    } else {
+      throw new Error(`Unsupported encryption method for "${entry.path}"`);
+    }
+  }
+
+  // Non-encrypted entry
   if (entry.compressionMethod === COMPRESSION_STORE) {
     return compressedData;
   }
@@ -310,21 +395,58 @@ async function extractEntryData(data: Uint8Array, entry: ZipEntryInfo): Promise<
 }
 
 /**
- * Extract file data synchronously
+ * Extract file data synchronously (only supports ZipCrypto, not AES)
  */
-function extractEntryDataSync(data: Uint8Array, entry: ZipEntryInfo): Uint8Array {
+function extractEntryDataSync(
+  data: Uint8Array,
+  entry: ZipEntryInfo,
+  options: ExtractOptions = {}
+): Uint8Array {
   if (entry.isDirectory) {
     return EMPTY;
   }
 
   assertEntryExtractableInMemory(entry);
 
-  if (entry.isEncrypted) {
-    throw new Error(`File "${entry.path}" is encrypted and cannot be extracted`);
-  }
-
   const compressedData = readEntryCompressedData(data, entry);
 
+  // Handle encrypted entries
+  if (entry.isEncrypted) {
+    if (!options.password) {
+      throw new Error(`File "${entry.path}" is encrypted. Please provide a password to extract.`);
+    }
+
+    if (entry.encryptionMethod === "aes") {
+      // AES requires async Web Crypto API - use async method instead
+      throw new Error(
+        `File "${entry.path}" uses AES encryption. Use the async extract() method instead of extractSync().`
+      );
+    } else if (entry.encryptionMethod === "zipcrypto") {
+      // ZipCrypto decryption (synchronous)
+      const decrypted = zipCryptoDecrypt(
+        compressedData,
+        options.password,
+        entry.crc32,
+        entry.dosTime
+      );
+      if (!decrypted) {
+        throw new Error(`Failed to decrypt "${entry.path}": incorrect password or corrupted data`);
+      }
+
+      // Decompress if needed
+      if (entry.compressionMethod === COMPRESSION_STORE) {
+        return decrypted;
+      }
+      if (entry.compressionMethod === COMPRESSION_DEFLATE) {
+        return decompressSync(decrypted);
+      }
+      throw new Error(`Unsupported compression method: ${entry.compressionMethod}`);
+    } else {
+      throw new Error(`Unsupported encryption method for "${entry.path}"`);
+    }
+  }
+
+  // Non-encrypted entry
   if (entry.compressionMethod === COMPRESSION_STORE) {
     return compressedData;
   }
@@ -366,11 +488,20 @@ export class ZipParser {
   private data: Uint8Array;
   private entries: ZipEntryInfo[];
   private entryMap: Map<string, ZipEntryInfo>;
+  private password?: string | Uint8Array;
 
   constructor(data: Uint8Array | ArrayBuffer, options: ZipParseOptions = {}) {
     this.data = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
     this.entries = parseZipEntries(this.data, options);
     this.entryMap = new Map(this.entries.map(e => [e.path, e]));
+    this.password = options.password;
+  }
+
+  /**
+   * Set the password for encrypted entries.
+   */
+  setPassword(password: string | Uint8Array | undefined): void {
+    this.password = password;
   }
 
   /**
@@ -395,6 +526,20 @@ export class ZipParser {
   }
 
   /**
+   * Check if the archive contains encrypted entries
+   */
+  hasEncryptedEntries(): boolean {
+    return this.entries.some(e => e.isEncrypted);
+  }
+
+  /**
+   * Get all encrypted entries
+   */
+  getEncryptedEntries(): ZipEntryInfo[] {
+    return this.entries.filter(e => e.isEncrypted);
+  }
+
+  /**
    * List all file paths
    */
   listFiles(): string[] {
@@ -403,35 +548,43 @@ export class ZipParser {
 
   /**
    * Extract a single file (async)
+   * @param path - File path within the archive
+   * @param password - Optional password for this entry (overrides constructor password)
    */
-  async extract(path: string): Promise<Uint8Array | null> {
+  async extract(path: string, password?: string | Uint8Array): Promise<Uint8Array | null> {
     const entry = this.entryMap.get(path);
     if (!entry) {
       return null;
     }
-    return extractEntryData(this.data, entry);
+    return extractEntryData(this.data, entry, { password: password ?? this.password });
   }
 
   /**
    * Extract a single file (sync)
    *
-   * This is supported in both Node.js and browser builds.
+   * Note: AES-encrypted files cannot be extracted synchronously.
+   * Use the async extract() method for AES-encrypted files.
+   *
+   * @param path - File path within the archive
+   * @param password - Optional password for this entry (overrides constructor password)
    */
-  extractSync(path: string): Uint8Array | null {
+  extractSync(path: string, password?: string | Uint8Array): Uint8Array | null {
     const entry = this.entryMap.get(path);
     if (!entry) {
       return null;
     }
-    return extractEntryDataSync(this.data, entry);
+    return extractEntryDataSync(this.data, entry, { password: password ?? this.password });
   }
 
   /**
    * Extract all files (async)
+   * @param password - Optional password for encrypted entries (overrides constructor password)
    */
-  async extractAll(): Promise<Map<string, Uint8Array>> {
+  async extractAll(password?: string | Uint8Array): Promise<Map<string, Uint8Array>> {
     const result = new Map<string, Uint8Array>();
+    const pw = password ?? this.password;
     for (const entry of this.entries) {
-      const data = await extractEntryData(this.data, entry);
+      const data = await extractEntryData(this.data, entry, { password: pw });
       result.set(entry.path, data);
     }
     return result;
@@ -440,26 +593,36 @@ export class ZipParser {
   /**
    * Extract all files (sync)
    * Returns object with file paths as keys and Uint8Array content as values
+   *
+   * Note: AES-encrypted files cannot be extracted synchronously.
+   * Use the async extractAll() method if the archive contains AES-encrypted files.
+   *
+   * @param password - Optional password for encrypted entries (overrides constructor password)
    */
-  extractAllSync(): Record<string, Uint8Array> {
+  extractAllSync(password?: string | Uint8Array): Record<string, Uint8Array> {
     const result: Record<string, Uint8Array> = {};
+    const pw = password ?? this.password;
     for (const entry of this.entries) {
-      result[entry.path] = extractEntryDataSync(this.data, entry);
+      result[entry.path] = extractEntryDataSync(this.data, entry, { password: pw });
     }
     return result;
   }
 
   /**
    * Iterate over entries with async callback
+   * @param callback - Callback for each entry
+   * @param password - Optional password for encrypted entries (overrides constructor password)
    */
   async forEach(
-    callback: (entry: ZipEntryInfo, getData: () => Promise<Uint8Array>) => Promise<boolean | void>
+    callback: (entry: ZipEntryInfo, getData: () => Promise<Uint8Array>) => Promise<boolean | void>,
+    password?: string | Uint8Array
   ): Promise<void> {
+    const pw = password ?? this.password;
     for (const entry of this.entries) {
       let dataPromise: Promise<Uint8Array> | null = null;
       const getData = () => {
         if (!dataPromise) {
-          dataPromise = extractEntryData(this.data, entry);
+          dataPromise = extractEntryData(this.data, entry, { password: pw });
         }
         return dataPromise;
       };

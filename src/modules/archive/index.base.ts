@@ -19,3 +19,35 @@ export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip"
 
 export type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip";
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive/unzip";
+
+// Encryption
+export {
+  ZIP_CRYPTO_HEADER_SIZE,
+  zipCryptoInitKeys,
+  zipCryptoDecrypt,
+  zipCryptoEncrypt,
+  AES_VENDOR_ID,
+  AES_VERSION_AE1,
+  AES_VERSION_AE2,
+  AES_EXTRA_FIELD_ID,
+  AES_SALT_LENGTH,
+  AES_KEY_LENGTH,
+  AES_AUTH_CODE_LENGTH,
+  AES_PASSWORD_VERIFY_LENGTH,
+  COMPRESSION_METHOD_AES,
+  aesDecrypt,
+  aesEncrypt,
+  aesEncryptedSize,
+  buildAesExtraField,
+  randomBytes,
+  type AesKeyStrength,
+  type AesExtraFieldInfo,
+  type ZipEncryptionMethod,
+  type ZipEncryptionInfo,
+  type ZipPasswordOptions,
+  type ZipEncryptionOptions,
+  getEncryptionMethodName,
+  isAesEncryption,
+  getAesKeyStrength,
+  encryptionMethodFromAesKeyStrength
+} from "@archive/crypto";

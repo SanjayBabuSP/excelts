@@ -33,20 +33,20 @@ function getTextDecoder(encoding?: string): TextDecoder {
   return decoder;
 }
 
-function nodeStreamToAsyncIterableNoDestroy(stream: any): AsyncIterable<Uint8Array> {
+function nodeStreamToAsyncIterableNoDestroy<T>(stream: any): AsyncIterable<T> {
   return {
-    [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
-      const chunks: Uint8Array[] = [];
+    [Symbol.asyncIterator](): AsyncIterator<T> {
+      const chunks: T[] = [];
       let head = 0;
       let done = false;
       let error: unknown | null = null;
       let cleanedUp = false;
       let pending: {
-        resolve: (r: IteratorResult<Uint8Array>) => void;
+        resolve: (r: IteratorResult<T>) => void;
         reject: (e: unknown) => void;
       } | null = null;
 
-      const take = (): Uint8Array => {
+      const take = (): T => {
         const chunk = chunks[head++]!;
         // Periodically compact to avoid unbounded head growth.
         if (head > 64 && head * 2 > chunks.length) {
@@ -79,7 +79,7 @@ function nodeStreamToAsyncIterableNoDestroy(stream: any): AsyncIterable<Uint8Arr
         }
       };
 
-      const onData = (chunk: Uint8Array): void => {
+      const onData = (chunk: T): void => {
         chunks.push(chunk);
         if (typeof stream?.pause === "function") {
           stream.pause();
@@ -127,7 +127,7 @@ function nodeStreamToAsyncIterableNoDestroy(stream: any): AsyncIterable<Uint8Arr
       }
 
       return {
-        next(): Promise<IteratorResult<Uint8Array>> {
+        next(): Promise<IteratorResult<T>> {
           if (error) {
             return Promise.reject(error);
           }
@@ -145,7 +145,7 @@ function nodeStreamToAsyncIterableNoDestroy(stream: any): AsyncIterable<Uint8Arr
             }
           });
         },
-        return(): Promise<IteratorResult<Uint8Array>> {
+        return(): Promise<IteratorResult<T>> {
           done = true;
           cleanup();
           if (pending) {
@@ -155,7 +155,7 @@ function nodeStreamToAsyncIterableNoDestroy(stream: any): AsyncIterable<Uint8Arr
           }
           return Promise.resolve({ value: undefined as any, done: true });
         },
-        throw(e?: unknown): Promise<IteratorResult<Uint8Array>> {
+        throw(e?: unknown): Promise<IteratorResult<T>> {
           done = true;
           cleanup();
           if (pending) {
@@ -173,8 +173,12 @@ function nodeStreamToAsyncIterableNoDestroy(stream: any): AsyncIterable<Uint8Arr
 function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   let cleanedUp = false;
 
-  const onEndOrClose = () => {
-    cleanup();
+  const cleanup = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    signal.removeEventListener("abort", onAbort);
   };
 
   const onAbort = () => {
@@ -182,26 +186,7 @@ function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
     try {
       entry.destroy?.(createAbortError((signal as any).reason));
     } catch {
-      try {
-        entry.autodrain?.();
-      } catch {
-        // ignore
-      }
-    }
-  };
-
-  const cleanup = () => {
-    if (cleanedUp) {
-      return;
-    }
-    cleanedUp = true;
-
-    // `entry.once(...)` listeners remove themselves; only the abort listener
-    // on the signal needs explicit cleanup.
-    try {
-      signal.removeEventListener("abort", onAbort);
-    } catch {
-      // ignore
+      entry.autodrain?.();
     }
   };
 
@@ -211,13 +196,9 @@ function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   }
 
   signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    entry.once?.("end", onEndOrClose);
-    entry.once?.("close", onEndOrClose);
-    entry.once?.("error", onEndOrClose);
-  } catch {
-    // ignore
-  }
+  entry.once?.("end", cleanup);
+  entry.once?.("close", cleanup);
+  entry.once?.("error", cleanup);
 }
 
 export interface UnzipOptions {
@@ -314,7 +295,7 @@ export class UnzipEntry {
         typeof (this._parseEntry as any)?.on === "function" &&
         typeof (this._parseEntry as any)?.pause === "function" &&
         typeof (this._parseEntry as any)?.resume === "function"
-          ? nodeStreamToAsyncIterableNoDestroy(this._parseEntry)
+          ? nodeStreamToAsyncIterableNoDestroy<Uint8Array>(this._parseEntry)
           : (this._parseEntry as any as AsyncIterable<Uint8Array>);
 
       let completed = false;
@@ -430,6 +411,8 @@ export class ZipReader {
         const parse = createParse({ ...(this._options.parse ?? {}), forceStream: true });
 
         const parseDonePromise = parse.promise();
+        // Ensure abort-driven rejections from the parser itself never surface as unhandled.
+        suppressUnhandledRejection(parseDonePromise);
         // Note: we attach a catch handler to `feedPromise` below to avoid
         // unhandled rejection warnings if the operation is aborted.
 
@@ -478,8 +461,18 @@ export class ZipReader {
         // Avoid unhandled rejection warnings when the operation is aborted.
         suppressUnhandledRejection(feedPromise);
 
+        const parseIter: AsyncIterator<ParseZipEntry> =
+          typeof (parse as any)?.[Symbol.asyncIterator] === "function"
+            ? (parse as any as AsyncIterable<ParseZipEntry>)[Symbol.asyncIterator]()
+            : (parse as any as AsyncIterator<ParseZipEntry>);
+
         try {
-          for await (const entry of parse as any as AsyncIterable<ParseZipEntry>) {
+          while (true) {
+            const { value, done } = await parseIter.next();
+            if (done) {
+              break;
+            }
+            const entry = value;
             throwIfAborted(signal);
             progress.mutate(s => {
               s.entriesEmitted += 1;
@@ -497,14 +490,13 @@ export class ZipReader {
             progress.update({ phase: "done" });
           }
         } finally {
-          try {
-            signal.removeEventListener("abort", onAbort);
-          } catch {
-            // ignore
-          }
+          signal.removeEventListener("abort", onAbort);
 
-          // Ensure the feed task does not get stranded.
-          await feedPromise.catch(() => {});
+          // Ensure the parser iterator is closed and any abort-induced errors are observed.
+          await parseIter.return?.().catch(() => {});
+
+          // Ensure parser/feed completion does not surface as an unhandled rejection.
+          await Promise.all([parseDonePromise, feedPromise]).catch(() => {});
         }
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));

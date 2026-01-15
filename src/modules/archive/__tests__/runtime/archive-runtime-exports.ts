@@ -26,7 +26,35 @@ export const ARCHIVE_RUNTIME_EXPORTS = [
   // Abort
   "ArchiveAbortError",
   "createAbortError",
-  "isAbortError"
+  "isAbortError",
+
+  // Crypto - ZipCrypto
+  "zipCryptoInitKeys",
+  "zipCryptoDecrypt",
+  "zipCryptoEncrypt",
+  "ZIP_CRYPTO_HEADER_SIZE",
+
+  // Crypto - AES
+  "aesDecrypt",
+  "aesEncrypt",
+  "aesEncryptedSize",
+  "buildAesExtraField",
+  "randomBytes",
+  "getAesKeyStrength",
+  "encryptionMethodFromAesKeyStrength",
+  "getEncryptionMethodName",
+  "isAesEncryption",
+
+  // AES constants
+  "AES_AUTH_CODE_LENGTH",
+  "AES_EXTRA_FIELD_ID",
+  "AES_KEY_LENGTH",
+  "AES_PASSWORD_VERIFY_LENGTH",
+  "AES_SALT_LENGTH",
+  "AES_VENDOR_ID",
+  "AES_VERSION_AE1",
+  "AES_VERSION_AE2",
+  "COMPRESSION_METHOD_AES"
 ] as const;
 
 export type ArchiveRuntimeExport = (typeof ARCHIVE_RUNTIME_EXPORTS)[number];

@@ -27,8 +27,10 @@ export const VERSION_ZIP64 = 45; // 4.5 - supports ZIP64
 // Compression methods
 export const COMPRESSION_STORE = 0;
 export const COMPRESSION_DEFLATE = 8;
+export const COMPRESSION_AES = 99;
 
 // General purpose bit flags
+export const FLAG_ENCRYPTED = 0x0001;
 export const FLAG_UTF8 = 0x0800;
 export const FLAG_DATA_DESCRIPTOR = 0x0008;
 

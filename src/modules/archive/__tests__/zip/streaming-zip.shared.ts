@@ -32,7 +32,13 @@ export interface StreamingZipModuleImports {
   };
   ZipDeflate: new (
     name: string,
-    options?: { level?: number; zip64?: boolean | "auto"; smartStore?: boolean }
+    options?: {
+      level?: number;
+      zip64?: boolean | "auto";
+      smartStore?: boolean;
+      encryptionMethod?: string;
+      password?: string | Uint8Array;
+    }
   ) => {
     name: string;
     level: number;
@@ -55,8 +61,11 @@ export interface StreamingZipModuleImports {
       uncompressedSize: number;
       compressedSize: number;
       compressionMethod: number;
+      isEncrypted?: boolean;
+      encryptionMethod?: string;
+      aesKeyStrength?: number;
     }>;
-    extractAll(): Promise<Map<string, Uint8Array>>;
+    extractAll(password?: string | Uint8Array): Promise<Map<string, Uint8Array>>;
   };
 }
 
@@ -366,6 +375,132 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
 
       expect(endCalled).toBe(true);
       expect(dataEvents.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Streaming Encryption", () => {
+    it("should create encrypted ZIP with ZipCrypto", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const file = new ZipDeflate("secret.txt", {
+        level: 6,
+        encryptionMethod: "zipcrypto",
+        password: "test-password"
+      } as any);
+      zip.add(file);
+
+      await file.push(new TextEncoder().encode("Secret content here"), true);
+      zip.end();
+      await done;
+
+      const zipData = concatChunks(chunks);
+
+      // Parse and verify the ZIP has encrypted entry
+      const parser = new ZipParser(zipData);
+      const entries = parser.getEntries();
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toBe("secret.txt");
+      // Entry should be encrypted
+      expect((entries[0] as any).isEncrypted).toBe(true);
+
+      // Extract with password
+      const extracted = await parser.extractAll("test-password");
+      const content = new TextDecoder().decode(extracted.get("secret.txt")!);
+      expect(content).toBe("Secret content here");
+    });
+
+    it("should create encrypted ZIP with AES-256", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const file = new ZipDeflate("aes-secret.txt", {
+        level: 6,
+        encryptionMethod: "aes-256",
+        password: "strong-password"
+      } as any);
+      zip.add(file);
+
+      await file.push(new TextEncoder().encode("AES encrypted content"), true);
+      zip.end();
+      await done;
+
+      const zipData = concatChunks(chunks);
+
+      // Parse and verify
+      const parser = new ZipParser(zipData);
+      const entries = parser.getEntries();
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toBe("aes-secret.txt");
+      expect((entries[0] as any).isEncrypted).toBe(true);
+      expect((entries[0] as any).encryptionMethod).toBe("aes");
+      expect((entries[0] as any).aesKeyStrength).toBe(256);
+
+      // Extract with password
+      const extracted = await parser.extractAll("strong-password");
+      const content = new TextDecoder().decode(extracted.get("aes-secret.txt")!);
+      expect(content).toBe("AES encrypted content");
+    });
+
+    it("should handle STORE mode with ZipCrypto encryption", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const file = new ZipDeflate("stored-secret.txt", {
+        level: 0, // STORE mode
+        encryptionMethod: "zipcrypto",
+        password: "store-password"
+      } as any);
+      zip.add(file);
+
+      await file.push(new TextEncoder().encode("Stored and encrypted"), true);
+      zip.end();
+      await done;
+
+      const zipData = concatChunks(chunks);
+
+      const parser = new ZipParser(zipData);
+      const entries = parser.getEntries();
+      expect(entries.length).toBe(1);
+      expect((entries[0] as any).compressionMethod).toBe(0); // STORE
+
+      const extracted = await parser.extractAll("store-password");
+      const content = new TextDecoder().decode(extracted.get("stored-secret.txt")!);
+      expect(content).toBe("Stored and encrypted");
+    });
+
+    it("should handle STORE mode with AES encryption", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const file = new ZipDeflate("aes-stored.txt", {
+        level: 0, // STORE mode
+        encryptionMethod: "aes-128",
+        password: "aes128-password"
+      } as any);
+      zip.add(file);
+
+      await file.push(new TextEncoder().encode("AES-128 stored content"), true);
+      zip.end();
+      await done;
+
+      const zipData = concatChunks(chunks);
+
+      const parser = new ZipParser(zipData);
+      const entries = parser.getEntries();
+      expect(entries.length).toBe(1);
+      expect((entries[0] as any).encryptionMethod).toBe("aes");
+      expect((entries[0] as any).aesKeyStrength).toBe(128);
+
+      const extracted = await parser.extractAll("aes128-password");
+      const content = new TextDecoder().decode(extracted.get("aes-stored.txt")!);
+      expect(content).toBe("AES-128 stored content");
+    });
+
+    it("should throw when encryption requested without password", () => {
+      expect(() => {
+        new ZipDeflate("no-password.txt", {
+          level: 6,
+          encryptionMethod: "aes-256"
+          // No password provided
+        } as any);
+      }).toThrow("Password is required for encryption");
     });
   });
 }
