@@ -19,14 +19,12 @@ class TextXform extends BaseXform {
   }
 
   parseOpen(node: any): boolean {
-    switch (node.name) {
-      case "t":
-        this._text = [];
-        this.model = ""; // Initialize model to empty string
-        return true;
-      default:
-        return false;
+    if (node.name === "t") {
+      this._text = [];
+      this.model = "";
+      return true;
     }
+    return false;
   }
 
   parseText(text: string): void {

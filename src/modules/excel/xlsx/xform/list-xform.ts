@@ -69,17 +69,15 @@ class ListXform extends BaseXform {
       this.parser.parseOpen(node);
       return true;
     }
-    switch (node.name) {
-      case this.tag:
-        this.model = [];
-        return true;
-      default:
-        if (this.childXform.parseOpen(node)) {
-          this.parser = this.childXform;
-          return true;
-        }
-        return false;
+    if (node.name === this.tag) {
+      this.model = [];
+      return true;
     }
+    if (this.childXform.parseOpen(node)) {
+      this.parser = this.childXform;
+      return true;
+    }
+    return false;
   }
 
   parseText(text: string): void {
