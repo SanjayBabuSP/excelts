@@ -4,10 +4,9 @@
  * Extends base with file path support and temp file storage for large files.
  */
 
-import fs from "fs";
 import type { Readable } from "@stream";
-import os from "os";
 import { join } from "path";
+import { createReadStream, createWriteStream, createTempDirSync, remove } from "@utils/fs";
 import { iterateStream } from "@excel/utils/iterate-stream";
 import { WorksheetReader } from "@excel/stream/worksheet-reader";
 import { HyperlinkReader } from "@excel/stream/hyperlink-reader";
@@ -58,24 +57,26 @@ class WorkbookReader extends WorkbookReaderBase<
 
   _getStream(input: NodeInput): Readable {
     if (typeof input === "string") {
-      return fs.createReadStream(input);
+      return createReadStream(input);
     }
     return super._getStream(input as CommonInput);
   }
 
   async _storeWaitingWorksheet(sheetNo: string, entry: any): Promise<WaitingWorksheet> {
-    const tmpDir = fs.mkdtempSync(join(os.tmpdir(), "excelts-"));
-    const path = join(tmpDir, `sheet${sheetNo}.xml`);
-    const cleanup = () => fs.rm(tmpDir, { recursive: true, force: true }, () => {});
+    const tmpDir = createTempDirSync("excelts-");
+    const filePath = join(tmpDir, `sheet${sheetNo}.xml`);
+    const cleanup = () => {
+      remove(tmpDir).catch(() => {});
+    };
 
     const writePromise = new Promise<void>((resolve, reject) => {
-      const tempStream = fs.createWriteStream(path);
+      const tempStream = createWriteStream(filePath);
       tempStream.on("error", reject);
       tempStream.on("finish", resolve);
       entry.pipe(tempStream);
     });
 
-    return { sheetNo, path, cleanup, writePromise };
+    return { sheetNo, path: filePath, cleanup, writePromise };
   }
 
   async *_processWaitingWorksheets(
@@ -83,7 +84,7 @@ class WorkbookReader extends WorkbookReaderBase<
   ): AsyncIterableIterator<WorksheetReadyEvent<WorksheetReader>> {
     for (const ws of waitingWorksheets) {
       await ws.writePromise;
-      const fileStream = fs.createReadStream(ws.path);
+      const fileStream = createReadStream(ws.path);
       try {
         yield* this._parseWorksheet(iterateStream(fileStream), ws.sheetNo);
       } finally {

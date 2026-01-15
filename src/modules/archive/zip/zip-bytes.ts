@@ -64,6 +64,7 @@ interface ProcessedEntry {
   comment: Uint8Array;
   offset: number;
   flags: number;
+  externalAttributes: number;
 }
 
 /**
@@ -84,6 +85,12 @@ export interface ZipEntry {
   encryptionMethod?: ZipEncryptionMethod;
   /** Per-entry password override */
   password?: string | Uint8Array;
+  /**
+   * External file attributes (optional).
+   * For Unix symlinks, use: ((mode << 16) | 0x20)
+   * where mode is typically 0o120777 for symlinks.
+   */
+  externalAttributes?: number;
 }
 
 interface ZipBuildSettings {
@@ -253,7 +260,8 @@ function buildProcessedEntry(
     extraField: finalExtraField,
     comment: metadata.commentBytes,
     offset: 0,
-    flags
+    flags,
+    externalAttributes: entry.externalAttributes ?? 0
   };
 }
 
@@ -520,7 +528,8 @@ function finalizeZip(
       compressedSize: needsZip64Entry ? UINT32_MAX : compressedSize,
       uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
       localHeaderOffset: needsZip64Entry ? UINT32_MAX : entry.offset,
-      versionNeeded: needsZip64Entry ? VERSION_ZIP64 : undefined
+      versionNeeded: needsZip64Entry ? VERSION_ZIP64 : undefined,
+      externalAttributes: entry.externalAttributes
     });
   }
 

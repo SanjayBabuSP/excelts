@@ -4,7 +4,7 @@
  * Extends base with file path support and file system image loading.
  */
 
-import fs from "fs";
+import { readFileBytes, createWriteStream } from "@utils/fs";
 import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 import {
   WorkbookWriterBase,
@@ -41,7 +41,7 @@ class WorkbookWriter extends WorkbookWriterBase<WorksheetWriter> {
    */
   protected _createOutputStream(options: WorkbookWriterOptions): OutputStreamLike {
     if (options.filename) {
-      return fs.createWriteStream(options.filename);
+      return createWriteStream(options.filename);
     }
     return super._createOutputStream(options);
   }
@@ -56,9 +56,7 @@ class WorkbookWriter extends WorkbookWriterBase<WorksheetWriter> {
           const filename = mediaPath(medium.name);
           // Node.js: support loading from file
           if (medium.filename) {
-            // `fs.readFile` returns a `Buffer` (which is already a `Uint8Array`).
-            // Avoid copying into a new `Uint8Array` for performance.
-            const data = await fs.promises.readFile(medium.filename);
+            const data = await readFileBytes(medium.filename);
             this._addFile(data, filename);
             return;
           }

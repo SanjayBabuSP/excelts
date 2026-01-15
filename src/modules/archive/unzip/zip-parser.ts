@@ -112,9 +112,17 @@ function findZip64EOCDLocator(data: Uint8Array, eocdOffset: number): number {
 }
 
 /**
- * Parse ZIP file entries from Central Directory
+ * Result of parsing a ZIP archive.
  */
-function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEntryInfo[] {
+interface ZipArchiveParseResult {
+  entries: ZipEntryInfo[];
+  comment: string;
+}
+
+/**
+ * Parse ZIP archive including entries and archive comment.
+ */
+function parseZipArchive(data: Uint8Array, options: ZipParseOptions = {}): ZipArchiveParseResult {
   const { decodeStrings = true } = options;
   let entries: ZipEntryInfo[] = [];
 
@@ -136,6 +144,7 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
   // 12      4     Size of central directory (bytes)
   // 16      4     Offset of start of central directory
   // 20      2     Comment length
+  // 22      n     Comment
   reader.skip(4); // signature
   reader.skip(2); // disk number
   reader.skip(2); // disk where central dir starts
@@ -143,6 +152,9 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
   let totalEntries = reader.readUint16(); // total entries
   reader.skip(4); // central directory size (unused)
   let centralDirOffset = reader.readUint32();
+  const archiveCommentLength = reader.readUint16();
+  const archiveComment =
+    archiveCommentLength > 0 ? reader.readString(archiveCommentLength, decodeStrings) : "";
 
   // Check for ZIP64
   const zip64LocatorOffset = findZip64EOCDLocator(data, eocdOffset);
@@ -310,7 +322,7 @@ function parseZipEntries(data: Uint8Array, options: ZipParseOptions = {}): ZipEn
     };
   }
 
-  return entries;
+  return { entries, comment: archiveComment };
 }
 
 /**
@@ -489,10 +501,13 @@ export class ZipParser {
   private entries: ZipEntryInfo[];
   private entryMap: Map<string, ZipEntryInfo>;
   private password?: string | Uint8Array;
+  private archiveComment: string;
 
   constructor(data: Uint8Array | ArrayBuffer, options: ZipParseOptions = {}) {
     this.data = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
-    this.entries = parseZipEntries(this.data, options);
+    const result = parseZipArchive(this.data, options);
+    this.entries = result.entries;
+    this.archiveComment = result.comment;
     this.entryMap = new Map(this.entries.map(e => [e.path, e]));
     this.password = options.password;
   }
@@ -523,6 +538,13 @@ export class ZipParser {
    */
   hasEntry(path: string): boolean {
     return this.entryMap.has(path);
+  }
+
+  /**
+   * Get the archive comment.
+   */
+  getZipComment(): string {
+    return this.archiveComment;
   }
 
   /**

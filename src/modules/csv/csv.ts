@@ -4,8 +4,7 @@
  * Extends browser CSV class with file system support.
  */
 
-import fs from "fs";
-import { fileExists } from "@utils/utils";
+import { fileExists, createReadStream, createWriteStream } from "@utils/fs";
 import {
   CSV as CSVBrowser,
   type CsvStreamReadOptions,
@@ -19,7 +18,7 @@ class CSV extends CSVBrowser {
       throw new Error(`File not found: ${filename}`);
     }
 
-    const readStream = fs.createReadStream(filename, {
+    const readStream = createReadStream(filename, {
       encoding: "utf8",
       highWaterMark: options?.highWaterMark ?? 64 * 1024
     });
@@ -28,7 +27,7 @@ class CSV extends CSVBrowser {
   }
 
   override async writeFile(filename: string, options?: CsvStreamWriteOptions): Promise<void> {
-    const writeStream = fs.createWriteStream(filename, {
+    const writeStream = createWriteStream(filename, {
       encoding: (options?.encoding || "utf8") as BufferEncoding,
       highWaterMark: options?.highWaterMark ?? 64 * 1024
     });
