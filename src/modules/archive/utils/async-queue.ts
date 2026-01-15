@@ -5,7 +5,7 @@ export type AsyncQueue<T> = {
   iterable: AsyncIterable<T>;
 };
 
-export function createAsyncQueue<T>(): AsyncQueue<T> {
+export function createAsyncQueue<T>(options: { onCancel?: () => void } = {}): AsyncQueue<T> {
   const values: Array<T | undefined> = [];
   let valuesHead = 0;
 
@@ -19,6 +19,31 @@ export function createAsyncQueue<T>(): AsyncQueue<T> {
   let waitersHead = 0;
   let done = false;
   let error: Error | null = null;
+  let cancelled = false;
+
+  const cancel = (): void => {
+    if (cancelled) {
+      return;
+    }
+    cancelled = true;
+
+    // Mark as done and unblock all waiters before calling `onCancel()`.
+    // This avoids races where `onCancel()` triggers an abort that calls `fail()`.
+    done = true;
+    while (true) {
+      const waiter = shiftWaiter();
+      if (!waiter) {
+        break;
+      }
+      waiter.resolve({ value: undefined as any, done: true });
+    }
+
+    try {
+      options.onCancel?.();
+    } catch {
+      // ignore
+    }
+  };
 
   const maybeCompact = (): void => {
     // Prevent unbounded growth of the underlying arrays.
@@ -120,6 +145,14 @@ export function createAsyncQueue<T>(): AsyncQueue<T> {
             return Promise.resolve({ value: undefined as any, done: true });
           }
           return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+        },
+        return(): Promise<IteratorResult<T>> {
+          cancel();
+          return Promise.resolve({ value: undefined as any, done: true });
+        },
+        throw(err?: unknown): Promise<IteratorResult<T>> {
+          cancel();
+          return Promise.reject(err);
         }
       };
     }

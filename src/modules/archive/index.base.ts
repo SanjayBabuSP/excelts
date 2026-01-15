@@ -10,6 +10,12 @@
 export type { ArchiveSource } from "@archive/io/archive-source";
 export type { ArchiveSink } from "@archive/io/archive-sink";
 
+// Abort
+export { ArchiveAbortError, createAbortError, isAbortError } from "@archive/utils/abort";
+
 // High-level APIs
 export { zip, ZipArchive, type ZipOptions, type ZipEntryOptions } from "@archive/zip";
 export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip";
+
+export type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip";
+export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive/unzip";

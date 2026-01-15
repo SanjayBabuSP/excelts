@@ -1,5 +1,6 @@
 import { encodeUtf8 } from "@archive/utils/text";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
+import { createAbortError } from "@archive/utils/abort";
 
 export type ArchiveSource =
   | Uint8Array
@@ -9,6 +10,17 @@ export type ArchiveSource =
   | AsyncIterable<unknown>
   | ReadableStream<unknown>
   | { [Symbol.asyncIterator](): AsyncIterator<unknown> };
+
+export function isInMemoryArchiveSource(
+  source: ArchiveSource
+): source is Uint8Array | ArrayBuffer | string | Blob {
+  return (
+    source instanceof Uint8Array ||
+    source instanceof ArrayBuffer ||
+    typeof source === "string" ||
+    (typeof Blob !== "undefined" && source instanceof Blob)
+  );
+}
 
 function normalizeChunk(value: unknown): Uint8Array | null {
   if (!value) {
@@ -68,28 +80,80 @@ export async function toUint8Array(
   return new Uint8Array(buf);
 }
 
-export async function* toAsyncIterable(source: ArchiveSource): AsyncIterable<Uint8Array> {
+export async function* toAsyncIterable(
+  source: ArchiveSource,
+  options: { signal?: AbortSignal; onChunk?: (chunk: Uint8Array) => void } = {}
+): AsyncIterable<Uint8Array> {
+  const { signal, onChunk } = options;
+
+  const checkAborted = (): void => {
+    if (signal?.aborted) {
+      throw createAbortError((signal as any).reason);
+    }
+  };
+
+  checkAborted();
+
   if (source instanceof Uint8Array) {
+    if (onChunk) {
+      onChunk(source);
+    }
     yield source;
     return;
   }
   if (typeof source === "string") {
-    yield encodeUtf8(source);
+    const bytes = encodeUtf8(source);
+    if (onChunk) {
+      onChunk(bytes);
+    }
+    yield bytes;
     return;
   }
   if (source instanceof ArrayBuffer) {
-    yield new Uint8Array(source);
+    const bytes = new Uint8Array(source);
+    if (onChunk) {
+      onChunk(bytes);
+    }
+    yield bytes;
     return;
   }
   if (typeof Blob !== "undefined" && source instanceof Blob) {
-    yield await toUint8Array(source);
+    const bytes = await toUint8Array(source);
+    checkAborted();
+    if (onChunk) {
+      onChunk(bytes);
+    }
+    yield bytes;
     return;
   }
 
   if (isReadableStream(source)) {
     const reader = source.getReader();
+
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      try {
+        reader.cancel();
+      } catch {
+        // ignore
+      }
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
     try {
       while (true) {
+        if (aborted) {
+          throw createAbortError((signal as any).reason);
+        }
+        checkAborted();
         const { done, value } = await reader.read();
         if (done) {
           return;
@@ -97,10 +161,24 @@ export async function* toAsyncIterable(source: ArchiveSource): AsyncIterable<Uin
 
         const chunk = normalizeChunk(value);
         if (chunk) {
+          if (aborted) {
+            throw createAbortError((signal as any).reason);
+          }
+          checkAborted();
+          if (onChunk) {
+            onChunk(chunk);
+          }
           yield chunk;
         }
       }
     } finally {
+      if (signal) {
+        try {
+          signal.removeEventListener("abort", onAbort);
+        } catch {
+          // ignore
+        }
+      }
       try {
         reader.releaseLock();
       } catch {
@@ -111,8 +189,12 @@ export async function* toAsyncIterable(source: ArchiveSource): AsyncIterable<Uin
 
   if (isAsyncIterable(source)) {
     for await (const value of source) {
+      checkAborted();
       const chunk = normalizeChunk(value);
       if (chunk) {
+        if (onChunk) {
+          onChunk(chunk);
+        }
         yield chunk;
       }
     }

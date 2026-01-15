@@ -249,6 +249,10 @@ const STR_FUNCTION = "function";
 export class PullStream extends Duplex {
   protected readonly _queue = new ByteQueue();
 
+  // Writable-side backpressure (Node.js)
+  private readonly _inputHighWaterMarkBytes: number;
+  private readonly _inputLowWaterMarkBytes: number;
+
   get buffer(): Uint8Array {
     return this._queue.view();
   }
@@ -261,9 +265,16 @@ export class PullStream extends Duplex {
   match?: number;
   __emittedError?: Error;
 
-  constructor() {
+  constructor(opts: ParseOptions = {}) {
     super({ decodeStrings: false, objectMode: true });
     this.finished = false;
+
+    // Default values are intentionally conservative to avoid memory spikes
+    // when parsing large archives under slow consumers.
+    const hi = Math.max(64 * 1024, opts.inputHighWaterMarkBytes ?? 2 * 1024 * 1024);
+    const lo = Math.max(32 * 1024, opts.inputLowWaterMarkBytes ?? Math.floor(hi / 4));
+    this._inputHighWaterMarkBytes = hi;
+    this._inputLowWaterMarkBytes = Math.min(lo, hi);
 
     this.on("finish", () => {
       this.finished = true;
@@ -274,14 +285,23 @@ export class PullStream extends Duplex {
   _write(chunk: Uint8Array | string, _encoding: string, callback: () => void): void {
     const data = typeof chunk === "string" ? textEncoder.encode(chunk) : chunk;
     this._queue.append(data);
-    this.cb = callback;
+
+    // Apply writable backpressure by deferring the callback when the input buffer is large.
+    // Otherwise, release it immediately so producers can stream in more bytes.
+    if (this._queue.length >= this._inputHighWaterMarkBytes) {
+      this.cb = callback;
+    } else {
+      callback();
+    }
     this.emit("chunk");
   }
 
   _read(): void {}
 
   protected _maybeReleaseWriteCallback(): void {
-    if (typeof this.cb === STR_FUNCTION) {
+    // Only release a deferred write callback when we've drained enough data.
+    // This provides bounded buffering while still preventing deadlocks.
+    if (typeof this.cb === STR_FUNCTION && this._queue.length <= this._inputLowWaterMarkBytes) {
       const callback = this.cb;
       this.cb = undefined;
       callback();
@@ -551,6 +571,13 @@ export class PullStream extends Duplex {
 
       // Attempt immediate fulfillment from any already-buffered data.
       onChunk();
+
+      // Race fix: `finish` can fire between the early `this.finished` check and
+      // registering the listener above. If that happens and we don't have enough
+      // buffered bytes to fulfill the pull, the Promise would never settle.
+      if (this.finished) {
+        onFinish();
+      }
     });
   }
 

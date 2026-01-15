@@ -7,10 +7,18 @@ import {
   toAsyncIterable,
   toUint8Array,
   toUint8ArraySync,
+  isInMemoryArchiveSource,
   type ArchiveSource
 } from "@archive/io/archive-source";
 import { createAsyncQueue } from "@archive/utils/async-queue";
+import {
+  createLinkedAbortController,
+  createAbortError,
+  throwIfAborted
+} from "@archive/utils/abort";
+import { ProgressEmitter } from "@archive/utils/progress";
 import type { Zip64Mode } from "./zip64-mode";
+import type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
 
 const REPRODUCIBLE_ZIP_MOD_TIME = new Date(1980, 0, 1, 0, 0, 0);
 
@@ -18,6 +26,15 @@ export interface ZipOptions {
   level?: number;
   timestamps?: ZipTimestampMode;
   comment?: string;
+
+  /** Default abort signal used by streaming operations. */
+  signal?: AbortSignal;
+
+  /** Default progress callback used by streaming operations. */
+  onProgress?: (p: ZipProgress) => void;
+
+  /** Default throttle for progress callbacks. */
+  progressIntervalMs?: number;
 
   /**
    * ZIP64 mode:
@@ -56,6 +73,8 @@ export interface ZipEntryOptions {
   zip64?: Zip64Mode;
 }
 
+export type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
+
 type ZipInput = {
   name: string;
   source: ArchiveSource;
@@ -68,6 +87,11 @@ export class ZipArchive {
     modTime: Date;
     smartStore: boolean;
     zip64: Zip64Mode;
+  };
+  private readonly _streamDefaults: {
+    signal?: AbortSignal;
+    onProgress?: (p: ZipProgress) => void;
+    progressIntervalMs?: number;
   };
   private readonly _entries: ZipInput[] = [];
   private _sealed = false;
@@ -82,6 +106,11 @@ export class ZipArchive {
       smartStore: options.smartStore ?? true,
       zip64: options.zip64 ?? "auto"
     };
+    this._streamDefaults = {
+      signal: options.signal,
+      onProgress: options.onProgress,
+      progressIntervalMs: options.progressIntervalMs
+    };
   }
 
   add(name: string, source: ArchiveSource, options?: ZipEntryOptions): this {
@@ -95,32 +124,95 @@ export class ZipArchive {
     return this;
   }
 
-  stream(): AsyncIterable<Uint8Array> {
+  stream(options: ZipStreamOptions = {}): AsyncIterable<Uint8Array> {
+    return this.operation(options).iterable;
+  }
+
+  operation(options: ZipStreamOptions = {}): ZipOperation {
     this._sealed = true;
 
-    const queue = createAsyncQueue<Uint8Array>();
+    const signalOpt = options.signal ?? this._streamDefaults.signal;
+    const onProgress = options.onProgress ?? this._streamDefaults.onProgress;
+    const progressIntervalMs =
+      options.progressIntervalMs ?? this._streamDefaults.progressIntervalMs;
+
+    const { controller, cleanup: cleanupAbortLink } = createLinkedAbortController(signalOpt);
+    const signal = controller.signal;
+
+    const progress = new ProgressEmitter<ZipProgress>(
+      {
+        type: "zip",
+        phase: "running",
+        entriesTotal: this._entries.length,
+        entriesDone: 0,
+        bytesIn: 0,
+        bytesOut: 0,
+        zip64: this._options.zip64
+      },
+      onProgress,
+      { intervalMs: progressIntervalMs }
+    );
+
+    const queue = createAsyncQueue<Uint8Array>({
+      onCancel: () => {
+        // Consumer stopped reading; abort upstream work to avoid buffering.
+        try {
+          controller.abort("cancelled");
+        } catch {
+          // ignore
+        }
+      }
+    });
 
     const zip = new StreamingZip(
       (err, data, final) => {
         if (err) {
+          progress.update({ phase: progress.snapshot.phase === "aborted" ? "aborted" : "error" });
           queue.fail(err);
           return;
         }
+
         if (data.length) {
+          progress.mutate(s => {
+            s.bytesOut += data.length;
+          });
           queue.push(data);
         }
+
         if (final) {
+          if (progress.snapshot.phase === "running") {
+            progress.update({ phase: "done" });
+          }
           queue.close();
         }
       },
       { comment: this._options.comment, zip64: this._options.zip64 }
     );
 
+    const onAbort = () => {
+      const err = createAbortError((signal as any).reason);
+      progress.update({ phase: "aborted" });
+      try {
+        zip.abort(err);
+      } catch {
+        // ignore
+      }
+      queue.fail(err);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+
     (async () => {
       try {
-        for (const entry of this._entries) {
+        for (let i = 0; i < this._entries.length; i++) {
+          throwIfAborted(signal);
+
+          const entry = this._entries[i]!;
           const level = entry.options?.level ?? this._options.level;
           const zip64 = entry.options?.zip64 ?? this._options.zip64;
+
+          let entryBytesIn = 0;
+          progress.update({ currentEntry: { name: entry.name, index: i, bytesIn: 0 } });
+
           const file = new ZipDeflateFile(entry.name, {
             level,
             modTime: entry.options?.modTime ?? this._options.modTime,
@@ -132,7 +224,14 @@ export class ZipArchive {
 
           zip.add(file);
 
-          // Feed data
+          const onChunk = (chunk: Uint8Array) => {
+            entryBytesIn += chunk.length;
+            progress.mutate(s => {
+              s.bytesIn += chunk.length;
+              s.currentEntry = { name: entry.name, index: i, bytesIn: entryBytesIn };
+            });
+          };
+
           if (
             entry.source instanceof Uint8Array ||
             entry.source instanceof ArrayBuffer ||
@@ -140,39 +239,78 @@ export class ZipArchive {
             (typeof Blob !== "undefined" && entry.source instanceof Blob)
           ) {
             const bytes = await toUint8Array(entry.source as any);
+            throwIfAborted(signal);
+            onChunk(bytes);
             await file.push(bytes, true);
           } else {
-            for await (const chunk of toAsyncIterable(entry.source)) {
+            for await (const chunk of toAsyncIterable(entry.source, { signal, onChunk })) {
+              throwIfAborted(signal);
               await file.push(chunk, false);
             }
+            throwIfAborted(signal);
             await file.push(new Uint8Array(0), true);
           }
 
           await file.complete();
+          progress.set("entriesDone", progress.snapshot.entriesDone + 1);
         }
 
+        throwIfAborted(signal);
         zip.end();
       } catch (e) {
-        queue.fail(e instanceof Error ? e : new Error(String(e)));
+        const err = e instanceof Error ? e : new Error(String(e));
+        if ((err as any).name === "AbortError") {
+          progress.update({ phase: "aborted" });
+          try {
+            zip.abort(err);
+          } catch {
+            // ignore
+          }
+        } else {
+          progress.update({ phase: "error" });
+        }
+        queue.fail(err);
+      } finally {
+        try {
+          signal.removeEventListener("abort", onAbort);
+        } catch {
+          // ignore
+        }
+        cleanupAbortLink();
+        progress.emitNow();
       }
     })();
 
-    return queue.iterable;
+    return {
+      iterable: queue.iterable,
+      signal,
+      abort(reason?: unknown) {
+        controller.abort(reason);
+      },
+      pointer() {
+        return progress.snapshot.bytesOut;
+      },
+      progress() {
+        return progress.snapshotCopy();
+      }
+    };
   }
 
-  async bytes(): Promise<Uint8Array> {
+  async bytes(options: ZipStreamOptions = {}): Promise<Uint8Array> {
     this._sealed = true;
 
-    const allSourcesInMemory = this._entries.every(
-      e =>
-        e.source instanceof Uint8Array ||
-        e.source instanceof ArrayBuffer ||
-        typeof e.source === "string" ||
-        (typeof Blob !== "undefined" && e.source instanceof Blob)
-    );
-    const hasBlobSource = this._entries.some(
-      e => typeof Blob !== "undefined" && e.source instanceof Blob
-    );
+    const signalOpt = options.signal ?? this._streamDefaults.signal;
+    const onProgress = options.onProgress ?? this._streamDefaults.onProgress;
+
+    // If progress/abort is requested, prefer the streaming pipeline so updates
+    // are meaningful and cancellation is responsive.
+    if (onProgress || signalOpt) {
+      return collect(this.stream(options));
+    }
+
+    const allSourcesInMemory = this._entries.every(e => isInMemoryArchiveSource(e.source));
+    const hasBlobSource =
+      typeof Blob !== "undefined" && this._entries.some(e => e.source instanceof Blob);
 
     // Fast-path: when all sources are already in memory and there are no
     // per-entry compression overrides, use the single-buffer ZIP builder.
@@ -251,8 +389,8 @@ export class ZipArchive {
     });
   }
 
-  async pipeTo(sink: ArchiveSink): Promise<void> {
-    await pipeIterableToSink(this.stream(), sink);
+  async pipeTo(sink: ArchiveSink, options: ZipStreamOptions = {}): Promise<void> {
+    await pipeIterableToSink(this.stream(options), sink);
   }
 }
 

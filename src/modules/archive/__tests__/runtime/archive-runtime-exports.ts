@@ -21,7 +21,12 @@ export const ARCHIVE_RUNTIME_EXPORTS = [
   "unzip",
   "ZipArchive",
   "ZipReader",
-  "UnzipEntry"
+  "UnzipEntry",
+
+  // Abort
+  "ArchiveAbortError",
+  "createAbortError",
+  "isAbortError"
 ] as const;
 
 export type ArchiveRuntimeExport = (typeof ARCHIVE_RUNTIME_EXPORTS)[number];

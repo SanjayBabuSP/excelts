@@ -17,6 +17,7 @@ import {
 import { decodeUtf8, encodeUtf8 } from "@archive/utils/text";
 import { isProbablyIncompressibleChunks } from "@archive/utils/compressibility";
 import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
+import { createAbortError } from "@archive/utils/abort";
 import {
   buildCentralDirectoryHeader,
   buildDataDescriptor,
@@ -613,6 +614,26 @@ export class ZipDeflateFile {
   isComplete(): boolean {
     return this._emittedDataDescriptor && this._centralDirEntryInfo !== null;
   }
+
+  abort(reason?: unknown): void {
+    if (this._completeError) {
+      return;
+    }
+
+    const err = createAbortError(reason);
+    this._finalized = true;
+    this._pendingEnd = true;
+    this._rejectComplete(err);
+
+    try {
+      const anyDeflate = this._deflate as any;
+      if (anyDeflate && typeof anyDeflate.destroy === "function") {
+        anyDeflate.destroy(err);
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**
@@ -823,6 +844,24 @@ export class StreamingZip {
       this._finalize();
     }
     // Otherwise, _processNextFile will call _finalize when done
+  }
+
+  abort(reason?: unknown): void {
+    if (this.ended) {
+      return;
+    }
+
+    const err = createAbortError(reason);
+    this.ended = true;
+    this.endPending = true;
+
+    try {
+      this.activeFile?.abort(err);
+    } catch {
+      // ignore
+    }
+
+    this.callback(err, EMPTY, true);
   }
 }
 
