@@ -7,6 +7,7 @@
 import type { ZipTimestampMode } from "@archive/utils/timestamps";
 import type { Zip64Mode } from "@archive/zip/zip64-mode";
 import type { ZipEncryptionMethod } from "@archive/crypto";
+import type { ZipPathOptions } from "@archive/zip/zip-path";
 
 // =============================================================================
 // Overwrite Strategies
@@ -42,6 +43,15 @@ export interface AddFileOptions {
   /** Custom modification time (defaults to file's mtime) */
   modTime?: Date;
 
+  /** Optional access time (used only when timestamps mode supports it). */
+  atime?: Date;
+
+  /** Optional metadata change time (used only when timestamps mode supports it). */
+  ctime?: Date;
+
+  /** Optional creation time (used by NTFS timestamps mode). */
+  birthTime?: Date;
+
   /** File comment */
   comment?: string;
 
@@ -50,6 +60,15 @@ export interface AddFileOptions {
 
   /** Password for encryption */
   password?: string | Uint8Array;
+
+  /** Optional Unix mode/permissions (may include type bits). */
+  mode?: number;
+
+  /** Optional MS-DOS attributes (low 8 bits). */
+  msDosAttributes?: number;
+
+  /** Advanced override for the ZIP central directory external attributes field. */
+  externalAttributes?: number;
 }
 
 // =============================================================================
@@ -83,6 +102,12 @@ export interface AddDirectoryOptions {
 
   /** Password for encryption */
   password?: string | Uint8Array;
+
+  /** Optional override mode for directory entries (may include type bits). */
+  mode?: number;
+
+  /** Optional MS-DOS attributes for directory entries (low 8 bits). */
+  msDosAttributes?: number;
 }
 
 // =============================================================================
@@ -119,6 +144,12 @@ export interface AddGlobOptions {
 
   /** Password for encryption */
   password?: string | Uint8Array;
+
+  /** Optional Unix mode override for files matched by the glob. */
+  mode?: number;
+
+  /** Optional MS-DOS attributes override for files matched by the glob. */
+  msDosAttributes?: number;
 }
 
 // =============================================================================
@@ -199,6 +230,18 @@ export interface ZipFileOptions {
 
   /** Default password */
   password?: string | Uint8Array;
+
+  /**
+   * Entry name normalization options.
+   * Defaults to legacy behavior (backslashes -> '/', strip leading '/').
+   */
+  path?: ZipPathOptions;
+
+  /** If true, write Unix permissions (mode) into external attributes. */
+  writePermissions?: boolean;
+
+  /** If true, preserve `stat.mode` when adding local files/dirs/globs (requires writePermissions). */
+  preservePermissions?: boolean;
 }
 
 /**

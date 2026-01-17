@@ -9,14 +9,18 @@
  */
 
 import { describe, it, expect } from "vitest";
+import type { ZipTimestampMode } from "@archive/utils/timestamps";
+import type { ZipPathOptions } from "@archive/zip/zip-path";
+import { parseZipExtraFields } from "@archive/utils/zip-extra-fields";
+import { concatUint8Arrays } from "@archive/utils/bytes";
 import {
-  CENTRAL_DIR_SIG,
-  ZIP64_EOCD_LOCATOR_SIG,
-  ZIP64_EOCD_SIG,
-  concatChunks,
-  findSignatureFromEnd,
-  hasSignature
-} from "@archive/__tests__/zip/zip-test-utils";
+  CENTRAL_DIR_HEADER_SIG,
+  DATA_DESCRIPTOR_SIG,
+  LOCAL_FILE_HEADER_SIG,
+  ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
+  ZIP64_END_OF_CENTRAL_DIR_SIG
+} from "@archive/zip-spec/zip-records";
+import { findSignatureFromEnd, hasSignature } from "@archive/__tests__/zip/zip-test-utils";
 
 /**
  * Streaming ZIP module interface - must be provided by platform-specific test
@@ -36,8 +40,24 @@ export interface StreamingZipModuleImports {
       level?: number;
       zip64?: boolean | "auto";
       smartStore?: boolean;
+      comment?: string;
+
+      // Timestamp metadata
+      modTime?: Date;
+      atime?: Date;
+      ctime?: Date;
+      birthTime?: Date;
+      timestamps?: ZipTimestampMode;
+
       encryptionMethod?: string;
       password?: string | Uint8Array;
+
+      // Entry metadata / path behavior
+      mode?: number;
+      msDosAttributes?: number;
+      externalAttributes?: number;
+      versionMadeBy?: number;
+      path?: false | ZipPathOptions;
     }
   ) => {
     name: string;
@@ -61,10 +81,24 @@ export interface StreamingZipModuleImports {
       uncompressedSize: number;
       compressedSize: number;
       compressionMethod: number;
+      externalAttributes?: number;
+      versionMadeBy?: number;
+      extraField?: Uint8Array;
       isEncrypted?: boolean;
       encryptionMethod?: string;
       aesKeyStrength?: number;
     }>;
+    getEntry(path: string):
+      | {
+          path: string;
+          uncompressedSize: number;
+          compressedSize: number;
+          compressionMethod: number;
+          externalAttributes: number;
+          versionMadeBy?: number;
+          extraField?: Uint8Array;
+        }
+      | undefined;
     extractAll(password?: string | Uint8Array): Promise<Map<string, Uint8Array>>;
   };
 }
@@ -174,12 +208,23 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       // First chunk should be local file header (signature 0x04034b50)
       const firstChunk = chunks[0];
       const sig = new DataView(firstChunk.buffer, firstChunk.byteOffset).getUint32(0, true);
-      expect(sig).toBe(0x04034b50);
+      expect(sig).toBe(LOCAL_FILE_HEADER_SIG);
 
       // Last chunk should be data descriptor (signature 0x08074b50)
       const lastChunk = chunks[chunks.length - 1];
       const descSig = new DataView(lastChunk.buffer, lastChunk.byteOffset).getUint32(0, true);
-      expect(descSig).toBe(0x08074b50);
+      expect(descSig).toBe(DATA_DESCRIPTOR_SIG);
+    });
+
+    it("should reject traversal paths in safe mode", () => {
+      expect(
+        () =>
+          new ZipDeflate("../evil.txt", {
+            level: 0,
+            smartStore: false,
+            path: { mode: "safe" }
+          })
+      ).toThrow(/Unsafe ZIP path/);
     });
   });
 
@@ -194,7 +239,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       // Parse and verify the ZIP
       const parser = new ZipParser(zipData);
@@ -206,6 +251,80 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       const extracted = await parser.extractAll();
       const content = new TextDecoder().decode(extracted.get("hello.txt")!);
       expect(content).toBe("Hello, World!");
+    });
+
+    it("should write NTFS timestamps when configured", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const modTime = new Date(Date.UTC(2024, 0, 2, 3, 4, 5));
+      const file = new ZipDeflate("t.txt", {
+        level: 0,
+        smartStore: false,
+        modTime,
+        timestamps: "dos+utc+ntfs"
+      });
+      zip.add(file);
+      await file.push(new TextEncoder().encode("t"), true);
+
+      zip.end();
+      await done;
+
+      const zipData = concatUint8Arrays(chunks);
+      const parser = new ZipParser(zipData);
+      const entry = parser.getEntry("t.txt");
+      expect(entry).toBeDefined();
+
+      const extra = parseZipExtraFields(entry!.extraField ?? new Uint8Array(0), {
+        uncompressedSize: entry!.uncompressedSize,
+        compressedSize: entry!.compressedSize
+      });
+      expect(extra.mtimeUnixSeconds).toBeDefined();
+      expect(extra.ntfsTimes).toBeDefined();
+    });
+
+    it("should write unix permissions to central directory external attributes", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const file = new ZipDeflate("perm.txt", {
+        level: 0,
+        smartStore: false,
+        // Intentionally omit the file type bits to ensure writer fills them.
+        mode: 0o644
+      });
+      zip.add(file);
+      await file.push(new TextEncoder().encode("perm"), true);
+
+      zip.end();
+      await done;
+
+      const zipData = concatUint8Arrays(chunks);
+      const parser = new ZipParser(zipData);
+      const entry = parser.getEntry("perm.txt");
+      expect(entry).toBeDefined();
+      expect(entry!.versionMadeBy).toBe((3 << 8) | 20);
+      expect((entry!.externalAttributes >>> 16) & 0xffff).toBe(0o100644);
+    });
+
+    it("should normalize paths when path options are provided", async () => {
+      const { zip, chunks, done } = collectZip();
+
+      const file = new ZipDeflate("\\foo\\bar\\..\\baz.txt", {
+        level: 0,
+        smartStore: false,
+        path: { mode: "posix", prependSlash: true }
+      });
+      zip.add(file);
+      await file.push(new TextEncoder().encode("p"), true);
+
+      zip.end();
+      await done;
+
+      const zipData = concatUint8Arrays(chunks);
+      const parser = new ZipParser(zipData);
+      const entries = parser.getEntries();
+      expect(entries.map(e => e.path)).toContain("/foo/baz.txt");
+
+      expect(parser.getEntry("/foo/baz.txt")).toBeDefined();
     });
 
     it("should create a valid ZIP with multiple files", async () => {
@@ -229,7 +348,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       // Parse and verify
       const parser = new ZipParser(zipData);
@@ -270,7 +389,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       // Parse and verify
       const parser = new ZipParser(zipData);
@@ -308,17 +427,22 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
-      expect(hasSignature(zipData, ZIP64_EOCD_SIG, zipData.length - 256, zipData.length)).toBe(
-        true
-      );
       expect(
-        hasSignature(zipData, ZIP64_EOCD_LOCATOR_SIG, zipData.length - 256, zipData.length)
+        hasSignature(zipData, ZIP64_END_OF_CENTRAL_DIR_SIG, zipData.length - 256, zipData.length)
+      ).toBe(true);
+      expect(
+        hasSignature(
+          zipData,
+          ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
+          zipData.length - 256,
+          zipData.length
+        )
       ).toBe(true);
 
       // Central directory header should use 0xFFFFFFFF sentinels.
-      const cdOffset = findSignatureFromEnd(zipData, CENTRAL_DIR_SIG, 1024 * 1024);
+      const cdOffset = findSignatureFromEnd(zipData, CENTRAL_DIR_HEADER_SIG, 1024 * 1024);
       expect(cdOffset).toBeGreaterThanOrEqual(0);
       const view = new DataView(zipData.buffer, zipData.byteOffset, zipData.byteLength);
       const compSize32 = view.getUint32(cdOffset + 20, true);
@@ -393,7 +517,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       // Parse and verify the ZIP has encrypted entry
       const parser = new ZipParser(zipData);
@@ -423,7 +547,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       // Parse and verify
       const parser = new ZipParser(zipData);
@@ -454,7 +578,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       const parser = new ZipParser(zipData);
       const entries = parser.getEntries();
@@ -480,7 +604,7 @@ export function runStreamingZipTests(imports: StreamingZipModuleImports): void {
       zip.end();
       await done;
 
-      const zipData = concatChunks(chunks);
+      const zipData = concatUint8Arrays(chunks);
 
       const parser = new ZipParser(zipData);
       const entries = parser.getEntries();

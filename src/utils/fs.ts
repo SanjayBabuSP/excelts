@@ -44,6 +44,18 @@ export interface FileEntry {
 
   /** Last modified time */
   mtime: Date;
+
+  /** Last access time */
+  atime: Date;
+
+  /** Metadata change time */
+  ctime: Date;
+
+  /** Creation time (when supported by the platform) */
+  birthTime: Date;
+
+  /** Unix mode (includes file type + permissions). */
+  mode: number;
 }
 
 /**
@@ -94,7 +106,11 @@ function buildFileEntry(absolutePath: string, relativePath: string, stats: fs.St
     relativePath,
     isDirectory,
     size: isDirectory ? 0 : stats.size,
-    mtime: stats.mtime
+    mtime: stats.mtime,
+    atime: stats.atime,
+    ctime: stats.ctime,
+    birthTime: stats.birthtime,
+    mode: stats.mode
   };
 }
 

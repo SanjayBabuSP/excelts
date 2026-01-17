@@ -1,8 +1,3 @@
-export const ZIP64_EOCD_SIG = 0x06064b50;
-export const ZIP64_EOCD_LOCATOR_SIG = 0x07064b50;
-export const EOCD_SIG = 0x06054b50;
-export const CENTRAL_DIR_SIG = 0x02014b50;
-
 export function hasSignature(
   data: Uint8Array,
   signature: number,
@@ -33,19 +28,4 @@ export function findSignatureFromEnd(
     }
   }
   return -1;
-}
-
-export function concatChunks(chunks: Uint8Array[]): Uint8Array {
-  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-  const out = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
-}
-
-export function readUint64LE(view: DataView, offset: number): bigint {
-  return view.getBigUint64(offset, true);
 }

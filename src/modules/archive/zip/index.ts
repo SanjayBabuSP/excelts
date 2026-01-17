@@ -19,6 +19,7 @@ import {
 import { ProgressEmitter } from "@archive/utils/progress";
 import type { Zip64Mode } from "./zip64-mode";
 import type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
+import type { ZipPathOptions } from "./zip-path";
 
 const REPRODUCIBLE_ZIP_MOD_TIME = new Date(1980, 0, 1, 0, 0, 0);
 
@@ -26,6 +27,9 @@ export interface ZipOptions {
   level?: number;
   timestamps?: ZipTimestampMode;
   comment?: string;
+
+  /** Optional entry name normalization. `false` keeps names as-is. */
+  path?: false | ZipPathOptions;
 
   /** Default abort signal used by streaming operations. */
   signal?: AbortSignal;
@@ -67,7 +71,22 @@ export interface ZipOptions {
 export interface ZipEntryOptions {
   level?: number;
   modTime?: Date;
+  atime?: Date;
+  ctime?: Date;
+  birthTime?: Date;
   comment?: string;
+
+  /** Optional Unix mode/permissions for this entry. */
+  mode?: number;
+
+  /** Optional MS-DOS attributes (low 8 bits). */
+  msDosAttributes?: number;
+
+  /** Advanced override for external attributes. */
+  externalAttributes?: number;
+
+  /** Advanced override for versionMadeBy. */
+  versionMadeBy?: number;
 
   /** Per-entry ZIP64 override. Defaults to the archive-level zip64 mode. */
   zip64?: Zip64Mode;
@@ -87,6 +106,7 @@ export class ZipArchive {
     modTime: Date;
     smartStore: boolean;
     zip64: Zip64Mode;
+    path: false | ZipPathOptions;
   };
   private readonly _streamDefaults: {
     signal?: AbortSignal;
@@ -104,7 +124,8 @@ export class ZipArchive {
       comment: options.comment,
       modTime: options.modTime ?? (reproducible ? REPRODUCIBLE_ZIP_MOD_TIME : new Date()),
       smartStore: options.smartStore ?? true,
-      zip64: options.zip64 ?? "auto"
+      zip64: options.zip64 ?? "auto",
+      path: options.path ?? false
     };
     this._streamDefaults = {
       signal: options.signal,
@@ -216,10 +237,18 @@ export class ZipArchive {
           const file = new ZipDeflateFile(entry.name, {
             level,
             modTime: entry.options?.modTime ?? this._options.modTime,
+            atime: entry.options?.atime,
+            ctime: entry.options?.ctime,
+            birthTime: entry.options?.birthTime,
             timestamps: this._options.timestamps,
             comment: entry.options?.comment,
             smartStore: this._options.smartStore,
-            zip64
+            zip64,
+            path: this._options.path,
+            mode: entry.options?.mode,
+            msDosAttributes: entry.options?.msDosAttributes,
+            externalAttributes: entry.options?.externalAttributes,
+            versionMadeBy: entry.options?.versionMadeBy
           });
 
           zip.add(file);

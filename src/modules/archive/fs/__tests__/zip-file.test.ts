@@ -164,6 +164,22 @@ describe("ZipFile", () => {
       const parser = new ZipParser(buffer);
       expect(parser.hasEntry("subdir/file.txt")).toBe(true);
     });
+
+    it("should preserve file permissions when enabled", async () => {
+      const testFilePath = path.join(testDir, "perm.txt");
+      await fsp.writeFile(testFilePath, "perm");
+      await fsp.chmod(testFilePath, 0o640);
+      const st = await fsp.stat(testFilePath);
+
+      const zip = new ZipFile({ writePermissions: true, preservePermissions: true });
+      zip.addFile(testFilePath);
+      const buffer = await zip.toBuffer();
+
+      const parser = new ZipParser(buffer);
+      const entry = parser.getEntries().find(e => e.path === "perm.txt");
+      expect(entry).toBeDefined();
+      expect((entry!.externalAttributes >>> 16) & 0xffff).toBe(st.mode & 0xffff);
+    });
   });
 
   describe("addBuffer and addText", () => {
@@ -185,6 +201,21 @@ describe("ZipFile", () => {
       const parser = new ZipParser(buffer);
       const content = parser.extractSync("hello.txt");
       expect(new TextDecoder().decode(content!)).toBe("Hello, 世界!");
+    });
+
+    it("should normalize paths when ZipFile path option is provided", async () => {
+      const zip = new ZipFile({ path: { mode: "posix", prependSlash: true } });
+      zip.addText("x", "\\foo\\bar\\..\\baz.txt");
+      const buffer = await zip.toBuffer();
+
+      const parser = new ZipParser(buffer);
+      expect(parser.hasEntry("/foo/baz.txt")).toBe(true);
+      expect(new TextDecoder().decode(parser.extractSync("/foo/baz.txt")!)).toBe("x");
+    });
+
+    it("should reject unsafe paths in safe mode", () => {
+      const zip = new ZipFile({ path: { mode: "safe" } });
+      expect(() => zip.addText("x", "../evil.txt")).toThrow(/Unsafe ZIP path/);
     });
   });
 
@@ -254,6 +285,20 @@ describe("ZipFile", () => {
       const parser = new ZipParser(buffer);
       expect(parser.hasEntry("keep.txt")).toBe(true);
       expect(parser.hasEntry("skip.log")).toBe(false);
+    });
+
+    it("should write directory entry mode when writePermissions is enabled", async () => {
+      await fsp.mkdir(path.join(testDir, "src", "utils"), { recursive: true });
+      await fsp.writeFile(path.join(testDir, "src", "utils", "helpers.ts"), "export {}\n");
+
+      const zip = new ZipFile({ writePermissions: true, preservePermissions: false });
+      zip.addDirectory(path.join(testDir, "src"));
+      const buffer = await zip.toBuffer();
+
+      const parser = new ZipParser(buffer);
+      const dirEntry = parser.getEntries().find(e => e.path === "src/utils/");
+      expect(dirEntry).toBeDefined();
+      expect((dirEntry!.externalAttributes >>> 16) & 0xffff).toBe(0o040755);
     });
   });
 

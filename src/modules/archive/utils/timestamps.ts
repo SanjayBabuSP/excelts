@@ -1,4 +1,16 @@
+import { concatUint8Arrays } from "@archive/utils/bytes";
+
 export const EXTENDED_TIMESTAMP_ID = 0x5455;
+export const NTFS_TIMESTAMP_ID = 0x000a;
+
+export interface ZipExtraTimestamps {
+  /** Access time. */
+  atime?: Date;
+  /** Metadata change time (Unix ctime). */
+  ctime?: Date;
+  /** Creation time (Windows/NTFS "btime"). */
+  birthTime?: Date;
+}
 
 function clampUint32(value: number): number {
   if (!Number.isFinite(value)) {
@@ -16,6 +28,17 @@ function clampUint32(value: number): number {
 
 function unixSecondsFromDate(date: Date): number {
   return clampUint32(Math.floor(date.getTime() / 1000));
+}
+
+function fileTimeFromDate(date: Date): bigint {
+  if (typeof BigInt !== "function") {
+    throw new Error("NTFS timestamps require BigInt support");
+  }
+  // Windows FILETIME: 100-nanosecond intervals since 1601-01-01 UTC.
+  // JS Date is milliseconds since 1970-01-01 UTC.
+  const unixMs = BigInt(date.getTime());
+  const EPOCH_DIFF_100NS = 116444736000000000n; // 1601->1970 in 100ns
+  return unixMs * 10000n + EPOCH_DIFF_100NS;
 }
 
 /**
@@ -50,29 +73,77 @@ function parseExtendedTimestampMtimeUnixSeconds(extraField: Uint8Array): number 
   return undefined;
 }
 
-/**
- * Build Info-ZIP "Extended Timestamp" extra field (0x5455).
- * We write only mtime (UTC, Unix seconds) to minimize size.
- */
-function buildExtendedTimestampExtraFieldFromUnixSeconds(unixSeconds: number): Uint8Array {
-  const ts = clampUint32(unixSeconds);
+function buildExtendedTimestampExtraField(modTime: Date, extra?: ZipExtraTimestamps): Uint8Array {
+  // Data: [flags:1][mtime?:4][atime?:4][ctime?:4]
+  const includeAtime = extra?.atime !== undefined;
+  const includeCtime = extra?.ctime !== undefined;
 
-  // flags(1) + mtime(4)
-  const payloadSize = 5;
+  let flags = 0x01;
+  if (includeAtime) {
+    flags |= 0x02;
+  }
+  if (includeCtime) {
+    flags |= 0x04;
+  }
+
+  const payloadSize = 1 + 4 + (includeAtime ? 4 : 0) + (includeCtime ? 4 : 0);
   const out = new Uint8Array(4 + payloadSize);
   const view = new DataView(out.buffer);
 
   view.setUint16(0, EXTENDED_TIMESTAMP_ID, true);
   view.setUint16(2, payloadSize, true);
+  out[4] = flags;
+  view.setUint32(5, unixSecondsFromDate(modTime), true);
 
-  out[4] = 0x01; // mtime present
-  view.setUint32(5, ts, true);
+  let cursor = 9;
+  if (includeAtime) {
+    view.setUint32(cursor, unixSecondsFromDate(extra!.atime!), true);
+    cursor += 4;
+  }
+  if (includeCtime) {
+    view.setUint32(cursor, unixSecondsFromDate(extra!.ctime!), true);
+  }
 
   return out;
 }
 
-function buildExtendedTimestampExtraFieldFromDate(date: Date): Uint8Array {
-  return buildExtendedTimestampExtraFieldFromUnixSeconds(unixSecondsFromDate(date));
+function buildNtfsTimestampExtraField(modTime: Date, extra?: ZipExtraTimestamps): Uint8Array {
+  if (typeof BigInt !== "function") {
+    throw new Error("NTFS timestamps require BigInt support");
+  }
+  // NTFS extra field (0x000a)
+  // Data:
+  //   [reserved:4=0]
+  //   [tag:2=0x0001][size:2=32]
+  //   [mtime:8][atime:8][ctime:8][btime:8] (FILETIME)
+  const atime = extra?.atime ?? modTime;
+  const ctime = extra?.ctime ?? modTime;
+  const btime = extra?.birthTime ?? modTime;
+
+  const dataSize = 4 + 2 + 2 + 32;
+  const out = new Uint8Array(4 + dataSize);
+  const view = new DataView(out.buffer);
+
+  view.setUint16(0, NTFS_TIMESTAMP_ID, true);
+  view.setUint16(2, dataSize, true);
+
+  // reserved
+  view.setUint32(4, 0, true);
+
+  // attribute tag 0x0001, size 32
+  view.setUint16(8, 0x0001, true);
+  view.setUint16(10, 32, true);
+
+  let cursor = 12;
+  view.setBigUint64(cursor, fileTimeFromDate(modTime), true);
+  cursor += 8;
+  view.setBigUint64(cursor, fileTimeFromDate(atime), true);
+  cursor += 8;
+  view.setBigUint64(cursor, fileTimeFromDate(ctime), true);
+  cursor += 8;
+  view.setBigUint64(cursor, fileTimeFromDate(btime), true);
+
+  return out;
 }
 
 /**
@@ -119,7 +190,12 @@ export function parseDosDateTimeUTC(date: number, time?: number): Date {
  * ZIP always has DOS date/time fields; `dos+utc` additionally writes the Info-ZIP
  * extended timestamp extra field (0x5455) for a UTC mtime.
  */
-export type ZipTimestampMode = "dos" | "dos+utc";
+/**
+ * - "dos": DOS date/time only
+ * - "dos+utc": also writes Info-ZIP extended timestamp (0x5455) for UTC mtime (and optional atime/ctime)
+ * - "dos+utc+ntfs": additionally writes NTFS timestamps (0x000a) including creation time
+ */
+export type ZipTimestampMode = "dos" | "dos+utc" | "dos+utc+ntfs";
 
 export function resolveZipLastModifiedDateFromUnixSeconds(
   dosDate: number,
@@ -141,8 +217,20 @@ export function resolveZipLastModifiedDateFromExtraField(
   return resolveZipLastModifiedDateFromUnixSeconds(dosDate, dosTime, unixSeconds);
 }
 
-export function buildZipTimestampExtraField(modTime: Date, mode: ZipTimestampMode): Uint8Array {
-  return mode === "dos+utc" ? buildExtendedTimestampExtraFieldFromDate(modTime) : new Uint8Array(0);
+export function buildZipTimestampExtraField(
+  modTime: Date,
+  mode: ZipTimestampMode,
+  extra?: ZipExtraTimestamps
+): Uint8Array {
+  if (mode === "dos") {
+    return new Uint8Array(0);
+  }
+
+  const parts: Uint8Array[] = [buildExtendedTimestampExtraField(modTime, extra)];
+  if (mode === "dos+utc+ntfs") {
+    parts.push(buildNtfsTimestampExtraField(modTime, extra));
+  }
+  return concatUint8Arrays(parts);
 }
 
 export function dateToZipDos(modTime: Date): { dosTime: number; dosDate: number } {

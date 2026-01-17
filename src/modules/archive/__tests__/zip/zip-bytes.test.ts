@@ -1,166 +1,38 @@
 import { describe, it, expect } from "vitest";
 import { createZip, createZipSync, type ZipEntry } from "@archive/zip/zip-bytes";
-import { decompress } from "@archive/compression/compress";
+import { parseZipExtraFields } from "@archive/utils/zip-extra-fields";
+import { ZipParser } from "@archive/unzip/zip-parser";
 
-// Helper to read ZIP structure
-function parseZipStructure(data: Uint8Array): {
-  localHeaders: Array<{
-    signature: number;
-    fileName: string;
-    compressedSize: number;
-    uncompressedSize: number;
-    crc32: number;
-    compressionMethod: number;
-  }>;
-  centralDirectory: Array<{
-    signature: number;
-    fileName: string;
-    offset: number;
-  }>;
-  endOfCentralDir: {
-    signature: number;
-    entryCount: number;
-    centralDirSize: number;
-    centralDirOffset: number;
-  };
-} {
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const decoder = new TextDecoder();
-  const localHeaders: Array<{
-    signature: number;
-    fileName: string;
-    compressedSize: number;
-    uncompressedSize: number;
-    crc32: number;
-    compressionMethod: number;
-  }> = [];
-  const centralDirectory: Array<{
-    signature: number;
-    fileName: string;
-    offset: number;
-  }> = [];
-  let endOfCentralDir = {
-    signature: 0,
-    entryCount: 0,
-    centralDirSize: 0,
-    centralDirOffset: 0
-  };
-
-  let offset = 0;
-
-  // Parse local file headers
-  while (offset < data.length) {
-    const sig = view.getUint32(offset, true);
-    if (sig !== 0x04034b50) {
-      break;
-    }
-
-    const fileNameLen = view.getUint16(offset + 26, true);
-    const extraLen = view.getUint16(offset + 28, true);
-    const fileName = decoder.decode(data.subarray(offset + 30, offset + 30 + fileNameLen));
-    const compressedSize = view.getUint32(offset + 18, true);
-
-    localHeaders.push({
-      signature: sig,
-      fileName,
-      compressedSize: view.getUint32(offset + 18, true),
-      uncompressedSize: view.getUint32(offset + 22, true),
-      crc32: view.getUint32(offset + 14, true),
-      compressionMethod: view.getUint16(offset + 8, true)
-    });
-
-    offset += 30 + fileNameLen + extraLen + compressedSize;
-  }
-
-  // Parse central directory
-  while (offset < data.length) {
-    const sig = view.getUint32(offset, true);
-    if (sig !== 0x02014b50) {
-      break;
-    }
-
-    const fileNameLen = view.getUint16(offset + 28, true);
-    const extraLen = view.getUint16(offset + 30, true);
-    const commentLen = view.getUint16(offset + 32, true);
-    const fileName = decoder.decode(data.subarray(offset + 46, offset + 46 + fileNameLen));
-
-    centralDirectory.push({
-      signature: sig,
-      fileName,
-      offset: view.getUint32(offset + 42, true)
-    });
-
-    offset += 46 + fileNameLen + extraLen + commentLen;
-  }
-
-  // Parse end of central directory
-  if (offset < data.length) {
-    const sig = view.getUint32(offset, true);
-    if (sig === 0x06054b50) {
-      endOfCentralDir = {
-        signature: sig,
-        entryCount: view.getUint16(offset + 10, true),
-        centralDirSize: view.getUint32(offset + 12, true),
-        centralDirOffset: view.getUint32(offset + 16, true)
-      };
-    }
-  }
-
-  return { localHeaders, centralDirectory, endOfCentralDir };
+function parseEntries(zipData: Uint8Array) {
+  const parser = new ZipParser(zipData);
+  return { parser, entries: parser.getEntries() };
 }
 
-// Helper to extract file content from ZIP
-async function extractFile(zipData: Uint8Array, fileName: string): Promise<Uint8Array | null> {
-  const structure = parseZipStructure(zipData);
-  const view = new DataView(zipData.buffer, zipData.byteOffset, zipData.byteLength);
-
-  for (let i = 0; i < structure.localHeaders.length; i++) {
-    if (structure.localHeaders[i].fileName === fileName) {
-      const header = structure.localHeaders[i];
-      const cdEntry = structure.centralDirectory[i];
-      const offset = cdEntry.offset;
-
-      const fileNameLen = view.getUint16(offset + 26, true);
-      const extraLen = view.getUint16(offset + 28, true);
-      const dataStart = offset + 30 + fileNameLen + extraLen;
-      const compressedData = zipData.subarray(dataStart, dataStart + header.compressedSize);
-
-      if (header.compressionMethod === 0) {
-        // STORE - no compression
-        return compressedData;
-      } else if (header.compressionMethod === 8) {
-        // DEFLATE
-        return decompress(compressedData);
-      }
-    }
-  }
-  return null;
+function extractFileSync(zipData: Uint8Array, fileName: string): Uint8Array | null {
+  const parser = new ZipParser(zipData);
+  return parser.extractSync(fileName);
 }
 
 describe("zip-bytes", () => {
   describe("createZip (async)", () => {
     it("should create a valid empty ZIP", async () => {
       const zip = await createZip([]);
-      const structure = parseZipStructure(zip);
+      const { entries } = parseEntries(zip);
 
-      expect(structure.localHeaders.length).toBe(0);
-      expect(structure.centralDirectory.length).toBe(0);
-      expect(structure.endOfCentralDir.signature).toBe(0x06054b50);
-      expect(structure.endOfCentralDir.entryCount).toBe(0);
+      expect(entries.length).toBe(0);
     });
 
     it("should create ZIP with single file", async () => {
       const content = new TextEncoder().encode("Hello, World!");
       const zip = await createZip([{ name: "hello.txt", data: content }]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders.length).toBe(1);
-      expect(structure.localHeaders[0].fileName).toBe("hello.txt");
-      expect(structure.localHeaders[0].uncompressedSize).toBe(content.length);
-      expect(structure.endOfCentralDir.entryCount).toBe(1);
+      const { entries } = parseEntries(zip);
+      expect(entries.length).toBe(1);
+      expect(entries[0]!.path).toBe("hello.txt");
+      expect(entries[0]!.uncompressedSize).toBe(content.length);
 
       // Extract and verify content
-      const extracted = await extractFile(zip, "hello.txt");
+      const extracted = extractFileSync(zip, "hello.txt");
       expect(extracted).toEqual(content);
     });
 
@@ -175,25 +47,23 @@ describe("zip-bytes", () => {
         { name: "file3.txt", data: file3 }
       ]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders.length).toBe(3);
-      expect(structure.centralDirectory.length).toBe(3);
-      expect(structure.endOfCentralDir.entryCount).toBe(3);
+      const { entries } = parseEntries(zip);
+      expect(entries.length).toBe(3);
 
       // Verify all files can be extracted
-      expect(await extractFile(zip, "file1.txt")).toEqual(file1);
-      expect(await extractFile(zip, "file2.txt")).toEqual(file2);
-      expect(await extractFile(zip, "file3.txt")).toEqual(file3);
+      expect(extractFileSync(zip, "file1.txt")).toEqual(file1);
+      expect(extractFileSync(zip, "file2.txt")).toEqual(file2);
+      expect(extractFileSync(zip, "file3.txt")).toEqual(file3);
     });
 
     it("should create ZIP with nested directories", async () => {
       const content = new TextEncoder().encode("Nested file content");
       const zip = await createZip([{ name: "folder/subfolder/deep/file.txt", data: content }]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].fileName).toBe("folder/subfolder/deep/file.txt");
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.path).toBe("folder/subfolder/deep/file.txt");
 
-      const extracted = await extractFile(zip, "folder/subfolder/deep/file.txt");
+      const extracted = extractFileSync(zip, "folder/subfolder/deep/file.txt");
       expect(extracted).toEqual(content);
     });
 
@@ -201,11 +71,11 @@ describe("zip-bytes", () => {
       const empty = new Uint8Array(0);
       const zip = await createZip([{ name: "empty.txt", data: empty }]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].uncompressedSize).toBe(0);
-      expect(structure.localHeaders[0].compressionMethod).toBe(0); // STORE for empty
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.uncompressedSize).toBe(0);
+      expect(entries[0]!.compressionMethod).toBe(0); // STORE for empty
 
-      const extracted = await extractFile(zip, "empty.txt");
+      const extracted = extractFileSync(zip, "empty.txt");
       expect(extracted).toEqual(empty);
     });
 
@@ -216,12 +86,12 @@ describe("zip-bytes", () => {
 
       const zip = await createZip([{ name: "large.bin", data: large }], { level: 1 });
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].uncompressedSize).toBe(large.length);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.uncompressedSize).toBe(large.length);
       // Compressed size should be smaller
-      expect(structure.localHeaders[0].compressedSize).toBeLessThan(large.length);
+      expect(entries[0]!.compressedSize).toBeLessThan(large.length);
 
-      const extracted = await extractFile(zip, "large.bin");
+      const extracted = extractFileSync(zip, "large.bin");
       expect(extracted).toEqual(large);
     });
 
@@ -233,11 +103,11 @@ describe("zip-bytes", () => {
 
       const zip = await createZip([{ name: "incompressible.bin", data: large }], { level: 6 });
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].compressionMethod).toBe(0); // STORE
-      expect(structure.localHeaders[0].compressedSize).toBe(large.length);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.compressionMethod).toBe(0); // STORE
+      expect(entries[0]!.compressedSize).toBe(large.length);
 
-      const extracted = await extractFile(zip, "incompressible.bin");
+      const extracted = extractFileSync(zip, "incompressible.bin");
       expect(extracted).toEqual(large);
     });
 
@@ -245,9 +115,9 @@ describe("zip-bytes", () => {
       const content = new TextEncoder().encode("Hello, World!");
       const zip = await createZip([{ name: "uncompressed.txt", data: content }], { level: 0 });
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].compressionMethod).toBe(0); // STORE
-      expect(structure.localHeaders[0].compressedSize).toBe(content.length);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.compressionMethod).toBe(0); // STORE
+      expect(entries[0]!.compressedSize).toBe(content.length);
     });
 
     it("should honor per-entry level override", () => {
@@ -265,9 +135,9 @@ describe("zip-bytes", () => {
         { level: 6 }
       );
 
-      const structure = parseZipStructure(zipData);
-      const a = structure.localHeaders.find(h => h.fileName === "a.txt")!;
-      const b = structure.localHeaders.find(h => h.fileName === "b.bin")!;
+      const { entries } = parseEntries(zipData);
+      const a = entries.find(e => e.path === "a.txt")!;
+      const b = entries.find(e => e.path === "b.bin")!;
 
       expect(a.compressionMethod).toBe(8);
       expect(b.compressionMethod).toBe(0);
@@ -276,9 +146,9 @@ describe("zip-bytes", () => {
       const content = new TextEncoder().encode("Hello, World!".repeat(100));
       const zip = await createZip([{ name: "compressed.txt", data: content }], { level: 6 });
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].compressionMethod).toBe(8); // DEFLATE
-      expect(structure.localHeaders[0].compressedSize).toBeLessThan(content.length);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.compressionMethod).toBe(8); // DEFLATE
+      expect(entries[0]!.compressedSize).toBeLessThan(content.length);
     });
 
     it("should handle unicode filenames", async () => {
@@ -289,10 +159,10 @@ describe("zip-bytes", () => {
         { name: "αρχείο.txt", data: content }
       ]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].fileName).toBe("文件.txt");
-      expect(structure.localHeaders[1].fileName).toBe("файл.txt");
-      expect(structure.localHeaders[2].fileName).toBe("αρχείο.txt");
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.path).toBe("文件.txt");
+      expect(entries[1]!.path).toBe("файл.txt");
+      expect(entries[2]!.path).toBe("αρχείο.txt");
     });
 
     it("should handle filenames with spaces", async () => {
@@ -302,16 +172,16 @@ describe("zip-bytes", () => {
         { name: "folder name/file name.txt", data: content }
       ]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].fileName).toBe("file with spaces.txt");
-      expect(structure.localHeaders[1].fileName).toBe("folder name/file name.txt");
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.path).toBe("file with spaces.txt");
+      expect(entries[1]!.path).toBe("folder name/file name.txt");
     });
 
     it("should handle binary data", async () => {
       const binary = new Uint8Array([0x00, 0x01, 0xff, 0xfe, 0x7f, 0x80]);
       const zip = await createZip([{ name: "binary.bin", data: binary }]);
 
-      const extracted = await extractFile(zip, "binary.bin");
+      const extracted = extractFileSync(zip, "binary.bin");
       expect(extracted).toEqual(binary);
     });
 
@@ -319,9 +189,9 @@ describe("zip-bytes", () => {
       const content = new TextEncoder().encode("Hello, World!");
       const zip = await createZip([{ name: "test.txt", data: content }]);
 
-      const structure = parseZipStructure(zip);
       // CRC32 of "Hello, World!" is 0xec4ac3d0
-      expect(structure.localHeaders[0].crc32).toBe(0xec4ac3d0);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.crc32).toBe(0xec4ac3d0);
     });
 
     it("should support file modification time", async () => {
@@ -331,8 +201,8 @@ describe("zip-bytes", () => {
       const zip = await createZip([{ name: "dated.txt", data: content, modTime }]);
 
       // Verify ZIP was created (detailed time verification would require more parsing)
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders.length).toBe(1);
+      const { entries } = parseEntries(zip);
+      expect(entries.length).toBe(1);
     });
 
     it("should support ZIP comment", async () => {
@@ -341,10 +211,8 @@ describe("zip-bytes", () => {
         comment: "This is a ZIP comment"
       });
 
-      // ZIP comment is at the end of EOCD
-      const decoder = new TextDecoder();
-      const zipString = decoder.decode(zip.subarray(zip.length - 50));
-      expect(zipString).toContain("This is a ZIP comment");
+      const { parser } = parseEntries(zip);
+      expect(parser.getZipComment()).toBe("This is a ZIP comment");
     });
 
     it("should support file comments", async () => {
@@ -353,10 +221,85 @@ describe("zip-bytes", () => {
         { name: "file.txt", data: content, comment: "File comment here" }
       ]);
 
-      // Comment is stored in central directory
-      const decoder = new TextDecoder();
-      const zipString = decoder.decode(zip);
-      expect(zipString).toContain("File comment here");
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.comment).toBe("File comment here");
+    });
+
+    it("should write unix permissions to external attributes", async () => {
+      const content = new TextEncoder().encode("perm");
+      const zip = await createZip([
+        {
+          name: "perm.txt",
+          data: content,
+          // Intentionally omit the file type bits to ensure writer fills them.
+          mode: 0o644
+        }
+      ]);
+
+      const parser = new ZipParser(zip);
+      const entry = parser.getEntry("perm.txt");
+      expect(entry).toBeDefined();
+      expect(entry!.versionMadeBy).toBe((3 << 8) | 20);
+      expect((entry!.externalAttributes >>> 16) & 0xffff).toBe(0o100644);
+    });
+
+    it("should mark directories in DOS attrs and write unix dir mode", async () => {
+      const zip = await createZip([
+        {
+          name: "folder/",
+          data: new Uint8Array(0),
+          mode: 0o755
+        }
+      ]);
+
+      const parser = new ZipParser(zip);
+      const entry = parser.getEntry("folder/");
+      expect(entry).toBeDefined();
+      expect((entry!.externalAttributes & 0xff & 0x10) !== 0).toBe(true);
+      expect((entry!.externalAttributes >>> 16) & 0xffff).toBe(0o040755);
+    });
+
+    it("should normalize paths when path options are provided", async () => {
+      const content = new TextEncoder().encode("p");
+      const zip = await createZip([{ name: "\\foo\\bar\\..\\baz.txt", data: content }], {
+        path: { mode: "posix", prependSlash: true }
+      });
+
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.path).toBe("/foo/baz.txt");
+
+      const extracted = extractFileSync(zip, "/foo/baz.txt");
+      expect(extracted).toEqual(content);
+    });
+
+    it("should reject traversal paths in safe mode", async () => {
+      await expect(
+        createZip([{ name: "../evil.txt", data: new TextEncoder().encode("x") }], {
+          path: { mode: "safe" }
+        })
+      ).rejects.toThrow(/Unsafe ZIP path/);
+    });
+
+    it("should write NTFS timestamps when configured", async () => {
+      const content = new TextEncoder().encode("t");
+      const modTime = new Date(Date.UTC(2024, 0, 2, 3, 4, 5));
+
+      const zip = await createZip([{ name: "t.txt", data: content, modTime }], {
+        timestamps: "dos+utc+ntfs"
+      });
+
+      const parser = new ZipParser(zip);
+      const entry = parser.getEntry("t.txt");
+      expect(entry).toBeDefined();
+
+      const extra = parseZipExtraFields(entry!.extraField ?? new Uint8Array(0), {
+        uncompressedSize: entry!.uncompressedSize,
+        compressedSize: entry!.compressedSize
+      });
+      expect(extra.mtimeUnixSeconds).toBe(Math.floor(modTime.getTime() / 1000));
+      expect(extra.ntfsTimes).toBeDefined();
+      const EPOCH_DIFF_100NS = 116444736000000000n;
+      expect(extra.ntfsTimes!.mtime).toBe(BigInt(modTime.getTime()) * 10000n + EPOCH_DIFF_100NS);
     });
   });
 
@@ -365,9 +308,16 @@ describe("zip-bytes", () => {
       const content = new TextEncoder().encode("Sync content");
       const zip = createZipSync([{ name: "sync.txt", data: content }]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders.length).toBe(1);
-      expect(structure.endOfCentralDir.entryCount).toBe(1);
+      const { entries } = parseEntries(zip);
+      expect(entries.length).toBe(1);
+    });
+
+    it("should reject traversal paths in safe mode (sync)", () => {
+      expect(() =>
+        createZipSync([{ name: "../evil.txt", data: new TextEncoder().encode("x") }], {
+          path: { mode: "safe" }
+        })
+      ).toThrow(/Unsafe ZIP path/);
     });
 
     it("should produce same result as async for same input", async () => {
@@ -378,13 +328,10 @@ describe("zip-bytes", () => {
       const syncZip = createZipSync(entries, { level: 6 });
 
       // Structure should be identical
-      const asyncStructure = parseZipStructure(asyncZip);
-      const syncStructure = parseZipStructure(syncZip);
+      const asyncEntries = parseEntries(asyncZip).entries;
+      const syncEntries = parseEntries(syncZip).entries;
 
-      expect(asyncStructure.localHeaders.length).toBe(syncStructure.localHeaders.length);
-      expect(asyncStructure.endOfCentralDir.entryCount).toBe(
-        syncStructure.endOfCentralDir.entryCount
-      );
+      expect(asyncEntries.length).toBe(syncEntries.length);
     });
 
     it("should produce deterministic bytes in reproducible mode", () => {
@@ -404,8 +351,8 @@ describe("zip-bytes", () => {
       const content = new TextEncoder().encode("Content");
       const zip = await createZip([{ name: longName, data: content }]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].fileName).toBe(longName);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.path).toBe(longName);
     });
 
     it("should handle special characters in filenames", async () => {
@@ -420,9 +367,9 @@ describe("zip-bytes", () => {
 
       const zip = await createZip(specialNames.map(name => ({ name, data: content })));
 
-      const structure = parseZipStructure(zip);
+      const { entries } = parseEntries(zip);
       specialNames.forEach((name, i) => {
-        expect(structure.localHeaders[i].fileName).toBe(name);
+        expect(entries[i]!.path).toBe(name);
       });
     });
 
@@ -430,7 +377,7 @@ describe("zip-bytes", () => {
       const zeros = new Uint8Array(1000).fill(0);
       const zip = await createZip([{ name: "zeros.bin", data: zeros }]);
 
-      const extracted = await extractFile(zip, "zeros.bin");
+      const extracted = extractFileSync(zip, "zeros.bin");
       expect(extracted).toEqual(zeros);
     });
 
@@ -438,7 +385,7 @@ describe("zip-bytes", () => {
       const ones = new Uint8Array(1000).fill(0xff);
       const zip = await createZip([{ name: "ones.bin", data: ones }]);
 
-      const extracted = await extractFile(zip, "ones.bin");
+      const extracted = extractFileSync(zip, "ones.bin");
       expect(extracted).toEqual(ones);
     });
 
@@ -449,10 +396,10 @@ describe("zip-bytes", () => {
         { name: "empty2.txt", data: new Uint8Array(0) }
       ]);
 
-      const structure = parseZipStructure(zip);
-      expect(structure.localHeaders[0].uncompressedSize).toBe(0);
-      expect(structure.localHeaders[1].uncompressedSize).toBe(11);
-      expect(structure.localHeaders[2].uncompressedSize).toBe(0);
+      const { entries } = parseEntries(zip);
+      expect(entries[0]!.uncompressedSize).toBe(0);
+      expect(entries[1]!.uncompressedSize).toBe(11);
+      expect(entries[2]!.uncompressedSize).toBe(0);
     });
 
     it("should handle XML-like content (common in XLSX)", async () => {
@@ -467,7 +414,7 @@ describe("zip-bytes", () => {
       const content = new TextEncoder().encode(xml);
       const zip = await createZip([{ name: "xl/worksheets/sheet1.xml", data: content }]);
 
-      const extracted = await extractFile(zip, "xl/worksheets/sheet1.xml");
+      const extracted = extractFileSync(zip, "xl/worksheets/sheet1.xml");
       expect(extracted).toEqual(content);
     });
 
@@ -481,11 +428,9 @@ describe("zip-bytes", () => {
       }
 
       const zip = await createZip(entries, { level: 1 });
-      const structure = parseZipStructure(zip);
 
-      expect(structure.localHeaders.length).toBe(100);
-      expect(structure.centralDirectory.length).toBe(100);
-      expect(structure.endOfCentralDir.entryCount).toBe(100);
+      const { entries: parsed } = parseEntries(zip);
+      expect(parsed.length).toBe(100);
     });
 
     it("should maintain file order", async () => {
@@ -496,12 +441,13 @@ describe("zip-bytes", () => {
       ];
 
       const zip = await createZip(entries);
-      const structure = parseZipStructure(zip);
+
+      const { entries: parsed } = parseEntries(zip);
 
       // Order should be preserved
-      expect(structure.localHeaders[0].fileName).toBe("c.txt");
-      expect(structure.localHeaders[1].fileName).toBe("a.txt");
-      expect(structure.localHeaders[2].fileName).toBe("b.txt");
+      expect(parsed[0]!.path).toBe("c.txt");
+      expect(parsed[1]!.path).toBe("a.txt");
+      expect(parsed[2]!.path).toBe("b.txt");
     });
   });
 
@@ -511,27 +457,27 @@ describe("zip-bytes", () => {
     it("should support all compression levels (0-9)", async () => {
       for (let level = 0; level <= 9; level++) {
         const zip = await createZip([{ name: "file.txt", data: testData }], { level });
-        const structure = parseZipStructure(zip);
+        const { entries } = parseEntries(zip);
 
         if (level === 0) {
-          expect(structure.localHeaders[0].compressionMethod).toBe(0);
+          expect(entries[0]!.compressionMethod).toBe(0);
         } else {
-          expect(structure.localHeaders[0].compressionMethod).toBe(8);
+          expect(entries[0]!.compressionMethod).toBe(8);
         }
 
         // Verify content can be extracted
-        const extracted = await extractFile(zip, "file.txt");
+        const extracted = extractFileSync(zip, "file.txt");
         expect(extracted).toEqual(testData);
       }
     });
 
     it("should use default level when not specified", async () => {
       const zip = await createZip([{ name: "file.txt", data: testData }]);
-      const structure = parseZipStructure(zip);
+      const { entries } = parseEntries(zip);
 
       // Default level should compress
-      expect(structure.localHeaders[0].compressionMethod).toBe(8);
-      expect(structure.localHeaders[0].compressedSize).toBeLessThan(testData.length);
+      expect(entries[0]!.compressionMethod).toBe(8);
+      expect(entries[0]!.compressedSize).toBeLessThan(testData.length);
     });
   });
 });

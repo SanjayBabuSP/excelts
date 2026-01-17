@@ -3,12 +3,9 @@
  */
 import { describe, it, expect } from "vitest";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
-import {
-  concatChunks,
-  hasSignature,
-  CENTRAL_DIR_SIG,
-  EOCD_SIG
-} from "@archive/__tests__/zip/zip-test-utils";
+import { hasSignature } from "@archive/__tests__/zip/zip-test-utils";
+import { concatUint8Arrays } from "@archive/utils/bytes";
+import { CENTRAL_DIR_HEADER_SIG, END_OF_CENTRAL_DIR_SIG } from "@archive/zip-spec/zip-records";
 
 describe("Debug ZIP output", () => {
   it("should produce ZIP with data descriptor", async () => {
@@ -40,15 +37,7 @@ describe("Debug ZIP output", () => {
     zip.end();
     await finishPromise;
 
-    const fullZip = concatChunks(chunks);
-
-    console.log("ZIP total size:", fullZip.length, "bytes");
-    console.log(
-      "ZIP hex:",
-      Array.from(fullZip.slice(0, 100))
-        .map(b => b.toString(16).padStart(2, "0"))
-        .join(" ")
-    );
+    const fullZip = concatUint8Arrays(chunks);
 
     // ZIP should be larger than just the local header (30 bytes + filename)
     expect(fullZip.length).toBeGreaterThan(50);
@@ -66,16 +55,20 @@ describe("Debug ZIP output", () => {
         0;
       if (sig === 0x08074b50) {
         foundDataDescriptor = true;
-        console.log("Found data descriptor at offset:", i);
         break;
       }
     }
     expect(foundDataDescriptor).toBe(true);
 
-    expect(hasSignature(fullZip, CENTRAL_DIR_SIG, 0, fullZip.length)).toBe(true);
+    expect(hasSignature(fullZip, CENTRAL_DIR_HEADER_SIG, 0, fullZip.length)).toBe(true);
 
-    expect(hasSignature(fullZip, EOCD_SIG, Math.max(0, fullZip.length - 256), fullZip.length)).toBe(
-      true
-    );
+    expect(
+      hasSignature(
+        fullZip,
+        END_OF_CENTRAL_DIR_SIG,
+        Math.max(0, fullZip.length - 256),
+        fullZip.length
+      )
+    ).toBe(true);
   });
 });

@@ -2,6 +2,7 @@ import { encodeUtf8 } from "@archive/utils/text";
 import {
   buildZipTimestampExtraField,
   dateToZipDos,
+  type ZipExtraTimestamps,
   type ZipTimestampMode
 } from "@archive/utils/timestamps";
 import {
@@ -25,6 +26,9 @@ export interface ZipEntryMetadataInput {
   name: string;
   comment?: string;
   modTime: Date;
+  atime?: Date;
+  ctime?: Date;
+  birthTime?: Date;
   timestamps: ZipTimestampMode;
   /** If true, set FLAG_DATA_DESCRIPTOR and expect CRC/sizes written later. */
   useDataDescriptor: boolean;
@@ -44,7 +48,11 @@ export function buildZipEntryMetadata(input: ZipEntryMetadataInput): ZipEntryMet
   const nameBytes = encodeUtf8(input.name);
   const commentBytes = encodeUtf8(input.comment ?? "");
   const { dosTime, dosDate } = dateToZipDos(input.modTime);
-  const extraField = buildZipTimestampExtraField(input.modTime, input.timestamps);
+  const extra: ZipExtraTimestamps | undefined =
+    input.atime || input.ctime || input.birthTime
+      ? { atime: input.atime, ctime: input.ctime, birthTime: input.birthTime }
+      : undefined;
+  const extraField = buildZipTimestampExtraField(input.modTime, input.timestamps, extra);
 
   return {
     nameBytes,

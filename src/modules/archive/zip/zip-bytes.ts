@@ -27,6 +27,8 @@ import {
   buildZipEntryMetadata,
   resolveZipCompressionMethod
 } from "@archive/zip/zip-entry-metadata";
+import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
+import { normalizeZipPath, type ZipPathOptions } from "@archive/zip/zip-path";
 import {
   FLAG_UTF8,
   FLAG_ENCRYPTED,
@@ -65,6 +67,7 @@ interface ProcessedEntry {
   offset: number;
   flags: number;
   externalAttributes: number;
+  versionMadeBy?: number;
 }
 
 /**
@@ -79,12 +82,33 @@ export interface ZipEntry {
   level?: number;
   /** File modification time (optional, defaults to current time) */
   modTime?: Date;
+
+  /** Optional access time (used only when timestamps mode supports it). */
+  atime?: Date;
+
+  /** Optional metadata change time (used only when timestamps mode supports it). */
+  ctime?: Date;
+
+  /** Optional creation time (used by NTFS timestamps mode). */
+  birthTime?: Date;
   /** File comment (optional) */
   comment?: string;
   /** Per-entry encryption method override */
   encryptionMethod?: ZipEncryptionMethod;
   /** Per-entry password override */
   password?: string | Uint8Array;
+
+  /**
+   * Unix mode/permissions for this entry.
+   * Accepts either a full `stat.mode` (includes file type bits), or just permission bits.
+   */
+  mode?: number;
+
+  /** Optional MS-DOS attributes (low 8 bits). */
+  msDosAttributes?: number;
+
+  /** Advanced override for the central directory `version made by` field. */
+  versionMadeBy?: number;
   /**
    * External file attributes (optional).
    * For Unix symlinks, use: ((mode << 16) | 0x20)
@@ -100,6 +124,8 @@ interface ZipBuildSettings {
   encryptionMethod: ZipEncryptionMethod;
   password?: string | Uint8Array;
 }
+
+type ZipPathOptionValue = false | ZipPathOptions;
 
 /**
  * Validate encryption options and throw if invalid.
@@ -128,6 +154,7 @@ function parseZipBuildOptions(options: ZipOptions): {
   zip64Mode: Zip64Mode;
   smartStore: boolean;
   thresholdBytes: number | undefined;
+  path: ZipPathOptionValue;
 } {
   const reproducible = options.reproducible ?? false;
   const level = options.level ?? DEFAULT_ZIP_LEVEL;
@@ -146,7 +173,8 @@ function parseZipBuildOptions(options: ZipOptions): {
     zipComment: encodeZipComment(options.comment),
     zip64Mode: options.zip64 ?? "auto",
     smartStore: options.smartStore ?? true,
-    thresholdBytes: options.thresholdBytes
+    thresholdBytes: options.thresholdBytes,
+    path: options.path ?? false
   };
 }
 
@@ -217,15 +245,20 @@ function compressEntryMaybeSync(
 function buildProcessedEntry(
   entry: ZipEntry,
   settings: ZipBuildSettings,
+  path: ZipPathOptionValue,
   compressedData: Uint8Array,
   deflate: boolean,
   encryptionResult?: { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }
 ): ProcessedEntry {
+  const resolvedName = path ? normalizeZipPath(entry.name, path) : entry.name;
   const modDate = entry.modTime ?? settings.defaultModTime;
   const metadata = buildZipEntryMetadata({
-    name: entry.name,
+    name: resolvedName,
     comment: entry.comment,
     modTime: modDate,
+    atime: entry.atime,
+    ctime: entry.ctime,
+    birthTime: entry.birthTime,
     timestamps: settings.timestamps,
     useDataDescriptor: false,
     deflate
@@ -249,6 +282,14 @@ function buildProcessedEntry(
     finalCompressionMethod = resolveZipCompressionMethod(deflate);
   }
 
+  const attrs = resolveZipExternalAttributesAndVersionMadeBy({
+    name: resolvedName,
+    mode: entry.mode,
+    msDosAttributes: entry.msDosAttributes,
+    externalAttributes: entry.externalAttributes,
+    versionMadeBy: entry.versionMadeBy
+  });
+
   return {
     name: metadata.nameBytes,
     uncompressedSize: entry.data.length,
@@ -261,7 +302,8 @@ function buildProcessedEntry(
     comment: metadata.commentBytes,
     offset: 0,
     flags,
-    externalAttributes: entry.externalAttributes ?? 0
+    externalAttributes: attrs.externalAttributes,
+    versionMadeBy: attrs.versionMadeBy
   };
 }
 
@@ -327,6 +369,13 @@ export interface ZipOptions extends CompressOptions {
    * Password for encryption. Required when encryptionMethod is not "none".
    */
   password?: string | Uint8Array;
+
+  /**
+   * Optional entry name normalization.
+   * - `false` (default): do not modify entry names.
+   * - `ZipPathOptions`: normalize each entry name before writing.
+   */
+  path?: ZipPathOptionValue;
 }
 
 /**
@@ -529,7 +578,8 @@ function finalizeZip(
       uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
       localHeaderOffset: needsZip64Entry ? UINT32_MAX : entry.offset,
       versionNeeded: needsZip64Entry ? VERSION_ZIP64 : undefined,
-      externalAttributes: entry.externalAttributes
+      externalAttributes: entry.externalAttributes,
+      versionMadeBy: entry.versionMadeBy
     });
   }
 
@@ -579,7 +629,7 @@ export async function createZip(
   entries: ZipEntry[],
   options: ZipOptions = {}
 ): Promise<Uint8Array> {
-  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes } =
+  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path } =
     parseZipBuildOptions(options);
   validateEncryptionOptions(settings.encryptionMethod, settings.password, false);
 
@@ -632,6 +682,7 @@ export async function createZip(
         processedEntries[idx] = buildProcessedEntry(
           entry,
           settings,
+          path,
           compressedData,
           deflate,
           encryptionResult
@@ -652,7 +703,7 @@ export async function createZip(
  * Note: AES encryption is not supported in sync mode.
  */
 export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Uint8Array {
-  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes } =
+  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path } =
     parseZipBuildOptions(options);
   validateEncryptionOptions(settings.encryptionMethod, settings.password, true);
 
@@ -691,7 +742,7 @@ export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Ui
     }
 
     processedEntries.push(
-      buildProcessedEntry(entry, settings, compressedData, deflate, encryptionResult)
+      buildProcessedEntry(entry, settings, path, compressedData, deflate, encryptionResult)
     );
   }
   return finalizeZip(processedEntries, zipComment, zip64Mode);

@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 import { Parse } from "@archive/unzip/stream.browser";
-import { concatChunks } from "@archive/__tests__/zip/zip-test-utils";
+import { concatUint8Arrays } from "@archive/utils/bytes";
 
 // Type helper for browser Parse which has different methods than Node version
 type BrowserParse = Parse & {
@@ -39,13 +39,13 @@ async function createZipBytesWithStreamingZip(
   for (const entry of entries) {
     const file = new ZipDeflateFile(entry.name, { level: entry.level ?? 6 });
     zip.add(file);
-    file.push(entry.content, true);
+    await file.push(entry.content, true);
     await file.complete();
   }
 
   zip.end();
   await finishPromise;
-  return concatChunks(chunks);
+  return concatUint8Arrays(chunks);
 }
 
 describe("FallbackInflateRaw", () => {
@@ -58,29 +58,21 @@ describe("FallbackInflateRaw", () => {
     globalThis.DecompressionStream = undefined;
 
     try {
-      const encoder = new TextEncoder();
-      const payload = encoder.encode("stream-me");
-
-      // In old browsers without CompressionStream, StreamingZip should still work.
-      // It will fall back to buffered (non-streaming) DEFLATE, so output may not be
-      // emitted until end(), but the resulting ZIP must be valid.
+      const payload = new TextEncoder().encode("stream-me");
       const fullZip = await createZipBytesWithStreamingZip([
         { name: "test.txt", content: payload, level: 6 }
       ]);
 
-      // Parse the ZIP to ensure it's valid and content matches.
       const parser = new Parse() as BrowserParse;
       const entries: Array<{ name: string; content: string }> = [];
 
       const entryPromise = new Promise<void>((resolve, reject) => {
-        parser.on("entry", async (entry: any) => {
+        parser.on("entry", (entry: any) => {
           if (entry.type === "File") {
             const readChunks: Uint8Array[] = [];
-            entry.on("data", (chunk: Uint8Array) => {
-              readChunks.push(chunk);
-            });
+            entry.on("data", (chunk: Uint8Array) => readChunks.push(chunk));
             entry.on("end", () => {
-              const combined = concatChunks(readChunks);
+              const combined = concatUint8Arrays(readChunks);
               entries.push({
                 name: entry.path,
                 content: new TextDecoder().decode(combined)
@@ -100,8 +92,8 @@ describe("FallbackInflateRaw", () => {
       await entryPromise;
 
       expect(entries.length).toBe(1);
-      expect(entries[0].name).toBe("test.txt");
-      expect(entries[0].content).toBe("stream-me");
+      expect(entries[0]!.name).toBe("test.txt");
+      expect(entries[0]!.content).toBe("stream-me");
     } finally {
       globalThis.CompressionStream = originalCompressionStream;
       globalThis.DecompressionStream = originalDecompressionStream;
@@ -113,96 +105,58 @@ describe("FallbackInflateRaw", () => {
       { name: "test.txt", content: new TextEncoder().encode("Hello, World!"), level: 6 }
     ]);
 
-    console.log("ZIP size:", fullZip.length);
-
-    // Parse the ZIP using Parse.browser.ts
     const parser = new Parse() as BrowserParse;
     const entries: Array<{ name: string; content: string }> = [];
 
-    // Set up entry promise - wait for entry to be fully processed
     const entryPromise = new Promise<void>((resolve, reject) => {
-      parser.on("entry", async (entry: any) => {
-        console.log("Got entry:", entry.path, "type:", entry.type);
-
+      parser.on("entry", (entry: any) => {
         if (entry.type === "File") {
-          // Read manually from the entry stream
           const readChunks: Uint8Array[] = [];
-
-          entry.on("data", (chunk: Uint8Array) => {
-            console.log("Got chunk:", chunk.length, "bytes");
-            readChunks.push(chunk);
-          });
-
+          entry.on("data", (chunk: Uint8Array) => readChunks.push(chunk));
           entry.on("end", () => {
-            console.log("Entry stream ended, total chunks:", readChunks.length);
-            const combined = concatChunks(readChunks);
-            const content = new TextDecoder().decode(combined);
+            const combined = concatUint8Arrays(readChunks);
             entries.push({
               name: entry.path,
-              content: content
+              content: new TextDecoder().decode(combined)
             });
             resolve();
           });
-
-          entry.on("error", (err: Error) => {
-            console.error("Entry stream error:", err);
-            reject(err);
-          });
+          entry.on("error", (err: Error) => reject(err));
         } else {
           entry.autodrain();
         }
       });
 
-      parser.on("error", (err: Error) => {
-        console.error("Parser error:", err);
-        reject(err);
-      });
+      parser.on("error", (err: Error) => reject(err));
     });
 
-    // Feed the data to the parser
     parser.write(fullZip);
     parser.end();
-
-    // Wait for entry to be fully processed
     await entryPromise;
 
-    console.log("Entry processed, entries:", entries.length);
-
-    // Verify results
     expect(entries.length).toBe(1);
-    expect(entries[0].name).toBe("test.txt");
-    expect(entries[0].content).toBe("Hello, World!");
+    expect(entries[0]!.name).toBe("test.txt");
+    expect(entries[0]!.content).toBe("Hello, World!");
   }, 30000);
 
   it("should parse ZIP with multiple files", async () => {
     const encoder = new TextEncoder();
-
     const fullZip = await createZipBytesWithStreamingZip([
       { name: "file1.txt", content: encoder.encode("File 1 content"), level: 6 },
       { name: "file2.txt", content: encoder.encode("File 2 content"), level: 6 },
       { name: "dir/file3.txt", content: encoder.encode("File 3 content"), level: 6 }
     ]);
 
-    console.log("Multi-file ZIP size:", fullZip.length);
-
-    // Parse the ZIP
     const parser = new Parse() as BrowserParse;
     const entries: Array<{ name: string; content: string }> = [];
 
-    // Wait for all 3 entries
     const allEntriesPromise = new Promise<void>((resolve, reject) => {
-      parser.on("entry", async (entry: any) => {
-        console.log("Got entry:", entry.path);
-
+      parser.on("entry", (entry: any) => {
         if (entry.type === "File") {
           const readChunks: Uint8Array[] = [];
-
-          entry.on("data", (chunk: Uint8Array) => {
-            readChunks.push(chunk);
-          });
-
+          entry.on("data", (chunk: Uint8Array) => readChunks.push(chunk));
           entry.on("end", () => {
-            const combined = concatChunks(readChunks);
+            const combined = concatUint8Arrays(readChunks);
             entries.push({
               name: entry.path,
               content: new TextDecoder().decode(combined)
@@ -211,23 +165,19 @@ describe("FallbackInflateRaw", () => {
               resolve();
             }
           });
-
-          entry.on("error", reject);
+          entry.on("error", (err: Error) => reject(err));
         } else {
           entry.autodrain();
         }
       });
 
-      parser.on("error", reject);
+      parser.on("error", (err: Error) => reject(err));
     });
 
-    // Feed the data to the parser
     parser.write(fullZip);
     parser.end();
-
     await allEntriesPromise;
 
-    // Verify results
     expect(entries.length).toBe(3);
     expect(entries.find(e => e.name === "file1.txt")?.content).toBe("File 1 content");
     expect(entries.find(e => e.name === "file2.txt")?.content).toBe("File 2 content");

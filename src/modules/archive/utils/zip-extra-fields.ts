@@ -11,7 +11,7 @@ import {
   AES_STRENGTH_FROM_BYTE,
   type AesKeyStrength
 } from "@archive/crypto/aes";
-import { EXTENDED_TIMESTAMP_ID } from "@archive/utils/timestamps";
+import { EXTENDED_TIMESTAMP_ID, NTFS_TIMESTAMP_ID } from "@archive/utils/timestamps";
 
 export interface ZipVars {
   uncompressedSize: number;
@@ -46,6 +46,20 @@ export interface ZipExtraFields {
   /** Info-ZIP extended timestamp (0x5455) mtime, Unix seconds (UTC). */
   mtimeUnixSeconds?: number;
 
+  /** Info-ZIP extended timestamp (0x5455) atime, Unix seconds (UTC), when present. */
+  atimeUnixSeconds?: number;
+
+  /** Info-ZIP extended timestamp (0x5455) ctime, Unix seconds (UTC), when present. */
+  ctimeUnixSeconds?: number;
+
+  /** NTFS timestamps (0x000a) as Windows FILETIME (100ns since 1601-01-01 UTC). */
+  ntfsTimes?: {
+    mtime: bigint;
+    atime: bigint;
+    ctime: bigint;
+    birthTime: bigint;
+  };
+
   /** AES encryption info (0x9901) when present */
   aesInfo?: AesExtraFieldInfo;
 }
@@ -54,6 +68,10 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 function readUint64LEBigInt(view: DataView, offset: number): bigint {
   return view.getBigUint64(offset, true);
+}
+
+function hasBigUint64(view: DataView): boolean {
+  return typeof (view as unknown as { getBigUint64?: unknown }).getBigUint64 === "function";
 }
 
 function toNumberIfSafe(value: bigint): number | undefined {
@@ -71,6 +89,7 @@ export function parseZipExtraFields(extraField: Uint8Array, vars: ZipVars): ZipE
   }
 
   const view = new DataView(extraField.buffer, extraField.byteOffset, extraField.byteLength);
+  const canReadBigUint64 = hasBigUint64(view);
   let offset = 0;
 
   while (offset + 4 <= extraField.length) {
@@ -128,8 +147,47 @@ export function parseZipExtraFields(extraField: Uint8Array, vars: ZipVars): ZipE
       // Data: [flags:1][mtime?:4][atime?:4][ctime?:4]
       if (partSize >= 1) {
         const flags = extraField[dataStart]!;
-        if ((flags & 0x01) !== 0 && partSize >= 5) {
-          extra.mtimeUnixSeconds = view.getUint32(dataStart + 1, true) >>> 0;
+        let cursor = dataStart + 1;
+        if ((flags & 0x01) !== 0 && cursor + 4 <= dataEnd) {
+          extra.mtimeUnixSeconds = view.getUint32(cursor, true) >>> 0;
+          cursor += 4;
+        }
+        if ((flags & 0x02) !== 0 && cursor + 4 <= dataEnd) {
+          extra.atimeUnixSeconds = view.getUint32(cursor, true) >>> 0;
+          cursor += 4;
+        }
+        if ((flags & 0x04) !== 0 && cursor + 4 <= dataEnd) {
+          extra.ctimeUnixSeconds = view.getUint32(cursor, true) >>> 0;
+        }
+      }
+    } else if (signature === NTFS_TIMESTAMP_ID) {
+      // NTFS timestamps (0x000a)
+      // Data:
+      //   [reserved:4]
+      //   repeated tags: [tag:2][size:2][data:size]
+      // Tag 0x0001: [mtime:8][atime:8][ctime:8][btime:8] as FILETIME.
+      if (!canReadBigUint64) {
+        // Older runtimes may not support BigInt-based DataView accessors.
+        // Skip parsing NTFS timestamps in that case.
+      } else if (partSize >= 4 + 4) {
+        let cursor = dataStart + 4;
+        while (cursor + 4 <= dataEnd) {
+          const tag = view.getUint16(cursor, true);
+          const size = view.getUint16(cursor + 2, true);
+          const tagDataStart = cursor + 4;
+          const tagDataEnd = tagDataStart + size;
+          if (tagDataEnd > dataEnd) {
+            break;
+          }
+          if (tag === 0x0001 && size >= 32 && tagDataStart + 32 <= tagDataEnd) {
+            extra.ntfsTimes = {
+              mtime: view.getBigUint64(tagDataStart + 0, true),
+              atime: view.getBigUint64(tagDataStart + 8, true),
+              ctime: view.getBigUint64(tagDataStart + 16, true),
+              birthTime: view.getBigUint64(tagDataStart + 24, true)
+            };
+          }
+          cursor = tagDataEnd;
         }
       }
     } else if (signature === AES_EXTRA_FIELD_ID) {

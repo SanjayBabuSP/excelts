@@ -38,6 +38,12 @@ export interface ZipEntryInfo {
   comment: string;
   /** External file attributes */
   externalAttributes: number;
+
+  /** Central directory "version made by" field (when available). */
+  versionMadeBy?: number;
+
+  /** Raw central directory extra field (when available). */
+  extraField?: Uint8Array;
   /** Is encrypted */
   isEncrypted: boolean;
 

@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { ZipParser } from "@archive/unzip/zip-parser";
 import { createZip, type ZipEntry } from "@archive/zip/zip-bytes";
-import { CENTRAL_DIR_SIG, findSignatureFromEnd } from "@archive/__tests__/zip/zip-test-utils";
+import { CENTRAL_DIR_HEADER_SIG } from "@archive/zip-spec/zip-records";
+import { findSignatureFromEnd } from "@archive/__tests__/zip/zip-test-utils";
 
 // Helper to convert object to ZipEntry array
 function toEntries(files: Record<string, Uint8Array>): ZipEntry[] {
@@ -53,7 +54,7 @@ describe("ZipParser", () => {
       const view = new DataView(zipData.buffer, zipData.byteOffset, zipData.byteLength);
 
       // Find the first central directory header (search from end).
-      const cdOffset = findSignatureFromEnd(zipData, CENTRAL_DIR_SIG, 1024 * 1024);
+      const cdOffset = findSignatureFromEnd(zipData, CENTRAL_DIR_HEADER_SIG, 1024 * 1024);
       expect(cdOffset).toBeGreaterThanOrEqual(0);
 
       const fileNameLength = view.getUint16(cdOffset + 28, true);

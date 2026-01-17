@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { ZipParser } from "@archive/unzip/zip-parser";
 import { createZip, createZipSync, type ZipEntry } from "@archive/zip/zip-bytes";
 import { concatUint8Arrays } from "@archive/utils/bytes";
+import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip/zip-path";
 
 // Shared TextEncoder instance to avoid repeated instantiation
 const textEncoder = new TextEncoder();
@@ -31,6 +32,7 @@ import type {
 } from "./types";
 
 import {
+  type FileEntry,
   traverseDirectory,
   traverseDirectorySync,
   glob as globFiles,
@@ -54,20 +56,58 @@ import {
 // =============================================================================
 
 /**
- * Normalize a path for use in ZIP archives (forward slashes, no leading slash).
+ * Resolve effective ZIP path options for an operation.
  */
-function normalizeZipPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\/+/, "");
+function resolveZipPathOptions(globalOptions: ZipFileOptions): ZipPathOptions {
+  return {
+    mode: "legacy",
+    ...(globalOptions.path ?? {})
+  };
 }
 
-/**
- * Join paths for ZIP archive (ensuring forward slashes).
- */
-function joinZipPath(...parts: string[]): string {
-  return parts
-    .filter(Boolean)
-    .map(p => normalizeZipPath(p))
-    .join("/");
+type ZipModeOptions = { mode?: number };
+
+function resolveEntryMode(
+  kind: "file" | "directory",
+  globalOptions: ZipFileOptions,
+  localOptions?: ZipModeOptions,
+  fsMode?: number
+): number | undefined {
+  if (!(globalOptions.writePermissions ?? false)) {
+    return undefined;
+  }
+
+  if (localOptions?.mode !== undefined) {
+    return localOptions.mode;
+  }
+
+  if ((globalOptions.preservePermissions ?? false) && fsMode !== undefined) {
+    return fsMode;
+  }
+
+  if (kind === "directory") {
+    return 0o040755;
+  }
+  return 0o100644;
+}
+
+function buildDirectoryEntry(
+  zipPath: string,
+  fsEntry: FileEntry,
+  globalOptions: ZipFileOptions,
+  localOptions: AddDirectoryOptions
+): ZipEntry {
+  return {
+    name: zipPath + "/",
+    data: new Uint8Array(0),
+    level: 0,
+    modTime: fsEntry.mtime,
+    atime: fsEntry.atime,
+    ctime: fsEntry.ctime,
+    birthTime: fsEntry.birthTime,
+    mode: resolveEntryMode("directory", globalOptions, localOptions, fsEntry.mode),
+    msDosAttributes: localOptions.msDosAttributes
+  };
 }
 
 /**
@@ -207,16 +247,32 @@ function buildZipEntry(
   entryOptions: AddFileOptions,
   globalOptions: ZipFileOptions,
   globalPassword: string | Uint8Array | undefined,
-  modTime?: Date
+  fsMetadata?: {
+    modTime?: Date;
+    mode?: number;
+    atime?: Date;
+    ctime?: Date;
+    birthTime?: Date;
+  }
 ): ZipEntry {
+  const mode = resolveEntryMode("file", globalOptions, entryOptions, fsMetadata?.mode);
+
+  const externalAttributes = entryOptions.externalAttributes;
+
   return {
     name,
     data,
     level: entryOptions.level ?? globalOptions.level,
-    modTime: entryOptions.modTime ?? modTime ?? new Date(),
+    modTime: entryOptions.modTime ?? fsMetadata?.modTime ?? new Date(),
+    atime: entryOptions.atime ?? fsMetadata?.atime,
+    ctime: entryOptions.ctime ?? fsMetadata?.ctime,
+    birthTime: entryOptions.birthTime ?? fsMetadata?.birthTime,
     comment: entryOptions.comment,
     encryptionMethod: entryOptions.encryptionMethod ?? globalOptions.encryptionMethod,
-    password: entryOptions.password ?? globalPassword
+    password: entryOptions.password ?? globalPassword,
+    mode,
+    msDosAttributes: entryOptions.msDosAttributes,
+    externalAttributes
   };
 }
 
@@ -224,11 +280,15 @@ function buildZipEntry(
  * Build a ZipEntry for an updated existing entry.
  */
 function buildUpdatedEntry(
-  existingEntry: { path: string; comment: string },
+  existingEntry: { path: string; comment: string; externalAttributes: number },
   updated: { data: Uint8Array; options?: AddFileOptions },
   globalOptions: ZipFileOptions,
   globalPassword: string | Uint8Array | undefined
 ): ZipEntry {
+  const externalAttributes =
+    updated.options?.externalAttributes ??
+    (updated.options?.mode !== undefined ? undefined : existingEntry.externalAttributes);
+
   return {
     name: existingEntry.path,
     data: updated.data,
@@ -236,7 +296,10 @@ function buildUpdatedEntry(
     modTime: updated.options?.modTime ?? new Date(),
     comment: updated.options?.comment ?? existingEntry.comment,
     encryptionMethod: updated.options?.encryptionMethod ?? globalOptions.encryptionMethod,
-    password: updated.options?.password ?? globalPassword
+    password: updated.options?.password ?? globalPassword,
+    mode: updated.options?.mode,
+    msDosAttributes: updated.options?.msDosAttributes,
+    externalAttributes
   };
 }
 
@@ -244,7 +307,7 @@ function buildUpdatedEntry(
  * Build a ZipEntry for preserving an existing entry (no update).
  */
 function buildPreservedEntry(
-  existingEntry: { path: string; lastModified: Date; comment: string },
+  existingEntry: { path: string; lastModified: Date; comment: string; externalAttributes: number },
   data: Uint8Array,
   globalOptions: ZipFileOptions,
   globalPassword: string | Uint8Array | undefined
@@ -256,7 +319,8 @@ function buildPreservedEntry(
     modTime: existingEntry.lastModified,
     comment: existingEntry.comment,
     encryptionMethod: globalOptions.encryptionMethod,
-    password: globalPassword
+    password: globalPassword,
+    externalAttributes: existingEntry.externalAttributes
   };
 }
 
@@ -269,7 +333,7 @@ function buildSymlinkEntry(zipPath: string, target: string, mode?: number): ZipE
     data: textEncoder.encode(target),
     level: 0,
     modTime: new Date(),
-    externalAttributes: ((mode ?? 0o120777) << 16) | 0x20
+    mode: mode ?? 0o120777
   };
 }
 
@@ -504,7 +568,12 @@ export class ZipFile {
    */
   addFile(localPath: string, options: AddFileOptions = {}): this {
     const resolvedPath = path.resolve(localPath);
-    const zipPath = joinZipPath(options.prefix ?? "", options.name ?? path.basename(localPath));
+    const pathOptions = resolveZipPathOptions(this._options);
+    const zipPath = joinZipPath(
+      pathOptions,
+      options.prefix ?? "",
+      options.name ?? path.basename(localPath)
+    );
 
     this._pendingEntries.push({
       type: "file",
@@ -542,10 +611,11 @@ export class ZipFile {
    * @returns this for chaining
    */
   addBuffer(data: Uint8Array, zipPath: string, options: AddFileOptions = {}): this {
+    const pathOptions = resolveZipPathOptions(this._options);
     this._pendingEntries.push({
       type: "buffer",
       data,
-      zipPath: normalizeZipPath(zipPath),
+      zipPath: normalizeZipPath(zipPath, pathOptions),
       options
     });
     return this;
@@ -587,10 +657,11 @@ export class ZipFile {
     zipPath: string,
     options: AddFileOptions = {}
   ): this {
+    const pathOptions = resolveZipPathOptions(this._options);
     this._pendingEntries.push({
       type: "stream",
       stream,
-      zipPath: normalizeZipPath(zipPath),
+      zipPath: normalizeZipPath(zipPath, pathOptions),
       options
     });
     return this;
@@ -612,9 +683,10 @@ export class ZipFile {
    * ```
    */
   symlink(filepath: string, target: string, mode?: number): this {
+    const pathOptions = resolveZipPathOptions(this._options);
     this._pendingEntries.push({
       type: "symlink",
-      zipPath: normalizeZipPath(filepath),
+      zipPath: normalizeZipPath(filepath, pathOptions),
       target,
       mode
     });
@@ -763,7 +835,7 @@ export class ZipFile {
    * ```
    */
   deleteEntry(entryPath: string): boolean {
-    const normalizedPath = normalizeZipPath(entryPath);
+    const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._options));
 
     // Check if entry exists in original archive
     if (this._parser?.hasEntry(normalizedPath)) {
@@ -774,15 +846,9 @@ export class ZipFile {
     }
 
     // Check if entry exists in pending entries
-    const index = this._pendingEntries.findIndex(e => {
-      if (e.type === "buffer" || e.type === "stream" || e.type === "symlink") {
-        return e.zipPath === normalizedPath;
-      }
-      if (e.type === "file") {
-        return e.zipPath === normalizedPath;
-      }
-      return false;
-    });
+    const index = this._pendingEntries.findIndex(
+      e => "zipPath" in e && e.zipPath === normalizedPath
+    );
 
     if (index >= 0) {
       this._pendingEntries.splice(index, 1);
@@ -821,7 +887,7 @@ export class ZipFile {
    * ```
    */
   updateEntry(entryPath: string, data: Uint8Array | string, options: AddFileOptions = {}): boolean {
-    const normalizedPath = normalizeZipPath(entryPath);
+    const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._options));
     const bytes = typeof data === "string" ? textEncoder.encode(data) : data;
 
     // Check if entry exists in original archive
@@ -833,15 +899,9 @@ export class ZipFile {
     }
 
     // Check if entry exists in pending entries
-    const index = this._pendingEntries.findIndex(e => {
-      if (e.type === "buffer") {
-        return e.zipPath === normalizedPath;
-      }
-      if (e.type === "file") {
-        return e.zipPath === normalizedPath;
-      }
-      return false;
-    });
+    const index = this._pendingEntries.findIndex(
+      e => "zipPath" in e && e.zipPath === normalizedPath
+    );
 
     if (index >= 0) {
       // Replace with updated buffer entry
@@ -938,14 +998,13 @@ export class ZipFile {
           const data = await readFileBytes(pending.localPath);
           const stats = await safeStats(pending.localPath);
           entries.push(
-            buildZipEntry(
-              pending.zipPath,
-              data,
-              pending.options,
-              this._options,
-              this._password,
-              stats?.mtime
-            )
+            buildZipEntry(pending.zipPath, data, pending.options, this._options, this._password, {
+              modTime: stats?.mtime,
+              mode: stats?.mode,
+              atime: stats?.atime,
+              ctime: stats?.ctime,
+              birthTime: stats?.birthtime
+            })
           );
           this._bytesWritten += data.length;
           break;
@@ -985,6 +1044,7 @@ export class ZipFile {
           const { prefix, includeRoot = true, recursive = true, filter } = pending.options;
           const dirName = path.basename(pending.localPath);
           const basePrefix = prefix ?? (includeRoot ? dirName : "");
+          const pathOptions = resolveZipPathOptions(this._options);
 
           for await (const entry of traverseDirectory(pending.localPath, {
             recursive,
@@ -993,26 +1053,20 @@ export class ZipFile {
           })) {
             checkAbort();
 
-            const zipPath = joinZipPath(basePrefix, entry.relativePath);
+            const zipPath = joinZipPath(pathOptions, basePrefix, entry.relativePath);
 
             if (entry.isDirectory) {
-              // Add directory entry (trailing slash)
-              entries.push({
-                name: zipPath + "/",
-                data: new Uint8Array(0),
-                level: 0
-              });
+              entries.push(buildDirectoryEntry(zipPath, entry, this._options, pending.options));
             } else {
               const data = await readFileBytes(entry.absolutePath);
               entries.push(
-                buildZipEntry(
-                  zipPath,
-                  data,
-                  pending.options,
-                  this._options,
-                  this._password,
-                  entry.mtime
-                )
+                buildZipEntry(zipPath, data, pending.options, this._options, this._password, {
+                  modTime: entry.mtime,
+                  mode: entry.mode,
+                  atime: entry.atime,
+                  ctime: entry.ctime,
+                  birthTime: entry.birthTime
+                })
               );
               this._bytesWritten += data.length;
             }
@@ -1022,6 +1076,7 @@ export class ZipFile {
 
         case "glob": {
           const { cwd, prefix, ignore, dot, followSymlinks, filter } = pending.options;
+          const pathOptions = resolveZipPathOptions(this._options);
 
           for await (const entry of globFiles(pending.pattern, {
             cwd,
@@ -1032,17 +1087,16 @@ export class ZipFile {
           })) {
             checkAbort();
 
-            const zipPath = joinZipPath(prefix ?? "", entry.relativePath);
+            const zipPath = joinZipPath(pathOptions, prefix ?? "", entry.relativePath);
             const data = await readFileBytes(entry.absolutePath);
             entries.push(
-              buildZipEntry(
-                zipPath,
-                data,
-                pending.options,
-                this._options,
-                this._password,
-                entry.mtime
-              )
+              buildZipEntry(zipPath, data, pending.options, this._options, this._password, {
+                modTime: entry.mtime,
+                mode: entry.mode,
+                atime: entry.atime,
+                ctime: entry.ctime,
+                birthTime: entry.birthTime
+              })
             );
             this._bytesWritten += data.length;
           }
@@ -1117,14 +1171,13 @@ export class ZipFile {
           const data = readFileBytesSync(pending.localPath);
           const stats = safeStatsSync(pending.localPath);
           entries.push(
-            buildZipEntry(
-              pending.zipPath,
-              data,
-              pending.options,
-              this._options,
-              this._password,
-              stats?.mtime
-            )
+            buildZipEntry(pending.zipPath, data, pending.options, this._options, this._password, {
+              modTime: stats?.mtime,
+              mode: stats?.mode,
+              atime: stats?.atime,
+              ctime: stats?.ctime,
+              birthTime: stats?.birthtime
+            })
           );
           break;
         }
@@ -1151,31 +1204,27 @@ export class ZipFile {
           const { prefix, includeRoot = true, recursive = true, filter } = pending.options;
           const dirName = path.basename(pending.localPath);
           const basePrefix = prefix ?? (includeRoot ? dirName : "");
+          const pathOptions = resolveZipPathOptions(this._options);
 
           for (const entry of traverseDirectorySync(pending.localPath, {
             recursive,
             followSymlinks: pending.options.followSymlinks,
             filter: wrapFilter(filter)
           })) {
-            const zipPath = joinZipPath(basePrefix, entry.relativePath);
+            const zipPath = joinZipPath(pathOptions, basePrefix, entry.relativePath);
 
             if (entry.isDirectory) {
-              entries.push({
-                name: zipPath + "/",
-                data: new Uint8Array(0),
-                level: 0
-              });
+              entries.push(buildDirectoryEntry(zipPath, entry, this._options, pending.options));
             } else {
               const data = readFileBytesSync(entry.absolutePath);
               entries.push(
-                buildZipEntry(
-                  zipPath,
-                  data,
-                  pending.options,
-                  this._options,
-                  this._password,
-                  entry.mtime
-                )
+                buildZipEntry(zipPath, data, pending.options, this._options, this._password, {
+                  modTime: entry.mtime,
+                  mode: entry.mode,
+                  atime: entry.atime,
+                  ctime: entry.ctime,
+                  birthTime: entry.birthTime
+                })
               );
             }
           }
@@ -1184,6 +1233,7 @@ export class ZipFile {
 
         case "glob": {
           const { cwd, prefix, ignore, dot, followSymlinks, filter } = pending.options;
+          const pathOptions = resolveZipPathOptions(this._options);
 
           for (const entry of globFilesSync(pending.pattern, {
             cwd,
@@ -1192,17 +1242,16 @@ export class ZipFile {
             followSymlinks,
             filter: wrapFilter(filter)
           })) {
-            const zipPath = joinZipPath(prefix ?? "", entry.relativePath);
+            const zipPath = joinZipPath(pathOptions, prefix ?? "", entry.relativePath);
             const data = readFileBytesSync(entry.absolutePath);
             entries.push(
-              buildZipEntry(
-                zipPath,
-                data,
-                pending.options,
-                this._options,
-                this._password,
-                entry.mtime
-              )
+              buildZipEntry(zipPath, data, pending.options, this._options, this._password, {
+                modTime: entry.mtime,
+                mode: entry.mode,
+                atime: entry.atime,
+                ctime: entry.ctime,
+                birthTime: entry.birthTime
+              })
             );
           }
           break;

@@ -27,6 +27,8 @@ import {
   buildZipEntryMetadata,
   resolveZipCompressionMethod
 } from "@archive/zip/zip-entry-metadata";
+import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
+import { normalizeZipPath, type ZipPathOptions } from "@archive/zip/zip-path";
 import { decodeUtf8, encodeUtf8 } from "@archive/utils/text";
 import { isProbablyIncompressibleChunks } from "@archive/utils/compressibility";
 import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
@@ -72,6 +74,8 @@ interface ZipEntryInfo {
   dosDate: number;
   offset: number;
   zip64: boolean;
+  externalAttributes: number;
+  versionMadeBy?: number;
 }
 
 type CentralDirectoryEntryInfo = ZipEntryInfo;
@@ -148,11 +152,17 @@ export class ZipDeflateFile {
   private _compressionMethod: number;
   private readonly _modTime: Date;
 
+  private _externalAttributes: number;
+  private _versionMadeBy?: number;
+
   constructor(
     name: string,
     options?: {
       level?: number;
       modTime?: Date;
+      atime?: Date;
+      ctime?: Date;
+      birthTime?: Date;
       timestamps?: ZipTimestampMode;
       comment?: string;
       smartStore?: boolean;
@@ -161,9 +171,22 @@ export class ZipDeflateFile {
       encryptionMethod?: ZipEncryptionMethod;
       /** Password for encryption */
       password?: string | Uint8Array;
+
+      /** Optional Unix mode/permissions (may include type bits). */
+      mode?: number;
+      /** Optional MS-DOS attributes (low 8 bits). */
+      msDosAttributes?: number;
+      /** Advanced override for external attributes. */
+      externalAttributes?: number;
+      /** Advanced override for central directory versionMadeBy. */
+      versionMadeBy?: number;
+
+      /** Optional entry name normalization. */
+      path?: false | ZipPathOptions;
     }
   ) {
-    this.name = name;
+    const resolvedName = options?.path ? normalizeZipPath(name, options.path) : name;
+    this.name = resolvedName;
     const modTime = options?.modTime ?? new Date();
     this._modTime = modTime;
     this.level = options?.level ?? DEFAULT_ZIP_LEVEL;
@@ -186,9 +209,12 @@ export class ZipDeflateFile {
     // Smart-store sampling does not allocate a contiguous buffer.
 
     const metadata = buildZipEntryMetadata({
-      name,
+      name: resolvedName,
       comment: options?.comment ?? "",
       modTime,
+      atime: options?.atime,
+      ctime: options?.ctime,
+      birthTime: options?.birthTime,
       timestamps: options?.timestamps ?? DEFAULT_ZIP_TIMESTAMPS,
       useDataDescriptor: true,
       deflate: false
@@ -201,6 +227,18 @@ export class ZipDeflateFile {
     this.extraField = metadata.extraField;
     this._flags = metadata.flags;
     this._compressionMethod = metadata.compressionMethod;
+
+    // External attributes + versionMadeBy
+    const attrs = resolveZipExternalAttributesAndVersionMadeBy({
+      name: resolvedName,
+      mode: options?.mode,
+      msDosAttributes: options?.msDosAttributes,
+      externalAttributes: options?.externalAttributes,
+      versionMadeBy: options?.versionMadeBy
+    });
+
+    this._externalAttributes = attrs.externalAttributes;
+    this._versionMadeBy = attrs.versionMadeBy;
 
     // Set encryption flag
     if (this._encryptionMethod !== "none") {
@@ -780,7 +818,9 @@ export class ZipDeflateFile {
       dosTime: this.dosTime,
       dosDate: this.dosDate,
       offset: -1,
-      zip64: this._zip64
+      zip64: this._zip64,
+      externalAttributes: this._externalAttributes,
+      versionMadeBy: this._versionMadeBy
     };
 
     this._enqueueData(descriptor, true);
@@ -818,7 +858,9 @@ export class ZipDeflateFile {
       lastModified: this._modTime,
       localHeaderOffset: this._centralDirEntryInfo.offset,
       comment: decodeUtf8(this._centralDirEntryInfo.comment),
-      externalAttributes: 0,
+      externalAttributes: this._centralDirEntryInfo.externalAttributes,
+      versionMadeBy: this._centralDirEntryInfo.versionMadeBy,
+      extraField: this._centralDirEntryInfo.extraField,
       isEncrypted: this._encryptionMethod !== "none",
       encryptionMethod: this._aesKeyStrength
         ? "aes"
@@ -1006,8 +1048,9 @@ export class StreamingZip {
         compressedSize: needsZip64Entry ? UINT32_MAX : entry.compressedSize,
         uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
         localHeaderOffset: needsZip64Entry ? UINT32_MAX : entry.offset,
-        versionMadeBy: VERSION_MADE_BY,
-        versionNeeded: needsZip64Entry ? VERSION_ZIP64 : VERSION_NEEDED
+        versionMadeBy: entry.versionMadeBy ?? VERSION_MADE_BY,
+        versionNeeded: needsZip64Entry ? VERSION_ZIP64 : VERSION_NEEDED,
+        externalAttributes: entry.externalAttributes
       });
 
       centralDirSize += header.length;

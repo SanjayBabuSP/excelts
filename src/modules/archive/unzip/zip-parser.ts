@@ -230,7 +230,7 @@ function parseZipArchive(data: Uint8Array, options: ZipParseOptions = {}): ZipAr
     // 46+n    m     Extra field
     // 46+n+m  k     File comment
 
-    centralReader.skip(2); // version made by
+    const versionMadeBy = centralReader.readUint16();
     centralReader.skip(2); // version needed
     const flags = centralReader.readUint16();
     const compressionMethod = centralReader.readUint16();
@@ -254,14 +254,15 @@ function parseZipArchive(data: Uint8Array, options: ZipParseOptions = {}): ZipAr
     const fileName = fileNameLength > 0 ? centralReader.readString(fileNameLength, useUtf8) : "";
 
     let extraFields = {} as ReturnType<typeof parseZipExtraFields>;
+    let rawExtraField: Uint8Array = new Uint8Array(0);
     if (extraFieldLength > 0) {
-      const extraField = centralReader.readBytes(extraFieldLength);
+      rawExtraField = centralReader.readBytes(extraFieldLength);
       const vars = {
         compressedSize,
         uncompressedSize,
         offsetToLocalFileHeader: localHeaderOffset
       };
-      extraFields = parseZipExtraFields(extraField, vars);
+      extraFields = parseZipExtraFields(rawExtraField, vars);
 
       compressedSize = vars.compressedSize;
       uncompressedSize = vars.uncompressedSize;
@@ -313,6 +314,8 @@ function parseZipArchive(data: Uint8Array, options: ZipParseOptions = {}): ZipAr
       localHeaderOffset64: extraFields.offsetToLocalFileHeader64,
       comment,
       externalAttributes,
+      versionMadeBy,
+      extraField: rawExtraField,
       isEncrypted,
       encryptionMethod,
       aesVersion,
