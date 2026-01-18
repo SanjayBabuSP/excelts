@@ -95,3 +95,19 @@ export {
   type WriteZipOptions,
   type ZipEntryInfo
 } from "@archive/fs";
+
+// TAR + Gzip support (Node.js only - requires zlib)
+export {
+  TarGzArchive,
+  targz,
+  parseTarGz,
+  parseTarGzStream,
+  untargz,
+  gzipTar,
+  gunzip,
+  gzip,
+  gzipSync,
+  gunzipSync,
+  type TarGzOptions,
+  type ParseTarGzOptions
+} from "@archive/tar/tar-gzip";

@@ -36,6 +36,25 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "ZipReader",
   "UnzipEntry",
 
+  // TAR archive support (basic - no gzip)
+  "TAR_BLOCK_SIZE",
+  "TAR_TYPE",
+  "TarArchive",
+  "TarReader",
+  "TarReaderEntry",
+  "createTarArchive",
+  "createTarReader",
+  "tar",
+  "tarSync",
+  "parseTar",
+  "parseTarStream",
+  "untar",
+  "isTarFile",
+  "isTarDirectory",
+  "isTarSymlink",
+  "isTarHardLink",
+  "isTarDataEntry",
+
   // Random access / HTTP Range reading
   "HttpRangeReader",
   "BufferReader",
@@ -113,7 +132,19 @@ export const ARCHIVE_NODE_EXPORTS = [
   "createReadStream",
   "createWriteStream",
   "createTempDir",
-  "createTempDirSync"
+  "createTempDirSync",
+
+  // TAR + Gzip support (Node.js only - requires zlib)
+  "TarGzArchive",
+  "targz",
+  "parseTarGz",
+  "parseTarGzStream",
+  "untargz",
+  "gzipTar",
+  "gunzip",
+  "gzip",
+  "gzipSync",
+  "gunzipSync"
 ] as const;
 
 /**

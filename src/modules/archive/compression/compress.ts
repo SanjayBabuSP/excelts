@@ -23,8 +23,14 @@ export function hasWorkerSupport(): boolean {
   return false;
 }
 
-function uint8ArrayToBufferView(data: Uint8Array): Buffer {
+/** Convert Uint8Array to Node.js Buffer (zero-copy view) */
+export function uint8ArrayToBuffer(data: Uint8Array): Buffer {
   return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+}
+
+/** Convert Node.js Buffer to Uint8Array (zero-copy view) */
+export function bufferToUint8Array(buffer: Buffer): Uint8Array {
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
 const deflateRawAsync = promisify(zlib.deflateRaw) as (
@@ -63,12 +69,10 @@ export async function compress(
 
   // Small-input fast path: avoid threadpool overhead.
   if (data.byteLength <= thresholdBytes) {
-    const result = zlib.deflateRawSync(uint8ArrayToBufferView(data), { level });
-    return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+    return bufferToUint8Array(zlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
   }
 
-  const result = await deflateRawAsync(uint8ArrayToBufferView(data), { level });
-  return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+  return bufferToUint8Array(await deflateRawAsync(uint8ArrayToBuffer(data), { level }));
 }
 
 /**
@@ -85,8 +89,7 @@ export function compressSync(data: Uint8Array, options: CompressOptions = {}): U
     return data;
   }
 
-  const result = zlib.deflateRawSync(uint8ArrayToBufferView(data), { level });
-  return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+  return bufferToUint8Array(zlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
 }
 
 /**
@@ -103,12 +106,10 @@ export async function decompress(
 
   // Small-input fast path: avoid threadpool overhead.
   if (data.byteLength <= thresholdBytes) {
-    const result = zlib.inflateRawSync(uint8ArrayToBufferView(data));
-    return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+    return bufferToUint8Array(zlib.inflateRawSync(uint8ArrayToBuffer(data)));
   }
 
-  const result = await inflateRawAsync(uint8ArrayToBufferView(data));
-  return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+  return bufferToUint8Array(await inflateRawAsync(uint8ArrayToBuffer(data)));
 }
 
 /**
@@ -118,6 +119,5 @@ export async function decompress(
  * @returns Decompressed data
  */
 export function decompressSync(data: Uint8Array): Uint8Array {
-  const result = zlib.inflateRawSync(uint8ArrayToBufferView(data));
-  return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+  return bufferToUint8Array(zlib.inflateRawSync(uint8ArrayToBuffer(data)));
 }

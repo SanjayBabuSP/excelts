@@ -20,10 +20,20 @@ import { ProgressEmitter } from "@archive/utils/progress";
 import type { Zip64Mode } from "./zip64-mode";
 import type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
 import type { ZipPathOptions } from "./zip-path";
+import { TarArchive } from "@archive/tar/tar-archive";
 
 const REPRODUCIBLE_ZIP_MOD_TIME = new Date(1980, 0, 1, 0, 0, 0);
 
+/** Archive format type */
+export type ArchiveFormat = "zip" | "tar";
+
 export interface ZipOptions {
+  /**
+   * Archive format: "zip" (default) or "tar"
+   * When "tar", returns a TarArchive with compatible interface
+   */
+  format?: ArchiveFormat;
+
   level?: number;
   timestamps?: ZipTimestampMode;
   comment?: string;
@@ -423,6 +433,45 @@ export class ZipArchive {
   }
 }
 
-export function zip(options?: ZipOptions): ZipArchive {
+/** ZIP options with format: "tar" */
+export interface ZipOptionsTar extends ZipOptions {
+  format: "tar";
+}
+
+/** ZIP options with format: "zip" (or default) */
+export interface ZipOptionsZip extends ZipOptions {
+  format?: "zip";
+}
+
+/**
+ * Create a new archive
+ *
+ * @param options - Archive options including format
+ * @returns ZipArchive or TarArchive depending on format option
+ *
+ * @example
+ * ```ts
+ * // Create ZIP archive (default)
+ * const zipArchive = zip();
+ * zipArchive.add("file.txt", "content");
+ * const zipBytes = await zipArchive.bytes();
+ *
+ * // Create TAR archive
+ * const tarArchive = zip({ format: "tar" });
+ * tarArchive.add("file.txt", "content");
+ * const tarBytes = await tarArchive.bytes();
+ * ```
+ */
+export function zip(options: ZipOptionsTar): TarArchive;
+export function zip(options?: ZipOptionsZip): ZipArchive;
+export function zip(options?: ZipOptions): ZipArchive | TarArchive {
+  if (options?.format === "tar") {
+    return new TarArchive({
+      modTime: options.modTime,
+      signal: options.signal,
+      onProgress: options.onProgress as any,
+      progressIntervalMs: options.progressIntervalMs
+    });
+  }
   return new ZipArchive(options);
 }

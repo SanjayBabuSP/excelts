@@ -34,11 +34,58 @@ export {
 export { ArchiveAbortError, createAbortError, isAbortError } from "@archive/utils/abort";
 
 // High-level APIs
-export { zip, ZipArchive, type ZipOptions, type ZipEntryOptions } from "@archive/zip";
+export {
+  zip,
+  ZipArchive,
+  type ZipOptions,
+  type ZipEntryOptions,
+  type ArchiveFormat
+} from "@archive/zip";
 export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip";
 
 export type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip";
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive/unzip";
+
+// TAR archive support (unified API compatible with ZIP)
+// Note: Gzip support exported separately in index.ts (Node.js only)
+export {
+  TAR_BLOCK_SIZE,
+  TAR_TYPE,
+  // Unified API classes (same interface as ZipArchive/ZipReader)
+  TarArchive,
+  TarReader,
+  TarReaderEntry,
+  createTarArchive,
+  createTarReader,
+  // Convenience functions
+  tar,
+  tarSync,
+  // Low-level parser functions
+  parseTar,
+  parseTarStream,
+  untar,
+  // Type helpers
+  isTarFile,
+  isTarDirectory,
+  isTarSymlink,
+  isTarHardLink,
+  isTarDataEntry,
+  // Types
+  type TarType,
+  type TarEntryInfo,
+  type TarEntry,
+  type TarHeaderOptions,
+  type TarParseOptions,
+  type TarArchiveOptions,
+  type TarArchiveEntryOptions,
+  type TarArchiveProgress,
+  type TarArchiveStreamOptions,
+  type TarArchiveOperation,
+  type TarReaderOptions,
+  type TarReaderProgress,
+  type TarReaderStreamOptions,
+  type TarReaderOperation
+} from "@archive/tar/index.browser";
 
 // Encryption
 export {

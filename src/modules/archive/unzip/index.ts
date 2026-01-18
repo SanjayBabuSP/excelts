@@ -19,6 +19,7 @@ import {
 import { ProgressEmitter } from "@archive/utils/progress";
 import { suppressUnhandledRejection } from "@archive/utils/promise";
 import type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progress";
+import { TarReader } from "@archive/tar/tar-archive";
 
 const textDecoderCache = new Map<string, TextDecoder>();
 
@@ -202,6 +203,12 @@ function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
 }
 
 export interface UnzipOptions {
+  /**
+   * Archive format: "zip" (default) or "tar"
+   * When "tar", returns a TarReader with compatible interface
+   */
+  format?: "zip" | "tar";
+
   decodeStrings?: boolean;
   parse?: ParseOptions;
 
@@ -573,6 +580,47 @@ export class ZipReader {
   }
 }
 
-export function unzip(source: ArchiveSource, options?: UnzipOptions): ZipReader {
+/** Unzip options with format: "tar" */
+export interface UnzipOptionsTar extends UnzipOptions {
+  format: "tar";
+}
+
+/** Unzip options with format: "zip" (or default) */
+export interface UnzipOptionsZip extends UnzipOptions {
+  format?: "zip";
+}
+
+/**
+ * Open an archive for reading
+ *
+ * @param source - Archive data source
+ * @param options - Options including format
+ * @returns ZipReader or TarReader depending on format option
+ *
+ * @example
+ * ```ts
+ * // Read ZIP archive (default)
+ * const zipReader = unzip(zipBytes);
+ * for await (const entry of zipReader.entries()) {
+ *   console.log(entry.path);
+ * }
+ *
+ * // Read TAR archive
+ * const tarReader = unzip(tarBytes, { format: "tar" });
+ * for await (const entry of tarReader.entries()) {
+ *   console.log(entry.path);
+ * }
+ * ```
+ */
+export function unzip(source: ArchiveSource, options: UnzipOptionsTar): TarReader;
+export function unzip(source: ArchiveSource, options?: UnzipOptionsZip): ZipReader;
+export function unzip(source: ArchiveSource, options?: UnzipOptions): ZipReader | TarReader {
+  if (options?.format === "tar") {
+    return new TarReader(source, {
+      signal: options.signal,
+      onProgress: options.onProgress as any,
+      progressIntervalMs: options.progressIntervalMs
+    });
+  }
   return new ZipReader(source, options);
 }

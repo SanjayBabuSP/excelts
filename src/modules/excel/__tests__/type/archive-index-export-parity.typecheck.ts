@@ -45,8 +45,8 @@ type ClassKeys<T> = {
 
 type NonClassKeys<T> = Exclude<keyof T, ClassKeys<T>>;
 
-// Node-only exports (file system convenience layer)
-type NodeOnlyClassExports = "ZipFile";
+// Node-only exports (file system convenience layer + gzip support)
+type NodeOnlyClassExports = "ZipFile" | "TarGzArchive";
 type NodeOnlyNonClassExports =
   | "traverseDirectory"
   | "traverseDirectorySync"
@@ -78,7 +78,17 @@ type NodeOnlyNonClassExports =
   | "createReadStream"
   | "createWriteStream"
   | "createTempDir"
-  | "createTempDirSync";
+  | "createTempDirSync"
+  // TAR + Gzip support (Node.js only - requires zlib)
+  | "targz"
+  | "parseTarGz"
+  | "parseTarGzStream"
+  | "untargz"
+  | "gzipTar"
+  | "gunzip"
+  | "gzip"
+  | "gzipSync"
+  | "gunzipSync";
 
 // Exclude Node-only exports from parity checks
 type SharedClassKeys<T> = Exclude<ClassKeys<T>, NodeOnlyClassExports>;
