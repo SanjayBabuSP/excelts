@@ -516,6 +516,11 @@ export async function aesCheckPasswordOnly(
 }
 
 /**
+ * Alias for aesCheckPasswordOnly for API consistency with zipCryptoVerifyPassword.
+ */
+export { aesCheckPasswordOnly as aesVerifyPassword };
+
+/**
  * Verify the HMAC signature of AES-encrypted data without decryption.
  * This is useful for integrity verification without decompressing data.
  *

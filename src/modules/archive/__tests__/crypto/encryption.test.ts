@@ -601,15 +601,31 @@ describe("ZipCrypto Password Check", () => {
     expect(result).toBe(true);
   });
 
-  it("should return false for incorrect password", () => {
+  it("should return false for incorrect password in most cases", () => {
+    // Note: ZipCrypto password verification only checks 1 byte,
+    // so there's a 1/256 chance of false positive. We use a specific
+    // password combination that is known to fail verification.
     const password = "correct-password";
-    const wrongPassword = "wrong-password";
-    const plaintext = new TextEncoder().encode("Test data");
+    const wrongPassword = "different-password-xyz";
+    const plaintext = new TextEncoder().encode("Test data for verification");
     const crcValue = crc32(plaintext);
 
-    const encrypted = zipCryptoEncrypt(plaintext, password, crcValue, getRandomBytes);
+    // Use deterministic random bytes for reproducible test
+    let seed = 12345;
+    const deterministicRandom = (length: number): Uint8Array => {
+      const result = new Uint8Array(length);
+      for (let i = 0; i < length; i++) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        result[i] = seed & 0xff;
+      }
+      return result;
+    };
+
+    const encrypted = zipCryptoEncrypt(plaintext, password, crcValue, deterministicRandom);
     const result = zipCryptoCheckPassword(encrypted, wrongPassword, crcValue);
 
+    // With deterministic random and these specific passwords, this should be false
+    // If this test becomes flaky, adjust the passwords or seed
     expect(result).toBe(false);
   });
 

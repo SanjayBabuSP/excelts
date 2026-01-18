@@ -21,6 +21,8 @@ export {
   zipCryptoEncrypt,
   zipCryptoCreateHeader,
   zipCryptoEncryptByte,
+  zipCryptoDecryptByte,
+  zipCryptoCheckPassword as zipCryptoVerifyPassword,
   type ZipCryptoState
 } from "./zip-crypto";
 
@@ -39,6 +41,7 @@ export {
   aesDecrypt,
   aesEncrypt,
   aesEncryptedSize,
+  aesVerifyPassword,
   buildAesExtraField,
   randomBytes,
   type AesKeyStrength,

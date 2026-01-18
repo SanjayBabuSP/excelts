@@ -10,6 +10,26 @@
 export type { ArchiveSource } from "@archive/io/archive-source";
 export type { ArchiveSink } from "@archive/io/archive-sink";
 
+// Random Access / HTTP Range reading
+export {
+  HttpRangeReader,
+  BufferReader,
+  RangeNotSupportedError,
+  HttpRangeError,
+  type RandomAccessReader,
+  type HttpRangeReaderOptions,
+  type HttpRangeReaderStats
+} from "@archive/io/random-access";
+
+export {
+  RemoteZipReader,
+  Crc32MismatchError,
+  type RemoteZipReaderOptions,
+  type RemoteZipOpenOptions,
+  type RemoteZipStats,
+  type ExtractOptions
+} from "@archive/io/remote-zip-reader";
+
 // Abort
 export { ArchiveAbortError, createAbortError, isAbortError } from "@archive/utils/abort";
 

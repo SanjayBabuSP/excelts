@@ -26,6 +26,14 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "ZipReader",
   "UnzipEntry",
 
+  // Random access / HTTP Range reading
+  "HttpRangeReader",
+  "BufferReader",
+  "RangeNotSupportedError",
+  "HttpRangeError",
+  "RemoteZipReader",
+  "Crc32MismatchError",
+
   // Abort
   "ArchiveAbortError",
   "createAbortError",
