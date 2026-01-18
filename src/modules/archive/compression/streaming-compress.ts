@@ -79,8 +79,12 @@ export function createDeflateStream(options: StreamCompressOptions = {}): Deflat
 
 /**
  * Create a true streaming INFLATE decompressor
+ *
+ * @param options - Decompression options (useWorker is ignored in Node.js)
  */
-export function createInflateStream(): InflateStream {
+export function createInflateStream(options: StreamCompressOptions = {}): InflateStream {
+  // Note: options.useWorker is ignored in Node.js (zlib uses native thread pool)
+  void options;
   return createInflateRaw();
 }
 

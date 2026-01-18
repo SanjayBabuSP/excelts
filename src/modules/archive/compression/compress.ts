@@ -15,6 +15,14 @@ export { type CompressOptions, hasCompressionStream } from "@archive/compression
 
 import type { CompressOptions } from "@archive/compression/compress.base";
 
+/**
+ * Check if Web Workers are available.
+ * Always returns false in Node.js (zlib uses native thread pool).
+ */
+export function hasWorkerSupport(): boolean {
+  return false;
+}
+
 function uint8ArrayToBufferView(data: Uint8Array): Buffer {
   return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
 }

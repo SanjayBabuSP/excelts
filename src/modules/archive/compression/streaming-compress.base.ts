@@ -7,6 +7,35 @@
 
 export interface StreamCompressOptions {
   level?: number;
+
+  /**
+   * Use Web Workers for streaming compression/decompression (browser only).
+   * This offloads the work to a background thread, keeping the main thread responsive.
+   *
+   * Note: Worker-based streaming buffers chunks and processes them at end()
+   * for better throughput, trading memory for main thread responsiveness.
+   *
+   * Note: This option is ignored in Node.js.
+   *
+   * Defaults to false for backward compatibility.
+   */
+  useWorker?: boolean;
+
+  /**
+   * Custom worker pool instance (browser only).
+   * If not provided, uses a shared pool.
+   *
+   * Note: This option is ignored in Node.js.
+   */
+  workerPool?: unknown;
+
+  /**
+   * Allow transferring the input buffer to the worker (browser only).
+   * When true, chunks written to the stream may have their underlying buffer transferred.
+   *
+   * Note: This option is ignored in Node.js.
+   */
+  allowTransfer?: boolean;
 }
 
 export type StreamCallback = (err?: Error | null) => void;

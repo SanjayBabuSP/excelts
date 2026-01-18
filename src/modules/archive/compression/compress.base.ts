@@ -28,12 +28,46 @@ export interface CompressOptions {
   level?: number;
 
   /**
-   * Threshold (in bytes) to choose the lower-overhead path.
+   * Threshold (in bytes) to choose sync vs async path (Node.js only).
+   * - Node.js: inputs <= threshold use sync zlib (avoid threadpool overhead)
    *
-   * - Node.js: inputs <= threshold use sync zlib fast-path (avoid threadpool overhead)
-   * - Browser: inputs <= threshold use the pure-JS fallback (avoid stream scheduling overhead)
+   * This option is ignored in browsers.
+   * Default: 8MB.
    */
   thresholdBytes?: number;
+
+  /**
+   * Use Web Workers for compression/decompression (browser only).
+   * - true: Always use worker
+   * - false: Never use worker
+   * - undefined: Auto-detect based on data size (use worker when >= autoWorkerThreshold)
+   *
+   * Note: This option is ignored in Node.js (which uses native zlib thread pool).
+   */
+  useWorker?: boolean;
+
+  /**
+   * Threshold (in bytes) for auto-worker decision (browser only).
+   * When useWorker is undefined, data >= this threshold will use workers.
+   *
+   * Default: 1MB.
+   */
+  autoWorkerThreshold?: number;
+
+  /**
+   * Allow transferring the input buffer to the worker (browser only).
+   * When true, the input buffer will be transferred (zero-copy) and become unusable.
+   *
+   * Use this for better performance when you don't need the input data after compression.
+   */
+  allowTransfer?: boolean;
+
+  /**
+   * Abort signal for cancellation when using worker pool (browser only).
+   *
+   * Note: This option is ignored in Node.js.
+   */
+  signal?: AbortSignal;
 }
 
 /**

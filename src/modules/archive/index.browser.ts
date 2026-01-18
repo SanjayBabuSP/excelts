@@ -17,6 +17,7 @@ export {
   decompress,
   decompressSync,
   hasCompressionStream,
+  hasWorkerSupport,
   type CompressOptions
 } from "@archive/compression/compress.browser";
 
@@ -27,3 +28,19 @@ export {
   hasDeflateRaw,
   type StreamCompressOptions
 } from "@archive/compression/streaming-compress.browser";
+
+// Worker Pool
+export {
+  WorkerPool,
+  getDefaultWorkerPool,
+  terminateDefaultWorkerPool,
+  deflateWithPool,
+  inflateWithPool,
+  deflateBatchWithPool,
+  inflateBatchWithPool,
+  type WorkerPoolOptions,
+  type WorkerPoolStats,
+  type TaskOptions,
+  type TaskResult,
+  type WorkerTaskType
+} from "@archive/compression/worker-pool/index.browser";

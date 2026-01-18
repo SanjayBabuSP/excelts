@@ -13,11 +13,21 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "decompress",
   "decompressSync",
   "hasCompressionStream",
+  "hasWorkerSupport",
 
   // Streaming compression
   "createDeflateStream",
   "createInflateStream",
   "hasDeflateRaw",
+
+  // Worker Pool (browser-only functionality, stub in Node)
+  "WorkerPool",
+  "getDefaultWorkerPool",
+  "terminateDefaultWorkerPool",
+  "deflateWithPool",
+  "inflateWithPool",
+  "deflateBatchWithPool",
+  "inflateBatchWithPool",
 
   // High-level archive API
   "zip",

@@ -17,6 +17,7 @@ export {
   decompress,
   decompressSync,
   hasCompressionStream,
+  hasWorkerSupport,
   type CompressOptions
 } from "@archive/compression/compress";
 
@@ -27,6 +28,22 @@ export {
   hasDeflateRaw,
   type StreamCompressOptions
 } from "@archive/compression/streaming-compress";
+
+// Worker Pool (stub exports for API parity - only functional in browser)
+export {
+  WorkerPool,
+  getDefaultWorkerPool,
+  terminateDefaultWorkerPool,
+  deflateWithPool,
+  inflateWithPool,
+  deflateBatchWithPool,
+  inflateBatchWithPool,
+  type WorkerPoolOptions,
+  type WorkerPoolStats,
+  type TaskOptions,
+  type TaskResult,
+  type WorkerTaskType
+} from "@archive/compression/worker-pool";
 
 // Node.js file system convenience layer
 export {
