@@ -19,40 +19,34 @@ import {
   isAesEncryption,
   getAesKeyStrength
 } from "@archive/crypto";
-import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
-import { isProbablyIncompressible } from "@archive/utils/compressibility";
-import { encodeUtf8 } from "@archive/utils/text";
-import { type ZipTimestampMode } from "@archive/utils/timestamps";
+import {
+  DEFAULT_ZIP_LEVEL,
+  DEFAULT_ZIP_TIMESTAMPS,
+  REPRODUCIBLE_ZIP_MOD_TIME
+} from "@archive/shared/defaults";
+import { isProbablyIncompressible } from "@archive/zip/compressibility";
+import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import { type ZipTimestampMode } from "@archive/zip-spec/timestamps";
 import {
   buildZipEntryMetadata,
   resolveZipCompressionMethod
 } from "@archive/zip/zip-entry-metadata";
 import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
-import { normalizeZipPath, type ZipPathOptions } from "@archive/zip/zip-path";
+import { normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import {
   FLAG_UTF8,
   FLAG_ENCRYPTED,
   COMPRESSION_AES,
-  UINT16_MAX,
   UINT32_MAX,
-  ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE,
-  ZIP_END_OF_CENTRAL_DIR_FIXED_SIZE,
   ZIP_LOCAL_FILE_HEADER_FIXED_SIZE,
-  ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE,
-  ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE,
-  buildZip64EndOfCentralDirectory,
-  buildZip64EndOfCentralDirectoryLocator,
   buildZip64ExtraField,
   concatExtraFields,
   VERSION_ZIP64,
-  writeCentralDirectoryHeaderInto,
-  writeEndOfCentralDirectoryInto,
   writeLocalFileHeaderInto
 } from "@archive/zip-spec/zip-records";
-import type { Zip64Mode } from "./zip64-mode";
-
-const REPRODUCIBLE_ZIP_MOD_TIME = new Date(1980, 0, 1, 0, 0, 0);
-const EMPTY = new Uint8Array(0);
+import type { Zip64Mode } from "@archive/zip-spec/zip-records";
+import { buildCentralDirectoryAndEocd, type ZipCentralDirectoryEntryInput } from "./writer-core";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 interface ProcessedEntry {
   name: Uint8Array;
@@ -117,6 +111,12 @@ export interface ZipEntry {
   externalAttributes?: number;
 }
 
+// Re-export ZipRawEntry from shared module
+export type { ZipRawEntry } from "./raw-entry";
+import { type ZipRawEntry, isZipRawEntry } from "./raw-entry";
+
+export type ZipBuildEntry = ZipEntry | ZipRawEntry;
+
 interface ZipBuildSettings {
   level: number;
   timestamps: ZipTimestampMode;
@@ -180,7 +180,7 @@ function parseZipBuildOptions(options: ZipOptions): {
 
 function encodeZipComment(comment?: string): Uint8Array {
   // Keep empty comment as empty bytes (no encoding surprises).
-  return comment ? encodeUtf8(comment) : EMPTY;
+  return comment ? encodeUtf8(comment) : EMPTY_UINT8ARRAY;
 }
 
 function shouldDeflate(level: number, data: Uint8Array): boolean {
@@ -299,6 +299,47 @@ function buildProcessedEntry(
     modTime: metadata.dosTime,
     modDate: metadata.dosDate,
     extraField: finalExtraField,
+    comment: metadata.commentBytes,
+    offset: 0,
+    flags,
+    externalAttributes: attrs.externalAttributes,
+    versionMadeBy: attrs.versionMadeBy
+  };
+}
+
+function buildProcessedRawEntry(
+  entry: ZipRawEntry,
+  settings: ZipBuildSettings,
+  path: ZipPathOptionValue
+): ProcessedEntry {
+  const resolvedName = path ? normalizeZipPath(entry.name, path) : entry.name;
+  const modDate = entry.modTime ?? settings.defaultModTime;
+  const metadata = buildZipEntryMetadata({
+    name: resolvedName,
+    comment: entry.comment,
+    modTime: modDate,
+    timestamps: settings.timestamps,
+    useDataDescriptor: false,
+    deflate: false
+  });
+
+  const flags = (entry.flags ?? FLAG_UTF8) | FLAG_UTF8;
+
+  const attrs = resolveZipExternalAttributesAndVersionMadeBy({
+    name: resolvedName,
+    externalAttributes: entry.externalAttributes,
+    versionMadeBy: entry.versionMadeBy
+  });
+
+  return {
+    name: metadata.nameBytes,
+    uncompressedSize: entry.uncompressedSize,
+    compressedData: entry.compressedData,
+    crc: entry.crc32 >>> 0,
+    compressionMethod: entry.compressionMethod,
+    modTime: metadata.dosTime,
+    modDate: metadata.dosDate,
+    extraField: entry.extraField ?? metadata.extraField,
     comment: metadata.commentBytes,
     offset: 0,
     flags,
@@ -452,11 +493,9 @@ function finalizeZip(
   zip64Mode: Zip64Mode = "auto"
 ): Uint8Array {
   const forceZip64 = zip64Mode === true;
-  const forbidZip64 = zip64Mode === false;
 
   // Precompute offsets and effective extra fields (local vs central can differ for ZIP64).
   const localExtraFields: Uint8Array[] = new Array(processedEntries.length);
-  const centralExtraFields: Uint8Array[] = new Array(processedEntries.length);
   const zip64EntryNeeded: boolean[] = new Array(processedEntries.length);
   const compressedSizes: number[] = new Array(processedEntries.length);
 
@@ -479,20 +518,10 @@ function finalizeZip(
           uncompressedSize: entry.uncompressedSize,
           compressedSize
         })
-      : EMPTY;
-    const zip64CentralExtra = needsZip64Entry
-      ? buildZip64ExtraField({
-          uncompressedSize: entry.uncompressedSize,
-          compressedSize,
-          localHeaderOffset: entry.offset
-        })
-      : EMPTY;
+      : EMPTY_UINT8ARRAY;
 
     localExtraFields[i] = needsZip64Entry
       ? concatExtraFields(entry.extraField, zip64LocalExtra)
-      : entry.extraField;
-    centralExtraFields[i] = needsZip64Entry
-      ? concatExtraFields(entry.extraField, zip64CentralExtra)
       : entry.extraField;
 
     const localHeaderSize =
@@ -502,35 +531,34 @@ function finalizeZip(
 
   const centralDirOffset = localSectionSize;
 
-  let centralDirSize = 0;
-  for (let i = 0; i < processedEntries.length; i++) {
-    const entry = processedEntries[i]!;
-    const size =
-      ZIP_CENTRAL_DIR_HEADER_FIXED_SIZE +
-      entry.name.length +
-      centralExtraFields[i]!.length +
-      entry.comment.length;
-    centralDirSize += size;
-  }
-  const needsZip64FromArchive =
-    processedEntries.length > UINT16_MAX ||
-    centralDirOffset > UINT32_MAX ||
-    centralDirSize > UINT32_MAX;
-  const needsZip64 = forceZip64 || needsZip64FromArchive;
-  if (forbidZip64 && needsZip64) {
-    throw new Error("ZIP64 is required but zip64=false");
-  }
+  const cdEntries: ZipCentralDirectoryEntryInput[] = processedEntries.map((entry, i) => {
+    const compressedSize = compressedSizes[i]!;
+    return {
+      fileName: entry.name,
+      extraField: entry.extraField,
+      comment: entry.comment,
+      flags: entry.flags,
+      crc32: entry.crc,
+      compressedSize,
+      uncompressedSize: entry.uncompressedSize,
+      compressionMethod: entry.compressionMethod,
+      dosTime: entry.modTime,
+      dosDate: entry.modDate,
+      localHeaderOffset: entry.offset,
+      zip64: zip64EntryNeeded[i]!,
+      externalAttributes: entry.externalAttributes,
+      versionMadeBy: entry.versionMadeBy
+    };
+  });
 
-  const zip64TrailerSize = needsZip64
-    ? ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE + ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE
-    : 0;
+  const cdResult = buildCentralDirectoryAndEocd(cdEntries, {
+    zipComment,
+    zip64Mode,
+    centralDirOffset
+  });
 
-  const totalSize =
-    localSectionSize +
-    centralDirSize +
-    zip64TrailerSize +
-    ZIP_END_OF_CENTRAL_DIR_FIXED_SIZE +
-    zipComment.length;
+  const trailerSize = cdResult.trailerRecords.reduce((sum, part) => sum + part.length, 0);
+  const totalSize = localSectionSize + cdResult.centralDirSize + trailerSize;
   const out = new Uint8Array(totalSize);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
 
@@ -560,64 +588,15 @@ function finalizeZip(
   }
 
   // Central directory headers
-  for (let i = 0; i < processedEntries.length; i++) {
-    const entry = processedEntries[i]!;
-    const compressedSize = compressedSizes[i]!;
-    const needsZip64Entry = zip64EntryNeeded[i]!;
-
-    offset += writeCentralDirectoryHeaderInto(out, view, offset, {
-      fileName: entry.name,
-      extraField: centralExtraFields[i]!,
-      comment: entry.comment,
-      flags: entry.flags,
-      compressionMethod: entry.compressionMethod,
-      dosTime: entry.modTime,
-      dosDate: entry.modDate,
-      crc32: entry.crc,
-      compressedSize: needsZip64Entry ? UINT32_MAX : compressedSize,
-      uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
-      localHeaderOffset: needsZip64Entry ? UINT32_MAX : entry.offset,
-      versionNeeded: needsZip64Entry ? VERSION_ZIP64 : undefined,
-      externalAttributes: entry.externalAttributes,
-      versionMadeBy: entry.versionMadeBy
-    });
+  for (const header of cdResult.centralDirectoryHeaders) {
+    out.set(header, offset);
+    offset += header.length;
   }
 
-  if (needsZip64) {
-    const zip64EocdOffset = offset;
-    const zip64Eocd = buildZip64EndOfCentralDirectory({
-      entryCountOnDisk: processedEntries.length,
-      entryCountTotal: processedEntries.length,
-      centralDirSize,
-      centralDirOffset
-    });
-    out.set(zip64Eocd, offset);
-    offset += zip64Eocd.length;
-
-    const zip64Locator = buildZip64EndOfCentralDirectoryLocator({
-      zip64EndOfCentralDirectoryOffset: zip64EocdOffset,
-      totalDisks: 1
-    });
-    out.set(zip64Locator, offset);
-    offset += zip64Locator.length;
-
-    // End of central directory (classic) uses sentinel values.
-    writeEndOfCentralDirectoryInto(out, view, offset, {
-      entryCount: UINT16_MAX,
-      centralDirSize: UINT32_MAX,
-      centralDirOffset: UINT32_MAX,
-      comment: zipComment
-    });
-    return out;
+  for (const part of cdResult.trailerRecords) {
+    out.set(part, offset);
+    offset += part.length;
   }
-
-  // End of central directory
-  writeEndOfCentralDirectoryInto(out, view, offset, {
-    entryCount: processedEntries.length,
-    centralDirSize,
-    centralDirOffset,
-    comment: zipComment
-  });
 
   return out;
 }
@@ -626,7 +605,7 @@ function finalizeZip(
  * Create a ZIP file from entries (async)
  */
 export async function createZip(
-  entries: ZipEntry[],
+  entries: ZipBuildEntry[],
   options: ZipOptions = {}
 ): Promise<Uint8Array> {
   const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path } =
@@ -648,6 +627,12 @@ export async function createZip(
           return;
         }
         const entry = entries[idx]!;
+
+        if (isZipRawEntry(entry)) {
+          processedEntries[idx] = buildProcessedRawEntry(entry, settings, path);
+          continue;
+        }
+
         const entryLevel = entry.level ?? settings.level;
         const compressOptions: CompressOptions = {
           level: entryLevel,
@@ -702,7 +687,7 @@ export async function createZip(
  * This is supported in both Node.js and browser builds.
  * Note: AES encryption is not supported in sync mode.
  */
-export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Uint8Array {
+export function createZipSync(entries: ZipBuildEntry[], options: ZipOptions = {}): Uint8Array {
   const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path } =
     parseZipBuildOptions(options);
   validateEncryptionOptions(settings.encryptionMethod, settings.password, true);
@@ -710,6 +695,11 @@ export function createZipSync(entries: ZipEntry[], options: ZipOptions = {}): Ui
   const processedEntries: ProcessedEntry[] = [];
 
   for (const entry of entries) {
+    if (isZipRawEntry(entry)) {
+      processedEntries.push(buildProcessedRawEntry(entry, settings, path));
+      continue;
+    }
+
     const entryLevel = entry.level ?? settings.level;
     const compressOptions: CompressOptions = {
       level: entryLevel,

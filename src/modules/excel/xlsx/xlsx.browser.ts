@@ -85,7 +85,7 @@ import {
   worksheetRelsPath
 } from "@excel/utils/ooxml-paths";
 
-import type { ZipTimestampMode } from "@archive/utils/timestamps";
+import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 
 type StreamListener = Parameters<IEventEmitter["on"]>[1];
 

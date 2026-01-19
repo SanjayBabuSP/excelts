@@ -6,7 +6,9 @@ export type AsyncQueue<T> = {
 };
 
 export function createAsyncQueue<T>(options: { onCancel?: () => void } = {}): AsyncQueue<T> {
-  const values: Array<T | undefined> = [];
+  const CLEARED = Symbol("async-queue.cleared");
+  type ValueSlot = T | typeof CLEARED;
+  const values: ValueSlot[] = [];
   let valuesHead = 0;
 
   const waiters: Array<
@@ -76,18 +78,18 @@ export function createAsyncQueue<T>(options: { onCancel?: () => void } = {}): As
     return undefined;
   };
 
-  const shiftValue = (): T | undefined => {
+  const shiftValue = (): { found: true; value: T } | { found: false } => {
     while (valuesHead < values.length) {
       const v = values[valuesHead];
-      values[valuesHead] = undefined;
+      values[valuesHead] = CLEARED;
       valuesHead++;
-      if (v !== undefined) {
+      if (v !== CLEARED) {
         maybeCompact();
-        return v;
+        return { found: true, value: v as T };
       }
     }
     maybeCompact();
-    return undefined;
+    return { found: false };
   };
 
   const push = (value: T): void => {
@@ -137,9 +139,9 @@ export function createAsyncQueue<T>(options: { onCancel?: () => void } = {}): As
           if (error) {
             return Promise.reject(error);
           }
-          const value = shiftValue();
-          if (value !== undefined) {
-            return Promise.resolve({ value, done: false });
+          const r = shiftValue();
+          if (r.found) {
+            return Promise.resolve({ value: r.value, done: false });
           }
           if (done) {
             return Promise.resolve({ value: undefined as any, done: true });

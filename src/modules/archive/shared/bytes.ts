@@ -1,36 +1,22 @@
-export function sumUint8ArrayLengths(arrays: readonly Uint8Array[]): number {
-  let totalLength = 0;
-  for (let i = 0; i < arrays.length; i++) {
-    totalLength += arrays[i].length;
-  }
-  return totalLength;
-}
+/**
+ * Archive-specific binary utilities.
+ *
+ * For common utilities (concatUint8Arrays), import directly from @stream/shared.
+ */
 
-export function concatUint8Arrays(arrays: readonly Uint8Array[]): Uint8Array {
-  const len = arrays.length;
-  if (len === 0) {
-    return new Uint8Array(0);
-  }
-  if (len === 1) {
-    return arrays[0];
-  }
-
-  const totalLength = sumUint8ArrayLengths(arrays);
-  const result = new Uint8Array(totalLength);
-
-  let offset = 0;
-  for (let i = 0; i < len; i++) {
-    const arr = arrays[i];
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-
-  return result;
-}
+/**
+ * A reusable empty Uint8Array instance.
+ *
+ * Use this constant instead of creating `new Uint8Array(0)` to avoid
+ * allocating new objects for empty byte arrays.
+ */
+export const EMPTY_UINT8ARRAY = new Uint8Array(0);
 
 /**
  * Find the first index of `pattern` within `buffer`.
  * Returns -1 when not found.
+ *
+ * This is optimized for small patterns (1-4 bytes) common in ZIP parsing.
  */
 export function indexOfUint8ArrayPattern(
   buffer: Uint8Array,

@@ -1,6 +1,6 @@
-import { encodeUtf8 } from "@archive/utils/text";
+import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@stream/shared";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
-import { createAbortError } from "@archive/utils/abort";
+import { createAbortError } from "@archive/shared/errors";
 
 export type ArchiveSource =
   | Uint8Array
@@ -46,12 +46,12 @@ function normalizeChunk(value: unknown): Uint8Array | null {
       : null;
   }
 
-  // Best-effort: treat unknown chunk as Uint8Array-like.
-  if (typeof (value as any).length === "number" && (value as any).length) {
-    return value as any as Uint8Array;
-  }
-
-  return null;
+  // Strict mode: reject unknown chunk types.
+  // Treating arbitrary array-like values as bytes can silently corrupt data
+  // (e.g. number[] values get clamped to 0-255 when copied into Uint8Array).
+  throw new TypeError(
+    `Unsupported archive source chunk type: ${Object.prototype.toString.call(value)}`
+  );
 }
 
 export function toUint8ArraySync(source: Uint8Array | ArrayBuffer | string): Uint8Array {
@@ -78,6 +78,38 @@ export async function toUint8Array(
   }
   const buf = await source.arrayBuffer();
   return new Uint8Array(buf);
+}
+
+/**
+ * Resolve any ArchiveSource to a single Uint8Array buffer.
+ *
+ * This collects all chunks from streaming sources (AsyncIterable, ReadableStream)
+ * into a single buffer. For large sources, this may use significant memory.
+ *
+ * @param source - Any ArchiveSource type
+ * @param options - Options including abort signal
+ * @returns Complete buffer containing all source data
+ */
+export async function resolveArchiveSourceToBuffer(
+  source: ArchiveSource,
+  options: { signal?: AbortSignal } = {}
+): Promise<Uint8Array> {
+  // Fast path for in-memory sources
+  if (isInMemoryArchiveSource(source)) {
+    return toUint8Array(source as Uint8Array | ArrayBuffer | string | Blob);
+  }
+
+  // Streaming sources - collect all chunks
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+
+  for await (const chunk of toAsyncIterable(source, options)) {
+    chunks.push(chunk);
+    totalLength += chunk.length;
+  }
+
+  // Concatenate all chunks
+  return concatUint8Arrays(chunks, totalLength);
 }
 
 export async function* toAsyncIterable(

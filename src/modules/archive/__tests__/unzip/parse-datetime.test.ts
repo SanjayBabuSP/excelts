@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDosDateTimeUTC } from "@archive/utils/timestamps";
+import { parseDosDateTimeUTC } from "@archive/zip-spec/timestamps";
 
 describe("parse-datetime", () => {
   describe("parseDosDateTimeUTC", () => {

@@ -1,21 +1,21 @@
 import zlib from "zlib";
 import type { Duplex, PassThrough, Transform } from "@stream";
 import {
-  DATA_DESCRIPTOR_SIGNATURE_BYTES,
   PullStream,
   type PullStreamPublicApi,
   runParseLoop,
   streamUntilValidatedDataDescriptor,
-  type CrxHeader,
-  type EntryProps,
-  type EntryVars,
   type InflateFactory,
-  type ParseDriverState,
   type ParseEmitter,
   type ParseIO,
-  type ParseOptions,
   type ZipEntry
 } from "@archive/unzip/stream.base";
+import {
+  DATA_DESCRIPTOR_SIGNATURE_BYTES,
+  type CrxHeader,
+  type ParseDriverState,
+  type ParseOptions
+} from "@archive/unzip/parser-core";
 
 /**
  * Creates an InflateRaw stream using Node.js native zlib.
@@ -24,9 +24,9 @@ function createInflateRaw(): Transform {
   return zlib.createInflateRaw();
 }
 
-export type { CrxHeader } from "@archive/unzip/stream.base";
+export type { CrxHeader, EntryProps, EntryVars, ParseOptions } from "@archive/unzip/parser-core";
 
-export type { EntryProps, EntryVars, ParseOptions, ZipEntry };
+export type { ZipEntry } from "@archive/unzip/stream.base";
 
 const dataDescriptorSignature = DATA_DESCRIPTOR_SIGNATURE_BYTES;
 

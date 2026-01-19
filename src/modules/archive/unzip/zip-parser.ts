@@ -4,25 +4,15 @@
  * No dependency on Node.js stream module
  */
 
-import { decompress, decompressSync } from "@archive/compression/compress";
-import { zipCryptoDecrypt, aesDecrypt } from "@archive/crypto";
-import { BinaryReader } from "@archive/utils/binary";
-import { resolveZipLastModifiedDateFromUnixSeconds } from "@archive/utils/timestamps";
-import { parseZipExtraFields } from "@archive/utils/zip-extra-fields";
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
+import { parseZipArchiveFromBuffer } from "@archive/zip-spec/zip-parser-core";
 import {
-  CENTRAL_DIR_HEADER_SIG,
-  COMPRESSION_AES,
-  COMPRESSION_DEFLATE,
-  COMPRESSION_STORE,
-  FLAG_UTF8,
-  LOCAL_FILE_HEADER_SIG,
-  UINT16_MAX,
-  UINT32_MAX,
-  ZIP64_END_OF_CENTRAL_DIR_SIG
-} from "@archive/zip-spec/zip-records";
+  processEntryData,
+  processEntryDataSync,
+  readEntryCompressedData
+} from "./zip-extract-core";
 
-const EMPTY = new Uint8Array(0);
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 function assertEntryExtractableInMemory(entry: ZipEntryInfo): void {
@@ -65,53 +55,6 @@ export interface ZipParseOptions {
 }
 
 /**
- * Find the End of Central Directory record
- * Searches backwards from the end of the file
- */
-function findEndOfCentralDir(data: Uint8Array): number {
-  // EOCD is at least 22 bytes, search backwards
-  // Comment can be up to 65535 bytes
-  const minOffset = Math.max(0, data.length - 65557);
-
-  // Signature bytes (little-endian): 0x06054b50 -> 50 4b 05 06
-  const b0 = 0x50;
-  const b1 = 0x4b;
-  const b2 = 0x05;
-  const b3 = 0x06;
-
-  for (let i = data.length - 22; i >= minOffset; i--) {
-    if (data[i] === b0 && data[i + 1] === b1 && data[i + 2] === b2 && data[i + 3] === b3) {
-      return i;
-    }
-  }
-
-  return -1;
-}
-
-/**
- * Find ZIP64 End of Central Directory Locator
- */
-function findZip64EOCDLocator(data: Uint8Array, eocdOffset: number): number {
-  // ZIP64 EOCD Locator is 20 bytes and appears right before EOCD
-  const locatorOffset = eocdOffset - 20;
-  if (locatorOffset < 0) {
-    return -1;
-  }
-
-  // Signature bytes (little-endian): 0x07064b50 -> 50 4b 06 07
-  if (
-    data[locatorOffset] === 0x50 &&
-    data[locatorOffset + 1] === 0x4b &&
-    data[locatorOffset + 2] === 0x06 &&
-    data[locatorOffset + 3] === 0x07
-  ) {
-    return locatorOffset;
-  }
-
-  return -1;
-}
-
-/**
  * Result of parsing a ZIP archive.
  */
 interface ZipArchiveParseResult {
@@ -123,209 +66,7 @@ interface ZipArchiveParseResult {
  * Parse ZIP archive including entries and archive comment.
  */
 function parseZipArchive(data: Uint8Array, options: ZipParseOptions = {}): ZipArchiveParseResult {
-  const { decodeStrings = true } = options;
-  let entries: ZipEntryInfo[] = [];
-
-  // Find End of Central Directory
-  const eocdOffset = findEndOfCentralDir(data);
-  if (eocdOffset === -1) {
-    throw new Error("Invalid ZIP file: End of Central Directory not found");
-  }
-
-  const reader = new BinaryReader(data, eocdOffset);
-
-  // Read EOCD
-  // Offset  Size  Description
-  // 0       4     EOCD signature (0x06054b50)
-  // 4       2     Number of this disk
-  // 6       2     Disk where central directory starts
-  // 8       2     Number of central directory records on this disk
-  // 10      2     Total number of central directory records
-  // 12      4     Size of central directory (bytes)
-  // 16      4     Offset of start of central directory
-  // 20      2     Comment length
-  // 22      n     Comment
-  reader.skip(4); // signature
-  reader.skip(2); // disk number
-  reader.skip(2); // disk where central dir starts
-  reader.skip(2); // entries on this disk
-  let totalEntries = reader.readUint16(); // total entries
-  reader.skip(4); // central directory size (unused)
-  let centralDirOffset = reader.readUint32();
-  const archiveCommentLength = reader.readUint16();
-  const archiveComment =
-    archiveCommentLength > 0 ? reader.readString(archiveCommentLength, decodeStrings) : "";
-
-  // Check for ZIP64
-  const zip64LocatorOffset = findZip64EOCDLocator(data, eocdOffset);
-  if (zip64LocatorOffset !== -1) {
-    const locatorReader = new BinaryReader(data, zip64LocatorOffset);
-    locatorReader.skip(4); // signature
-    locatorReader.skip(4); // disk number with ZIP64 EOCD
-    const zip64EOCDOffset = Number(locatorReader.readBigUint64());
-
-    // Read ZIP64 EOCD
-    const zip64Reader = new BinaryReader(data, zip64EOCDOffset);
-    const zip64Sig = zip64Reader.readUint32();
-    if (zip64Sig === ZIP64_END_OF_CENTRAL_DIR_SIG) {
-      zip64Reader.skip(8); // size of ZIP64 EOCD
-      zip64Reader.skip(2); // version made by
-      zip64Reader.skip(2); // version needed
-      zip64Reader.skip(4); // disk number
-      zip64Reader.skip(4); // disk with central dir
-      // ZIP64 EOCD layout (after disk fields):
-      // - entryCountOnDisk (u64)
-      // - entryCountTotal (u64)
-      // - centralDirSize (u64)
-      // - centralDirOffset (u64)
-      zip64Reader.skip(8); // entry count on this disk (unused for single-disk)
-      const zip64TotalEntries = Number(zip64Reader.readBigUint64());
-      zip64Reader.skip(8); // central directory size (unused)
-      const zip64CentralDirOffset = Number(zip64Reader.readBigUint64());
-
-      // Use ZIP64 values if standard values are maxed out
-      if (totalEntries === UINT16_MAX) {
-        totalEntries = zip64TotalEntries;
-      }
-      if (centralDirOffset === UINT32_MAX) {
-        centralDirOffset = zip64CentralDirOffset;
-      }
-    }
-  }
-
-  // Preallocate to avoid repeated array growth on large archives.
-  if (totalEntries > 0) {
-    entries = new Array(totalEntries);
-  }
-
-  // Read Central Directory entries
-  const centralReader = new BinaryReader(data, centralDirOffset);
-
-  for (let i = 0; i < totalEntries; i++) {
-    const sig = centralReader.readUint32();
-    if (sig !== CENTRAL_DIR_HEADER_SIG) {
-      throw new Error(`Invalid Central Directory header signature at entry ${i}`);
-    }
-
-    // Central Directory File Header format:
-    // Offset  Size  Description
-    // 0       4     Central directory file header signature (0x02014b50)
-    // 4       2     Version made by
-    // 6       2     Version needed to extract
-    // 8       2     General purpose bit flag
-    // 10      2     Compression method
-    // 12      2     File last modification time
-    // 14      2     File last modification date
-    // 16      4     CRC-32
-    // 20      4     Compressed size
-    // 24      4     Uncompressed size
-    // 28      2     File name length
-    // 30      2     Extra field length
-    // 32      2     File comment length
-    // 34      2     Disk number where file starts
-    // 36      2     Internal file attributes
-    // 38      4     External file attributes
-    // 42      4     Relative offset of local file header
-    // 46      n     File name
-    // 46+n    m     Extra field
-    // 46+n+m  k     File comment
-
-    const versionMadeBy = centralReader.readUint16();
-    centralReader.skip(2); // version needed
-    const flags = centralReader.readUint16();
-    const compressionMethod = centralReader.readUint16();
-    const lastModTime = centralReader.readUint16();
-    const lastModDate = centralReader.readUint16();
-    const crc32 = centralReader.readUint32();
-    let compressedSize = centralReader.readUint32();
-    let uncompressedSize = centralReader.readUint32();
-    const fileNameLength = centralReader.readUint16();
-    const extraFieldLength = centralReader.readUint16();
-    const commentLength = centralReader.readUint16();
-    centralReader.skip(2); // disk number start
-    centralReader.skip(2); // internal attributes
-    const externalAttributes = centralReader.readUint32();
-    let localHeaderOffset = centralReader.readUint32();
-
-    // Check for UTF-8 flag (bit 11)
-    const isUtf8 = (flags & FLAG_UTF8) !== 0;
-    const useUtf8 = decodeStrings && isUtf8;
-
-    const fileName = fileNameLength > 0 ? centralReader.readString(fileNameLength, useUtf8) : "";
-
-    let extraFields = {} as ReturnType<typeof parseZipExtraFields>;
-    let rawExtraField: Uint8Array = new Uint8Array(0);
-    if (extraFieldLength > 0) {
-      rawExtraField = centralReader.readBytes(extraFieldLength);
-      const vars = {
-        compressedSize,
-        uncompressedSize,
-        offsetToLocalFileHeader: localHeaderOffset
-      };
-      extraFields = parseZipExtraFields(rawExtraField, vars);
-
-      compressedSize = vars.compressedSize;
-      uncompressedSize = vars.uncompressedSize;
-      localHeaderOffset = vars.offsetToLocalFileHeader ?? localHeaderOffset;
-    }
-
-    const comment = commentLength > 0 ? centralReader.readString(commentLength, useUtf8) : "";
-
-    const isDirectory = fileName.endsWith("/") || (externalAttributes & 0x10) !== 0;
-    const isEncrypted = (flags & 0x01) !== 0;
-
-    const unixSecondsMtime = extraFields.mtimeUnixSeconds;
-    const lastModified = resolveZipLastModifiedDateFromUnixSeconds(
-      lastModDate,
-      lastModTime,
-      unixSecondsMtime
-    );
-
-    // Determine encryption method and populate encryption-specific fields
-    let encryptionMethod: ZipEntryInfo["encryptionMethod"] = "none";
-    let aesVersion: ZipEntryInfo["aesVersion"];
-    let aesKeyStrength: ZipEntryInfo["aesKeyStrength"];
-    let originalCompressionMethod: ZipEntryInfo["originalCompressionMethod"];
-
-    if (isEncrypted) {
-      if (compressionMethod === COMPRESSION_AES && extraFields.aesInfo) {
-        // AES encryption
-        encryptionMethod = "aes";
-        aesVersion = extraFields.aesInfo.version;
-        aesKeyStrength = extraFields.aesInfo.keyStrength;
-        originalCompressionMethod = extraFields.aesInfo.compressionMethod;
-      } else {
-        // Traditional PKWARE ZipCrypto
-        encryptionMethod = "zipcrypto";
-      }
-    }
-
-    entries[i] = {
-      path: fileName,
-      isDirectory,
-      compressedSize,
-      compressedSize64: extraFields.compressedSize64,
-      uncompressedSize,
-      uncompressedSize64: extraFields.uncompressedSize64,
-      compressionMethod,
-      crc32,
-      lastModified,
-      localHeaderOffset,
-      localHeaderOffset64: extraFields.offsetToLocalFileHeader64,
-      comment,
-      externalAttributes,
-      versionMadeBy,
-      extraField: rawExtraField,
-      isEncrypted,
-      encryptionMethod,
-      aesVersion,
-      aesKeyStrength,
-      originalCompressionMethod,
-      dosTime: lastModTime
-    };
-  }
-
-  return { entries, comment: archiveComment };
+  return parseZipArchiveFromBuffer(data, { decodeStrings: options.decodeStrings });
 }
 
 /**
@@ -345,68 +86,13 @@ async function extractEntryData(
   options: ExtractOptions = {}
 ): Promise<Uint8Array> {
   if (entry.isDirectory) {
-    return EMPTY;
+    return EMPTY_UINT8ARRAY;
   }
 
   assertEntryExtractableInMemory(entry);
 
   const compressedData = readEntryCompressedData(data, entry);
-
-  // Handle encrypted entries
-  if (entry.isEncrypted) {
-    if (!options.password) {
-      throw new Error(`File "${entry.path}" is encrypted. Please provide a password to extract.`);
-    }
-
-    if (entry.encryptionMethod === "aes" && entry.aesKeyStrength) {
-      // AES decryption
-      const decrypted = await aesDecrypt(compressedData, options.password, entry.aesKeyStrength);
-      if (!decrypted) {
-        throw new Error(`Failed to decrypt "${entry.path}": incorrect password or corrupted data`);
-      }
-
-      // Decompress if needed (use original compression method)
-      const compressionMethod = entry.originalCompressionMethod ?? COMPRESSION_STORE;
-      if (compressionMethod === COMPRESSION_STORE) {
-        return decrypted;
-      }
-      if (compressionMethod === COMPRESSION_DEFLATE) {
-        return decompress(decrypted);
-      }
-      throw new Error(`Unsupported compression method: ${compressionMethod}`);
-    } else if (entry.encryptionMethod === "zipcrypto") {
-      // ZipCrypto decryption
-      const decrypted = zipCryptoDecrypt(
-        compressedData,
-        options.password,
-        entry.crc32,
-        entry.dosTime
-      );
-      if (!decrypted) {
-        throw new Error(`Failed to decrypt "${entry.path}": incorrect password or corrupted data`);
-      }
-
-      // Decompress if needed
-      if (entry.compressionMethod === COMPRESSION_STORE) {
-        return decrypted;
-      }
-      if (entry.compressionMethod === COMPRESSION_DEFLATE) {
-        return decompress(decrypted);
-      }
-      throw new Error(`Unsupported compression method: ${entry.compressionMethod}`);
-    } else {
-      throw new Error(`Unsupported encryption method for "${entry.path}"`);
-    }
-  }
-
-  // Non-encrypted entry
-  if (entry.compressionMethod === COMPRESSION_STORE) {
-    return compressedData;
-  }
-  if (entry.compressionMethod === COMPRESSION_DEFLATE) {
-    return decompress(compressedData);
-  }
-  throw new Error(`Unsupported compression method: ${entry.compressionMethod}`);
+  return processEntryData(entry, compressedData, options.password);
 }
 
 /**
@@ -418,82 +104,13 @@ function extractEntryDataSync(
   options: ExtractOptions = {}
 ): Uint8Array {
   if (entry.isDirectory) {
-    return EMPTY;
+    return EMPTY_UINT8ARRAY;
   }
 
   assertEntryExtractableInMemory(entry);
 
   const compressedData = readEntryCompressedData(data, entry);
-
-  // Handle encrypted entries
-  if (entry.isEncrypted) {
-    if (!options.password) {
-      throw new Error(`File "${entry.path}" is encrypted. Please provide a password to extract.`);
-    }
-
-    if (entry.encryptionMethod === "aes") {
-      // AES requires async Web Crypto API - use async method instead
-      throw new Error(
-        `File "${entry.path}" uses AES encryption. Use the async extract() method instead of extractSync().`
-      );
-    } else if (entry.encryptionMethod === "zipcrypto") {
-      // ZipCrypto decryption (synchronous)
-      const decrypted = zipCryptoDecrypt(
-        compressedData,
-        options.password,
-        entry.crc32,
-        entry.dosTime
-      );
-      if (!decrypted) {
-        throw new Error(`Failed to decrypt "${entry.path}": incorrect password or corrupted data`);
-      }
-
-      // Decompress if needed
-      if (entry.compressionMethod === COMPRESSION_STORE) {
-        return decrypted;
-      }
-      if (entry.compressionMethod === COMPRESSION_DEFLATE) {
-        return decompressSync(decrypted);
-      }
-      throw new Error(`Unsupported compression method: ${entry.compressionMethod}`);
-    } else {
-      throw new Error(`Unsupported encryption method for "${entry.path}"`);
-    }
-  }
-
-  // Non-encrypted entry
-  if (entry.compressionMethod === COMPRESSION_STORE) {
-    return compressedData;
-  }
-  if (entry.compressionMethod === COMPRESSION_DEFLATE) {
-    return decompressSync(compressedData);
-  }
-  throw new Error(`Unsupported compression method: ${entry.compressionMethod}`);
-}
-
-function readEntryCompressedData(data: Uint8Array, entry: ZipEntryInfo): Uint8Array {
-  const reader = new BinaryReader(data, entry.localHeaderOffset);
-
-  const sig = reader.readUint32();
-  if (sig !== LOCAL_FILE_HEADER_SIG) {
-    throw new Error(`Invalid local file header signature for "${entry.path}"`);
-  }
-
-  reader.skip(2); // version needed
-  reader.skip(2); // flags
-  reader.skip(2); // compression method
-  reader.skip(2); // last mod time
-  reader.skip(2); // last mod date
-  reader.skip(4); // crc32
-  reader.skip(4); // compressed size
-  reader.skip(4); // uncompressed size
-  const fileNameLength = reader.readUint16();
-  const extraFieldLength = reader.readUint16();
-
-  reader.skip(fileNameLength);
-  reader.skip(extraFieldLength);
-
-  return reader.readBytes(entry.compressedSize);
+  return processEntryDataSync(entry, compressedData, options.password);
 }
 
 /**
@@ -534,6 +151,34 @@ export class ZipParser {
    */
   getEntry(path: string): ZipEntryInfo | undefined {
     return this.entryMap.get(path);
+  }
+
+  /**
+   * Get a zero-copy view of the raw (compressed) entry payload.
+   *
+   * Notes:
+   * - This returns the bytes as stored in the ZIP (compressed and possibly encrypted).
+   * - The returned Uint8Array is a view into the original ZIP buffer.
+   * - This does NOT include the local file header, extra field, or data descriptor.
+   */
+  getRawCompressedData(path: string): Uint8Array | null {
+    const entry = this.entryMap.get(path);
+    if (!entry) {
+      return null;
+    }
+    // This helper returns a subarray view into the original `data`.
+    return readEntryCompressedData(this.data, entry);
+  }
+
+  /**
+   * Get raw (compressed) payload together with its parsed entry info.
+   */
+  getRawEntry(path: string): { info: ZipEntryInfo; compressedData: Uint8Array } | null {
+    const entry = this.entryMap.get(path);
+    if (!entry) {
+      return null;
+    }
+    return { info: entry, compressedData: readEntryCompressedData(this.data, entry) };
   }
 
   /**

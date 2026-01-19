@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createAsyncQueue } from "@archive/utils/async-queue";
+import { createAsyncQueue } from "@archive/shared/async-queue";
 
 describe("async-queue", () => {
   it("return() should cancel, resolve pending next(), and call onCancel once", async () => {

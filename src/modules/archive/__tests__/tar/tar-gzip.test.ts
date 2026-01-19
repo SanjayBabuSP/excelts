@@ -30,7 +30,7 @@ describe("TAR Gzip Module", () => {
       const archive = new TarGzArchive();
       archive.add("hello.txt", "Hello, TarGz!");
 
-      const bytes = await archive.toUint8Array();
+      const bytes = await archive.bytes();
 
       // Verify gzip magic number
       expect(bytes[0]).toBe(GZIP_MAGIC[0]);
@@ -48,11 +48,11 @@ describe("TAR Gzip Module", () => {
 
       const noCompress = new TarGzArchive({ level: 0 });
       noCompress.add("file.txt", content);
-      const level0 = await noCompress.toUint8Array();
+      const level0 = await noCompress.bytes();
 
       const maxCompress = new TarGzArchive({ level: 9 });
       maxCompress.add("file.txt", content);
-      const level9 = await maxCompress.toUint8Array();
+      const level9 = await maxCompress.bytes();
 
       // Level 9 should be smaller than level 0 for compressible data
       expect(level9.length).toBeLessThan(level0.length);
@@ -71,7 +71,7 @@ describe("TAR Gzip Module", () => {
       archive.addDirectory("dir");
       archive.add("dir/file3.txt", "Content 3");
 
-      const bytes = await archive.toUint8Array();
+      const bytes = await archive.bytes();
       const entries = await parseTarGz(bytes);
 
       expect(entries.length).toBe(4);
@@ -121,7 +121,7 @@ describe("TAR Gzip Module", () => {
       // Create a tar.gz
       const archive = new TarGzArchive();
       archive.add("test.txt", "Test content");
-      const compressed = await archive.toUint8Array();
+      const compressed = await archive.bytes();
 
       // Parse it
       const entries = await parseTarGz(compressed);
@@ -138,7 +138,7 @@ describe("TAR Gzip Module", () => {
       archive.add("one.txt", "First");
       archive.add("two.txt", "Second");
 
-      const bytes = await archive.toUint8Array();
+      const bytes = await archive.bytes();
       const extracted = await untargz(bytes);
 
       expect(extracted.size).toBe(2);
@@ -189,7 +189,7 @@ describe("TAR Gzip Module", () => {
       // Create uncompressed tar
       const archive = new TarArchive();
       archive.add("file.txt", "Uncompressed TAR content");
-      const tarBytes = await archive.toUint8Array();
+      const tarBytes = await archive.bytes();
 
       // Compress with gzipTar
       const compressed = await gzipTar(tarBytes);
@@ -214,7 +214,7 @@ describe("TAR Gzip Module", () => {
       const archive = new TarGzArchive();
       archive.add("binary.bin", binaryData);
 
-      const compressed = await archive.toUint8Array();
+      const compressed = await archive.bytes();
       const entries = await parseTarGz(compressed);
 
       expect(entries[0].info.size).toBe(256);
@@ -227,7 +227,7 @@ describe("TAR Gzip Module", () => {
       const archive = new TarGzArchive();
       archive.add("unicode.txt", content);
 
-      const compressed = await archive.toUint8Array();
+      const compressed = await archive.bytes();
       const entries = await parseTarGz(compressed);
 
       expect(await entries[0].text()).toBe(content);
@@ -239,7 +239,7 @@ describe("TAR Gzip Module", () => {
       const archive = new TarGzArchive();
       archive.add(longPath, "Long path content");
 
-      const compressed = await archive.toUint8Array();
+      const compressed = await archive.bytes();
       const entries = await parseTarGz(compressed);
 
       expect(entries[0].info.path).toBe(longPath);
@@ -252,7 +252,7 @@ describe("TAR Gzip Module", () => {
       const archive = new TarGzArchive();
       archive.add("script.sh", "#!/bin/bash", { mode, mtime });
 
-      const compressed = await archive.toUint8Array();
+      const compressed = await archive.bytes();
       const entries = await parseTarGz(compressed);
 
       expect(entries[0].info.mode).toBe(mode);
@@ -268,8 +268,8 @@ describe("TAR Gzip Module", () => {
       const archive = new TarGzArchive({ level: 9 });
       archive.add("repetitive.txt", data);
 
-      const compressed = await archive.toUint8Array();
-      const uncompressed = await new TarArchive().add("repetitive.txt", data).toUint8Array();
+      const compressed = await archive.bytes();
+      const uncompressed = await new TarArchive().add("repetitive.txt", data).bytes();
 
       // Compressed should be significantly smaller
       expect(compressed.length).toBeLessThan(uncompressed.length / 5);

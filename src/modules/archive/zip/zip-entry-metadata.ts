@@ -1,10 +1,10 @@
-import { encodeUtf8 } from "@archive/utils/text";
+import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
 import {
   buildZipTimestampExtraField,
   dateToZipDos,
   type ZipExtraTimestamps,
   type ZipTimestampMode
-} from "@archive/utils/timestamps";
+} from "@archive/zip-spec/timestamps";
 import {
   COMPRESSION_DEFLATE,
   COMPRESSION_STORE,

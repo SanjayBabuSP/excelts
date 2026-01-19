@@ -7,27 +7,29 @@
  */
 
 import { Duplex, PassThrough, concatUint8Arrays } from "@stream";
+import { toError } from "@archive/shared/errors";
 import {
-  DATA_DESCRIPTOR_SIGNATURE_BYTES,
   runParseLoop,
-  type CrxHeader,
   type PullStreamPublicApi,
-  type EntryProps,
-  type EntryVars,
   type InflateFactory,
-  type ParseDriverState,
   type ParseEmitter,
   type ParseIO,
-  type ParseOptions,
   type ZipEntry,
+  DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK,
   streamUntilValidatedDataDescriptor
 } from "@archive/unzip/stream.base";
-import { PatternScanner } from "@archive/utils/pattern-scanner";
+import {
+  DATA_DESCRIPTOR_SIGNATURE_BYTES,
+  type CrxHeader,
+  type EntryProps,
+  type EntryVars,
+  type ParseDriverState,
+  type ParseOptions
+} from "@archive/unzip/parser-core";
+import { PatternScanner } from "@archive/unzip/pattern-scanner";
 import { inflateRaw as fallbackInflateRaw } from "@archive/compression/deflate-fallback";
-import { ByteQueue } from "@archive/internal/byte-queue";
+import { ByteQueue } from "@archive/shared/byte-queue";
 import { hasDeflateRawDecompressionStream } from "@archive/compression/compress.base";
-
-const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
 
 // =============================================================================
 // Browser InflateRaw using DecompressionStream
@@ -492,7 +494,7 @@ class FallbackInflateRaw extends Duplex {
       this._finished = true;
       callback();
     } catch (err) {
-      callback(err instanceof Error ? err : new Error(String(err)));
+      callback(toError(err));
     }
   }
 

@@ -13,8 +13,8 @@
 import { EventEmitter } from "@stream";
 import { deflateRawCompressed, inflateRaw } from "@archive/compression/deflate-fallback";
 import { hasDeflateRawWebStreams } from "@archive/compression/compress.base";
-import { concatUint8Arrays } from "@archive/utils/bytes";
-import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
+import { concatUint8Arrays } from "@stream/shared";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 import type { WorkerPool, WorkerTaskType } from "@archive/compression/worker-pool/index.browser";
 import {
   hasWorkerSupport,

@@ -8,7 +8,7 @@ export interface ZipPathOptions {
    */
   mode?: ZipPathMode;
 
-  /** Like archiver's `namePrependSlash`: if true, ensures a single leading '/'. */
+  /** If true, ensures a single leading '/'. */
   prependSlash?: boolean;
 
   /** If true, strips a Windows drive prefix like `C:`. Default: true for posix/safe. */

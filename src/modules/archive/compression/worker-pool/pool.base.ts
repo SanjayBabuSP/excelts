@@ -77,11 +77,5 @@ export function hasWorkerSupport(): boolean {
   return typeof Worker !== "undefined" && typeof Blob !== "undefined";
 }
 
-/**
- * Create an AbortError
- */
-export function createAbortError(message = "Task was aborted"): Error {
-  const error = new Error(message);
-  error.name = "AbortError";
-  return error;
-}
+// Re-export from shared errors module
+export { createAbortError } from "@archive/shared/errors";

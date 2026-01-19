@@ -4,10 +4,10 @@
  * @module
  */
 
-import type { ZipTimestampMode } from "@archive/utils/timestamps";
-import type { Zip64Mode } from "@archive/zip/zip64-mode";
+import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
+import type { Zip64Mode } from "@archive/zip-spec/zip-records";
 import type { ZipEncryptionMethod } from "@archive/crypto";
-import type { ZipPathOptions } from "@archive/zip/zip-path";
+import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 
 // =============================================================================
 // Overwrite Strategies

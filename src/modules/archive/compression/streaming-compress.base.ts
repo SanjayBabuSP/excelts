@@ -5,6 +5,9 @@
  * don't depend on each other.
  */
 
+// Re-export error helper for browser use
+export { asError } from "@archive/shared/errors";
+
 export interface StreamCompressOptions {
   level?: number;
 
@@ -69,7 +72,3 @@ export interface StreamingCodec {
 
 export type DeflateStream = StreamingCodec;
 export type InflateStream = StreamingCodec;
-
-export function asError(err: unknown): Error {
-  return err instanceof Error ? err : new Error(String(err));
-}

@@ -23,7 +23,7 @@ import {
   hasDeflateRawDecompressionStream
 } from "@archive/compression/compress.base";
 import { inflateRaw, deflateRawCompressed } from "@archive/compression/deflate-fallback";
-import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 import {
   deflateWithPool,
   inflateWithPool,

@@ -357,7 +357,7 @@ describe("WorkerPool", () => {
         signal: controller.signal
       });
 
-      await expect(taskPromise).rejects.toThrow("aborted");
+      await expect(taskPromise).rejects.toThrow(/aborted/i);
 
       // Let the blocker complete
       await blocker;
@@ -383,7 +383,7 @@ describe("WorkerPool", () => {
       // Abort immediately while task is still queued (worker is busy with blocker)
       controller.abort();
 
-      await expect(taskPromise).rejects.toThrow("aborted");
+      await expect(taskPromise).rejects.toThrow(/aborted/i);
 
       await blocker;
     });

@@ -1,3 +1,60 @@
+/**
+ * Unified progress types and utilities for archive operations.
+ *
+ * This module defines common progress structures used across zip and unzip operations.
+ * Having them in a shared location reduces duplication and enables cross-module type reuse.
+ *
+ * @module
+ */
+
+// -----------------------------------------------------------------------------
+// Common Types
+// -----------------------------------------------------------------------------
+
+/**
+ * Common progress phase states for archive operations.
+ */
+export type ArchiveProgressPhase = "running" | "done" | "aborted" | "error";
+
+// -----------------------------------------------------------------------------
+// Base Stream Options
+// -----------------------------------------------------------------------------
+
+/**
+ * Common streaming options shared between zip and unzip.
+ */
+export interface ArchiveStreamOptions<P> {
+  /** Abort signal for cancellation */
+  signal?: AbortSignal;
+
+  /** Progress callback */
+  onProgress?: (p: P) => void;
+
+  /** Throttle progress callbacks; 0 emits on the next microtask */
+  progressIntervalMs?: number;
+}
+
+/**
+ * Base operation result type.
+ */
+export interface ArchiveOperationBase<P> {
+  /** Abort signal linked to this operation */
+  signal: AbortSignal;
+
+  /** Abort the operation */
+  abort(reason?: unknown): void;
+
+  /** Returns bytes processed so far */
+  pointer(): number;
+
+  /** Latest progress snapshot */
+  progress(): P;
+}
+
+// -----------------------------------------------------------------------------
+// Progress Emitter
+// -----------------------------------------------------------------------------
+
 export type ProgressListener<T> = (snapshot: T) => void;
 
 export type ProgressEmitterOptions = {

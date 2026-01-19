@@ -31,10 +31,18 @@ export const ARCHIVE_BROWSER_EXPORTS = [
 
   // High-level archive API
   "zip",
+  "editZip",
+  "editZipUrl",
   "unzip",
   "ZipArchive",
+  "ZipEditor",
+  "ZipEditPlan",
   "ZipReader",
   "UnzipEntry",
+
+  // Format registry (ZIP/TAR dispatch)
+  "createArchive",
+  "createReader",
 
   // TAR archive support (basic - no gzip)
   "TAR_BLOCK_SIZE",
@@ -58,15 +66,26 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   // Random access / HTTP Range reading
   "HttpRangeReader",
   "BufferReader",
+  "RemoteZipReader",
+
+  // Error types
+  "ArchiveError",
+  "ArchiveAbortError",
+  "ZipParseError",
+  "InvalidZipSignatureError",
+  "EocdNotFoundError",
+  "Crc32MismatchError",
+  "DecryptionError",
+  "PasswordRequiredError",
   "RangeNotSupportedError",
   "HttpRangeError",
-  "RemoteZipReader",
-  "Crc32MismatchError",
+  "FileTooLargeError",
+  "UnsupportedCompressionError",
 
-  // Abort
-  "ArchiveAbortError",
+  // Abort utilities
   "createAbortError",
   "isAbortError",
+  "throwIfAborted",
 
   // Crypto - ZipCrypto
   "zipCryptoInitKeys",

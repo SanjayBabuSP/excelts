@@ -1,29 +1,12 @@
 /**
- * Shared text encoding/decoding utilities.
+ * Archive-specific text utilities.
  *
- * Caches encoder/decoder instances for performance.
+ * For common utilities (UTF-8 encoding/decoding), import directly from @stream/shared.
  */
-
-export const utf8Encoder = new TextEncoder();
-export const utf8Decoder = new TextDecoder("utf-8");
-
-/**
- * Encode a string as UTF-8.
- */
-export function encodeUtf8(value: string): Uint8Array {
-  return utf8Encoder.encode(value);
-}
-
-/**
- * Decode bytes as UTF-8.
- */
-export function decodeUtf8(bytes: Uint8Array): string {
-  return utf8Decoder.decode(bytes);
-}
 
 /**
  * Decode bytes as Latin-1/byte-to-char.
- * Used as a fallback when UTF-8 flag is not set.
+ * Used as a fallback when UTF-8 flag is not set in ZIP files.
  */
 export function decodeLatin1(bytes: Uint8Array): string {
   // Avoid spreading huge arrays; build incrementally.

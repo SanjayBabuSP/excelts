@@ -1,8 +1,6 @@
-import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
+import { EMPTY_UINT8ARRAY, indexOfUint8ArrayPattern } from "@archive/shared/bytes";
 
 export class ByteQueue {
-  private static readonly EMPTY = new Uint8Array(0);
-
   // Store data as immutable chunks to avoid copying on append.
   private _chunks: Uint8Array[] = [];
   private _headOffset = 0;
@@ -28,7 +26,7 @@ export class ByteQueue {
 
   view(): Uint8Array {
     if (this._length === 0) {
-      return ByteQueue.EMPTY;
+      return EMPTY_UINT8ARRAY;
     }
 
     // Fast path: single chunk.
@@ -93,7 +91,7 @@ export class ByteQueue {
 
   read(length: number): Uint8Array {
     if (length <= 0) {
-      return new Uint8Array(0);
+      return EMPTY_UINT8ARRAY;
     }
     if (length > this._length) {
       throw new RangeError("ByteQueue: read beyond available data");

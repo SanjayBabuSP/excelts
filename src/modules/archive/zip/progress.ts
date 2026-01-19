@@ -1,7 +1,18 @@
-import type { Zip64Mode } from "./zip64-mode";
+import type { Zip64Mode } from "@archive/zip-spec/zip-records";
+import type {
+  ArchiveProgressPhase,
+  ArchiveStreamOptions,
+  ArchiveOperationBase
+} from "@archive/shared/progress";
 
-export type ZipProgressPhase = "running" | "done" | "aborted" | "error";
+/**
+ * Progress phase for ZIP creation operations.
+ */
+export type ZipProgressPhase = ArchiveProgressPhase;
 
+/**
+ * Progress information for ZIP creation.
+ */
 export type ZipProgress = {
   type: "zip";
   phase: ZipProgressPhase;
@@ -19,30 +30,22 @@ export type ZipProgress = {
 
   /** Total uncompressed bytes consumed from all sources. */
   bytesIn: number;
-  /** Total ZIP bytes emitted to the consumer (like archiver.pointer()). */
+  /** Total ZIP bytes emitted to the consumer. */
   bytesOut: number;
 
   /** Zip64 mode in effect for the archive. */
   zip64: Zip64Mode;
 };
 
-export type ZipStreamOptions = {
-  signal?: AbortSignal;
-  onProgress?: (p: ZipProgress) => void;
+/**
+ * Streaming options for ZIP creation.
+ */
+export type ZipStreamOptions = ArchiveStreamOptions<ZipProgress>;
 
-  /** Throttle progress callbacks; 0 emits on the next microtask. */
-  progressIntervalMs?: number;
-};
-
-export type ZipOperation = {
+/**
+ * Operation handle for streaming ZIP creation.
+ */
+export type ZipOperation = ArchiveOperationBase<ZipProgress> & {
+  /** Async iterable of ZIP output chunks */
   iterable: AsyncIterable<Uint8Array>;
-  signal: AbortSignal;
-
-  abort(reason?: unknown): void;
-
-  /** Returns bytes emitted so far (archiver-style pointer()). */
-  pointer(): number;
-
-  /** Latest progress snapshot. */
-  progress(): ZipProgress;
 };

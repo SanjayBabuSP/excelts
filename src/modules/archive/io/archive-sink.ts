@@ -35,7 +35,9 @@ export async function pipeIterableToSink(
   // Node-style Writable
   for await (const chunk of iterable) {
     const ok = sink.write(chunk);
-    if (ok === false && typeof (sink as any).once === "function") {
+    const hasEvents =
+      typeof (sink as any).once === "function" || typeof (sink as any).on === "function";
+    if (ok === false && hasEvents) {
       await onceEvent(sink as any, "drain");
     }
   }
@@ -44,7 +46,7 @@ export async function pipeIterableToSink(
     sink.end();
   }
 
-  if (typeof sink.once === "function") {
+  if (typeof (sink as any).once === "function" || typeof (sink as any).on === "function") {
     await Promise.race([onceEvent(sink as any, "finish"), onceEvent(sink as any, "close")]);
   }
 }

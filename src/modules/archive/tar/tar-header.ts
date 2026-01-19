@@ -20,6 +20,7 @@ import {
 } from "./tar-constants";
 import type { TarEntryInfo } from "./tar-entry-info";
 import { textEncoder, textDecoder } from "@stream/shared";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 /**
  * Encode a string to a fixed-size field (null-terminated if space allows)
@@ -383,7 +384,6 @@ export function calculatePadding(size: number): number {
 
 // Pre-allocated padding buffers (512 bytes max padding)
 const PADDING_CACHE: Uint8Array[] = [];
-const EMPTY_UINT8ARRAY = new Uint8Array(0);
 
 /**
  * Create padding bytes (uses cached buffers to avoid allocation)

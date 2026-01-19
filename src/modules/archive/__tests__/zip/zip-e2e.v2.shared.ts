@@ -8,14 +8,12 @@
 import { describe, it, expect } from "vitest";
 import type { ArchiveSource, UnzipOptions, ZipArchive, ZipOptions, ZipReader } from "@archive";
 import { hasSignature } from "@archive/__tests__/zip/zip-test-utils";
+import { LOCAL_FILE_HEADER_SIG, END_OF_CENTRAL_DIR_SIG } from "@archive/zip-spec/zip-records";
 
 export interface ZipE2EModuleImports {
   zip: (options?: ZipOptions) => ZipArchive;
   unzip: (source: ArchiveSource, options?: UnzipOptions) => ZipReader;
 }
-
-const LOCAL_FILE_HEADER_SIG = 0x04034b50;
-const END_OF_CENTRAL_DIR_SIG = 0x06054b50;
 
 function makeTestEntries(): Array<{ name: string; data: Uint8Array }> {
   const text = new TextEncoder();

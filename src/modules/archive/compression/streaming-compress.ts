@@ -8,7 +8,7 @@
 import { createDeflateRaw, createInflateRaw, constants, type DeflateRaw } from "zlib";
 import { Transform, type TransformCallback } from "@stream";
 
-import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 
 export type {
   DeflateStream,

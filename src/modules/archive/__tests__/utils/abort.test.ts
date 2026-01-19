@@ -6,7 +6,7 @@ import {
   createLinkedAbortController,
   isAbortError,
   throwIfAborted
-} from "@archive/utils/abort";
+} from "@archive/shared/errors";
 
 describe("abort utils", () => {
   it("createAbortError should preserve reason and message", () => {

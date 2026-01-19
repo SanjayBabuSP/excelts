@@ -11,7 +11,7 @@ import {
   AES_STRENGTH_FROM_BYTE,
   type AesKeyStrength
 } from "@archive/crypto/aes";
-import { EXTENDED_TIMESTAMP_ID, NTFS_TIMESTAMP_ID } from "@archive/utils/timestamps";
+import { EXTENDED_TIMESTAMP_ID, NTFS_TIMESTAMP_ID } from "@archive/zip-spec/timestamps";
 
 export interface ZipVars {
   uncompressedSize: number;

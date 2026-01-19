@@ -1,7 +1,7 @@
 /**
  * Node.js file system convenience layer for ZIP operations.
  *
- * Provides a unified API similar to archiver and adm-zip for:
+ * Provides a unified API for:
  * - Adding files/directories/globs to ZIP archives
  * - Extracting ZIP archives to disk
  * - Reading/writing ZIP files
@@ -11,13 +11,11 @@
 
 import * as path from "node:path";
 
-import { ZipParser } from "@archive/unzip/zip-parser";
+import { ZipParser, type ZipEntryInfo as ParserEntryInfo } from "@archive/unzip/zip-parser";
 import { createZip, createZipSync, type ZipEntry } from "@archive/zip/zip-bytes";
-import { concatUint8Arrays } from "@archive/utils/bytes";
-import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip/zip-path";
-
-// Shared TextEncoder instance to avoid repeated instantiation
-const textEncoder = new TextEncoder();
+import { concatUint8Arrays, textEncoder as utf8Encoder } from "@stream/shared";
+import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
+import { ZipEditView } from "@archive/zip/zip-edit-view";
 
 import type {
   AddFileOptions,
@@ -277,33 +275,6 @@ function buildZipEntry(
 }
 
 /**
- * Build a ZipEntry for an updated existing entry.
- */
-function buildUpdatedEntry(
-  existingEntry: { path: string; comment: string; externalAttributes: number },
-  updated: { data: Uint8Array; options?: AddFileOptions },
-  globalOptions: ZipFileOptions,
-  globalPassword: string | Uint8Array | undefined
-): ZipEntry {
-  const externalAttributes =
-    updated.options?.externalAttributes ??
-    (updated.options?.mode !== undefined ? undefined : existingEntry.externalAttributes);
-
-  return {
-    name: existingEntry.path,
-    data: updated.data,
-    level: updated.options?.level ?? globalOptions.level,
-    modTime: updated.options?.modTime ?? new Date(),
-    comment: updated.options?.comment ?? existingEntry.comment,
-    encryptionMethod: updated.options?.encryptionMethod ?? globalOptions.encryptionMethod,
-    password: updated.options?.password ?? globalPassword,
-    mode: updated.options?.mode,
-    msDosAttributes: updated.options?.msDosAttributes,
-    externalAttributes
-  };
-}
-
-/**
  * Build a ZipEntry for preserving an existing entry (no update).
  */
 function buildPreservedEntry(
@@ -330,7 +301,7 @@ function buildPreservedEntry(
 function buildSymlinkEntry(zipPath: string, target: string, mode?: number): ZipEntry {
   return {
     name: zipPath,
-    data: textEncoder.encode(target),
+    data: utf8Encoder.encode(target),
     level: 0,
     modTime: new Date(),
     mode: mode ?? 0o120777
@@ -456,10 +427,8 @@ export class ZipFile {
   private _parser: ZipParser | null = null;
   private _sourcePath: string | null = null;
   private _password: string | Uint8Array | undefined;
-  // Track deleted entries (by path)
-  private _deletedEntries: Set<string> = new Set();
-  // Track updated entries (path -> new data)
-  private _updatedEntries: Map<string, { data: Uint8Array; options?: AddFileOptions }> = new Map();
+  // View tracker for edit operations (delete/update) on existing entries
+  private _editView: ZipEditView<ParserEntryInfo> | null = null;
   // AbortController for cancellation
   private _abortController: AbortController | null = null;
   // Track bytes written (for pointer())
@@ -505,6 +474,9 @@ export class ZipFile {
     if (sourcePath) {
       this._sourcePath = sourcePath;
     }
+    // Initialize edit view with existing entries
+    this._editView = new ZipEditView({ path: resolveZipPathOptions(this._options) });
+    this._editView.initFromEntries(this._parser.getEntries(), e => e.path);
   }
 
   // ===========================================================================
@@ -586,23 +558,6 @@ export class ZipFile {
   }
 
   /**
-   * Add a file from a local path with a custom archive path.
-   *
-   * Similar to adm-zip's addLocalFile().
-   *
-   * @param localPath - Path to the file on disk
-   * @param zipPath - Path within the archive (defaults to file basename)
-   * @param comment - Optional file comment
-   * @returns this for chaining
-   */
-  addLocalFile(localPath: string, zipPath?: string, comment?: string): this {
-    return this.addFile(localPath, {
-      name: zipPath ?? path.basename(localPath),
-      comment
-    });
-  }
-
-  /**
    * Add data from a buffer.
    *
    * @param data - File data
@@ -630,13 +585,11 @@ export class ZipFile {
    * @returns this for chaining
    */
   addText(content: string, zipPath: string, options: AddFileOptions = {}): this {
-    return this.addBuffer(textEncoder.encode(content), zipPath, options);
+    return this.addBuffer(utf8Encoder.encode(content), zipPath, options);
   }
 
   /**
    * Add data from an async iterable or ReadableStream.
-   *
-   * Similar to archiver's append() with a stream.
    *
    * @param stream - Async iterable or ReadableStream
    * @param zipPath - Path within the archive
@@ -669,8 +622,6 @@ export class ZipFile {
 
   /**
    * Add a symbolic link entry.
-   *
-   * Similar to archiver's symlink().
    *
    * @param filepath - Path in the archive
    * @param target - Target path the symlink points to
@@ -719,55 +670,6 @@ export class ZipFile {
     return this;
   }
 
-  /**
-   * Add a local folder to the archive.
-   *
-   * Similar to adm-zip's addLocalFolder().
-   *
-   * @param localPath - Path to the folder on disk
-   * @param zipPath - Prefix path in the archive (defaults to folder name)
-   * @param filter - Optional filter function
-   * @returns this for chaining
-   */
-  addLocalFolder(localPath: string, zipPath?: string, filter?: (path: string) => boolean): this {
-    return this.addDirectory(localPath, {
-      prefix: zipPath ?? path.basename(localPath),
-      includeRoot: false,
-      filter
-    });
-  }
-
-  /**
-   * Add a local folder recursively with custom filter.
-   *
-   * Similar to adm-zip's addLocalFolderAsync().
-   *
-   * @param localPath - Path to the folder on disk
-   * @param zipPath - Prefix path in the archive
-   * @param filter - Optional filter regex or function
-   * @returns this for chaining
-   */
-  addLocalFolderPromise(
-    localPath: string,
-    options?: {
-      zipPath?: string;
-      filter?: RegExp | ((path: string) => boolean);
-    }
-  ): this {
-    const filter = options?.filter;
-    const filterFn = filter
-      ? typeof filter === "function"
-        ? filter
-        : (p: string) => filter.test(p)
-      : undefined;
-
-    return this.addDirectory(localPath, {
-      prefix: options?.zipPath ?? path.basename(localPath),
-      includeRoot: false,
-      filter: filterFn
-    });
-  }
-
   // ===========================================================================
   // Add Glob Patterns
   // ===========================================================================
@@ -794,58 +696,44 @@ export class ZipFile {
     return this;
   }
 
-  /**
-   * Add files matching a glob pattern.
-   *
-   * Similar to archiver's glob() method.
-   *
-   * @param pattern - Glob pattern
-   * @param options - Glob options
-   * @returns this for chaining
-   */
-  glob(
-    pattern: string,
-    options?: {
-      cwd?: string;
-      ignore?: string | string[];
-      prefix?: string;
-      dot?: boolean;
-    }
-  ): this {
-    return this.addGlob(pattern, options);
-  }
+  // ===========================================================================
+  // Unified Edit API (consistent with ZipEditor)
+  // ===========================================================================
 
-  // ===========================================================================
-  // Modify Archive (Delete/Update Entries)
-  // ===========================================================================
+  /**
+   * Check if an entry exists (considering pending edits).
+   *
+   * Unified API consistent with ZipEditor.
+   *
+   * @param name - Entry name to check
+   * @returns `true` if the entry exists
+   */
+  has(name: string): boolean {
+    // Check edit view first (original archive entries)
+    if (this._editView?.has(name)) {
+      return true;
+    }
+    // Check pending entries
+    const normalizedPath = normalizeZipPath(name, resolveZipPathOptions(this._options));
+    return this._pendingEntries.some(e => "zipPath" in e && e.zipPath === normalizedPath);
+  }
 
   /**
    * Delete an entry from the archive.
    *
-   * Similar to adm-zip's deleteFile().
+   * Unified API consistent with ZipEditor.
    *
-   * @param entryPath - Path of the entry to delete
-   * @returns true if entry was found and marked for deletion
-   *
-   * @example
-   * ```ts
-   * const zip = await ZipFile.fromFile("./archive.zip");
-   * zip.deleteEntry("old-file.txt");
-   * await zip.writeToFile("./archive.zip", { overwrite: "overwrite" });
-   * ```
+   * @param name - Entry name to delete
+   * @returns `true` if the entry existed and was deleted
    */
-  deleteEntry(entryPath: string): boolean {
-    const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._options));
-
-    // Check if entry exists in original archive
-    if (this._parser?.hasEntry(normalizedPath)) {
-      this._deletedEntries.add(normalizedPath);
-      // Also remove from updated entries if present
-      this._updatedEntries.delete(normalizedPath);
-      return true;
+  delete(name: string): boolean {
+    // Check if entry exists in edit view (original archive)
+    if (this._editView?.has(name)) {
+      return this._editView.delete(name);
     }
 
     // Check if entry exists in pending entries
+    const normalizedPath = normalizeZipPath(name, resolveZipPathOptions(this._options));
     const index = this._pendingEntries.findIndex(
       e => "zipPath" in e && e.zipPath === normalizedPath
     );
@@ -859,74 +747,119 @@ export class ZipFile {
   }
 
   /**
-   * Delete a file from the archive (adm-zip compatible alias).
+   * Add or update an entry with new content.
    *
-   * @param entry - Entry path or entry object
-   * @returns true if entry was deleted
-   */
-  deleteFile(entry: string | ZipEntryInfo): boolean {
-    const entryPath = typeof entry === "string" ? entry : entry.path;
-    return this.deleteEntry(entryPath);
-  }
-
-  /**
-   * Update the content of an existing entry.
+   * If an entry with the same name already exists (in original archive or pending),
+   * it will be replaced. Otherwise, a new entry is added.
    *
-   * Similar to adm-zip's updateFile().
+   * Unified API consistent with ZipEditor.
    *
-   * @param entryPath - Path of the entry to update
-   * @param data - New content (Uint8Array or string)
-   * @param options - Options for the updated entry
-   * @returns true if entry was found and marked for update
+   * @param name - Entry name (path in the archive)
+   * @param source - Entry data (Uint8Array or string)
+   * @param options - Per-entry options
+   * @returns `this` for chaining
    *
    * @example
    * ```ts
    * const zip = await ZipFile.fromFile("./archive.zip");
-   * zip.updateEntry("config.json", JSON.stringify(newConfig));
-   * await zip.writeToFile("./archive.zip", { overwrite: "overwrite" });
+   * zip
+   *   .set("readme.txt", "Hello World")
+   *   .set("data.bin", binaryData, { level: 0 });
+   * await zip.writeToFile("./output.zip");
    * ```
    */
-  updateEntry(entryPath: string, data: Uint8Array | string, options: AddFileOptions = {}): boolean {
-    const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._options));
-    const bytes = typeof data === "string" ? textEncoder.encode(data) : data;
+  set(name: string, source: Uint8Array | string, options: AddFileOptions = {}): this {
+    const bytes = typeof source === "string" ? utf8Encoder.encode(source) : source;
 
-    // Check if entry exists in original archive
-    if (this._parser?.hasEntry(normalizedPath)) {
-      // Remove from deleted entries if present
-      this._deletedEntries.delete(normalizedPath);
-      this._updatedEntries.set(normalizedPath, { data: bytes, options });
-      return true;
+    // If entry exists in edit view, update it there
+    if (this._editView?.has(name)) {
+      this._editView.set(name, bytes, options);
+      return this;
     }
 
     // Check if entry exists in pending entries
+    const normalizedPath = normalizeZipPath(name, resolveZipPathOptions(this._options));
     const index = this._pendingEntries.findIndex(
       e => "zipPath" in e && e.zipPath === normalizedPath
     );
 
     if (index >= 0) {
-      // Replace with updated buffer entry
+      // Replace existing pending entry
       this._pendingEntries[index] = {
         type: "buffer",
         data: bytes,
         zipPath: normalizedPath,
         options
       };
+    } else {
+      // Add as new pending entry
+      this._pendingEntries.push({
+        type: "buffer",
+        data: bytes,
+        zipPath: normalizedPath,
+        options
+      });
+    }
+
+    return this;
+  }
+
+  /**
+   * Rename an entry.
+   *
+   * **Overwrite behavior**: If an entry with the target name already exists,
+   * it will be replaced (similar to `mv -f`).
+   *
+   * Unified API consistent with ZipEditor.
+   *
+   * @param from - Current entry name
+   * @param to - New entry name
+   * @returns `true` if the rename was successful, `false` if source doesn't exist
+   *
+   * @example
+   * ```ts
+   * const zip = await ZipFile.fromFile("./archive.zip");
+   * zip.rename("old-name.txt", "new-name.txt");
+   * await zip.writeToFile("./output.zip");
+   * ```
+   */
+  rename(from: string, to: string): boolean {
+    // Try rename in edit view first
+    if (this._editView?.rename(from, to)) {
+      return true;
+    }
+
+    // Check pending entries
+    const pathOptions = resolveZipPathOptions(this._options);
+    const normalizedFrom = normalizeZipPath(from, pathOptions);
+    const normalizedTo = normalizeZipPath(to, pathOptions);
+
+    if (normalizedFrom === normalizedTo) {
+      return this.has(from);
+    }
+
+    const index = this._pendingEntries.findIndex(
+      e => "zipPath" in e && e.zipPath === normalizedFrom
+    );
+
+    if (index >= 0) {
+      // Remove any existing entry with target name
+      const toIndex = this._pendingEntries.findIndex(
+        e => "zipPath" in e && e.zipPath === normalizedTo
+      );
+      if (toIndex >= 0 && toIndex !== index) {
+        this._pendingEntries.splice(toIndex, 1);
+      }
+
+      // Rename the entry
+      const entry = this._pendingEntries[index < toIndex ? index : index - (toIndex >= 0 ? 1 : 0)]!;
+      if ("zipPath" in entry) {
+        entry.zipPath = normalizedTo;
+      }
       return true;
     }
 
     return false;
-  }
-
-  /**
-   * Update a file in the archive (adm-zip compatible alias).
-   *
-   * @param entry - Entry path or entry object
-   * @param content - New content (Uint8Array)
-   * @returns true if entry was updated
-   */
-  updateFile(entry: string | ZipEntryInfo, content: Uint8Array): boolean {
-    const entryPath = typeof entry === "string" ? entry : entry.path;
-    return this.updateEntry(entryPath, content);
   }
 
   // ===========================================================================
@@ -963,33 +896,30 @@ export class ZipFile {
     // Collect all entries
     const entries: ZipEntry[] = [];
 
-    // If we have an existing archive, include its entries (with modifications applied)
-    if (this._parser) {
-      for (const existingEntry of this._parser.getEntries()) {
+    // Process entries from edit view (existing archive with modifications)
+    if (this._editView && this._parser) {
+      // Process base (preserved) entries
+      for (const { info } of this._editView.getBaseEntries()) {
         checkAbort();
-
-        // Skip deleted entries
-        if (this._deletedEntries.has(existingEntry.path)) {
-          continue;
+        const data = await this._parser.extract(info.path, this._password);
+        if (data) {
+          entries.push(buildPreservedEntry(info, data, this._options, this._password));
+          this._bytesWritten += data.length;
         }
+      }
 
-        // Check for updated content
-        const updated = this._updatedEntries.get(existingEntry.path);
-        if (updated) {
-          entries.push(buildUpdatedEntry(existingEntry, updated, this._options, this._password));
-          this._bytesWritten += updated.data.length;
-        } else {
-          // Extract original data
-          const data = await this._parser.extract(existingEntry.path, this._password);
-          if (data) {
-            entries.push(buildPreservedEntry(existingEntry, data, this._options, this._password));
-            this._bytesWritten += data.length;
-          }
-        }
+      // Process set (updated) entries
+      for (const setEntry of this._editView.getSetEntries()) {
+        checkAbort();
+        // Source is Uint8Array from updateEntry()
+        const data = setEntry.source as Uint8Array;
+        const options = (setEntry.options as AddFileOptions) ?? {};
+        entries.push(buildZipEntry(setEntry.name, data, options, this._options, this._password));
+        this._bytesWritten += data.length;
       }
     }
 
-    // Process pending entries
+    // Process pending entries (new files added via add* methods)
     for (const pending of this._pendingEntries) {
       checkAbort();
 
@@ -1115,8 +1045,11 @@ export class ZipFile {
 
     // Clear pending changes after building
     this._pendingEntries = [];
-    this._deletedEntries.clear();
-    this._updatedEntries.clear();
+    if (this._editView && this._parser) {
+      // Re-initialize edit view from the new zip data (all changes applied)
+      this._parser = new ZipParser(this._zipData, { password: this._password });
+      this._editView.initFromEntries(this._parser.getEntries(), e => e.path);
+    }
     this._abortController = null;
 
     return this._zipData;
@@ -1133,7 +1066,6 @@ export class ZipFile {
     if (this._zipData && !this.hasPendingChanges()) {
       return this._zipData;
     }
-
     // Check for stream entries which can't be processed synchronously
     const hasStreamEntry = this._pendingEntries.some(e => e.type === "stream");
     if (hasStreamEntry) {
@@ -1142,29 +1074,25 @@ export class ZipFile {
 
     const entries: ZipEntry[] = [];
 
-    // If we have an existing archive, include its entries (with modifications applied)
-    if (this._parser) {
-      for (const existingEntry of this._parser.getEntries()) {
-        // Skip deleted entries
-        if (this._deletedEntries.has(existingEntry.path)) {
-          continue;
+    // Process entries from edit view (existing archive with modifications)
+    if (this._editView && this._parser) {
+      // Process base (preserved) entries
+      for (const { info } of this._editView.getBaseEntries()) {
+        const data = this._parser.extractSync(info.path, this._password);
+        if (data) {
+          entries.push(buildPreservedEntry(info, data, this._options, this._password));
         }
+      }
 
-        // Check for updated content
-        const updated = this._updatedEntries.get(existingEntry.path);
-        if (updated) {
-          entries.push(buildUpdatedEntry(existingEntry, updated, this._options, this._password));
-        } else {
-          // Extract original data synchronously
-          const data = this._parser.extractSync(existingEntry.path, this._password);
-          if (data) {
-            entries.push(buildPreservedEntry(existingEntry, data, this._options, this._password));
-          }
-        }
+      // Process set (updated) entries
+      for (const setEntry of this._editView.getSetEntries()) {
+        const data = setEntry.source as Uint8Array;
+        const options = (setEntry.options as AddFileOptions) ?? {};
+        entries.push(buildZipEntry(setEntry.name, data, options, this._options, this._password));
       }
     }
 
-    // Process pending entries
+    // Process pending entries (new files added via add* methods)
     for (const pending of this._pendingEntries) {
       switch (pending.type) {
         case "file": {
@@ -1267,10 +1195,39 @@ export class ZipFile {
 
     // Clear pending changes after building
     this._pendingEntries = [];
-    this._deletedEntries.clear();
-    this._updatedEntries.clear();
+    if (this._editView && this._parser) {
+      // Re-initialize edit view from the new zip data (all changes applied)
+      this._parser = new ZipParser(this._zipData, { password: this._password });
+      this._editView.initFromEntries(this._parser.getEntries(), e => e.path);
+    }
 
     return this._zipData;
+  }
+
+  // ===========================================================================
+  // Unified Output API (consistent with ZipArchive)
+  // ===========================================================================
+
+  /**
+   * Build the ZIP archive and return as a buffer.
+   *
+   * Unified API consistent with ZipArchive.
+   *
+   * @returns ZIP file data
+   */
+  async bytes(): Promise<Uint8Array> {
+    return this.toBuffer();
+  }
+
+  /**
+   * Synchronously build the ZIP archive and return as a buffer.
+   *
+   * Unified API consistent with ZipArchive.
+   *
+   * @returns ZIP file data
+   */
+  bytesSync(): Uint8Array {
+    return this.toBufferSync();
   }
 
   // ===========================================================================
@@ -1299,8 +1256,6 @@ export class ZipFile {
 
   /**
    * Synchronously write the ZIP archive to a file.
-   *
-   * Similar to adm-zip's writeZip().
    */
   writeToFileSync(filePath: string, options: WriteZipOptions = {}): void {
     const { overwrite = "error" } = options;
@@ -1314,19 +1269,6 @@ export class ZipFile {
     const data = this.toBufferSync();
     ensureDirSync(path.dirname(targetPath));
     writeFileBytesSync(targetPath, data);
-  }
-
-  /**
-   * Write ZIP to file (adm-zip compatible alias).
-   */
-  writeZip(targetFileName?: string): void {
-    if (targetFileName) {
-      this.writeToFileSync(targetFileName, { overwrite: "overwrite" });
-    } else if (this._sourcePath) {
-      this.writeToFileSync(this._sourcePath, { overwrite: "overwrite" });
-    } else {
-      throw new Error("No target file specified");
-    }
   }
 
   // ===========================================================================
@@ -1365,16 +1307,6 @@ export class ZipFile {
    */
   getEntryNames(): string[] {
     return this.getEntries().map(e => e.path);
-  }
-
-  /**
-   * Check if an entry exists.
-   */
-  hasEntry(entryPath: string): boolean {
-    if (!this._parser) {
-      return false;
-    }
-    return this._parser.hasEntry(entryPath);
   }
 
   /**
@@ -1518,8 +1450,6 @@ export class ZipFile {
    * Synchronously extract all entries to a directory.
    *
    * Note: AES-encrypted archives cannot be extracted synchronously.
-   *
-   * Similar to adm-zip's extractAllTo().
    */
   extractToSync(targetDir: string, options: ExtractOptions = {}): void {
     if (!this._parser) {
@@ -1558,27 +1488,6 @@ export class ZipFile {
         }
       }
     }
-  }
-
-  /**
-   * Extract all to directory (adm-zip compatible alias).
-   *
-   * @param targetPath - Target directory
-   * @param overwrite - Whether to overwrite existing files
-   */
-  extractAllTo(targetPath: string, overwrite = false): void {
-    this.extractToSync(targetPath, {
-      overwrite: overwrite ? "overwrite" : "error"
-    });
-  }
-
-  /**
-   * Extract all entries asynchronously (adm-zip compatible alias).
-   */
-  extractAllToAsync(targetPath: string, overwrite = false): Promise<void> {
-    return this.extractTo(targetPath, {
-      overwrite: overwrite ? "overwrite" : "error"
-    });
   }
 
   /**
@@ -1704,8 +1613,6 @@ export class ZipFile {
   /**
    * Get the archive comment.
    *
-   * Similar to adm-zip's getZipComment().
-   *
    * @returns Archive comment string (empty if none)
    */
   getZipComment(): string {
@@ -1718,8 +1625,6 @@ export class ZipFile {
   /**
    * Set or update the archive comment.
    *
-   * Similar to adm-zip's addZipComment().
-   *
    * @param comment - Comment string
    */
   addZipComment(comment: string): this {
@@ -1729,8 +1634,6 @@ export class ZipFile {
 
   /**
    * Get the comment for a specific entry.
-   *
-   * Similar to adm-zip's getZipEntryComment().
    *
    * @param entryPath - Path of the entry
    * @returns Entry comment or null if entry not found
@@ -1744,11 +1647,7 @@ export class ZipFile {
    * Check if there are pending modifications (adds/deletes/updates).
    */
   hasPendingChanges(): boolean {
-    return (
-      this._pendingEntries.length > 0 ||
-      this._deletedEntries.size > 0 ||
-      this._updatedEntries.size > 0
-    );
+    return this._pendingEntries.length > 0 || (this._editView?.hasChanges() ?? false);
   }
 
   /**
@@ -1761,8 +1660,7 @@ export class ZipFile {
   /**
    * Abort the current operation.
    *
-   * Similar to archiver's abort() method. This will cancel any in-progress
-   * build or extraction operation.
+   * Cancels any in-progress build or extraction operation.
    *
    * @returns this for chaining
    *
@@ -1802,8 +1700,7 @@ export class ZipFile {
   /**
    * Get the number of bytes written so far.
    *
-   * Similar to archiver's pointer() method. This is useful for
-   * tracking progress during archive creation.
+   * Useful for tracking progress during archive creation.
    *
    * @returns Number of bytes in the current archive data
    *

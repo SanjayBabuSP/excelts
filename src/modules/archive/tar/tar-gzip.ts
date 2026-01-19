@@ -8,7 +8,7 @@
 import { promisify } from "util";
 import * as zlib from "zlib";
 
-import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 import { uint8ArrayToBuffer, bufferToUint8Array } from "@archive/compression/compress";
 import type { ArchiveSource } from "@archive/io/archive-source";
 import { toUint8Array, isInMemoryArchiveSource, toAsyncIterable } from "@archive/io/archive-source";
@@ -39,7 +39,7 @@ export type ParseTarGzOptions = TarParseOptions;
  * ```ts
  * const archive = new TarGzArchive({ level: 6 });
  * archive.add("file.txt", "Hello, World!");
- * const bytes = await archive.toUint8Array();
+ * const bytes = await archive.bytes();
  * ```
  */
 export class TarGzArchive extends TarArchive {

@@ -348,37 +348,37 @@ describe("ZipFile", () => {
     });
   });
 
-  describe("adm-zip compatible methods", () => {
-    it("addLocalFile should work", async () => {
+  describe("addFile and addDirectory methods", () => {
+    it("addFile with custom path should work", async () => {
       await fsp.writeFile(path.join(testDir, "local.txt"), "local content");
 
       const zip = new ZipFile();
-      zip.addLocalFile(path.join(testDir, "local.txt"), "custom/path.txt");
+      zip.addFile(path.join(testDir, "local.txt"), { name: "custom/path.txt" });
       const buffer = await zip.toBuffer();
 
       const parser = new ZipParser(buffer);
       expect(parser.hasEntry("custom/path.txt")).toBe(true);
     });
 
-    it("addLocalFolder should work", async () => {
+    it("addDirectory with prefix should work", async () => {
       await fsp.mkdir(path.join(testDir, "folder"));
       await fsp.writeFile(path.join(testDir, "folder", "file.txt"), "content");
 
       const zip = new ZipFile();
-      zip.addLocalFolder(path.join(testDir, "folder"), "dest");
+      zip.addDirectory(path.join(testDir, "folder"), { prefix: "dest", includeRoot: false });
       const buffer = await zip.toBuffer();
 
       const parser = new ZipParser(buffer);
       expect(parser.hasEntry("dest/file.txt")).toBe(true);
     });
 
-    it("writeZip should write to file synchronously", async () => {
+    it("writeToFileSync should write to file synchronously", async () => {
       await fsp.writeFile(path.join(testDir, "data.txt"), "data");
 
       const zip = new ZipFile();
       zip.addFile(path.join(testDir, "data.txt"));
       const outputPath = path.join(tempDir, "sync-output.zip");
-      zip.writeZip(outputPath);
+      zip.writeToFileSync(outputPath, { overwrite: "overwrite" });
 
       expect(fs.existsSync(outputPath)).toBe(true);
     });
@@ -398,8 +398,8 @@ describe("ZipFile", () => {
       const entries = zip.getEntries();
 
       expect(entries).toHaveLength(2);
-      expect(zip.hasEntry("hello.txt")).toBe(true);
-      expect(zip.hasEntry("world.txt")).toBe(true);
+      expect(zip.has("hello.txt")).toBe(true);
+      expect(zip.has("world.txt")).toBe(true);
 
       const content = await zip.readAsText("hello.txt");
       expect(content).toBe("Hello!");
@@ -472,7 +472,7 @@ describe("ZipFile", () => {
       expect(fs.existsSync(path.join(extractDir, "skip.log"))).toBe(false);
     });
 
-    it("extractAllTo should work (adm-zip compatible)", async () => {
+    it("extractToSync should work", async () => {
       const srcZip = new ZipFile();
       srcZip.addText("Content", "file.txt");
       const zipPath = path.join(tempDir, "extractall.zip");
@@ -480,7 +480,7 @@ describe("ZipFile", () => {
 
       const extractDir = path.join(tempDir, "extractall-out");
       const zip = ZipFile.fromFileSync(zipPath);
-      zip.extractAllTo(extractDir, true);
+      zip.extractToSync(extractDir, { overwrite: "overwrite" });
 
       expect(fs.existsSync(path.join(extractDir, "file.txt"))).toBe(true);
     });
@@ -634,7 +634,7 @@ describe("ZipFile", () => {
     });
   });
 
-  describe("deleteEntry/updateEntry (modify archive)", () => {
+  describe("delete/set (modify archive)", () => {
     it("should delete an entry from existing archive", async () => {
       // Create initial archive
       const srcZip = new ZipFile();
@@ -648,7 +648,7 @@ describe("ZipFile", () => {
       const zip = await ZipFile.fromFile(zipPath);
       expect(zip.entryCount).toBe(3);
 
-      const deleted = zip.deleteEntry("file2.txt");
+      const deleted = zip.delete("file2.txt");
       expect(deleted).toBe(true);
 
       // Rebuild and verify
@@ -668,7 +668,7 @@ describe("ZipFile", () => {
       const buffer = await srcZip.toBuffer();
 
       const zip = ZipFile.fromBuffer(buffer);
-      const deleted = zip.deleteEntry("not-exists.txt");
+      const deleted = zip.delete("not-exists.txt");
       expect(deleted).toBe(false);
     });
 
@@ -681,8 +681,7 @@ describe("ZipFile", () => {
 
       // Open and update
       const zip = await ZipFile.fromFile(zipPath);
-      const updated = zip.updateEntry("config.json", "Updated content");
-      expect(updated).toBe(true);
+      zip.set("config.json", "Updated content");
 
       // Rebuild and verify
       const newBuffer = await zip.toBuffer();
@@ -692,13 +691,13 @@ describe("ZipFile", () => {
       expect(new TextDecoder().decode(content!)).toBe("Updated content");
     });
 
-    it("updateFile should work with Uint8Array (adm-zip compatible)", async () => {
+    it("set should work with Uint8Array", async () => {
       const srcZip = new ZipFile();
       srcZip.addBuffer(new Uint8Array([1, 2, 3]), "data.bin");
       const buffer = await srcZip.toBuffer();
 
       const zip = ZipFile.fromBuffer(buffer);
-      zip.updateFile("data.bin", new Uint8Array([4, 5, 6, 7]));
+      zip.set("data.bin", new Uint8Array([4, 5, 6, 7]));
 
       const newBuffer = await zip.toBuffer();
       const parser = new ZipParser(newBuffer);
@@ -706,16 +705,15 @@ describe("ZipFile", () => {
       expect(content).toEqual(new Uint8Array([4, 5, 6, 7]));
     });
 
-    it("deleteFile should work with entry object (adm-zip compatible)", async () => {
+    it("delete should work with entry path", async () => {
       const srcZip = new ZipFile();
       srcZip.addText("Content", "target.txt");
       const buffer = await srcZip.toBuffer();
 
       const zip = ZipFile.fromBuffer(buffer);
-      const entry = zip.getEntry("target.txt");
-      expect(entry).not.toBeNull();
+      expect(zip.has("target.txt")).toBe(true);
 
-      zip.deleteFile(entry!);
+      zip.delete("target.txt");
 
       const newBuffer = await zip.toBuffer();
       const parser = new ZipParser(newBuffer);
@@ -823,7 +821,7 @@ describe("ZipFile", () => {
       const zip = ZipFile.fromBuffer(buffer);
       expect(zip.hasPendingChanges()).toBe(false);
 
-      zip.deleteEntry("file.txt");
+      zip.delete("file.txt");
       expect(zip.hasPendingChanges()).toBe(true);
     });
 
@@ -835,7 +833,7 @@ describe("ZipFile", () => {
       const zip = ZipFile.fromBuffer(buffer);
       expect(zip.hasPendingChanges()).toBe(false);
 
-      zip.updateEntry("file.txt", "Updated");
+      zip.set("file.txt", "Updated");
       expect(zip.hasPendingChanges()).toBe(true);
     });
   });
@@ -938,7 +936,7 @@ describe("ZipFile", () => {
         const zip = new ZipFile();
         zip.addText("Content", "file.txt");
 
-        expect(zip.deleteEntry("file.txt")).toBe(true);
+        expect(zip.delete("file.txt")).toBe(true);
         expect(zip.hasPendingChanges()).toBe(false);
       });
 
@@ -946,17 +944,17 @@ describe("ZipFile", () => {
         const zip = new ZipFile();
         zip.addBuffer(new Uint8Array([1, 2, 3]), "data.bin");
 
-        expect(zip.deleteEntry("data.bin")).toBe(true);
+        expect(zip.delete("data.bin")).toBe(true);
         expect(zip.hasPendingChanges()).toBe(false);
       });
     });
 
-    describe("update pending entries", () => {
+    describe("set pending entries", () => {
       it("should update pending buffer entry", async () => {
         const zip = new ZipFile();
         zip.addBuffer(new Uint8Array([1, 2, 3]), "data.bin");
 
-        expect(zip.updateEntry("data.bin", new Uint8Array([4, 5, 6]))).toBe(true);
+        zip.set("data.bin", new Uint8Array([4, 5, 6]));
 
         const buffer = await zip.toBuffer();
         const parser = new ZipParser(buffer);
@@ -964,16 +962,21 @@ describe("ZipFile", () => {
         expect(content).toEqual(new Uint8Array([4, 5, 6]));
       });
 
-      it("should return false when updating non-existent entry", () => {
+      it("should add new entry when setting non-existent entry", async () => {
         const zip = new ZipFile();
-        expect(zip.updateEntry("non-existent.txt", "content")).toBe(false);
+        zip.set("new-file.txt", "content");
+        expect(zip.has("new-file.txt")).toBe(true);
+
+        const buffer = await zip.toBuffer();
+        const parser = new ZipParser(buffer);
+        expect(parser.hasEntry("new-file.txt")).toBe(true);
       });
     });
 
-    describe("hasEntry without parser", () => {
+    describe("has without parser", () => {
       it("should return false when no archive loaded", () => {
         const zip = new ZipFile();
-        expect(zip.hasEntry("file.txt")).toBe(false);
+        expect(zip.has("file.txt")).toBe(false);
       });
     });
 
@@ -1102,23 +1105,23 @@ describe("ZipFile", () => {
       });
     });
 
-    describe("writeZip without target", () => {
-      it("should throw when no target specified and no source path", () => {
+    describe("writeToFileSync without target", () => {
+      it("should throw when no target specified", () => {
         const zip = new ZipFile();
         zip.addText("Content", "file.txt");
 
-        expect(() => zip.writeZip()).toThrow(/no target file/i);
+        expect(() => zip.writeToFileSync("")).toThrow();
       });
 
-      it("should write to source path when available", async () => {
+      it("should update file with writeToFileSync and overwrite", async () => {
         const srcZip = new ZipFile();
         srcZip.addText("Original", "file.txt");
         const zipPath = path.join(tempDir, "writeback.zip");
         await srcZip.writeToFile(zipPath);
 
         const zip = await ZipFile.fromFile(zipPath);
-        zip.updateEntry("file.txt", "Updated");
-        zip.writeZip(); // Should write to source path
+        zip.set("file.txt", "Updated");
+        zip.writeToFileSync(zipPath, { overwrite: "overwrite" });
 
         // Verify update
         const reloaded = await ZipFile.fromFile(zipPath);
@@ -1146,7 +1149,7 @@ describe("ZipFile", () => {
         const buffer = await srcZip.toBuffer();
 
         const zip = ZipFile.fromBuffer(buffer);
-        zip.deleteEntry("file1.txt");
+        zip.delete("file1.txt");
 
         const newBuffer = zip.toBufferSync();
         const parser = new ZipParser(newBuffer);
@@ -1160,7 +1163,7 @@ describe("ZipFile", () => {
         const buffer = await srcZip.toBuffer();
 
         const zip = ZipFile.fromBuffer(buffer);
-        zip.updateEntry("file.txt", "Updated content");
+        zip.set("file.txt", "Updated content");
 
         const newBuffer = zip.toBufferSync();
         const parser = new ZipParser(newBuffer);
@@ -1255,7 +1258,7 @@ describe("ZipFile", () => {
           expect(fs.existsSync(path.join(extractDir, "mydir"))).toBe(true);
         } else {
           // If no explicit directory entry, test extracts file correctly
-          expect(zip.hasEntry("mydir/inner.txt")).toBe(true);
+          expect(zip.has("mydir/inner.txt")).toBe(true);
         }
       });
 
@@ -1326,13 +1329,13 @@ describe("ZipFile", () => {
       });
     });
 
-    describe("archiver-compatible glob method", () => {
-      it("glob should work as alias for addGlob", async () => {
+    describe("addGlob method", () => {
+      it("addGlob should match files by glob pattern", async () => {
         await fsp.writeFile(path.join(testDir, "glob1.ts"), "");
         await fsp.writeFile(path.join(testDir, "glob2.ts"), "");
 
         const zip = new ZipFile();
-        zip.glob("*.ts", { cwd: testDir, prefix: "src" });
+        zip.addGlob("*.ts", { cwd: testDir, prefix: "src" });
         const buffer = await zip.toBuffer();
 
         const parser = new ZipParser(buffer);
@@ -1342,16 +1345,18 @@ describe("ZipFile", () => {
       });
     });
 
-    describe("addLocalFolderPromise with regex filter", () => {
-      it("should filter using RegExp", async () => {
+    describe("addDirectory with regex filter", () => {
+      it("should filter using function from regex", async () => {
         await fsp.mkdir(path.join(testDir, "regex-test"));
         await fsp.writeFile(path.join(testDir, "regex-test", "keep.ts"), "");
         await fsp.writeFile(path.join(testDir, "regex-test", "skip.spec.ts"), "");
 
         const zip = new ZipFile();
-        zip.addLocalFolderPromise(path.join(testDir, "regex-test"), {
-          zipPath: "filtered",
-          filter: /^(?!.*\.spec\.ts$).*$/
+        const pattern = /^(?!.*\.spec\.ts$).*$/;
+        zip.addDirectory(path.join(testDir, "regex-test"), {
+          prefix: "filtered",
+          includeRoot: false,
+          filter: (p: string) => pattern.test(p)
         });
         const buffer = await zip.toBuffer();
 

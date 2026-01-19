@@ -4,11 +4,25 @@
  * Shared by streaming zip writer and buffer zip builder.
  */
 
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
+import { concatUint8Arrays } from "@stream/shared";
+
+// =============================================================================
+// ZIP64 mode type
+// =============================================================================
+
+/**
+ * Shared ZIP64 mode type.
+ *
+ * - "auto": write ZIP64 only when required by ZIP limits.
+ * - true: force ZIP64 structures.
+ * - false: forbid ZIP64; throw if required.
+ */
+export type Zip64Mode = boolean | "auto";
+
 // =============================================================================
 // ZIP format constants (PKWARE APPNOTE)
 // =============================================================================
-
-const EMPTY = new Uint8Array(0);
 
 // Signatures
 export const LOCAL_FILE_HEADER_SIG = 0x04034b50;
@@ -276,7 +290,7 @@ export function buildZip64ExtraField(input: {
   }
 
   if (dataLen === 0) {
-    return EMPTY;
+    return EMPTY_UINT8ARRAY;
   }
 
   const out = new Uint8Array(4 + dataLen);
@@ -305,16 +319,7 @@ export function buildZip64ExtraField(input: {
 }
 
 export function concatExtraFields(a: Uint8Array, b: Uint8Array): Uint8Array {
-  if (a.length === 0) {
-    return b;
-  }
-  if (b.length === 0) {
-    return a;
-  }
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
+  return concatUint8Arrays([a, b]);
 }
 
 export interface Zip64EndOfCentralDirectoryInput {

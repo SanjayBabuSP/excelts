@@ -2,7 +2,7 @@
  * Node.js file system convenience layer for ZIP operations.
  *
  * This module provides a high-level API for working with ZIP files
- * on the file system, similar to archiver and adm-zip.
+ * on the file system.
  *
  * @example Create a ZIP from files and directories
  * ```ts

@@ -8,7 +8,7 @@
 import { promisify } from "util";
 import * as zlib from "zlib";
 
-import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 
 // Re-export shared types and utilities
 export { type CompressOptions, hasCompressionStream } from "@archive/compression/compress.base";

@@ -1,7 +1,18 @@
 import type { UnzipEntry } from "./index";
+import type {
+  ArchiveProgressPhase,
+  ArchiveStreamOptions,
+  ArchiveOperationBase
+} from "@archive/shared/progress";
 
-export type UnzipProgressPhase = "running" | "done" | "aborted" | "error";
+/**
+ * Progress phase for unzip operations.
+ */
+export type UnzipProgressPhase = ArchiveProgressPhase;
 
+/**
+ * Progress information for unzip operations.
+ */
 export type UnzipProgress = {
   type: "unzip";
   phase: UnzipProgressPhase;
@@ -22,19 +33,15 @@ export type UnzipProgress = {
   };
 };
 
-export type UnzipStreamOptions = {
-  signal?: AbortSignal;
-  onProgress?: (p: UnzipProgress) => void;
+/**
+ * Streaming options for unzip operations.
+ */
+export type UnzipStreamOptions = ArchiveStreamOptions<UnzipProgress>;
 
-  /** Throttle progress callbacks; 0 emits on the next microtask. */
-  progressIntervalMs?: number;
-};
-
-export type UnzipOperation = {
+/**
+ * Operation handle for streaming unzip.
+ */
+export type UnzipOperation = ArchiveOperationBase<UnzipProgress> & {
+  /** Async iterable of unzip entry objects */
   iterable: AsyncIterable<UnzipEntry>;
-  signal: AbortSignal;
-
-  abort(reason?: unknown): void;
-  pointer(): number;
-  progress(): UnzipProgress;
 };

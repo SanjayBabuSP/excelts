@@ -95,26 +95,8 @@ export interface HttpRangeReaderStats {
 /**
  * Error thrown when the server doesn't support Range requests.
  */
-export class RangeNotSupportedError extends Error {
-  constructor(url: string) {
-    super(`Server does not support Range requests for: ${url}`);
-    this.name = "RangeNotSupportedError";
-  }
-}
-
-/**
- * Error thrown when an HTTP request fails.
- */
-export class HttpRangeError extends Error {
-  constructor(
-    public readonly url: string,
-    public readonly status: number,
-    public readonly statusText: string
-  ) {
-    super(`HTTP ${status} ${statusText} for: ${url}`);
-    this.name = "HttpRangeError";
-  }
-}
+export { RangeNotSupportedError, HttpRangeError } from "@archive/shared/errors";
+import { RangeNotSupportedError, HttpRangeError } from "@archive/shared/errors";
 
 /**
  * Parse total file size from Content-Range header.

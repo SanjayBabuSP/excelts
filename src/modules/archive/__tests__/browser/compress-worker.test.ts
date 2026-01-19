@@ -86,7 +86,7 @@ describe("compress.browser with worker support", () => {
           useWorker: true,
           signal: controller.signal
         })
-      ).rejects.toThrow("aborted");
+      ).rejects.toThrow(/aborted/i);
     });
 
     it("should fallback to main thread when useWorker is false", async () => {
@@ -180,7 +180,7 @@ describe("compress.browser with worker support", () => {
 
       await expect(
         decompress(compressed, { useWorker: true, signal: controller.signal })
-      ).rejects.toThrow("aborted");
+      ).rejects.toThrow(/aborted/i);
     });
   });
 

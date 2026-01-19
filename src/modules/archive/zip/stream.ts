@@ -21,64 +21,41 @@ import {
   isAesEncryption,
   getAesKeyStrength
 } from "@archive/crypto";
-import type { ZipTimestampMode } from "@archive/utils/timestamps";
-import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
+import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
+import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/shared/defaults";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import {
   buildZipEntryMetadata,
   resolveZipCompressionMethod
 } from "@archive/zip/zip-entry-metadata";
 import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
-import { normalizeZipPath, type ZipPathOptions } from "@archive/zip/zip-path";
-import { decodeUtf8, encodeUtf8 } from "@archive/utils/text";
-import { isProbablyIncompressibleChunks } from "@archive/utils/compressibility";
+import { normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
+import { uint8ArrayToString as decodeUtf8, stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import { isProbablyIncompressibleChunks } from "@archive/zip/compressibility";
 import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
-import { createAbortError } from "@archive/utils/abort";
+import { createAbortError, toError } from "@archive/shared/errors";
+import { buildCentralDirectoryAndEocd, centralDirEntryToInput } from "./writer-core";
+import type { ZipCentralDirEntry, ZipWritableFile } from "./writable-file";
 import {
-  buildCentralDirectoryHeader,
   buildDataDescriptor,
   buildDataDescriptorZip64,
-  buildEndOfCentralDirectory,
-  buildZip64EndOfCentralDirectory,
-  buildZip64EndOfCentralDirectoryLocator,
-  buildZip64ExtraField,
   concatExtraFields,
   UINT16_MAX,
   UINT32_MAX,
   buildLocalFileHeader,
   VERSION_ZIP64,
-  VERSION_MADE_BY,
   VERSION_NEEDED,
   FLAG_ENCRYPTED,
-  COMPRESSION_AES
+  FLAG_DATA_DESCRIPTOR,
+  FLAG_UTF8,
+  COMPRESSION_AES,
+  type Zip64Mode
 } from "@archive/zip-spec/zip-records";
-import type { Zip64Mode } from "./zip64-mode";
 
-export type { Zip64Mode } from "./zip64-mode";
+export type { Zip64Mode } from "@archive/zip-spec/zip-records";
+export type { ZipCentralDirEntry, ZipWritableFile } from "./writable-file";
 
-const EMPTY = new Uint8Array(0);
 const SMART_STORE_DECIDE_BYTES = 16 * 1024;
-
-/**
- * Internal entry info for central directory
- */
-interface ZipEntryInfo {
-  name: Uint8Array;
-  extraField: Uint8Array;
-  comment: Uint8Array;
-  flags: number;
-  crc: number;
-  compressedSize: number;
-  uncompressedSize: number;
-  compressionMethod: number;
-  dosTime: number;
-  dosDate: number;
-  offset: number;
-  zip64: boolean;
-  externalAttributes: number;
-  versionMadeBy?: number;
-}
-
-type CentralDirectoryEntryInfo = ZipEntryInfo;
 
 /**
  * Encryption options for streaming ZIP creation.
@@ -102,7 +79,7 @@ export class ZipDeflateFile {
   private _headerEmitted = false;
   private _ondata: ((data: Uint8Array, final: boolean) => void) | null = null;
   private _onerror: ((err: Error) => void) | null = null;
-  private _centralDirEntryInfo: CentralDirectoryEntryInfo | null = null;
+  private _centralDirEntryInfo: ZipCentralDirEntry | null = null;
   private _pendingEnd = false;
   private _emittedDataDescriptor = false;
   private _localHeader: Uint8Array | null = null;
@@ -272,7 +249,7 @@ export class ZipDeflateFile {
    */
   private _getAesExtraField(): Uint8Array {
     if (!this._aesKeyStrength) {
-      return EMPTY;
+      return EMPTY_UINT8ARRAY;
     }
     if (!this._aesExtraField) {
       this._aesExtraField = buildAesExtraField(
@@ -873,7 +850,7 @@ export class ZipDeflateFile {
   }
 
   /** Writer-only metadata for building the Central Directory. */
-  getCentralDirectoryEntryInfo(): CentralDirectoryEntryInfo | null {
+  getCentralDirectoryEntryInfo(): ZipCentralDirEntry | null {
     return this._centralDirEntryInfo;
   }
 
@@ -903,11 +880,289 @@ export class ZipDeflateFile {
 }
 
 /**
+ * Passthrough ZIP entry writer.
+ *
+ * Emits a local header with data-descriptor flag, then streams the provided
+ * raw payload (already compressed and/or encrypted), then emits a data descriptor.
+ */
+export class ZipRawFile implements ZipWritableFile {
+  private _headerEmitted = false;
+  private _finalized = false;
+  private _started = false;
+  private _zip64Mode: Zip64Mode = "auto";
+  private _zip64 = false;
+
+  private _dataQueue: Uint8Array[] = [];
+  private _finalQueued = false;
+
+  private _ondata: ((data: Uint8Array, final: boolean) => void) | null = null;
+  private _onerror: ((err: Error) => void) | null = null;
+
+  private _centralDirEntryInfo: ZipCentralDirEntry;
+
+  readonly name: string;
+  readonly nameBytes: Uint8Array;
+  readonly commentBytes: Uint8Array;
+  readonly dosTime: number;
+  readonly dosDate: number;
+  readonly extraField: Uint8Array;
+  private readonly _flags: number;
+  private readonly _compressionMethod: number;
+  private readonly _crc32: number;
+  private readonly _compressedSize: number;
+  private readonly _uncompressedSize: number;
+  private readonly _externalAttributes: number;
+  private readonly _versionMadeBy?: number;
+
+  private _source: Uint8Array | AsyncIterable<Uint8Array>;
+  private _chunkSize: number;
+
+  private _doneResolve: (() => void) | null = null;
+  private _doneReject: ((err: Error) => void) | null = null;
+  private _donePromise: Promise<void>;
+
+  constructor(
+    name: string,
+    options: {
+      compressedData: Uint8Array | AsyncIterable<Uint8Array>;
+      crc32: number;
+      compressedSize: number;
+      uncompressedSize: number;
+      compressionMethod: number;
+      flags?: number;
+      comment?: Uint8Array;
+      extraField?: Uint8Array;
+      dosTime: number;
+      dosDate: number;
+      zip64?: Zip64Mode;
+      externalAttributes?: number;
+      versionMadeBy?: number;
+      chunkSize?: number;
+    }
+  ) {
+    this.name = name;
+    this.nameBytes = encodeUtf8(name);
+    this.commentBytes = options.comment ?? EMPTY_UINT8ARRAY;
+    this.dosTime = options.dosTime;
+    this.dosDate = options.dosDate;
+    this.extraField = options.extraField ?? EMPTY_UINT8ARRAY;
+
+    this._crc32 = options.crc32 >>> 0;
+    this._compressedSize = options.compressedSize;
+    this._uncompressedSize = options.uncompressedSize;
+    this._compressionMethod = options.compressionMethod;
+
+    this._externalAttributes = options.externalAttributes ?? 0;
+    this._versionMadeBy = options.versionMadeBy;
+
+    this._zip64Mode = options.zip64 ?? "auto";
+    this._zip64 =
+      this._zip64Mode === true ||
+      this._compressedSize > UINT32_MAX ||
+      this._uncompressedSize > UINT32_MAX;
+
+    // Always write data descriptor for passthrough entries to avoid
+    // local-header ZIP64 complexity.
+    this._flags = (options.flags ?? 0) | FLAG_UTF8 | FLAG_DATA_DESCRIPTOR;
+
+    this._centralDirEntryInfo = {
+      name: this.nameBytes,
+      extraField: this.extraField,
+      comment: this.commentBytes,
+      flags: this._flags,
+      crc: this._crc32,
+      compressedSize: this._compressedSize,
+      uncompressedSize: this._uncompressedSize,
+      compressionMethod: this._compressionMethod,
+      dosTime: this.dosTime,
+      dosDate: this.dosDate,
+      offset: 0,
+      zip64: this._zip64,
+      externalAttributes: this._externalAttributes,
+      versionMadeBy: this._versionMadeBy
+    };
+
+    this._source = options.compressedData;
+    this._chunkSize = options.chunkSize ?? 64 * 1024;
+
+    this._donePromise = new Promise<void>((resolve, reject) => {
+      this._doneResolve = resolve;
+      this._doneReject = reject;
+    });
+  }
+
+  /**
+   * Resolves when the file has fully emitted its local header, payload,
+   * and trailing data descriptor.
+   */
+  done(): Promise<void> {
+    return this._donePromise;
+  }
+
+  get ondata(): ((data: Uint8Array, final: boolean) => void) | null {
+    return this._ondata;
+  }
+
+  set ondata(fn: ((data: Uint8Array, final: boolean) => void) | null) {
+    this._ondata = fn;
+    this._drainQueue();
+  }
+
+  get onerror(): ((err: Error) => void) | null {
+    return this._onerror;
+  }
+
+  set onerror(fn: ((err: Error) => void) | null) {
+    this._onerror = fn;
+  }
+
+  getCentralDirectoryEntryInfo(): ZipCentralDirEntry | null {
+    return this._centralDirEntryInfo;
+  }
+
+  private _enqueueData(data: Uint8Array, final: boolean): void {
+    if (this._finalQueued) {
+      return;
+    }
+    if (data.length) {
+      this._dataQueue.push(data);
+    }
+    if (final) {
+      this._finalQueued = true;
+    }
+    this._drainQueue();
+  }
+
+  private _drainQueue(): void {
+    if (!this._ondata) {
+      return;
+    }
+
+    while (this._dataQueue.length) {
+      const chunk = this._dataQueue.shift()!;
+      this._ondata(chunk, false);
+    }
+
+    if (this._finalQueued) {
+      this._finalQueued = false;
+      this._ondata(EMPTY_UINT8ARRAY, true);
+
+      // Emitting final means this file is fully written.
+      try {
+        this._doneResolve?.();
+      } catch {
+        // ignore
+      } finally {
+        this._doneResolve = null;
+        this._doneReject = null;
+      }
+    }
+  }
+
+  private _buildLocalHeader(): Uint8Array {
+    return buildLocalFileHeader({
+      fileName: this.nameBytes,
+      extraField: this.extraField,
+      flags: this._flags,
+      compressionMethod: this._compressionMethod,
+      dosTime: this.dosTime,
+      dosDate: this.dosDate,
+      crc32: 0,
+      compressedSize: 0,
+      uncompressedSize: 0,
+      versionNeeded: this._zip64 ? VERSION_ZIP64 : VERSION_NEEDED
+    });
+  }
+
+  private _buildDataDescriptor(): Uint8Array {
+    if (this._zip64) {
+      return buildDataDescriptorZip64(this._crc32, this._compressedSize, this._uncompressedSize);
+    }
+    return buildDataDescriptor(this._crc32, this._compressedSize, this._uncompressedSize);
+  }
+
+  async start(): Promise<void> {
+    if (this._started) {
+      return;
+    }
+    this._started = true;
+
+    try {
+      if (!this._headerEmitted) {
+        this._headerEmitted = true;
+        this._enqueueData(this._buildLocalHeader(), false);
+      }
+
+      if (this._source instanceof Uint8Array) {
+        // Fast path: emit entire buffer if small enough (avoids loop overhead)
+        if (this._source.length <= this._chunkSize) {
+          this._enqueueData(this._source, false);
+        } else {
+          for (let offset = 0; offset < this._source.length; offset += this._chunkSize) {
+            const chunk = this._source.subarray(
+              offset,
+              Math.min(this._source.length, offset + this._chunkSize)
+            );
+            this._enqueueData(chunk, false);
+          }
+        }
+      } else {
+        for await (const chunk of this._source) {
+          this._enqueueData(chunk, false);
+        }
+      }
+
+      if (!this._finalized) {
+        this._finalized = true;
+        this._enqueueData(this._buildDataDescriptor(), true);
+      }
+    } catch (e) {
+      const err = toError(e);
+      try {
+        this._doneReject?.(err);
+      } catch {
+        // ignore
+      } finally {
+        this._doneResolve = null;
+        this._doneReject = null;
+      }
+      try {
+        this._onerror?.(err);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  abort(reason?: unknown): void {
+    if (this._finalized) {
+      return;
+    }
+    this._finalized = true;
+    const err = createAbortError(reason);
+
+    try {
+      this._doneReject?.(err);
+    } catch {
+      // ignore
+    } finally {
+      this._doneResolve = null;
+      this._doneReject = null;
+    }
+    try {
+      this._onerror?.(err);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
  * Streaming ZIP Creator - processes files sequentially
  */
 export class StreamingZip {
   private callback: (err: Error | null, data: Uint8Array, final: boolean) => void;
-  private entries: CentralDirectoryEntryInfo[] = [];
+  private entries: ZipCentralDirEntry[] = [];
   private currentOffset = 0;
   private ended = false;
   private endPending = false;
@@ -918,9 +1173,9 @@ export class StreamingZip {
   private zip64Mode: Zip64Mode;
 
   // Queue for sequential file processing
-  private fileQueue: ZipDeflateFile[] = [];
+  private fileQueue: ZipWritableFile[] = [];
   private fileQueueIndex = 0;
-  private activeFile: ZipDeflateFile | null = null;
+  private activeFile: ZipWritableFile | null = null;
 
   constructor(
     callback: (err: Error | null, data: Uint8Array, final: boolean) => void,
@@ -928,11 +1183,11 @@ export class StreamingZip {
   ) {
     this.callback = callback;
     // Avoid per-instance TextEncoder allocations.
-    this.zipComment = options?.comment ? encodeUtf8(options.comment) : EMPTY;
+    this.zipComment = options?.comment ? encodeUtf8(options.comment) : EMPTY_UINT8ARRAY;
     this.zip64Mode = options?.zip64 ?? "auto";
   }
 
-  add(file: ZipDeflateFile): void {
+  add(file: ZipWritableFile): void {
     if (this.ended) {
       throw new Error("Cannot add files after calling end() ");
     }
@@ -975,7 +1230,7 @@ export class StreamingZip {
         return;
       }
       this.ended = true;
-      this.callback(err, EMPTY, true);
+      this.callback(err, EMPTY_UINT8ARRAY, true);
     };
 
     file.ondata = (data: Uint8Array, final: boolean) => {
@@ -996,6 +1251,29 @@ export class StreamingZip {
         this._processNextFile();
       }
     };
+
+    // Auto-start writers that require an explicit start().
+    if (typeof file.start === "function") {
+      try {
+        const promise = file.start();
+        // Avoid unhandled rejections and surface errors to the pipeline.
+        promise.catch(e => {
+          const err = toError(e);
+          try {
+            file.onerror?.(err);
+          } catch {
+            // ignore
+          }
+        });
+      } catch (e) {
+        const err = toError(e);
+        try {
+          file.onerror?.(err);
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 
   private _finalize(): void {
@@ -1005,99 +1283,36 @@ export class StreamingZip {
     this.ended = true;
 
     const centralDirOffset = this.currentOffset;
-    let centralDirSize = 0;
 
-    const forceZip64 = this.zip64Mode === true;
-    const forbidZip64 = this.zip64Mode === false;
-    const needsZip64EOCDFromArchive =
-      this.entries.length > UINT16_MAX || centralDirOffset > UINT32_MAX;
+    let result: {
+      centralDirectoryHeaders: Uint8Array[];
+      centralDirSize: number;
+      trailerRecords: Uint8Array[];
+    };
+    try {
+      // Convert ZipCentralDirEntry to ZipCentralDirectoryEntryInput using helper
+      const cdEntries = this.entries.map(entry => centralDirEntryToInput(entry));
 
-    for (const entry of this.entries) {
-      // Decide ZIP64 per entry for CD header.
-      const needsZip64Entry =
-        forceZip64 ||
-        entry.zip64 ||
-        entry.offset > UINT32_MAX ||
-        entry.compressedSize > UINT32_MAX ||
-        entry.uncompressedSize > UINT32_MAX;
-
-      const zip64Extra = needsZip64Entry
-        ? buildZip64ExtraField({
-            uncompressedSize:
-              forceZip64 || entry.uncompressedSize > UINT32_MAX
-                ? entry.uncompressedSize
-                : undefined,
-            compressedSize:
-              forceZip64 || entry.compressedSize > UINT32_MAX ? entry.compressedSize : undefined,
-            localHeaderOffset: forceZip64 || entry.offset > UINT32_MAX ? entry.offset : undefined
-          })
-        : EMPTY;
-      const extraField = needsZip64Entry
-        ? concatExtraFields(entry.extraField, zip64Extra)
-        : entry.extraField;
-
-      const header = buildCentralDirectoryHeader({
-        fileName: entry.name,
-        extraField,
-        comment: entry.comment ?? EMPTY,
-        flags: entry.flags,
-        compressionMethod: entry.compressionMethod,
-        dosTime: entry.dosTime,
-        dosDate: entry.dosDate,
-        crc32: entry.crc,
-        compressedSize: needsZip64Entry ? UINT32_MAX : entry.compressedSize,
-        uncompressedSize: needsZip64Entry ? UINT32_MAX : entry.uncompressedSize,
-        localHeaderOffset: needsZip64Entry ? UINT32_MAX : entry.offset,
-        versionMadeBy: entry.versionMadeBy ?? VERSION_MADE_BY,
-        versionNeeded: needsZip64Entry ? VERSION_ZIP64 : VERSION_NEEDED,
-        externalAttributes: entry.externalAttributes
+      result = buildCentralDirectoryAndEocd(cdEntries, {
+        zipComment: this.zipComment,
+        zip64Mode: this.zip64Mode,
+        centralDirOffset
       });
+    } catch (e) {
+      const err = toError(e);
+      this.callback(err, EMPTY_UINT8ARRAY, true);
+      return;
+    }
 
-      centralDirSize += header.length;
+    for (const header of result.centralDirectoryHeaders) {
       this.callback(null, header, false);
     }
 
-    const writeZip64EOCD = forceZip64 || needsZip64EOCDFromArchive || centralDirSize > UINT32_MAX;
-    if (forbidZip64 && writeZip64EOCD) {
-      this.callback(new Error("ZIP64 is required but zip64=false"), EMPTY, true);
-      return;
+    for (let i = 0; i < result.trailerRecords.length; i++) {
+      const record = result.trailerRecords[i]!;
+      const final = i === result.trailerRecords.length - 1;
+      this.callback(null, record, final);
     }
-
-    // ZIP64 EOCD + locator must be written BEFORE the classic EOCD.
-    // Classic EOCD fields are set to their 0xFFFF/0xFFFFFFFF sentinels.
-    if (writeZip64EOCD) {
-      const zip64EocdOffset = this.currentOffset + centralDirSize;
-      const zip64Eocd = buildZip64EndOfCentralDirectory({
-        entryCountOnDisk: this.entries.length,
-        entryCountTotal: this.entries.length,
-        centralDirSize,
-        centralDirOffset
-      });
-      const zip64Locator = buildZip64EndOfCentralDirectoryLocator({
-        zip64EndOfCentralDirectoryOffset: zip64EocdOffset,
-        totalDisks: 1
-      });
-      this.callback(null, zip64Eocd, false);
-      this.callback(null, zip64Locator, false);
-
-      const eocd = buildEndOfCentralDirectory({
-        entryCount: UINT16_MAX,
-        centralDirSize: UINT32_MAX,
-        centralDirOffset: UINT32_MAX,
-        comment: this.zipComment
-      });
-      this.callback(null, eocd, true);
-      return;
-    }
-
-    const eocd = buildEndOfCentralDirectory({
-      entryCount: this.entries.length,
-      centralDirSize,
-      centralDirOffset,
-      comment: this.zipComment
-    });
-
-    this.callback(null, eocd, true);
   }
 
   end(): void {
@@ -1128,7 +1343,7 @@ export class StreamingZip {
       // ignore
     }
 
-    this.callback(err, EMPTY, true);
+    this.callback(err, EMPTY_UINT8ARRAY, true);
   }
 }
 

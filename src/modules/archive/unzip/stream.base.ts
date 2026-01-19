@@ -1,8 +1,4 @@
 import {
-  parseDosDateTimeUTC,
-  resolveZipLastModifiedDateFromUnixSeconds
-} from "@archive/utils/timestamps";
-import {
   Duplex,
   PassThrough,
   Transform,
@@ -11,194 +7,32 @@ import {
   finished,
   type Readable
 } from "@stream";
-import { parseTyped as parseBuffer } from "@archive/utils/parse-buffer";
-import { ByteQueue } from "@archive/internal/byte-queue";
-import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
-import { PatternScanner } from "@archive/utils/pattern-scanner";
-import { readUint32LE, writeUint32LE } from "@archive/utils/binary";
+import { ByteQueue } from "@archive/shared/byte-queue";
+import { textEncoder as utf8Encoder } from "@stream/shared";
+import { PatternScanner } from "@archive/unzip/pattern-scanner";
+
 import {
-  parseZipExtraFields,
-  type ZipExtraFields,
-  type ZipVars
-} from "@archive/utils/zip-extra-fields";
-import {
-  CENTRAL_DIR_HEADER_SIG,
-  DATA_DESCRIPTOR_SIG,
-  END_OF_CENTRAL_DIR_SIG,
-  LOCAL_FILE_HEADER_SIG,
-  ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
-  ZIP64_END_OF_CENTRAL_DIR_SIG
-} from "@archive/zip-spec/zip-records";
+  DEFAULT_PARSE_THRESHOLD_BYTES,
+  buildZipEntryProps,
+  decodeZipEntryPath,
+  getZipEntryType,
+  hasDataDescriptorFlag,
+  isFileSizeKnown,
+  parseExtraField,
+  readDataDescriptor,
+  readLocalFileHeader,
+  resolveZipEntryLastModifiedDateTime,
+  runParseLoopCore,
+  isValidZipRecordSignature,
+  type CrxHeader,
+  type EntryProps,
+  type EntryVars,
+  type ParseDriverState,
+  type ParseOptions,
+  type ZipExtraFields
+} from "@archive/unzip/parser-core";
 
-export const DATA_DESCRIPTOR_SIGNATURE_BYTES = writeUint32LE(DATA_DESCRIPTOR_SIG);
-
-const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
-
-// Shared parseBuffer() formats
-export const CRX_HEADER_FORMAT: [string, number][] = [
-  ["version", 4],
-  ["pubKeyLength", 4],
-  ["signatureLength", 4]
-];
-
-export const LOCAL_FILE_HEADER_FORMAT: [string, number][] = [
-  ["versionsNeededToExtract", 2],
-  ["flags", 2],
-  ["compressionMethod", 2],
-  ["lastModifiedTime", 2],
-  ["lastModifiedDate", 2],
-  ["crc32", 4],
-  ["compressedSize", 4],
-  ["uncompressedSize", 4],
-  ["fileNameLength", 2],
-  ["extraFieldLength", 2]
-];
-
-export const DATA_DESCRIPTOR_FORMAT: [string, number][] = [
-  ["dataDescriptorSignature", 4],
-  ["crc32", 4],
-  ["compressedSize", 4],
-  ["uncompressedSize", 4]
-];
-
-export const CENTRAL_DIRECTORY_FILE_HEADER_FORMAT: [string, number][] = [
-  ["versionMadeBy", 2],
-  ["versionsNeededToExtract", 2],
-  ["flags", 2],
-  ["compressionMethod", 2],
-  ["lastModifiedTime", 2],
-  ["lastModifiedDate", 2],
-  ["crc32", 4],
-  ["compressedSize", 4],
-  ["uncompressedSize", 4],
-  ["fileNameLength", 2],
-  ["extraFieldLength", 2],
-  ["fileCommentLength", 2],
-  ["diskNumber", 2],
-  ["internalFileAttributes", 2],
-  ["externalFileAttributes", 4],
-  ["offsetToLocalFileHeader", 4]
-];
-
-export const END_OF_CENTRAL_DIRECTORY_FORMAT: [string, number][] = [
-  ["diskNumber", 2],
-  ["diskStart", 2],
-  ["numberOfRecordsOnDisk", 2],
-  ["numberOfRecords", 2],
-  ["sizeOfCentralDirectory", 4],
-  ["offsetToStartOfCentralDirectory", 4],
-  ["commentLength", 2]
-];
-
-// Shared entry metadata helpers
-export interface ZipEntryVarsMeta {
-  flags: number | null;
-  uncompressedSize: number;
-  lastModifiedDate: number | null;
-  lastModifiedTime: number | null;
-}
-
-export type { ZipVars, ZipExtraFields };
-
-export interface ZipEntryPropsMeta {
-  path: string;
-  pathBuffer: Uint8Array;
-  flags: {
-    isUnicode: boolean;
-  };
-}
-
-export interface CrxHeader {
-  version: number | null;
-  pubKeyLength: number | null;
-  signatureLength: number | null;
-  publicKey?: Uint8Array;
-  signature?: Uint8Array;
-}
-
-export interface LocalFileHeaderVars {
-  versionsNeededToExtract: number | null;
-  flags: number | null;
-  compressionMethod: number | null;
-  lastModifiedTime: number | null;
-  lastModifiedDate: number | null;
-  crc32: number | null;
-  compressedSize: number | null;
-  uncompressedSize: number | null;
-  fileNameLength: number | null;
-  extraFieldLength: number | null;
-}
-
-export interface DataDescriptorVars {
-  dataDescriptorSignature: number | null;
-  crc32: number | null;
-  compressedSize: number | null;
-  uncompressedSize: number | null;
-}
-
-const textDecoder = new TextDecoder();
-const textEncoder = new TextEncoder();
-
-export function decodeZipEntryPath(pathBuffer: Uint8Array): string {
-  return textDecoder.decode(pathBuffer);
-}
-
-export function isZipUnicodeFlag(flags: number | null): boolean {
-  return ((flags || 0) & 0x800) !== 0;
-}
-
-export function isZipDirectoryPath(path: string): boolean {
-  if (path.length === 0) {
-    return false;
-  }
-  const last = path.charCodeAt(path.length - 1);
-  return last === 47 || last === 92;
-}
-
-export function getZipEntryType(path: string, uncompressedSize: number): "Directory" | "File" {
-  return uncompressedSize === 0 && isZipDirectoryPath(path) ? "Directory" : "File";
-}
-
-export function buildZipEntryProps(
-  path: string,
-  pathBuffer: Uint8Array,
-  flags: number | null
-): ZipEntryPropsMeta {
-  return {
-    path,
-    pathBuffer,
-    flags: {
-      isUnicode: isZipUnicodeFlag(flags)
-    }
-  };
-}
-
-export function resolveZipEntryLastModifiedDateTime(
-  vars: ZipEntryVarsMeta,
-  extraFields: ZipExtraFields
-): Date {
-  const dosDate = vars.lastModifiedDate || 0;
-  const dosTime = vars.lastModifiedTime || 0;
-
-  const dosDateTime = parseDosDateTimeUTC(dosDate, dosTime);
-
-  const unixSecondsMtime = extraFields.mtimeUnixSeconds;
-  if (unixSecondsMtime === undefined) {
-    return dosDateTime;
-  }
-
-  return resolveZipLastModifiedDateFromUnixSeconds(dosDate, dosTime, unixSecondsMtime);
-}
-
-export const parseExtraField = parseZipExtraFields;
-
-export function hasDataDescriptorFlag(flags: number | null): boolean {
-  return ((flags || 0) & 0x08) !== 0;
-}
-
-export function isFileSizeKnown(flags: number | null, compressedSize: number | null): boolean {
-  return !hasDataDescriptorFlag(flags) || (compressedSize || 0) > 0;
-}
+export const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
 
 export type DrainStream = Transform & { promise: () => Promise<void> };
 
@@ -283,7 +117,7 @@ export class PullStream extends Duplex {
   }
 
   _write(chunk: Uint8Array | string, _encoding: string, callback: () => void): void {
-    const data = typeof chunk === "string" ? textEncoder.encode(chunk) : chunk;
+    const data = typeof chunk === "string" ? utf8Encoder.encode(chunk) : chunk;
     this._queue.append(data);
 
     // Apply writable backpressure by deferring the callback when the input buffer is large.
@@ -600,245 +434,6 @@ export type PullStreamPublicApi = {
   pullUntil(pattern: Uint8Array, includeEof?: boolean): Promise<Uint8Array>;
 };
 
-export async function readCrxHeader(pull: PullFn): Promise<CrxHeader> {
-  const data = await pull(12);
-  const header =
-    data.length >= 12 ? parseCrxHeaderFast(data) : parseBuffer<CrxHeader>(data, CRX_HEADER_FORMAT);
-  const pubKeyLength = header.pubKeyLength || 0;
-  const signatureLength = header.signatureLength || 0;
-
-  const keyAndSig = await pull(pubKeyLength + signatureLength);
-  header.publicKey = keyAndSig.subarray(0, pubKeyLength);
-  header.signature = keyAndSig.subarray(pubKeyLength);
-  return header;
-}
-
-export async function readLocalFileHeader(pull: PullFn): Promise<{
-  vars: EntryVars;
-  fileNameBuffer: Uint8Array;
-  extraFieldData: Uint8Array;
-}> {
-  const data = await pull(26);
-  const vars =
-    data.length >= 26
-      ? parseLocalFileHeaderVarsFast(data)
-      : parseBuffer<EntryVars>(data, LOCAL_FILE_HEADER_FORMAT);
-  const fileNameBuffer = await pull(vars.fileNameLength || 0);
-  const extraFieldData = await pull(vars.extraFieldLength || 0);
-  return { vars, fileNameBuffer, extraFieldData };
-}
-
-export async function readDataDescriptor(pull: PullFn): Promise<DataDescriptorVars> {
-  const data = await pull(16);
-  return data.length >= 16
-    ? parseDataDescriptorVarsFast(data)
-    : parseBuffer<DataDescriptorVars>(data, DATA_DESCRIPTOR_FORMAT);
-}
-
-export async function consumeCentralDirectoryFileHeader(pull: PullFn): Promise<void> {
-  const data = await pull(42);
-  const vars = parseBuffer<Record<string, number | null>>(
-    data,
-    CENTRAL_DIRECTORY_FILE_HEADER_FORMAT
-  );
-  await pull(vars.fileNameLength || 0);
-  await pull(vars.extraFieldLength || 0);
-  await pull(vars.fileCommentLength || 0);
-}
-
-export async function consumeEndOfCentralDirectoryRecord(pull: PullFn): Promise<void> {
-  const data = await pull(18);
-  const vars = parseBuffer<Record<string, number | null>>(data, END_OF_CENTRAL_DIRECTORY_FORMAT);
-  await pull(vars.commentLength || 0);
-}
-
-// =============================================================================
-// Validated Data Descriptor Scan (shared by Node + Browser)
-// =============================================================================
-
-function isValidZipRecordSignature(sig: number): boolean {
-  switch (sig) {
-    case LOCAL_FILE_HEADER_SIG:
-    case CENTRAL_DIR_HEADER_SIG:
-    case END_OF_CENTRAL_DIR_SIG:
-    case ZIP64_END_OF_CENTRAL_DIR_SIG:
-    case ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG:
-      return true;
-    default:
-      return false;
-  }
-}
-
-function readUint32LEFromBytes(view: Uint8Array, offset: number): number {
-  return (
-    (view[offset] |
-      0 |
-      ((view[offset + 1] | 0) << 8) |
-      ((view[offset + 2] | 0) << 16) |
-      ((view[offset + 3] | 0) << 24)) >>>
-    0
-  );
-}
-
-function readUint16LEFromBytes(view: Uint8Array, offset: number): number {
-  return (view[offset] | ((view[offset + 1] | 0) << 8)) >>> 0;
-}
-
-function parseCrxHeaderFast(data: Uint8Array): CrxHeader {
-  return {
-    version: readUint32LEFromBytes(data, 0),
-    pubKeyLength: readUint32LEFromBytes(data, 4),
-    signatureLength: readUint32LEFromBytes(data, 8)
-  };
-}
-
-function parseLocalFileHeaderVarsFast(data: Uint8Array): EntryVars {
-  return {
-    versionsNeededToExtract: readUint16LEFromBytes(data, 0),
-    flags: readUint16LEFromBytes(data, 2),
-    compressionMethod: readUint16LEFromBytes(data, 4),
-    lastModifiedTime: readUint16LEFromBytes(data, 6),
-    lastModifiedDate: readUint16LEFromBytes(data, 8),
-    crc32: readUint32LEFromBytes(data, 10),
-    compressedSize: readUint32LEFromBytes(data, 14),
-    uncompressedSize: readUint32LEFromBytes(data, 18),
-    fileNameLength: readUint16LEFromBytes(data, 22),
-    extraFieldLength: readUint16LEFromBytes(data, 24)
-  };
-}
-
-function parseDataDescriptorVarsFast(data: Uint8Array): DataDescriptorVars {
-  return {
-    dataDescriptorSignature: readUint32LEFromBytes(data, 0),
-    crc32: readUint32LEFromBytes(data, 4),
-    compressedSize: readUint32LEFromBytes(data, 8),
-    uncompressedSize: readUint32LEFromBytes(data, 12)
-  };
-}
-
-function indexOf4BytesPattern(buffer: Uint8Array, pattern: Uint8Array, startIndex: number): number {
-  if (pattern.length !== 4) {
-    return indexOfUint8ArrayPattern(buffer, pattern, startIndex);
-  }
-
-  const b0 = pattern[0];
-  const b1 = pattern[1];
-  const b2 = pattern[2];
-  const b3 = pattern[3];
-
-  const bufLen = buffer.length;
-  let start = startIndex | 0;
-  if (start < 0) {
-    start = 0;
-  }
-  if (start > bufLen - 4) {
-    return -1;
-  }
-
-  const last = bufLen - 4;
-  let i = buffer.indexOf(b0, start);
-  while (i !== -1 && i <= last) {
-    if (buffer[i + 1] === b1 && buffer[i + 2] === b2 && buffer[i + 3] === b3) {
-      return i;
-    }
-    i = buffer.indexOf(b0, i + 1);
-  }
-
-  return -1;
-}
-
-export interface ValidatedDataDescriptorScanResult {
-  /** Start index of the descriptor within `view`, or -1 when not found yet. */
-  foundIndex: number;
-  /** Where the caller should resume searching on the next scan of (a mostly unchanged) view. */
-  nextSearchFrom: number;
-}
-
-function initScanResult(
-  out?: ValidatedDataDescriptorScanResult
-): ValidatedDataDescriptorScanResult {
-  if (out) {
-    return out;
-  }
-  return { foundIndex: -1, nextSearchFrom: 0 };
-}
-
-/**
- * Scan for a validated DATA_DESCRIPTOR record boundary.
- *
- * Scanning for the 4-byte signature alone is unsafe because it can appear inside
- * compressed data. We validate a candidate by requiring:
- * - the next 4 bytes after the 16-byte descriptor form a known ZIP record signature, and
- * - the descriptor's compressedSize matches the number of compressed bytes emitted so far.
- */
-export function scanValidatedDataDescriptor(
-  view: Uint8Array,
-  dataDescriptorSignature: Uint8Array,
-  bytesEmitted: number,
-  startIndex = 0,
-  out?: ValidatedDataDescriptorScanResult
-): ValidatedDataDescriptorScanResult {
-  const result = initScanResult(out);
-
-  const viewLen = view.length;
-
-  let searchFrom = startIndex | 0;
-  if (searchFrom < 0) {
-    searchFrom = 0;
-  }
-  if (searchFrom > viewLen) {
-    searchFrom = viewLen;
-  }
-
-  // To avoid missing a signature split across chunk boundaries, we may need
-  // to re-check the last (sigLen - 1) bytes on the next scan.
-  const sigLen = dataDescriptorSignature.length | 0;
-  const overlap = sigLen > 0 ? sigLen - 1 : 0;
-
-  const viewLimit = Math.max(0, viewLen - overlap);
-
-  while (searchFrom < viewLen) {
-    const match = indexOf4BytesPattern(view, dataDescriptorSignature, searchFrom);
-    if (match === -1) {
-      result.foundIndex = -1;
-      result.nextSearchFrom = Math.max(searchFrom, viewLimit);
-      return result;
-    }
-
-    const idx = match;
-
-    // Need 16 bytes for descriptor + 4 bytes for next record signature.
-    const nextSigOffset = idx + 16;
-    if (nextSigOffset + 4 <= viewLen) {
-      const nextSig = readUint32LEFromBytes(view, nextSigOffset);
-
-      const descriptorCompressedSize = readUint32LEFromBytes(view, idx + 8);
-      const expectedCompressedSize = (bytesEmitted + idx) >>> 0;
-
-      if (
-        isValidZipRecordSignature(nextSig) &&
-        descriptorCompressedSize === expectedCompressedSize
-      ) {
-        result.foundIndex = idx;
-        result.nextSearchFrom = idx;
-        return result;
-      }
-
-      searchFrom = idx + 1;
-      continue;
-    }
-
-    // Not enough bytes to validate yet. Re-check this candidate once more bytes arrive.
-    result.foundIndex = -1;
-    result.nextSearchFrom = idx;
-    return result;
-  }
-
-  result.foundIndex = -1;
-  result.nextSearchFrom = Math.max(searchFrom, viewLimit);
-  return result;
-}
-
 export interface StreamUntilValidatedDataDescriptorSource {
   getLength(): number;
   read(length: number): Uint8Array;
@@ -1066,73 +661,6 @@ export function streamUntilValidatedDataDescriptor(
 // Shared Parse Loop (used by Node + Browser)
 // =============================================================================
 
-export interface ParseOptions {
-  verbose?: boolean;
-  forceStream?: boolean;
-  /**
-   * Browser-only: use a Web Worker to run inflate off the main thread.
-   * Defaults to false.
-   */
-  useWorkerInflate?: boolean;
-  /**
-   * Browser-only: provide an explicit Worker script URL.
-   *
-   * Useful under strict CSP that blocks `blob:` workers. When set, the browser
-   * parser will try to construct `new Worker(workerInflateUrl)`.
-   */
-  workerInflateUrl?: string;
-  /**
-   * Input backpressure high-water mark (bytes).
-   *
-   * When provided, implementations may delay the writable callback until the
-   * internal input buffer drops below `inputLowWaterMarkBytes`.
-   *
-   * This is primarily used by the browser parser, because its writable side
-   * otherwise tends to accept unlimited data and can cause large memory spikes.
-   */
-  inputHighWaterMarkBytes?: number;
-  /**
-   * Input backpressure low-water mark (bytes).
-   * When the internal buffer drops to (or below) this value, a delayed writable
-   * callback may be released.
-   */
-  inputLowWaterMarkBytes?: number;
-  /**
-   * Threshold (in bytes) for small file optimization.
-   * Files smaller than this will use sync decompression (no stream overhead).
-   *
-   * Note: the optimization is only applied when the entry sizes are trusted
-   * (i.e. no data descriptor) and BOTH compressedSize and uncompressedSize
-   * are below this threshold. This avoids buffering huge highly-compressible
-   * files (e.g. large XML) in memory, which would defeat streaming.
-   * Default: 5MB
-   */
-  thresholdBytes?: number;
-}
-
-export interface EntryVars {
-  versionsNeededToExtract: number | null;
-  flags: number | null;
-  compressionMethod: number | null;
-  lastModifiedTime: number | null;
-  lastModifiedDate: number | null;
-  crc32: number | null;
-  compressedSize: number | null;
-  uncompressedSize: number | null;
-  fileNameLength: number | null;
-  extraFieldLength: number | null;
-  lastModifiedDateTime?: Date;
-  crxHeader?: CrxHeader;
-}
-
-export interface EntryProps {
-  path: string;
-  pathBuffer: Uint8Array;
-  flags: {
-    isUnicode: boolean;
-  };
-}
-
 export interface ZipEntry extends PassThrough {
   path: string;
   props: EntryProps;
@@ -1143,11 +671,6 @@ export interface ZipEntry extends PassThrough {
   __autodraining?: boolean;
   autodrain: () => DrainStream;
   buffer: () => Promise<Uint8Array>;
-}
-
-export interface ParseDriverState {
-  crxHeader?: CrxHeader;
-  reachedCD?: boolean;
 }
 
 export interface ParseIO {
@@ -1176,13 +699,6 @@ export type InflateFactory = () => Transform | Duplex | PassThrough;
  */
 export type InflateRawSync = (data: Uint8Array) => Uint8Array;
 
-/**
- * Default threshold for small file optimization (5MB).
- */
-export const DEFAULT_PARSE_THRESHOLD_BYTES = 5 * 1024 * 1024;
-
-const endDirectorySignature = writeUint32LE(END_OF_CENTRAL_DIR_SIG);
-
 export async function runParseLoop(
   opts: ParseOptions,
   io: ParseIO,
@@ -1193,62 +709,9 @@ export async function runParseLoop(
 ): Promise<void> {
   const thresholdBytes = opts.thresholdBytes ?? DEFAULT_PARSE_THRESHOLD_BYTES;
 
-  while (true) {
-    const sigBytes = await io.pull(4);
-    if (sigBytes.length === 0) {
-      emitter.emitClose();
-      return;
-    }
-
-    const signature = readUint32LE(sigBytes, 0);
-
-    if (signature === 0x34327243) {
-      state.crxHeader = await readCrxHeader(async length => io.pull(length));
-      emitter.emitCrxHeader(state.crxHeader);
-      continue;
-    }
-
-    if (signature === LOCAL_FILE_HEADER_SIG) {
-      await readFileRecord(
-        opts,
-        io,
-        emitter,
-        inflateFactory,
-        state,
-        thresholdBytes,
-        inflateRawSync
-      );
-      continue;
-    }
-
-    if (signature === CENTRAL_DIR_HEADER_SIG) {
-      state.reachedCD = true;
-      await consumeCentralDirectoryFileHeader(async length => io.pull(length));
-      continue;
-    }
-
-    if (signature === END_OF_CENTRAL_DIR_SIG) {
-      await consumeEndOfCentralDirectoryRecord(async length => io.pull(length));
-      io.setDone();
-      emitter.emitClose();
-      return;
-    }
-
-    if (state.reachedCD) {
-      // We are in central directory trailing data; resync by scanning for EOCD signature.
-      // consumeEndOfCentralDirectoryRecord expects the EOCD signature to be consumed, so includeEof=true.
-      const includeEof = true;
-      await io.pullUntil(endDirectorySignature, includeEof);
-      await consumeEndOfCentralDirectoryRecord(async length => io.pull(length));
-      io.setDone();
-      emitter.emitClose();
-      return;
-    }
-
-    emitter.emitError(new Error("invalid signature: 0x" + signature.toString(16)));
-    emitter.emitClose();
-    return;
-  }
+  await runParseLoopCore(opts, io, emitter, state, async (_opts, _io, _emitter, _state) => {
+    await readFileRecord(opts, io, emitter, inflateFactory, state, thresholdBytes, inflateRawSync);
+  });
 }
 
 async function pumpKnownCompressedSizeToEntry(

@@ -30,21 +30,47 @@ export {
   type ExtractOptions
 } from "@archive/io/remote-zip-reader";
 
-// Abort
-export { ArchiveAbortError, createAbortError, isAbortError } from "@archive/utils/abort";
+// Abort and Error types - all from centralized errors module
+export {
+  // Abort helpers
+  ArchiveAbortError,
+  createAbortError,
+  isAbortError,
+  throwIfAborted,
+  // Error classes
+  ArchiveError,
+  ZipParseError,
+  InvalidZipSignatureError,
+  EocdNotFoundError,
+  DecryptionError,
+  PasswordRequiredError,
+  FileTooLargeError,
+  UnsupportedCompressionError
+} from "@archive/shared/errors";
 
 // High-level APIs
 export {
   zip,
   ZipArchive,
+  ZipEditor,
+  editZip,
+  editZipUrl,
+  ZipEditPlan,
   type ZipOptions,
   type ZipEntryOptions,
+  type ZipEditOptions,
+  type ZipEditUrlOptions,
+  type ZipEditWarning,
+  type ZipEditOp,
   type ArchiveFormat
 } from "@archive/zip";
 export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip";
 
 export type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip";
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive/unzip";
+
+// Format registry (ZIP/TAR dispatch)
+export { createArchive, createReader } from "@archive/formats";
 
 // TAR archive support (unified API compatible with ZIP)
 // Note: Gzip support exported separately in index.ts (Node.js only)

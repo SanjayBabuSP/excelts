@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ProgressEmitter } from "@archive/utils/progress";
+import { ProgressEmitter } from "@archive/shared/progress";
 
 describe("ProgressEmitter", () => {
   afterEach(() => {

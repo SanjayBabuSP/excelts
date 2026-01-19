@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseExtraField, type ZipVars } from "@archive/unzip/stream.base";
+import { parseExtraField, type ZipVars } from "@archive/unzip/parser-core";
 
 describe("parse-extra-field", () => {
   describe("parseExtraField", () => {

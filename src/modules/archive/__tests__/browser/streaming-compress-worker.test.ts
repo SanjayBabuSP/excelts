@@ -16,7 +16,7 @@ import {
   WorkerPool,
   terminateDefaultWorkerPool
 } from "@archive/compression/worker-pool/index.browser";
-import { concatUint8Arrays } from "@archive/utils/bytes";
+import { concatUint8Arrays } from "@stream/shared";
 
 // Helper to create compressible data
 function createCompressibleData(size: number): Uint8Array {

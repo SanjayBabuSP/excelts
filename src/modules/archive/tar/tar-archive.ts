@@ -8,8 +8,13 @@
 import type { ArchiveSource } from "@archive/io/archive-source";
 import { toAsyncIterable, toUint8Array, isInMemoryArchiveSource } from "@archive/io/archive-source";
 import { collect, pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
-import { createLinkedAbortController } from "@archive/utils/abort";
-import { concatUint8Arrays } from "@archive/utils/bytes";
+import { createLinkedAbortController } from "@archive/shared/errors";
+import { concatUint8Arrays, textEncoder, getTextDecoder } from "@stream/shared";
+import type {
+  ArchiveProgressPhase,
+  ArchiveStreamOptions,
+  ArchiveOperationBase
+} from "@archive/shared/progress";
 import { TAR_TYPE, DEFAULT_TAR_MODE, DEFAULT_TAR_DIR_MODE, type TarType } from "./tar-constants";
 import { type TarEntryInfo, isDataEntry, isDirectory } from "./tar-entry-info";
 import {
@@ -19,7 +24,6 @@ import {
   type TarHeaderOptions
 } from "./tar-header";
 import { parseTar, parseTarStream, type TarParseOptions } from "./tar-parser";
-import { textEncoder, getTextDecoder } from "@stream/shared";
 
 // ============================================================================
 // Types
@@ -68,9 +72,17 @@ export interface TarArchiveEntryOptions {
   linkname?: string;
 }
 
+/**
+ * Progress phase for TAR operations.
+ */
+export type TarProgressPhase = ArchiveProgressPhase;
+
+/**
+ * Progress information for TAR creation.
+ */
 export interface TarArchiveProgress {
   type: "tar";
-  phase: "running" | "done" | "error" | "aborted";
+  phase: TarProgressPhase;
   entriesTotal: number;
   entriesDone: number;
   bytesIn: number;
@@ -78,19 +90,18 @@ export interface TarArchiveProgress {
   currentEntry?: { name: string; index: number; bytesIn: number };
 }
 
-export interface TarArchiveStreamOptions {
-  signal?: AbortSignal;
-  onProgress?: (p: TarArchiveProgress) => void;
-  progressIntervalMs?: number;
-}
+/**
+ * Streaming options for TAR creation.
+ */
+export type TarArchiveStreamOptions = ArchiveStreamOptions<TarArchiveProgress>;
 
-export interface TarArchiveOperation {
+/**
+ * Operation handle for streaming TAR creation.
+ */
+export type TarArchiveOperation = ArchiveOperationBase<TarArchiveProgress> & {
+  /** Async iterable of TAR output chunks */
   iterable: AsyncIterable<Uint8Array>;
-  signal: AbortSignal;
-  abort(reason?: unknown): void;
-  pointer(): number;
-  progress(): TarArchiveProgress;
-}
+};
 
 export interface TarReaderOptions {
   /** Maximum file size to extract into memory (default: 100MB) */
@@ -423,20 +434,6 @@ export class TarArchive {
    */
   async pipeTo(sink: ArchiveSink, options: TarArchiveStreamOptions = {}): Promise<void> {
     await pipeIterableToSink(this.stream(options), sink);
-  }
-
-  /**
-   * Alias for bytes() - for API compatibility
-   */
-  async toUint8Array(options: TarArchiveStreamOptions = {}): Promise<Uint8Array> {
-    return this.bytes(options);
-  }
-
-  /**
-   * Alias for bytesSync() - for API compatibility
-   */
-  toUint8ArraySync(): Uint8Array {
-    return this.bytesSync();
   }
 }
 

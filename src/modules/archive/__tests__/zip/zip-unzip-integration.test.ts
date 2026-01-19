@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { zip, unzip } from "@archive";
-import { concatUint8Arrays } from "@archive/utils/bytes";
+import { concatUint8Arrays } from "@stream/shared";
 
 // Helper to decode Uint8Array to string
 const decode = (data: Uint8Array): string => new TextDecoder().decode(data);

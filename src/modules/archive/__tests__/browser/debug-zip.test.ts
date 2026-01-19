@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 import { hasSignature } from "@archive/__tests__/zip/zip-test-utils";
-import { concatUint8Arrays } from "@archive/utils/bytes";
+import { concatUint8Arrays } from "@stream/shared";
 import { CENTRAL_DIR_HEADER_SIG, END_OF_CENTRAL_DIR_SIG } from "@archive/zip-spec/zip-records";
 
 describe("Debug ZIP output", () => {
