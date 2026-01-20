@@ -24,6 +24,7 @@ import type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progre
 import { getTextDecoder } from "@stream/shared";
 import { eventedReadableToAsyncIterableNoDestroy } from "@stream/internal/evented-readable-to-async-iterable";
 import type { ArchiveFormat } from "@archive/formats/types";
+import { isWritableStream } from "@stream/internal/type-guards";
 
 function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   let cleanedUp = false;
@@ -55,6 +56,53 @@ function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   entry.once?.("close", cleanup);
   entry.once?.("error", cleanup);
 }
+
+/**
+ * Convert an AsyncIterable to a WHATWG ReadableStream.
+ */
+function asyncIterableToReadableStream<T>(
+  iterable: AsyncIterable<T>,
+  onCancel?: (reason: unknown) => void
+): ReadableStream<T> {
+  const iterator = iterable[Symbol.asyncIterator]();
+  let cancelled = false;
+
+  return new ReadableStream<T>({
+    async pull(controller) {
+      if (cancelled) {
+        controller.close();
+        return;
+      }
+
+      try {
+        const { value, done } = await iterator.next();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (e) {
+        controller.error(toError(e));
+      }
+    },
+    async cancel(reason) {
+      cancelled = true;
+      try {
+        await iterator.return?.();
+      } catch {
+        // ignore
+      }
+      onCancel?.(reason);
+    }
+  });
+}
+
+type PipeToOptions = {
+  preventClose?: boolean;
+  preventAbort?: boolean;
+  preventCancel?: boolean;
+  signal?: AbortSignal;
+};
 
 export interface UnzipOptions {
   /**
@@ -186,8 +234,36 @@ export class UnzipEntry {
     }
   }
 
-  async pipeTo(sink: ArchiveSink): Promise<void> {
+  async pipeTo(sink: WritableStream<Uint8Array>, options?: PipeToOptions): Promise<void>;
+  async pipeTo(sink: ArchiveSink): Promise<void>;
+  async pipeTo(sink: ArchiveSink, options?: PipeToOptions): Promise<void> {
+    // Prefer native Web Streams piping semantics when a WHATWG WritableStream is provided.
+    // This supports standard options like `signal` / `preventClose` / `preventAbort`.
+    if (isWritableStream(sink) && typeof (this.readableStream() as any).pipeTo === "function") {
+      await this.readableStream().pipeTo(sink, options as any);
+      return;
+    }
+
+    // Fallback to the library sink piping (supports Node-style Writable too).
     await pipeIterableToSink(this.stream(), sink);
+  }
+
+  readableStream(): ReadableStream<Uint8Array> {
+    const parseEntry = this._parseEntry;
+
+    return asyncIterableToReadableStream(this.stream(), reason => {
+      if (parseEntry) {
+        try {
+          parseEntry.destroy?.(createAbortError(reason));
+        } catch {
+          try {
+            parseEntry.autodrain?.();
+          } catch {
+            // ignore
+          }
+        }
+      }
+    });
   }
 
   async text(encoding?: string): Promise<string> {
@@ -215,6 +291,18 @@ export class ZipReader {
 
   entries(options: UnzipStreamOptions = {}): AsyncIterable<UnzipEntry> {
     return this.operation(options).iterable;
+  }
+
+  entriesStream(options: UnzipStreamOptions = {}): ReadableStream<UnzipEntry> {
+    const op = this.operation(options);
+
+    return asyncIterableToReadableStream(op.iterable, reason => {
+      try {
+        op.abort(reason ?? "cancelled");
+      } catch {
+        // ignore
+      }
+    });
   }
 
   operation(options: UnzipStreamOptions = {}): UnzipOperation {

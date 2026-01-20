@@ -3,7 +3,7 @@
  * Shared by ZIP parsers.
  */
 
-import { decodeLatin1 } from "@archive/shared/text";
+import { decodeCp437 } from "@archive/shared/text";
 import { uint8ArrayToString as decodeUtf8 } from "@stream/shared";
 
 export function writeUint32LE(value: number): Uint8Array {
@@ -73,7 +73,7 @@ export class BinaryReader {
 
   readString(length: number, utf8 = true): string {
     const bytes = this.readBytes(length);
-    return utf8 ? decodeUtf8(bytes) : decodeLatin1(bytes);
+    return utf8 ? decodeUtf8(bytes) : decodeCp437(bytes);
   }
 
   skip(length: number): void {

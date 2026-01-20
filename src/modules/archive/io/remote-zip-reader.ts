@@ -23,7 +23,12 @@ import {
   AES_SALT_LENGTH,
   ZIP_CRYPTO_HEADER_SIZE
 } from "@archive/crypto";
-import { processEntryData, LOCAL_HEADER_FIXED_SIZE } from "@archive/unzip/zip-extract-core";
+import {
+  processEntryData,
+  processEntryDataStream,
+  LOCAL_HEADER_FIXED_SIZE
+} from "@archive/unzip/zip-extract-core";
+import { pipeIterableToSink } from "@archive/io/archive-sink";
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import {
   EOCD_MAX_SEARCH_SIZE,
@@ -920,14 +925,44 @@ export class RemoteZipReader {
       return false;
     }
 
-    const data = await this.extractEntry(entry, options);
-    const writer = writable.getWriter();
-    try {
-      await writer.write(data);
-      await writer.close();
-    } finally {
-      writer.releaseLock();
+    const opts = this.normalizeExtractOptions(options);
+    const signal = this.options.signal;
+
+    // AES cannot be truly streamed because HMAC verification needs full ciphertext.
+    if (entry.encryptionMethod === "aes") {
+      const data = await this.extractEntry(entry, opts);
+      const writer = writable.getWriter();
+      try {
+        await writer.write(data);
+        await writer.close();
+      } finally {
+        writer.releaseLock();
+      }
+      return true;
     }
+
+    const checkCrc32 = opts.checkCrc32 ?? this.options.checkCrc32 ?? false;
+    const password = opts.password ?? this.options.password;
+
+    const raw = this.getRawCompressedStream(entry, { signal });
+    if (!raw) {
+      return false;
+    }
+
+    let processed = 0;
+    const tracked = {
+      async *[Symbol.asyncIterator]() {
+        for await (const chunk of raw) {
+          processed += chunk.length;
+          opts.onprogress?.(processed, entry.compressedSize);
+          yield chunk;
+        }
+      }
+    } satisfies AsyncIterable<Uint8Array>;
+
+    const out = processEntryDataStream(entry, tracked, { password, checkCrc32, signal });
+    await pipeIterableToSink(out, writable);
+
     return true;
   }
 

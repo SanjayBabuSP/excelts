@@ -11,8 +11,14 @@
  */
 
 import { decompress, decompressSync } from "@archive/compression/compress";
-import { crc32 } from "@archive/compression/crc32";
-import { zipCryptoDecrypt, aesDecrypt } from "@archive/crypto";
+import { crc32, crc32Finalize, crc32Update } from "@archive/compression/crc32";
+import {
+  ZIP_CRYPTO_HEADER_SIZE,
+  aesDecrypt,
+  zipCryptoDecrypt,
+  zipCryptoDecryptByte,
+  zipCryptoInitKeys
+} from "@archive/crypto";
 import { BinaryReader } from "@archive/zip-spec/binary";
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import {
@@ -24,8 +30,13 @@ import {
   Crc32MismatchError,
   DecryptionError,
   PasswordRequiredError,
-  UnsupportedCompressionError
+  UnsupportedCompressionError,
+  throwIfAborted,
+  toError
 } from "@archive/shared/errors";
+import { createAsyncQueue } from "@archive/shared/async-queue";
+import { createInflateStream } from "@archive/compression/streaming-compress";
+import { collect } from "@archive/io/archive-sink";
 
 /**
  * Local file header fixed size (30 bytes)
@@ -168,6 +179,260 @@ async function decompressData(
     return decompress(data);
   }
   throw new UnsupportedCompressionError(compressionMethod);
+}
+
+async function* decryptZipCryptoStream(
+  entry: ZipEntryInfo,
+  encrypted: AsyncIterable<Uint8Array>,
+  password: string | Uint8Array,
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<Uint8Array> {
+  const { signal } = options;
+
+  const state = zipCryptoInitKeys(password);
+  const header = new Uint8Array(ZIP_CRYPTO_HEADER_SIZE);
+  let headerOffset = 0;
+  let verified = false;
+
+  for await (const chunk of encrypted) {
+    throwIfAborted(signal);
+
+    let offset = 0;
+
+    // Fill and verify header first.
+    if (!verified) {
+      while (headerOffset < ZIP_CRYPTO_HEADER_SIZE && offset < chunk.length) {
+        header[headerOffset++] = chunk[offset++]!;
+      }
+
+      if (headerOffset < ZIP_CRYPTO_HEADER_SIZE) {
+        continue;
+      }
+
+      // Decrypt header in-place and verify check byte.
+      let lastPlain = 0;
+      for (let i = 0; i < ZIP_CRYPTO_HEADER_SIZE; i++) {
+        lastPlain = zipCryptoDecryptByte(state, header[i]!);
+      }
+
+      const crcHighByte = (entry.crc32 >>> 24) & 0xff;
+      const timeHighByte = entry.dosTime !== undefined ? (entry.dosTime >>> 8) & 0xff : -1;
+      if (lastPlain !== crcHighByte && lastPlain !== timeHighByte) {
+        throw new DecryptionError(entry.path);
+      }
+
+      verified = true;
+    }
+
+    // Decrypt remaining bytes in this chunk.
+    if (offset < chunk.length) {
+      const out = new Uint8Array(chunk.length - offset);
+      for (let i = 0; i < out.length; i++) {
+        out[i] = zipCryptoDecryptByte(state, chunk[offset + i]!);
+      }
+      if (out.length) {
+        yield out;
+      }
+    }
+  }
+
+  if (!verified) {
+    throw new DecryptionError(entry.path);
+  }
+}
+
+async function* inflateRawStream(
+  source: AsyncIterable<Uint8Array>,
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<Uint8Array> {
+  const { signal } = options;
+
+  const inflator = createInflateStream();
+  const queue = createAsyncQueue<Uint8Array>({
+    onCancel: () => {
+      try {
+        inflator.destroy();
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  inflator.on("data", (chunk: Uint8Array) => {
+    if (chunk && chunk.length) {
+      queue.push(chunk);
+    }
+  });
+  inflator.on("end", () => {
+    queue.close();
+  });
+  inflator.on("error", (err: Error) => {
+    queue.fail(err);
+  });
+
+  const producer = (async () => {
+    try {
+      for await (const chunk of source) {
+        throwIfAborted(signal);
+        await new Promise<void>((resolve, reject) => {
+          inflator.write(chunk, err => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
+
+      throwIfAborted(signal);
+      await new Promise<void>((resolve, reject) => {
+        inflator.end(err => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+    } catch (e) {
+      queue.fail(toError(e));
+      try {
+        inflator.destroy(toError(e));
+      } catch {
+        // ignore
+      }
+    }
+  })();
+
+  try {
+    for await (const out of queue.iterable) {
+      throwIfAborted(signal);
+      yield out;
+    }
+  } finally {
+    // Ensure producer completion is observed.
+    await producer.catch(() => {});
+    try {
+      inflator.destroy();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function* validateCrc32Stream(
+  entry: ZipEntryInfo,
+  source: AsyncIterable<Uint8Array>,
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<Uint8Array> {
+  const { signal } = options;
+  let crc = 0xffffffff;
+  for await (const chunk of source) {
+    throwIfAborted(signal);
+    if (chunk.length) {
+      crc = crc32Update(crc, chunk);
+      yield chunk;
+    }
+  }
+  const actual = crc32Finalize(crc);
+  if (actual !== entry.crc32) {
+    throw new Crc32MismatchError(entry.path, entry.crc32, actual);
+  }
+}
+
+/**
+ * Process entry data as an async iterable of output chunks.
+ *
+ * This avoids buffering the full output in memory for STORE/DEFLATE entries.
+ *
+ * Note: AES-encrypted entries cannot be truly streamed because HMAC verification
+ * requires the full ciphertext; this function falls back to buffering for AES.
+ */
+export function processEntryDataStream(
+  entry: ZipEntryInfo,
+  compressedData: AsyncIterable<Uint8Array>,
+  options: ExtractCoreOptions & { signal?: AbortSignal } = {}
+): AsyncIterable<Uint8Array> {
+  const { password, checkCrc32 = false, signal } = options;
+
+  const run = async function* (): AsyncIterable<Uint8Array> {
+    throwIfAborted(signal);
+
+    if (entry.isDirectory) {
+      return;
+    }
+
+    // Encrypted cases
+    if (entry.isEncrypted) {
+      if (!password) {
+        throw new PasswordRequiredError(entry.path);
+      }
+
+      if (entry.encryptionMethod === "aes" && entry.aesKeyStrength) {
+        // AES requires full ciphertext to verify HMAC.
+        const encrypted = await collect(compressedData);
+        const decrypted = await aesDecrypt(encrypted, password, entry.aesKeyStrength);
+        const method = entry.originalCompressionMethod ?? COMPRESSION_STORE;
+        const out = await decompressData(decrypted, method, entry.path);
+
+        if (out.length) {
+          yield out;
+        }
+        return;
+      }
+
+      if (entry.encryptionMethod === "zipcrypto") {
+        const decrypted = decryptZipCryptoStream(entry, compressedData, password, { signal });
+        let outStream: AsyncIterable<Uint8Array>;
+
+        if (entry.compressionMethod === COMPRESSION_STORE) {
+          outStream = decrypted;
+        } else if (entry.compressionMethod === COMPRESSION_DEFLATE) {
+          outStream = inflateRawStream(decrypted, { signal });
+        } else {
+          throw new UnsupportedCompressionError(entry.compressionMethod);
+        }
+
+        if (checkCrc32) {
+          outStream = validateCrc32Stream(entry, outStream, { signal });
+        }
+
+        for await (const chunk of outStream) {
+          yield chunk;
+        }
+        return;
+      }
+
+      // Fallback for other encryption methods.
+      const encrypted = await collect(compressedData);
+      const out = await processEntryData(entry, encrypted, password, checkCrc32);
+      if (out.length) {
+        yield out;
+      }
+      return;
+    }
+
+    // Non-encrypted
+    let outStream: AsyncIterable<Uint8Array>;
+    if (entry.compressionMethod === COMPRESSION_STORE) {
+      outStream = compressedData;
+    } else if (entry.compressionMethod === COMPRESSION_DEFLATE) {
+      outStream = inflateRawStream(compressedData, { signal });
+    } else {
+      throw new UnsupportedCompressionError(entry.compressionMethod);
+    }
+
+    if (checkCrc32) {
+      outStream = validateCrc32Stream(entry, outStream, { signal });
+    }
+
+    for await (const chunk of outStream) {
+      yield chunk;
+    }
+  };
+
+  return run();
 }
 
 /**

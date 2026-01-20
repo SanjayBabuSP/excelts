@@ -12,6 +12,35 @@ import {
   type AesKeyStrength
 } from "@archive/crypto/aes";
 import { EXTENDED_TIMESTAMP_ID, NTFS_TIMESTAMP_ID } from "@archive/zip-spec/timestamps";
+import { uint8ArrayToString as decodeUtf8 } from "@stream/shared";
+
+// =============================================================================
+// Extra Field IDs
+// =============================================================================
+
+/**
+ * Info-ZIP Unicode Path Extra Field (0x7075).
+ *
+ * Used to store UTF-8 encoded file names when the general purpose bit 11
+ * (UTF-8 flag) is not set. This allows compatibility with older tools
+ * while still preserving Unicode file names.
+ *
+ * Format: [version:1][nameCrc32:4][unicodeName:variable]
+ */
+export const UNICODE_PATH_EXTRA_FIELD_ID = 0x7075;
+
+/**
+ * Info-ZIP Unicode Comment Extra Field (0x6375).
+ *
+ * Similar to Unicode Path, but for file comments.
+ *
+ * Format: [version:1][commentCrc32:4][unicodeComment:variable]
+ */
+export const UNICODE_COMMENT_EXTRA_FIELD_ID = 0x6375;
+
+// =============================================================================
+// Types
+// =============================================================================
 
 export interface ZipVars {
   uncompressedSize: number;
@@ -31,6 +60,18 @@ export interface AesExtraFieldInfo {
   keyStrength: AesKeyStrength;
   /** Original compression method */
   compressionMethod: number;
+}
+
+/**
+ * Info-ZIP Unicode Path/Comment Extra Field info.
+ */
+export interface UnicodeExtraFieldInfo {
+  /** Version (currently always 1) */
+  version: number;
+  /** CRC32 of the original raw name/comment bytes */
+  originalCrc32: number;
+  /** UTF-8 encoded name/comment */
+  unicodeValue: string;
 }
 
 export interface ZipExtraFields {
@@ -62,6 +103,18 @@ export interface ZipExtraFields {
 
   /** AES encryption info (0x9901) when present */
   aesInfo?: AesExtraFieldInfo;
+
+  /**
+   * Info-ZIP Unicode Path Extra Field (0x7075).
+   * Contains UTF-8 encoded file name when present.
+   */
+  unicodePath?: UnicodeExtraFieldInfo;
+
+  /**
+   * Info-ZIP Unicode Comment Extra Field (0x6375).
+   * Contains UTF-8 encoded comment when present.
+   */
+  unicodeComment?: UnicodeExtraFieldInfo;
 }
 
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -209,6 +262,26 @@ export function parseZipExtraFields(extraField: Uint8Array, vars: ZipVars): ZipE
             };
           }
         }
+      }
+    } else if (signature === UNICODE_PATH_EXTRA_FIELD_ID) {
+      // Info-ZIP Unicode Path Extra Field (0x7075)
+      // Data: [version:1][nameCrc32:4][unicodeName:variable]
+      if (partSize >= 5) {
+        const version = extraField[dataStart]!;
+        const originalCrc32 = view.getUint32(dataStart + 1, true);
+        const unicodeBytes = extraField.subarray(dataStart + 5, dataEnd);
+        const unicodeValue = decodeUtf8(unicodeBytes);
+        extra.unicodePath = { version, originalCrc32, unicodeValue };
+      }
+    } else if (signature === UNICODE_COMMENT_EXTRA_FIELD_ID) {
+      // Info-ZIP Unicode Comment Extra Field (0x6375)
+      // Data: [version:1][commentCrc32:4][unicodeComment:variable]
+      if (partSize >= 5) {
+        const version = extraField[dataStart]!;
+        const originalCrc32 = view.getUint32(dataStart + 1, true);
+        const unicodeBytes = extraField.subarray(dataStart + 5, dataEnd);
+        const unicodeValue = decodeUtf8(unicodeBytes);
+        extra.unicodeComment = { version, originalCrc32, unicodeValue };
       }
     }
 

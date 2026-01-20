@@ -8,18 +8,17 @@
 import { BinaryReader } from "@archive/zip-spec/binary";
 import { parseZipExtraFields } from "@archive/zip-spec/zip-extra-fields";
 import { resolveZipLastModifiedDateFromUnixSeconds } from "@archive/zip-spec/timestamps";
+import { decodeZipPath, decodeZipComment } from "@archive/shared/text";
 import type { ZipEntryInfo, ZipEntryEncryptionMethod } from "./zip-entry-info";
 import {
   CENTRAL_DIR_HEADER_SIG,
   COMPRESSION_AES,
-  FLAG_UTF8,
   UINT16_MAX,
   UINT32_MAX,
   ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
   ZIP64_END_OF_CENTRAL_DIR_SIG
 } from "./zip-records";
 import type { AesKeyStrength } from "@archive/crypto/aes";
-
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
@@ -276,7 +275,7 @@ export function parseCentralDirectoryEntry(
   const compressionMethod = reader.readUint16();
   const lastModTime = reader.readUint16();
   const lastModDate = reader.readUint16();
-  const crc32 = reader.readUint32();
+  const crc32Value = reader.readUint32();
   let compressedSize = reader.readUint32();
   let uncompressedSize = reader.readUint32();
   const fileNameLength = reader.readUint16();
@@ -287,10 +286,8 @@ export function parseCentralDirectoryEntry(
   const externalAttributes = reader.readUint32();
   let localHeaderOffset = reader.readUint32();
 
-  const isUtf8 = (flags & FLAG_UTF8) !== 0;
-  const useUtf8 = decodeStrings && isUtf8;
-
-  const fileName = fileNameLength > 0 ? reader.readString(fileNameLength, useUtf8) : "";
+  // Read raw bytes first, we need them for CRC32 verification in Unicode extra fields
+  const fileNameBytes = fileNameLength > 0 ? reader.readBytes(fileNameLength) : new Uint8Array(0);
 
   let extraFields = {} as ReturnType<typeof parseZipExtraFields>;
   let rawExtraField: Uint8Array = new Uint8Array(0);
@@ -309,7 +306,12 @@ export function parseCentralDirectoryEntry(
     localHeaderOffset = vars.offsetToLocalFileHeader ?? localHeaderOffset;
   }
 
-  const comment = commentLength > 0 ? reader.readString(commentLength, useUtf8) : "";
+  const commentBytes = commentLength > 0 ? reader.readBytes(commentLength) : new Uint8Array(0);
+
+  // Decode fileName and comment using unified decoder
+  // Handles: UTF-8 flag, Unicode extra fields (0x7075/0x6375), CP437 fallback
+  const fileName = decodeStrings ? decodeZipPath(fileNameBytes, flags, extraFields) : "";
+  const comment = decodeStrings ? decodeZipComment(commentBytes, flags, extraFields) : "";
 
   const isDirectory = fileName.endsWith("/") || (externalAttributes & 0x10) !== 0;
   const isEncrypted = (flags & 0x01) !== 0;
@@ -346,7 +348,7 @@ export function parseCentralDirectoryEntry(
     uncompressedSize,
     uncompressedSize64: extraFields.uncompressedSize64,
     compressionMethod,
-    crc32,
+    crc32: crc32Value,
     lastModified,
     localHeaderOffset,
     localHeaderOffset64: extraFields.offsetToLocalFileHeader64,

@@ -8,7 +8,6 @@ import {
   writeUint32LE
 } from "@archive/zip-spec/binary";
 import { indexOfUint8ArrayPattern } from "@archive/shared/bytes";
-import { textDecoder as utf8Decoder } from "@stream/shared";
 import {
   parseZipExtraFields,
   type ZipExtraFields,
@@ -136,10 +135,6 @@ export interface DataDescriptorVars {
   crc32: number | null;
   compressedSize: number | null;
   uncompressedSize: number | null;
-}
-
-export function decodeZipEntryPath(pathBuffer: Uint8Array): string {
-  return utf8Decoder.decode(pathBuffer);
 }
 
 export function isZipUnicodeFlag(flags: number | null): boolean {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { RemoteZipReader, Crc32MismatchError } from "@archive/io/remote-zip-reader";
 import { BufferReader } from "@archive/io/random-access";
 import { createZip, type ZipEntry } from "@archive/zip/zip-bytes";
+import { concatUint8Arrays } from "@stream/shared";
 
 // Helper to convert object to ZipEntry array
 function toEntries(files: Record<string, Uint8Array | string>): ZipEntry[] {
@@ -822,8 +823,11 @@ describe("RemoteZipReader.open", () => {
 
   describe("stream output (extractToStream)", () => {
     it("should extract to WritableStream", async () => {
-      const content = "Stream test content";
-      const zipData = await createZip(toEntries({ "stream.txt": content }));
+      const content = new Uint8Array(256 * 1024).fill(65); // 256KiB of 'A'
+      const zipData = await createZip(toEntries({ "stream.txt": content }), {
+        level: 0,
+        smartStore: false
+      });
       const reader = await RemoteZipReader.fromReader(new BufferReader(zipData));
 
       const chunks: Uint8Array[] = [];
@@ -836,10 +840,43 @@ describe("RemoteZipReader.open", () => {
       const success = await reader.extractToStream("stream.txt", writable);
       expect(success).toBe(true);
 
-      const result = new TextDecoder().decode(
-        new Uint8Array(chunks.reduce((acc, chunk) => [...acc, ...chunk], [] as number[]))
-      );
-      expect(result).toBe(content);
+      // Store method should stream in multiple writes (chunked reads).
+      expect(chunks.length).toBeGreaterThan(1);
+
+      const result = concatUint8Arrays(chunks);
+      expect(result).toEqual(content);
+
+      await reader.close();
+    });
+
+    it("should extract encrypted zipcrypto entry to WritableStream", async () => {
+      const password = "secret123";
+      const content = new Uint8Array(128 * 1024).map((_, i) => i & 0xff);
+
+      const zipData = await createZip(toEntries({ "enc.bin": content }), {
+        level: 0,
+        smartStore: false,
+        password,
+        encryptionMethod: "zipcrypto"
+      });
+
+      const reader = await RemoteZipReader.fromReader(new BufferReader(zipData));
+
+      const chunks: Uint8Array[] = [];
+      const writable = new WritableStream<Uint8Array>({
+        write(chunk) {
+          chunks.push(chunk);
+        }
+      });
+
+      const success = await reader.extractToStream("enc.bin", writable, { password });
+      expect(success).toBe(true);
+
+      // ZipCrypto + STORE should also stream in multiple writes.
+      expect(chunks.length).toBeGreaterThan(1);
+
+      const result = concatUint8Arrays(chunks);
+      expect(result).toEqual(content);
 
       await reader.close();
     });
