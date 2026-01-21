@@ -37,6 +37,8 @@ import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 import type { ArchiveFormat } from "@archive/formats/types";
 import { isBrowser } from "@utils/env";
 import { ByteQueue } from "@archive/shared/byte-queue";
+import { encodeZipString, type ZipStringEncoding } from "@archive/shared/text";
+import { buildZipDeflateFileOptions } from "@archive/zip/zip-entry-options";
 import {
   buildCentralDirectoryAndEocd,
   type ZipCentralDirectoryEntryInput
@@ -58,6 +60,9 @@ export interface ZipOptions {
 
   /** Optional entry name normalization. `false` keeps names as-is. */
   path?: false | ZipPathOptions;
+
+  /** Optional string encoding for entry names/comments and archive comment. */
+  encoding?: ZipStringEncoding;
 
   /** Default abort signal used by streaming operations. */
   signal?: AbortSignal;
@@ -119,6 +124,9 @@ export interface ZipEntryOptions {
 
   /** Per-entry ZIP64 override. Defaults to the archive-level zip64 mode. */
   zip64?: Zip64Mode;
+
+  /** Optional string encoding for this entry name/comment. */
+  encoding?: ZipStringEncoding;
 }
 
 export type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
@@ -136,6 +144,7 @@ export class ZipArchive {
     smartStore: boolean;
     zip64: Zip64Mode;
     path: false | ZipPathOptions;
+    encoding?: ZipStringEncoding;
   };
   private readonly _streamDefaults: {
     signal?: AbortSignal;
@@ -154,12 +163,25 @@ export class ZipArchive {
       modTime: options.modTime ?? (reproducible ? REPRODUCIBLE_ZIP_MOD_TIME : new Date()),
       smartStore: options.smartStore ?? true,
       zip64: options.zip64 ?? "auto",
-      path: options.path ?? false
+      path: options.path ?? false,
+      encoding: options.encoding
     };
     this._streamDefaults = {
       signal: options.signal,
       onProgress: options.onProgress,
       progressIntervalMs: options.progressIntervalMs
+    };
+  }
+
+  private _getCreateZipOptions() {
+    return {
+      level: this._options.level,
+      timestamps: this._options.timestamps,
+      modTime: this._options.modTime,
+      comment: this._options.comment,
+      smartStore: this._options.smartStore,
+      zip64: this._options.zip64,
+      encoding: this._options.encoding
     };
   }
 
@@ -259,7 +281,11 @@ export class ZipArchive {
           queue.close();
         }
       },
-      { comment: this._options.comment, zip64: this._options.zip64 }
+      {
+        comment: this._options.comment,
+        zip64: this._options.zip64,
+        encoding: this._options.encoding
+      }
     );
 
     const onAbort = () => {
@@ -280,28 +306,22 @@ export class ZipArchive {
           throwIfAborted(signal);
 
           const entry = this._entries[i]!;
-          const level = entry.options?.level ?? this._options.level;
-          const zip64 = entry.options?.zip64 ?? this._options.zip64;
 
           let entryBytesIn = 0;
           progress.update({ currentEntry: { name: entry.name, index: i, bytesIn: 0 } });
 
-          const file = new ZipDeflateFile(entry.name, {
-            level,
-            modTime: entry.options?.modTime ?? this._options.modTime,
-            atime: entry.options?.atime,
-            ctime: entry.options?.ctime,
-            birthTime: entry.options?.birthTime,
-            timestamps: this._options.timestamps,
-            comment: entry.options?.comment,
-            smartStore: this._options.smartStore,
-            zip64,
-            path: this._options.path,
-            mode: entry.options?.mode,
-            msDosAttributes: entry.options?.msDosAttributes,
-            externalAttributes: entry.options?.externalAttributes,
-            versionMadeBy: entry.options?.versionMadeBy
-          });
+          const file = new ZipDeflateFile(
+            entry.name,
+            buildZipDeflateFileOptions(entry.options, {
+              level: this._options.level,
+              modTime: this._options.modTime,
+              timestamps: this._options.timestamps,
+              smartStore: this._options.smartStore,
+              zip64: this._options.zip64,
+              path: this._options.path,
+              encoding: this._options.encoding
+            })
+          );
 
           zip.add(file);
 
@@ -397,7 +417,8 @@ export class ZipArchive {
         birthTime: input.options?.birthTime,
         timestamps: this._options.timestamps,
         useDataDescriptor: true,
-        deflate
+        deflate,
+        codec: input.options?.encoding ?? this._options.encoding
       });
 
       const localHeaderOffset = out.length;
@@ -506,7 +527,7 @@ export class ZipArchive {
     }
 
     const cdResult = buildCentralDirectoryAndEocd(cdEntries, {
-      zipComment: encodeUtf8(this._options.comment ?? ""),
+      zipComment: encodeZipString(this._options.comment, this._options.encoding),
       zip64Mode: this._options.zip64,
       centralDirOffset
     });
@@ -562,17 +583,11 @@ export class ZipArchive {
           data: toUint8ArraySync(e.source as any),
           level: e.options?.level,
           modTime: e.options?.modTime,
-          comment: e.options?.comment
+          comment: e.options?.comment,
+          encoding: e.options?.encoding ?? this._options.encoding
         }));
 
-        return createZipSync(entries, {
-          level: this._options.level,
-          timestamps: this._options.timestamps,
-          modTime: this._options.modTime,
-          comment: this._options.comment,
-          smartStore: this._options.smartStore,
-          zip64: this._options.zip64
-        });
+        return createZipSync(entries, this._getCreateZipOptions());
       }
 
       const entries = await Promise.all(
@@ -581,18 +596,12 @@ export class ZipArchive {
           data: await toUint8Array(e.source as any),
           level: e.options?.level,
           modTime: e.options?.modTime,
-          comment: e.options?.comment
+          comment: e.options?.comment,
+          encoding: e.options?.encoding ?? this._options.encoding
         }))
       );
 
-      return createZip(entries, {
-        level: this._options.level,
-        timestamps: this._options.timestamps,
-        modTime: this._options.modTime,
-        comment: this._options.comment,
-        smartStore: this._options.smartStore,
-        zip64: this._options.zip64
-      });
+      return createZip(entries, this._getCreateZipOptions());
     }
 
     return collect(this.stream());
@@ -613,18 +622,12 @@ export class ZipArchive {
         name: e.name,
         data: toUint8ArraySync(e.source as any),
         modTime: e.options?.modTime,
-        comment: e.options?.comment
+        comment: e.options?.comment,
+        encoding: e.options?.encoding ?? this._options.encoding
       };
     });
 
-    return createZipSync(entries, {
-      level: this._options.level,
-      timestamps: this._options.timestamps,
-      modTime: this._options.modTime,
-      comment: this._options.comment,
-      smartStore: this._options.smartStore,
-      zip64: this._options.zip64
-    });
+    return createZipSync(entries, this._getCreateZipOptions());
   }
 
   async pipeTo(sink: ArchiveSink, options: ZipStreamOptions = {}): Promise<void> {

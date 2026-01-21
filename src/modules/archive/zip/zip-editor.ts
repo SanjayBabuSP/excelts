@@ -1,6 +1,11 @@
 import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 import { dateToZipDos } from "@archive/zip-spec/timestamps";
-import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import {
+  encodeZipStringWithCodec,
+  resolveZipStringCodec,
+  type ZipStringCodec,
+  type ZipStringEncoding
+} from "@archive/shared/text";
 import {
   DEFAULT_ZIP_LEVEL,
   DEFAULT_ZIP_TIMESTAMPS,
@@ -20,7 +25,6 @@ import {
   type ArchiveSource
 } from "@archive/io/archive-source";
 import { collect, pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
-import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import { createAsyncQueue } from "@archive/shared/async-queue";
 import {
   createLinkedAbortController,
@@ -38,6 +42,7 @@ import { FLAG_ENCRYPTED } from "@archive/zip-spec/zip-records";
 import type { ZipEntryOptions } from "@archive/zip";
 import type { ZipEditPlan } from "./zip-edit-plan";
 import { ZipEditView, type SetViewEntry } from "./zip-edit-view";
+import { buildZipDeflateFileOptions } from "@archive/zip/zip-entry-options";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -63,6 +68,9 @@ export interface ZipEditOptions {
 
   /** Whether to decode entry names/comments from UTF-8. Default: true */
   decodeStrings?: boolean;
+
+  /** Optional string encoding for legacy (non-UTF8) names/comments. */
+  encoding?: ZipStringEncoding;
 
   /** Password for decrypting encrypted entries (only needed for extraction, not passthrough). */
   password?: string | Uint8Array;
@@ -144,13 +152,6 @@ function isRandomAccessReader(value: unknown): value is RandomAccessReader {
   );
 }
 
-/**
- * Encode a comment string to UTF-8 bytes.
- */
-function encodeComment(comment?: string): Uint8Array {
-  return comment ? encodeUtf8(comment) : EMPTY_UINT8ARRAY;
-}
-
 function getPreservedBaseFlags(info: ZipEntryInfo): number {
   // Preserve only bits that must match the raw payload.
   // Writer-controlled bits (e.g. UTF-8, data descriptor) are intentionally not preserved.
@@ -160,7 +161,8 @@ function getPreservedBaseFlags(info: ZipEntryInfo): number {
 function buildPreservedRawEntry(
   outName: string,
   info: ZipEntryInfo,
-  compressedData: Uint8Array
+  compressedData: Uint8Array,
+  encoding?: ZipStringEncoding
 ): ZipRawEntry {
   const flags = getPreservedBaseFlags(info);
   return {
@@ -171,35 +173,12 @@ function buildPreservedRawEntry(
     compressionMethod: info.compressionMethod,
     modTime: info.lastModified,
     comment: info.comment,
+    encoding,
     extraField: info.extraField,
-    flags: flags ? flags : undefined,
+    flags: flags || undefined,
     externalAttributes: info.externalAttributes,
     versionMadeBy: info.versionMadeBy
   };
-}
-
-function buildPreservedRawFile(
-  outName: string,
-  info: ZipEntryInfo,
-  compressedData: AsyncIterable<Uint8Array>,
-  zip64: Zip64Mode
-): ZipRawFile {
-  const { dosTime, dosDate } = dateToZipDos(info.lastModified);
-  return new ZipRawFile(outName, {
-    compressedData,
-    crc32: info.crc32,
-    compressedSize: info.compressedSize,
-    uncompressedSize: info.uncompressedSize,
-    compressionMethod: info.compressionMethod,
-    flags: getPreservedBaseFlags(info),
-    comment: encodeComment(info.comment),
-    extraField: info.extraField,
-    dosTime,
-    dosDate,
-    zip64,
-    externalAttributes: info.externalAttributes,
-    versionMadeBy: info.versionMadeBy
-  });
 }
 
 /**
@@ -249,12 +228,14 @@ export class ZipEditor {
     smartStore: boolean;
     zip64: Zip64Mode;
     path: false | ZipPathOptions;
+    encoding?: ZipStringEncoding;
   };
   private readonly _streamDefaults: {
     signal?: AbortSignal;
     onProgress?: (p: ZipProgress) => void;
     progressIntervalMs?: number;
   };
+  private readonly _stringCodec: ZipStringCodec;
 
   private constructor(
     input: { reader: RandomAccessReader; remote: RemoteZipReader },
@@ -277,9 +258,11 @@ export class ZipEditor {
       modTime: options.modTime ?? defaultModTime,
       smartStore: options.smartStore ?? true,
       zip64: options.zip64 ?? "auto",
-      path: options.path ?? false
+      path: options.path ?? false,
+      encoding: options.encoding
     };
 
+    this._stringCodec = resolveZipStringCodec(options.encoding);
     this._streamDefaults = {
       signal: options.signal,
       onProgress: options.onProgress,
@@ -341,7 +324,8 @@ export class ZipEditor {
     const remote = await RemoteZipReader.fromReader(reader, {
       decodeStrings: options.decodeStrings,
       password: options.password,
-      signal: options.signal
+      signal: options.signal,
+      encoding: options.encoding
     });
     return new ZipEditor({ reader, remote }, options);
   }
@@ -467,8 +451,42 @@ export class ZipEditor {
       comment: this._options.comment,
       smartStore: this._options.smartStore,
       zip64: this._options.zip64,
-      path: this._options.path
+      path: this._options.path,
+      encoding: this._options.encoding
     };
+  }
+
+  private _buildPreservedRawFile(
+    outName: string,
+    info: ZipEntryInfo,
+    compressedData: AsyncIterable<Uint8Array>,
+    zip64: Zip64Mode
+  ): ZipRawFile {
+    const { dosTime, dosDate } = dateToZipDos(info.lastModified);
+    return new ZipRawFile(outName, {
+      compressedData,
+      crc32: info.crc32,
+      compressedSize: info.compressedSize,
+      uncompressedSize: info.uncompressedSize,
+      compressionMethod: info.compressionMethod,
+      flags: getPreservedBaseFlags(info),
+      comment: encodeZipStringWithCodec(info.comment, this._stringCodec),
+      extraField: info.extraField,
+      dosTime,
+      dosDate,
+      zip64,
+      externalAttributes: info.externalAttributes,
+      versionMadeBy: info.versionMadeBy,
+      codec: this._stringCodec
+    });
+  }
+
+  private _buildPreservedRawEntry(
+    outName: string,
+    info: ZipEntryInfo,
+    compressedData: Uint8Array
+  ): ZipRawEntry {
+    return buildPreservedRawEntry(outName, info, compressedData, this._options.encoding);
   }
 
   private _emitWarning(entry: string, code: ZipEditWarning["code"], message: string): void {
@@ -603,7 +621,11 @@ export class ZipEditor {
           queue.close();
         }
       },
-      { comment: this._options.comment, zip64: this._options.zip64 }
+      {
+        comment: this._options.comment,
+        zip64: this._options.zip64,
+        codec: this._stringCodec
+      }
     );
 
     const onAbort = () => {
@@ -627,7 +649,7 @@ export class ZipEditor {
           const entry = preserved[i]!;
           progress.update({ currentEntry: { name: entry.outName, index: i, bytesIn: 0 } });
 
-          const rawFile = buildPreservedRawFile(
+          const rawFile = this._buildPreservedRawFile(
             entry.outName,
             entry.info,
             entry.compressedData,
@@ -648,28 +670,22 @@ export class ZipEditor {
 
           const idx = preserved.length + j;
           const entry = sets[j]!;
-          const level = entry.options?.level ?? this._options.level;
-          const zip64 = entry.options?.zip64 ?? this._options.zip64;
 
           let entryBytesIn = 0;
           progress.update({ currentEntry: { name: entry.name, index: idx, bytesIn: 0 } });
 
-          const file = new ZipDeflateFile(entry.name, {
-            level,
-            modTime: entry.options?.modTime ?? this._options.modTime,
-            atime: entry.options?.atime,
-            ctime: entry.options?.ctime,
-            birthTime: entry.options?.birthTime,
-            timestamps: this._options.timestamps,
-            comment: entry.options?.comment,
-            smartStore: this._options.smartStore,
-            zip64,
-            path: this._options.path,
-            mode: entry.options?.mode,
-            msDosAttributes: entry.options?.msDosAttributes,
-            externalAttributes: entry.options?.externalAttributes,
-            versionMadeBy: entry.options?.versionMadeBy
-          });
+          const file = new ZipDeflateFile(
+            entry.name,
+            buildZipDeflateFileOptions(entry.options, {
+              level: this._options.level,
+              modTime: this._options.modTime,
+              timestamps: this._options.timestamps,
+              smartStore: this._options.smartStore,
+              zip64: this._options.zip64,
+              path: this._options.path,
+              encoding: this._options.encoding
+            })
+          );
 
           zip.add(file);
 
@@ -788,7 +804,7 @@ export class ZipEditor {
           );
         }
 
-        return buildPreservedRawEntry(p.outName, p.info, compressedData);
+        return this._buildPreservedRawEntry(p.outName, p.info, compressedData);
       })
     );
 

@@ -25,6 +25,7 @@ import { getTextDecoder } from "@stream/shared";
 import { eventedReadableToAsyncIterableNoDestroy } from "@stream/internal/evented-readable-to-async-iterable";
 import type { ArchiveFormat } from "@archive/formats/types";
 import { isWritableStream } from "@stream/internal/type-guards";
+import type { ZipStringEncoding } from "@archive/shared/text";
 
 function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   let cleanedUp = false;
@@ -112,6 +113,8 @@ export interface UnzipOptions {
   format?: ArchiveFormat;
 
   decodeStrings?: boolean;
+  /** Optional string encoding for legacy (non-UTF8) names/comments. */
+  encoding?: ZipStringEncoding;
   parse?: ParseOptions;
 
   /** Password for encrypted entries (ZIP only). */
@@ -289,6 +292,10 @@ export class ZipReader {
     this._options = options;
   }
 
+  private get _encoding() {
+    return this._options.encoding ?? this._options.parse?.encoding;
+  }
+
   entries(options: UnzipStreamOptions = {}): AsyncIterable<UnzipEntry> {
     return this.operation(options).iterable;
   }
@@ -345,7 +352,8 @@ export class ZipReader {
           throwIfAborted(signal);
           progress.update({ bytesIn: bytes.length });
           const parser = new ZipParser(bytes, {
-            decodeStrings: this._options.decodeStrings
+            decodeStrings: this._options.decodeStrings,
+            encoding: this._encoding
           } satisfies ZipParseOptions);
           const password = this._options.password;
 
@@ -502,7 +510,8 @@ export class ZipReader {
       const bytes = await toUint8Array(this._source as any);
       this._bufferData = bytes;
       this._bufferParser = new ZipParser(bytes, {
-        decodeStrings: this._options.decodeStrings
+        decodeStrings: this._options.decodeStrings,
+        encoding: this._encoding
       } satisfies ZipParseOptions);
       return { parser: this._bufferParser, data: bytes };
     }

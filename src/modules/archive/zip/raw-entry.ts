@@ -1,3 +1,5 @@
+import type { ZipStringEncoding } from "@archive/shared/text";
+
 /**
  * Shared types for raw ZIP entries.
  *
@@ -53,6 +55,9 @@ export interface ZipRawEntry {
 
   /** Optional file comment */
   comment?: string;
+
+  /** Optional string encoding for this entry name/comment. */
+  encoding?: ZipStringEncoding;
 
   /** Optional extra field (raw bytes) */
   extraField?: Uint8Array;

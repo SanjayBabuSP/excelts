@@ -11,7 +11,8 @@
  */
 
 import { crc32 } from "@archive/compression/crc32";
-import { uint8ArrayToString as decodeUtf8 } from "@stream/shared";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
+import { stringToUint8Array as encodeUtf8, uint8ArrayToString as decodeUtf8 } from "@stream/shared";
 import type { ZipExtraFields } from "@archive/zip-spec/zip-extra-fields";
 
 // =============================================================================
@@ -84,6 +85,120 @@ export function decodeCp437(bytes: Uint8Array): string {
 }
 
 /**
+ * Encode a string as CP437 (IBM Code Page 437).
+ *
+ * Characters not representable in CP437 are replaced with '?'.
+ */
+export function encodeCp437(value: string): Uint8Array {
+  const bytes: number[] = [];
+  for (const ch of value) {
+    const code = ch.codePointAt(0);
+    if (code === undefined) {
+      bytes.push(0x3f);
+      continue;
+    }
+    if (code < 0x80) {
+      bytes.push(code);
+      continue;
+    }
+    const mapped = CP437_ENCODE_MAP.get(ch);
+    bytes.push(mapped ?? 0x3f);
+  }
+  return Uint8Array.from(bytes);
+}
+
+const CP437_ENCODE_MAP: Map<string, number> = (() => {
+  const map = new Map<string, number>();
+  for (let i = 0; i < CP437_HIGH_CHARS.length; i++) {
+    map.set(CP437_HIGH_CHARS[i]!, 0x80 + i);
+  }
+  return map;
+})();
+
+// =============================================================================
+// ZIP String Codec Helpers
+// =============================================================================
+
+export interface ZipStringCodec {
+  /** Human-readable encoding name (optional, for debugging). */
+  name?: string;
+  /** Encode a string into raw bytes for ZIP headers. */
+  encode(value: string): Uint8Array;
+  /** Decode raw ZIP bytes into a string. */
+  decode(bytes: Uint8Array): string;
+  /** Whether to set the UTF-8 flag in ZIP headers (default depends on encoding). */
+  useUtf8Flag?: boolean;
+  /** Whether to include Unicode extra fields for non-UTF-8 encodings. */
+  useUnicodeExtraFields?: boolean;
+}
+
+export type ZipStringEncoding = "utf-8" | "cp437" | ZipStringCodec;
+
+const UTF8_CODEC: ZipStringCodec = {
+  name: "utf-8",
+  encode: encodeUtf8,
+  decode: decodeUtf8,
+  useUtf8Flag: true,
+  useUnicodeExtraFields: false
+};
+
+const CP437_CODEC: ZipStringCodec = {
+  name: "cp437",
+  encode: encodeCp437,
+  decode: decodeCp437,
+  useUtf8Flag: false,
+  useUnicodeExtraFields: true
+};
+
+const CUSTOM_CODEC_CACHE = new WeakMap<ZipStringCodec, ZipStringCodec>();
+
+export function resolveZipStringCodec(encoding?: ZipStringEncoding): ZipStringCodec {
+  if (!encoding || encoding === "utf-8") {
+    return UTF8_CODEC;
+  }
+
+  if (encoding === "cp437") {
+    return CP437_CODEC;
+  }
+
+  const codec = encoding as ZipStringCodec;
+  const cached = CUSTOM_CODEC_CACHE.get(codec);
+  if (cached) {
+    return cached;
+  }
+
+  const useUtf8Flag = codec.useUtf8Flag ?? codec.name === "utf-8";
+  const resolved: ZipStringCodec = {
+    ...codec,
+    useUtf8Flag,
+    useUnicodeExtraFields: codec.useUnicodeExtraFields ?? !useUtf8Flag
+  };
+  CUSTOM_CODEC_CACHE.set(codec, resolved);
+  return resolved;
+}
+
+/**
+ * Encode an optional ZIP string using the specified encoding.
+ * Returns a shared empty buffer when the input is empty/undefined.
+ */
+export function encodeZipString(value?: string, encoding?: ZipStringEncoding): Uint8Array {
+  return encodeZipStringWithCodec(value, resolveZipStringCodec(encoding));
+}
+
+/**
+ * Encode an optional ZIP string using a pre-resolved codec.
+ */
+export function encodeZipStringWithCodec(
+  value: string | undefined,
+  codec: ZipStringCodec
+): Uint8Array {
+  if (!value) {
+    return EMPTY_UINT8ARRAY;
+  }
+  return codec.encode(value);
+}
+
+/**
  * Decode ASCII bytes using chunked String.fromCharCode for performance.
  */
 function decodeAsciiChunked(bytes: Uint8Array): string {
@@ -119,7 +234,8 @@ const FLAG_UTF8 = 0x0800;
 export function decodeZipString(
   bytes: Uint8Array,
   flags: number | null,
-  unicodeInfo?: { version: number; originalCrc32: number; unicodeValue: string }
+  unicodeInfo?: { version: number; originalCrc32: number; unicodeValue: string },
+  fallbackDecoder?: Pick<ZipStringCodec, "decode">
 ): string {
   if (bytes.length === 0) {
     return "";
@@ -135,8 +251,8 @@ export function decodeZipString(
     return unicodeInfo.unicodeValue;
   }
 
-  // Fall back to CP437
-  return decodeCp437(bytes);
+  // Fall back to CP437 or custom decoder
+  return fallbackDecoder ? fallbackDecoder.decode(bytes) : decodeCp437(bytes);
 }
 
 /**
@@ -152,9 +268,10 @@ export function decodeZipString(
 export function decodeZipPath(
   pathBytes: Uint8Array,
   flags: number | null,
-  extraFields?: ZipExtraFields
+  extraFields?: ZipExtraFields,
+  fallbackDecoder?: Pick<ZipStringCodec, "decode">
 ): string {
-  return decodeZipString(pathBytes, flags, extraFields?.unicodePath);
+  return decodeZipString(pathBytes, flags, extraFields?.unicodePath, fallbackDecoder);
 }
 
 /**
@@ -170,9 +287,10 @@ export function decodeZipPath(
 export function decodeZipComment(
   commentBytes: Uint8Array,
   flags: number | null,
-  extraFields?: ZipExtraFields
+  extraFields?: ZipExtraFields,
+  fallbackDecoder?: Pick<ZipStringCodec, "decode">
 ): string {
-  return decodeZipString(commentBytes, flags, extraFields?.unicodeComment);
+  return decodeZipString(commentBytes, flags, extraFields?.unicodeComment, fallbackDecoder);
 }
 
 // =============================================================================

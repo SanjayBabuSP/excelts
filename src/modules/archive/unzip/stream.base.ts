@@ -9,7 +9,7 @@ import {
 } from "@stream";
 import { ByteQueue } from "@archive/shared/byte-queue";
 import { textEncoder as utf8Encoder } from "@stream/shared";
-import { decodeZipPath } from "@archive/shared/text";
+import { decodeZipPath, resolveZipStringCodec } from "@archive/shared/text";
 import { PatternScanner } from "@archive/unzip/pattern-scanner";
 
 import {
@@ -880,8 +880,10 @@ async function readFileRecord(
   // Parse extra fields first so we can use Unicode Path Extra Field for decoding
   const extra = parseExtraField(extraFieldData, vars);
 
-  // Decode filename: UTF-8 flag → Unicode extra field → CP437
-  const fileName = decodeZipPath(fileNameBuffer, vars.flags, extra);
+  const decoder = opts.encoding ? resolveZipStringCodec(opts.encoding) : undefined;
+
+  // Decode filename: UTF-8 flag → Unicode extra field → CP437 (or custom decoder)
+  const fileName = decodeZipPath(fileNameBuffer, vars.flags, extra, decoder);
 
   const entry = new PassThrough({
     highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK

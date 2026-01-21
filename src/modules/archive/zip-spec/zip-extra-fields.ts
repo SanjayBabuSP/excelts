@@ -12,7 +12,8 @@ import {
   type AesKeyStrength
 } from "@archive/crypto/aes";
 import { EXTENDED_TIMESTAMP_ID, NTFS_TIMESTAMP_ID } from "@archive/zip-spec/timestamps";
-import { uint8ArrayToString as decodeUtf8 } from "@stream/shared";
+import { crc32 } from "@archive/compression/crc32";
+import { stringToUint8Array as encodeUtf8, uint8ArrayToString as decodeUtf8 } from "@stream/shared";
 
 // =============================================================================
 // Extra Field IDs
@@ -115,6 +116,47 @@ export interface ZipExtraFields {
    * Contains UTF-8 encoded comment when present.
    */
   unicodeComment?: UnicodeExtraFieldInfo;
+}
+
+// =============================================================================
+// Unicode Extra Field Builders
+// =============================================================================
+
+function buildUnicodeExtraField(
+  id: number,
+  originalBytes: Uint8Array,
+  unicodeValue: string
+): Uint8Array {
+  const unicodeBytes = encodeUtf8(unicodeValue);
+  const dataSize = 1 + 4 + unicodeBytes.length;
+  const out = new Uint8Array(4 + dataSize);
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+
+  view.setUint16(0, id, true);
+  view.setUint16(2, dataSize, true);
+  out[4] = 1; // version
+  view.setUint32(5, crc32(originalBytes) >>> 0, true);
+  out.set(unicodeBytes, 9);
+
+  return out;
+}
+
+export function buildUnicodePathExtraField(
+  originalPathBytes: Uint8Array,
+  unicodePath: string
+): Uint8Array {
+  return buildUnicodeExtraField(UNICODE_PATH_EXTRA_FIELD_ID, originalPathBytes, unicodePath);
+}
+
+export function buildUnicodeCommentExtraField(
+  originalCommentBytes: Uint8Array,
+  unicodeComment: string
+): Uint8Array {
+  return buildUnicodeExtraField(
+    UNICODE_COMMENT_EXTRA_FIELD_ID,
+    originalCommentBytes,
+    unicodeComment
+  );
 }
 
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);

@@ -42,6 +42,7 @@ import {
   type EOCDInfo,
   type ZIP64EOCDInfo
 } from "@archive/zip-spec/zip-parser-core";
+import { resolveZipStringCodec, type ZipStringEncoding } from "@archive/shared/text";
 import { LOCAL_FILE_HEADER_SIG } from "@archive/zip-spec/zip-records";
 import type { RandomAccessReader, HttpRangeReaderOptions } from "./random-access";
 import { HttpRangeReader } from "./random-access";
@@ -60,6 +61,9 @@ export interface RemoteZipReaderOptions {
    * @default true
    */
   decodeStrings?: boolean;
+
+  /** Optional string encoding for legacy (non-UTF8) names/comments. */
+  encoding?: ZipStringEncoding;
 
   /**
    * Abort signal for cancellation.
@@ -174,6 +178,7 @@ export class RemoteZipReader {
 
   private readonly dataOffsetCache = new WeakMap<ZipEntryInfo, number>();
   private _hasEncryptedEntries: boolean | null = null;
+  private _decoder?: ReturnType<typeof resolveZipStringCodec>;
 
   private constructor(
     reader: RandomAccessReader,
@@ -183,6 +188,13 @@ export class RemoteZipReader {
     this.reader = reader;
     this.options = options;
     this.httpReader = httpReader;
+    if (options.encoding) {
+      this._decoder = resolveZipStringCodec(options.encoding);
+    }
+  }
+
+  private get _encodingDecoder() {
+    return this._decoder;
   }
 
   /**
@@ -249,7 +261,12 @@ export class RemoteZipReader {
     }
 
     // Parse EOCD using shared function
-    const { eocd, comment } = parseEOCD(tailData, eocdLocalOffset, decodeStrings);
+    const { eocd, comment } = parseEOCD(
+      tailData,
+      eocdLocalOffset,
+      decodeStrings,
+      this._encodingDecoder
+    );
     this.archiveComment = comment;
 
     // Check for ZIP64
@@ -311,7 +328,10 @@ export class RemoteZipReader {
     );
 
     // Use shared parsing function
-    this.entries = parseCentralDirectory(centralDirData, eocd.totalEntries, { decodeStrings });
+    this.entries = parseCentralDirectory(centralDirData, eocd.totalEntries, {
+      decodeStrings,
+      encoding: this.options.encoding
+    });
 
     // Build entryMap
     for (const entry of this.entries) {

@@ -5,6 +5,7 @@
  */
 
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
+import type { ZipStringEncoding } from "@archive/shared/text";
 import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import { parseZipArchiveFromBuffer } from "@archive/zip-spec/zip-parser-core";
 import {
@@ -50,6 +51,9 @@ export interface ZipParseOptions {
   /** Whether to decode file names as UTF-8 (default: true) */
   decodeStrings?: boolean;
 
+  /** Optional string encoding for legacy (non-UTF8) names/comments. */
+  encoding?: ZipStringEncoding;
+
   /** Password for encrypted entries */
   password?: string | Uint8Array;
 }
@@ -66,7 +70,10 @@ interface ZipArchiveParseResult {
  * Parse ZIP archive including entries and archive comment.
  */
 function parseZipArchive(data: Uint8Array, options: ZipParseOptions = {}): ZipArchiveParseResult {
-  return parseZipArchiveFromBuffer(data, { decodeStrings: options.decodeStrings });
+  return parseZipArchiveFromBuffer(data, {
+    decodeStrings: options.decodeStrings,
+    encoding: options.encoding
+  });
 }
 
 /**

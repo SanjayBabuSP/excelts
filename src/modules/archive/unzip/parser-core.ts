@@ -8,6 +8,7 @@ import {
   writeUint32LE
 } from "@archive/zip-spec/binary";
 import { indexOfUint8ArrayPattern } from "@archive/shared/bytes";
+import type { ZipStringEncoding } from "@archive/shared/text";
 import {
   parseZipExtraFields,
   type ZipExtraFields,
@@ -437,6 +438,8 @@ export interface ParseOptions {
   inputHighWaterMarkBytes?: number;
   inputLowWaterMarkBytes?: number;
   thresholdBytes?: number;
+  /** Optional string encoding for legacy (non-UTF8) names. */
+  encoding?: ZipStringEncoding;
 }
 
 export interface ParseDriverState {

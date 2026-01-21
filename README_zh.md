@@ -112,6 +112,17 @@ cell.fill = {
   - 数据保护
   - 注释和批注
 
+## 归档工具（ZIP/TAR）
+
+ExcelTS 内置 ZIP/TAR 归档工具（用于 XLSX 管线）。若直接使用归档相关 API，
+可通过 `ZipStringEncoding` 自定义 ZIP 字符串编码：
+
+- 默认：`"utf-8"`
+- 传统兼容：`"cp437"`
+- 自定义：提供带 `encode`/`decode` 的 codec，并可设置可选标记
+
+当使用非 UTF-8 编码时，可写入 Unicode Extra Field 以提升跨工具兼容性。
+
 ## 流式 API
 
 处理大型 Excel 文件时无需将整个文件加载到内存中，ExcelTS 提供了流式读写 API。

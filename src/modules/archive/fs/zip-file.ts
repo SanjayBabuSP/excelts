@@ -17,6 +17,7 @@ import { textEncoder as utf8Encoder } from "@stream/shared";
 import { collectUint8ArrayStream } from "@archive/io/archive-source";
 import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import { ZipEditView } from "@archive/zip/zip-edit-view";
+import type { ZipStringEncoding } from "@archive/shared/text";
 
 import type {
   AddFileOptions,
@@ -105,7 +106,8 @@ function buildDirectoryEntry(
     ctime: fsEntry.ctime,
     birthTime: fsEntry.birthTime,
     mode: resolveEntryMode("directory", globalOptions, localOptions, fsEntry.mode),
-    msDosAttributes: localOptions.msDosAttributes
+    msDosAttributes: localOptions.msDosAttributes,
+    encoding: localOptions.encoding ?? globalOptions.encoding
   };
 }
 
@@ -244,6 +246,7 @@ function buildZipEntry(
     ctime: entryOptions.ctime ?? fsMetadata?.ctime,
     birthTime: entryOptions.birthTime ?? fsMetadata?.birthTime,
     comment: entryOptions.comment,
+    encoding: entryOptions.encoding ?? globalOptions.encoding,
     encryptionMethod: entryOptions.encryptionMethod ?? globalOptions.encryptionMethod,
     password: entryOptions.password ?? globalPassword,
     mode,
@@ -267,6 +270,7 @@ function buildPreservedEntry(
     level: globalOptions.level,
     modTime: existingEntry.lastModified,
     comment: existingEntry.comment,
+    encoding: globalOptions.encoding,
     encryptionMethod: globalOptions.encryptionMethod,
     password: globalPassword,
     externalAttributes: existingEntry.externalAttributes
@@ -276,13 +280,19 @@ function buildPreservedEntry(
 /**
  * Build a symlink ZipEntry.
  */
-function buildSymlinkEntry(zipPath: string, target: string, mode?: number): ZipEntry {
+function buildSymlinkEntry(
+  zipPath: string,
+  target: string,
+  mode?: number,
+  encoding?: ZipStringEncoding
+): ZipEntry {
   return {
     name: zipPath,
     data: utf8Encoder.encode(target),
     level: 0,
     modTime: new Date(),
-    mode: mode ?? 0o120777
+    mode: mode ?? 0o120777,
+    encoding
   };
 }
 
@@ -444,10 +454,11 @@ export class ZipFile {
   private _initFromData(
     data: Uint8Array,
     password?: string | Uint8Array,
-    sourcePath?: string
+    sourcePath?: string,
+    encoding?: ZipStringEncoding
   ): void {
     this._zipData = data;
-    this._parser = new ZipParser(data, { password });
+    this._parser = new ZipParser(data, { password, encoding });
     this._password = password;
     if (sourcePath) {
       this._sourcePath = sourcePath;
@@ -471,7 +482,7 @@ export class ZipFile {
   static async fromFile(filePath: string, options: OpenZipOptions = {}): Promise<ZipFile> {
     const data = await readFileBytes(filePath);
     const zip = new ZipFile();
-    zip._initFromData(data, options.password, path.resolve(filePath));
+    zip._initFromData(data, options.password, path.resolve(filePath), options.encoding);
     return zip;
   }
 
@@ -481,7 +492,7 @@ export class ZipFile {
   static fromFileSync(filePath: string, options: OpenZipOptions = {}): ZipFile {
     const data = readFileBytesSync(filePath);
     const zip = new ZipFile();
-    zip._initFromData(data, options.password, path.resolve(filePath));
+    zip._initFromData(data, options.password, path.resolve(filePath), options.encoding);
     return zip;
   }
 
@@ -495,7 +506,7 @@ export class ZipFile {
   static fromBuffer(data: Uint8Array | ArrayBuffer, options: OpenZipOptions = {}): ZipFile {
     const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
     const zip = new ZipFile();
-    zip._initFromData(bytes, options.password);
+    zip._initFromData(bytes, options.password, undefined, options.encoding);
     return zip;
   }
 
@@ -942,7 +953,12 @@ export class ZipFile {
         }
 
         case "symlink": {
-          const symlinkEntry = buildSymlinkEntry(pending.zipPath, pending.target, pending.mode);
+          const symlinkEntry = buildSymlinkEntry(
+            pending.zipPath,
+            pending.target,
+            pending.mode,
+            this._options.encoding
+          );
           entries.push(symlinkEntry);
           this._bytesWritten += symlinkEntry.data.length;
           break;

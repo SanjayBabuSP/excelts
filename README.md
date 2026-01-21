@@ -112,6 +112,18 @@ cell.fill = {
   - Data protection
   - Comments and notes
 
+## Archive Utilities (ZIP/TAR)
+
+ExcelTS includes internal ZIP/TAR utilities used by the XLSX pipeline. If you use the
+archive APIs directly, ZIP string encoding can be customized via `ZipStringEncoding`:
+
+- Default: `"utf-8"`
+- Legacy: `"cp437"`
+- Custom: provide a codec with `encode`/`decode` plus optional flags
+
+When a non-UTF-8 encoding is used, Unicode extra fields can be emitted for better
+cross-tool compatibility.
+
 ## Streaming API
 
 For processing large Excel files without loading them entirely into memory, ExcelTS provides streaming reader and writer APIs.

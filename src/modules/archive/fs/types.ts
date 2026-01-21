@@ -8,6 +8,7 @@ import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 import type { Zip64Mode } from "@archive/zip-spec/zip-records";
 import type { ZipEncryptionMethod } from "@archive/crypto";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
+import type { ZipStringEncoding } from "@archive/shared/text";
 
 // =============================================================================
 // Overwrite Strategies
@@ -69,6 +70,9 @@ export interface AddFileOptions {
 
   /** Advanced override for the ZIP central directory external attributes field. */
   externalAttributes?: number;
+
+  /** Optional string encoding for this entry name/comment. */
+  encoding?: ZipStringEncoding;
 }
 
 // =============================================================================
@@ -108,6 +112,9 @@ export interface AddDirectoryOptions {
 
   /** Optional MS-DOS attributes for directory entries (low 8 bits). */
   msDosAttributes?: number;
+
+  /** Optional string encoding for entries added from this directory. */
+  encoding?: ZipStringEncoding;
 }
 
 // =============================================================================
@@ -150,6 +157,9 @@ export interface AddGlobOptions {
 
   /** Optional MS-DOS attributes override for files matched by the glob. */
   msDosAttributes?: number;
+
+  /** Optional string encoding for entries added from this glob. */
+  encoding?: ZipStringEncoding;
 }
 
 // =============================================================================
@@ -242,6 +252,9 @@ export interface ZipFileOptions {
 
   /** If true, preserve `stat.mode` when adding local files/dirs/globs (requires writePermissions). */
   preservePermissions?: boolean;
+
+  /** Optional string encoding for entry names/comments. */
+  encoding?: ZipStringEncoding;
 }
 
 /**
@@ -250,6 +263,9 @@ export interface ZipFileOptions {
 export interface OpenZipOptions {
   /** Password for encrypted entries */
   password?: string | Uint8Array;
+
+  /** Optional string encoding for legacy (non-UTF8) names/comments. */
+  encoding?: ZipStringEncoding;
 }
 
 /**

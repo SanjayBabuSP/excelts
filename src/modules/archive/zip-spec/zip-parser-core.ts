@@ -8,7 +8,14 @@
 import { BinaryReader } from "@archive/zip-spec/binary";
 import { parseZipExtraFields } from "@archive/zip-spec/zip-extra-fields";
 import { resolveZipLastModifiedDateFromUnixSeconds } from "@archive/zip-spec/timestamps";
-import { decodeZipPath, decodeZipComment } from "@archive/shared/text";
+import {
+  decodeZipPath,
+  decodeZipComment,
+  resolveZipStringCodec,
+  type ZipStringEncoding,
+  type ZipStringCodec
+} from "@archive/shared/text";
+import { uint8ArrayToString as decodeUtf8 } from "@stream/shared";
 import type { ZipEntryInfo, ZipEntryEncryptionMethod } from "./zip-entry-info";
 import {
   CENTRAL_DIR_HEADER_SIG,
@@ -34,6 +41,12 @@ export const EOCD_MAX_SEARCH_SIZE = EOCD_MIN_SIZE + EOCD_MAX_COMMENT_SIZE;
 
 /** ZIP64 EOCD Locator size */
 export const ZIP64_EOCD_LOCATOR_SIZE = 20;
+
+function resolveDecoder(
+  options: CentralDirectoryParseOptions
+): Pick<ZipStringCodec, "decode"> | undefined {
+  return options.encoding ? resolveZipStringCodec(options.encoding) : undefined;
+}
 
 // -----------------------------------------------------------------------------
 // Types
@@ -76,6 +89,9 @@ export interface EOCDParseResult {
 export interface CentralDirectoryParseOptions {
   /** Whether to decode file names as UTF-8 (default: true) */
   decodeStrings?: boolean;
+
+  /** Optional string encoding for legacy (non-UTF8) names/comments. */
+  encoding?: ZipStringEncoding;
 }
 
 // -----------------------------------------------------------------------------
@@ -150,7 +166,8 @@ export function findZIP64EOCDLocator(data: Uint8Array, eocdOffset: number): numb
 export function parseEOCD(
   data: Uint8Array,
   offset: number,
-  decodeStrings = true
+  decodeStrings = true,
+  decoder?: Pick<ZipStringCodec, "decode">
 ): { eocd: EOCDInfo; comment: string } {
   const reader = new BinaryReader(data, offset);
 
@@ -163,7 +180,13 @@ export function parseEOCD(
   const centralDirOffset = reader.readUint32();
   const commentLength = reader.readUint16();
 
-  const comment = commentLength > 0 ? reader.readString(commentLength, decodeStrings) : "";
+  let comment = "";
+  if (commentLength > 0) {
+    const commentBytes = reader.readBytes(commentLength);
+    if (decodeStrings) {
+      comment = decoder ? decoder.decode(commentBytes) : decodeUtf8(commentBytes);
+    }
+  }
 
   return {
     eocd: {
@@ -267,7 +290,8 @@ export function applyZIP64ToEOCD(eocd: EOCDInfo, zip64: ZIP64EOCDInfo): void {
  */
 export function parseCentralDirectoryEntry(
   reader: BinaryReader,
-  decodeStrings: boolean
+  decodeStrings: boolean,
+  decoder?: Pick<ZipStringCodec, "decode">
 ): ZipEntryInfo {
   const versionMadeBy = reader.readUint16();
   reader.skip(2); // version needed
@@ -310,8 +334,8 @@ export function parseCentralDirectoryEntry(
 
   // Decode fileName and comment using unified decoder
   // Handles: UTF-8 flag, Unicode extra fields (0x7075/0x6375), CP437 fallback
-  const fileName = decodeStrings ? decodeZipPath(fileNameBytes, flags, extraFields) : "";
-  const comment = decodeStrings ? decodeZipComment(commentBytes, flags, extraFields) : "";
+  const fileName = decodeStrings ? decodeZipPath(fileNameBytes, flags, extraFields, decoder) : "";
+  const comment = decodeStrings ? decodeZipComment(commentBytes, flags, extraFields, decoder) : "";
 
   const isDirectory = fileName.endsWith("/") || (externalAttributes & 0x10) !== 0;
   const isEncrypted = (flags & 0x01) !== 0;
@@ -397,6 +421,7 @@ export function parseCentralDirectoryAt(
   options: CentralDirectoryParseOptions = {}
 ): ZipEntryInfo[] {
   const decodeStrings = options.decodeStrings ?? true;
+  const decoder = resolveDecoder(options);
 
   if (totalEntries === 0) {
     return [];
@@ -411,7 +436,7 @@ export function parseCentralDirectoryAt(
       throw new Error(`Invalid Central Directory header signature at entry ${i}`);
     }
 
-    entries[i] = parseCentralDirectoryEntry(reader, decodeStrings);
+    entries[i] = parseCentralDirectoryEntry(reader, decodeStrings, decoder);
   }
 
   return entries;
@@ -435,6 +460,7 @@ export function parseZipArchiveFromBuffer(
   options: CentralDirectoryParseOptions = {}
 ): { entries: ZipEntryInfo[]; comment: string } {
   const decodeStrings = options.decodeStrings ?? true;
+  const decoder = resolveDecoder(options);
 
   // Find EOCD
   const eocdOffset = findEOCDSignature(data);
@@ -443,7 +469,7 @@ export function parseZipArchiveFromBuffer(
   }
 
   // Parse EOCD
-  const { eocd, comment } = parseEOCD(data, eocdOffset, decodeStrings);
+  const { eocd, comment } = parseEOCD(data, eocdOffset, decodeStrings, decoder);
 
   // Check for ZIP64
   const zip64LocatorOffset = findZIP64EOCDLocator(data, eocdOffset);

@@ -1,4 +1,9 @@
-import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import {
+  encodeZipStringWithCodec,
+  resolveZipStringCodec,
+  type ZipStringCodec,
+  type ZipStringEncoding
+} from "@archive/shared/text";
 import {
   buildZipTimestampExtraField,
   dateToZipDos,
@@ -9,8 +14,13 @@ import {
   COMPRESSION_DEFLATE,
   COMPRESSION_STORE,
   FLAG_DATA_DESCRIPTOR,
-  FLAG_UTF8
+  FLAG_UTF8,
+  concatExtraFields
 } from "@archive/zip-spec/zip-records";
+import {
+  buildUnicodeCommentExtraField,
+  buildUnicodePathExtraField
+} from "@archive/zip-spec/zip-extra-fields";
 
 export interface ZipEntryMetadata {
   nameBytes: Uint8Array;
@@ -34,25 +44,51 @@ export interface ZipEntryMetadataInput {
   useDataDescriptor: boolean;
   /** If true, use DEFLATE; else STORE. */
   deflate: boolean;
+
+  /**
+   * String codec for name/comment.
+   * Can be a pre-resolved ZipStringCodec or a ZipStringEncoding shorthand.
+   */
+  codec?: ZipStringCodec | ZipStringEncoding;
 }
 
 export function resolveZipCompressionMethod(deflate: boolean): number {
   return deflate ? COMPRESSION_DEFLATE : COMPRESSION_STORE;
 }
 
-export function resolveZipFlags(useDataDescriptor: boolean): number {
-  return useDataDescriptor ? FLAG_UTF8 | FLAG_DATA_DESCRIPTOR : FLAG_UTF8;
+export function resolveZipFlags(useDataDescriptor: boolean, useUtf8Flag = true): number {
+  let flags = 0;
+  if (useUtf8Flag) {
+    flags |= FLAG_UTF8;
+  }
+  if (useDataDescriptor) {
+    flags |= FLAG_DATA_DESCRIPTOR;
+  }
+  return flags;
 }
 
 export function buildZipEntryMetadata(input: ZipEntryMetadataInput): ZipEntryMetadata {
-  const nameBytes = encodeUtf8(input.name);
-  const commentBytes = encodeUtf8(input.comment ?? "");
+  const codec = resolveZipStringCodec(input.codec);
+  const nameBytes = codec.encode(input.name);
+  const commentBytes = encodeZipStringWithCodec(input.comment, codec);
   const { dosTime, dosDate } = dateToZipDos(input.modTime);
   const extra: ZipExtraTimestamps | undefined =
     input.atime || input.ctime || input.birthTime
       ? { atime: input.atime, ctime: input.ctime, birthTime: input.birthTime }
       : undefined;
-  const extraField = buildZipTimestampExtraField(input.modTime, input.timestamps, extra);
+  let extraField = buildZipTimestampExtraField(input.modTime, input.timestamps, extra);
+
+  if (!codec.useUtf8Flag && codec.useUnicodeExtraFields) {
+    if (input.name) {
+      extraField = concatExtraFields(extraField, buildUnicodePathExtraField(nameBytes, input.name));
+    }
+    if (input.comment) {
+      extraField = concatExtraFields(
+        extraField,
+        buildUnicodeCommentExtraField(commentBytes, input.comment)
+      );
+    }
+  }
 
   return {
     nameBytes,
@@ -61,6 +97,6 @@ export function buildZipEntryMetadata(input: ZipEntryMetadataInput): ZipEntryMet
     dosDate,
     extraField,
     compressionMethod: resolveZipCompressionMethod(input.deflate),
-    flags: resolveZipFlags(input.useDataDescriptor)
+    flags: resolveZipFlags(input.useDataDescriptor, codec.useUtf8Flag)
   };
 }

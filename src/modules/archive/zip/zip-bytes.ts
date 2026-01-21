@@ -25,8 +25,8 @@ import {
   REPRODUCIBLE_ZIP_MOD_TIME
 } from "@archive/shared/defaults";
 import { isProbablyIncompressible } from "@archive/zip/compressibility";
-import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
 import { type ZipTimestampMode } from "@archive/zip-spec/timestamps";
+import { encodeZipString, type ZipStringEncoding } from "@archive/shared/text";
 import {
   buildZipEntryMetadata,
   resolveZipCompressionMethod
@@ -34,7 +34,6 @@ import {
 import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
 import { normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import {
-  FLAG_UTF8,
   FLAG_ENCRYPTED,
   COMPRESSION_AES,
   UINT32_MAX,
@@ -87,6 +86,8 @@ export interface ZipEntry {
   birthTime?: Date;
   /** File comment (optional) */
   comment?: string;
+  /** Optional string encoding for this entry name/comment. */
+  encoding?: ZipStringEncoding;
   /** Per-entry encryption method override */
   encryptionMethod?: ZipEncryptionMethod;
   /** Per-entry password override */
@@ -123,6 +124,7 @@ interface ZipBuildSettings {
   defaultModTime: Date;
   encryptionMethod: ZipEncryptionMethod;
   password?: string | Uint8Array;
+  encoding?: ZipStringEncoding;
 }
 
 type ZipPathOptionValue = false | ZipPathOptions;
@@ -144,7 +146,6 @@ function validateEncryptionOptions(
     );
   }
 }
-
 /**
  * Parse common ZIP options into build settings.
  */
@@ -168,19 +169,15 @@ function parseZipBuildOptions(options: ZipOptions): {
       timestamps,
       defaultModTime,
       encryptionMethod: options.encryptionMethod ?? "none",
-      password: options.password
+      password: options.password,
+      encoding: options.encoding
     },
-    zipComment: encodeZipComment(options.comment),
+    zipComment: encodeZipString(options.comment, options.encoding),
     zip64Mode: options.zip64 ?? "auto",
     smartStore: options.smartStore ?? true,
     thresholdBytes: options.thresholdBytes,
     path: options.path ?? false
   };
-}
-
-function encodeZipComment(comment?: string): Uint8Array {
-  // Keep empty comment as empty bytes (no encoding surprises).
-  return comment ? encodeUtf8(comment) : EMPTY_UINT8ARRAY;
 }
 
 function shouldDeflate(level: number, data: Uint8Array): boolean {
@@ -261,14 +258,15 @@ function buildProcessedEntry(
     birthTime: entry.birthTime,
     timestamps: settings.timestamps,
     useDataDescriptor: false,
-    deflate
+    deflate,
+    codec: entry.encoding ?? settings.encoding
   });
 
   // Determine final data and compression method based on encryption
   let finalData: Uint8Array;
   let finalCompressionMethod: number;
   let finalExtraField: Uint8Array = metadata.extraField;
-  let flags = FLAG_UTF8;
+  let flags = metadata.flags;
 
   if (encryptionResult) {
     finalData = encryptionResult.data;
@@ -320,10 +318,11 @@ function buildProcessedRawEntry(
     modTime: modDate,
     timestamps: settings.timestamps,
     useDataDescriptor: false,
-    deflate: false
+    deflate: false,
+    codec: entry.encoding ?? settings.encoding
   });
 
-  const flags = (entry.flags ?? FLAG_UTF8) | FLAG_UTF8;
+  const flags = ((entry.flags ?? 0) | metadata.flags) >>> 0;
 
   const attrs = resolveZipExternalAttributesAndVersionMadeBy({
     name: resolvedName,
@@ -376,6 +375,9 @@ export interface ZipOptions extends CompressOptions {
    * Defaults to 4.
    */
   concurrency?: number;
+
+  /** Optional string encoding for entry names/comments and archive comment. */
+  encoding?: ZipStringEncoding;
 
   /**
    * If true (default), automatically STORE incompressible data.

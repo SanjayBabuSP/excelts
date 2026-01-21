@@ -30,7 +30,12 @@ import {
 } from "@archive/zip/zip-entry-metadata";
 import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
 import { normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
-import { uint8ArrayToString as decodeUtf8, stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import {
+  encodeZipStringWithCodec,
+  resolveZipStringCodec,
+  type ZipStringCodec,
+  type ZipStringEncoding
+} from "@archive/shared/text";
 import { isProbablyIncompressibleChunks } from "@archive/zip/compressibility";
 import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import { createAbortError, toError } from "@archive/shared/errors";
@@ -131,6 +136,7 @@ export class ZipDeflateFile {
 
   private _externalAttributes: number;
   private _versionMadeBy?: number;
+  private readonly _stringCodec: ReturnType<typeof resolveZipStringCodec>;
 
   constructor(
     name: string,
@@ -160,6 +166,9 @@ export class ZipDeflateFile {
 
       /** Optional entry name normalization. */
       path?: false | ZipPathOptions;
+
+      /** Optional string encoding for this entry name/comment. */
+      encoding?: ZipStringEncoding;
     }
   ) {
     const resolvedName = options?.path ? normalizeZipPath(name, options.path) : name;
@@ -185,16 +194,19 @@ export class ZipDeflateFile {
 
     // Smart-store sampling does not allocate a contiguous buffer.
 
+    this._stringCodec = resolveZipStringCodec(options?.encoding);
+
     const metadata = buildZipEntryMetadata({
       name: resolvedName,
-      comment: options?.comment ?? "",
+      comment: options?.comment,
       modTime,
       atime: options?.atime,
       ctime: options?.ctime,
       birthTime: options?.birthTime,
       timestamps: options?.timestamps ?? DEFAULT_ZIP_TIMESTAMPS,
       useDataDescriptor: true,
-      deflate: false
+      deflate: false,
+      codec: this._stringCodec
     });
 
     this.nameBytes = metadata.nameBytes;
@@ -834,7 +846,7 @@ export class ZipDeflateFile {
       crc32: this._centralDirEntryInfo.crc,
       lastModified: this._modTime,
       localHeaderOffset: this._centralDirEntryInfo.offset,
-      comment: decodeUtf8(this._centralDirEntryInfo.comment),
+      comment: this._stringCodec.decode(this._centralDirEntryInfo.comment),
       externalAttributes: this._centralDirEntryInfo.externalAttributes,
       versionMadeBy: this._centralDirEntryInfo.versionMadeBy,
       extraField: this._centralDirEntryInfo.extraField,
@@ -916,6 +928,7 @@ export class ZipRawFile implements ZipWritableFile {
 
   private _source: Uint8Array | AsyncIterable<Uint8Array>;
   private _chunkSize: number;
+  private readonly _stringCodec: ReturnType<typeof resolveZipStringCodec>;
 
   private _doneResolve: (() => void) | null = null;
   private _doneReject: ((err: Error) => void) | null = null;
@@ -938,10 +951,12 @@ export class ZipRawFile implements ZipWritableFile {
       externalAttributes?: number;
       versionMadeBy?: number;
       chunkSize?: number;
+      codec?: ZipStringCodec;
     }
   ) {
     this.name = name;
-    this.nameBytes = encodeUtf8(name);
+    this._stringCodec = options.codec ?? resolveZipStringCodec();
+    this.nameBytes = this._stringCodec.encode(name);
     this.commentBytes = options.comment ?? EMPTY_UINT8ARRAY;
     this.dosTime = options.dosTime;
     this.dosDate = options.dosDate;
@@ -963,7 +978,8 @@ export class ZipRawFile implements ZipWritableFile {
 
     // Always write data descriptor for passthrough entries to avoid
     // local-header ZIP64 complexity.
-    this._flags = (options.flags ?? 0) | FLAG_UTF8 | FLAG_DATA_DESCRIPTOR;
+    this._flags =
+      (options.flags ?? 0) | (this._stringCodec.useUtf8Flag ? FLAG_UTF8 : 0) | FLAG_DATA_DESCRIPTOR;
 
     this._centralDirEntryInfo = {
       name: this.nameBytes,
@@ -1171,6 +1187,7 @@ export class StreamingZip {
 
   private zipComment: Uint8Array;
   private zip64Mode: Zip64Mode;
+  private readonly _stringCodec: ZipStringCodec;
 
   // Queue for sequential file processing
   private fileQueue: ZipWritableFile[] = [];
@@ -1179,11 +1196,16 @@ export class StreamingZip {
 
   constructor(
     callback: (err: Error | null, data: Uint8Array, final: boolean) => void,
-    options?: { comment?: string; zip64?: Zip64Mode }
+    options?: {
+      comment?: string;
+      zip64?: Zip64Mode;
+      encoding?: ZipStringEncoding;
+      codec?: ZipStringCodec;
+    }
   ) {
     this.callback = callback;
-    // Avoid per-instance TextEncoder allocations.
-    this.zipComment = options?.comment ? encodeUtf8(options.comment) : EMPTY_UINT8ARRAY;
+    this._stringCodec = options?.codec ?? resolveZipStringCodec(options?.encoding);
+    this.zipComment = encodeZipStringWithCodec(options?.comment, this._stringCodec);
     this.zip64Mode = options?.zip64 ?? "auto";
   }
 
