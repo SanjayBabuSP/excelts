@@ -150,7 +150,7 @@ export const ARCHIVE_BROWSER_EXPORTS = [
  * File system convenience layer exports (Node.js only)
  */
 export const ARCHIVE_NODE_EXPORTS = [
-  "ZipFile",
+  "ArchiveFile",
   "traverseDirectory",
   "traverseDirectorySync",
   "glob",

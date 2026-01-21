@@ -1,57 +1,94 @@
 /**
- * Node.js file system convenience layer for ZIP operations.
+ * Node.js file system convenience layer for archive operations.
  *
- * This module provides a high-level API for working with ZIP files
+ * This module provides a high-level API for working with ZIP and TAR files
  * on the file system.
  *
  * @example Create a ZIP from files and directories
  * ```ts
- * import { ZipFile } from "@archive/fs";
+ * import { ArchiveFile } from "@archive/fs";
  *
- * const zip = new ZipFile();
+ * const zip = new ArchiveFile();
  * zip.addFile("./readme.md");
  * zip.addDirectory("./src");
  * zip.addGlob("**\/*.json", { cwd: "./config" });
  * await zip.writeToFile("./output.zip");
  * ```
  *
+ * @example Create a TAR archive
+ * ```ts
+ * import { ArchiveFile } from "@archive/fs";
+ *
+ * const tar = new ArchiveFile({ format: "tar" });
+ * tar.addFile("./readme.md");
+ * tar.addDirectory("./src");
+ * await tar.writeToFile("./output.tar");
+ * ```
+ *
+ * @example Create a gzipped TAR archive
+ * ```ts
+ * import { ArchiveFile } from "@archive/fs";
+ *
+ * const tar = new ArchiveFile({ format: "tar", gzip: true });
+ * tar.addFile("./readme.md");
+ * await tar.writeToFile("./output.tar.gz");
+ * ```
+ *
  * @example Extract a ZIP file
  * ```ts
- * import { ZipFile } from "@archive/fs";
+ * import { ArchiveFile } from "@archive/fs";
  *
- * const zip = await ZipFile.fromFile("./archive.zip");
+ * const zip = await ArchiveFile.fromFile("./archive.zip");
  * await zip.extractTo("./output", { overwrite: "newer" });
  * ```
  *
- * @example Read ZIP contents
+ * @example Read archive contents
  * ```ts
- * import { ZipFile } from "@archive/fs";
+ * import { ArchiveFile } from "@archive/fs";
  *
- * const zip = await ZipFile.fromFile("./archive.zip");
- * for (const entry of zip.getEntries()) {
+ * const archive = await ArchiveFile.fromFile("./archive.zip");
+ * for (const entry of archive.getEntries()) {
  *   console.log(entry.path, entry.size);
  * }
- * const content = await zip.readAsText("readme.txt");
+ * const content = await archive.readAsText("readme.txt");
  * ```
  *
  * @module
  */
 
-// Main class
-export { ZipFile } from "./zip-file";
+// Main unified class
+export { ArchiveFile } from "./archive-file";
 
 // Types
 export type {
+  // Common types
   OverwriteStrategy,
+  ArchiveFormat,
+  ArchiveEntryInfo,
+  // ZIP types
   AddFileOptions,
   AddDirectoryOptions,
   AddGlobOptions,
-  ExtractOptions,
+  ExtractToOptions,
   ExtractProgress,
   ZipFileOptions,
   OpenZipOptions,
   WriteZipOptions,
-  ZipEntryInfo
+  WriteArchiveOptions,
+  ZipEntryInfo,
+  // TAR types
+  TarFileOptions,
+  OpenTarOptions,
+  AddTarFileOptions,
+  AddTarDirectoryOptions,
+  AddTarGlobOptions,
+  // Unified options (with format discrimination)
+  ArchiveFileOptions,
+  ArchiveFileOptionsZip,
+  ArchiveFileOptionsTar,
+  OpenArchiveOptions,
+  OpenArchiveOptionsZip,
+  OpenArchiveOptionsTar
 } from "./types";
 
 // File system utilities (for advanced users)

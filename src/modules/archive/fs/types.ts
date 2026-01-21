@@ -1,5 +1,8 @@
 /**
- * Type definitions for Node.js file system ZIP operations.
+ * Type definitions for Node.js file system archive operations.
+ *
+ * Supports both ZIP and TAR formats through a unified API with
+ * format-specific options controlled via TypeScript types.
  *
  * @module
  */
@@ -9,6 +12,9 @@ import type { Zip64Mode } from "@archive/zip-spec/zip-records";
 import type { ZipEncryptionMethod } from "@archive/crypto";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 import type { ZipStringEncoding } from "@archive/shared/text";
+import type { ArchiveFormat } from "@archive/formats/types";
+
+export type { ArchiveFormat };
 
 // =============================================================================
 // Overwrite Strategies
@@ -167,9 +173,9 @@ export interface AddGlobOptions {
 // =============================================================================
 
 /**
- * Options for extracting files from an archive.
+ * Options for extracting files from an archive to disk.
  */
-export interface ExtractOptions {
+export interface ExtractToOptions {
   /** How to handle existing files (default: 'error') */
   overwrite?: OverwriteStrategy;
 
@@ -269,12 +275,15 @@ export interface OpenZipOptions {
 }
 
 /**
- * Options for writing a ZIP file to disk.
+ * Options for writing an archive file to disk.
  */
 export interface WriteZipOptions {
   /** How to handle existing file (default: 'error') */
   overwrite?: OverwriteStrategy;
 }
+
+/** Alias for backward compatibility */
+export type WriteArchiveOptions = WriteZipOptions;
 
 // =============================================================================
 // Entry Information
@@ -313,4 +322,193 @@ export interface ZipEntryInfo {
 
   /** File comment */
   comment: string;
+}
+
+/**
+ * Unified entry info type (format-agnostic properties only)
+ */
+export interface ArchiveEntryInfo {
+  /** Path within the archive */
+  path: string;
+
+  /** Whether this is a directory */
+  isDirectory: boolean;
+
+  /** Uncompressed file size in bytes */
+  size: number;
+
+  /** Last modified date */
+  lastModified?: Date;
+
+  /** Modification time (alias for lastModified) */
+  mtime?: Date;
+
+  /** File mode (Unix permissions) */
+  mode?: number;
+
+  /** User ID */
+  uid?: number;
+
+  /** Group ID */
+  gid?: number;
+
+  /** User name */
+  uname?: string;
+
+  /** Group name */
+  gname?: string;
+
+  /** Link target (for symlinks) */
+  linkname?: string;
+
+  /** Entry type (TAR-specific) */
+  type?: string;
+}
+
+// =============================================================================
+// TAR-specific Options
+// =============================================================================
+
+/**
+ * Options for creating a TAR archive via ArchiveFile.
+ */
+export interface TarFileOptions {
+  /** Archive format */
+  format: "tar";
+
+  /** Default modification time for entries */
+  modTime?: Date;
+
+  /** If true, compress with gzip (creates .tar.gz / .tgz) */
+  gzip?: boolean;
+
+  /** Gzip compression level (1-9, default: 6) */
+  gzipLevel?: number;
+}
+
+/**
+ * Options for opening an existing TAR file.
+ */
+export interface OpenTarOptions {
+  /** Archive format */
+  format: "tar";
+
+  /** If true, decompress gzip before parsing */
+  gzip?: boolean;
+}
+
+// =============================================================================
+// Unified ArchiveFile Options (with format discrimination)
+// =============================================================================
+
+/**
+ * ZIP format options for ArchiveFile.
+ */
+export interface ArchiveFileOptionsZip extends ZipFileOptions {
+  /** Archive format (default: 'zip') */
+  format?: "zip";
+}
+
+/**
+ * TAR format options for ArchiveFile.
+ */
+export interface ArchiveFileOptionsTar extends Omit<TarFileOptions, "format"> {
+  /** Archive format */
+  format: "tar";
+}
+
+/**
+ * Union type for ArchiveFile options.
+ */
+export type ArchiveFileOptions = ArchiveFileOptionsZip | ArchiveFileOptionsTar;
+
+/**
+ * ZIP format options for opening an archive.
+ */
+export interface OpenArchiveOptionsZip extends OpenZipOptions {
+  /** Archive format (default: 'zip') */
+  format?: "zip";
+}
+
+/**
+ * TAR format options for opening an archive.
+ */
+export interface OpenArchiveOptionsTar extends Omit<OpenTarOptions, "format"> {
+  /** Archive format */
+  format: "tar";
+}
+
+/**
+ * Union type for opening archives.
+ */
+export type OpenArchiveOptions = OpenArchiveOptionsZip | OpenArchiveOptionsTar;
+
+// =============================================================================
+// TAR Entry Options
+// =============================================================================
+
+/**
+ * Options for adding a file entry to a TAR archive.
+ */
+export interface AddTarFileOptions {
+  /** Custom name in the archive (defaults to basename of source path) */
+  name?: string;
+
+  /** Prefix path in the archive */
+  prefix?: string;
+
+  /** Custom modification time (defaults to file's mtime) */
+  modTime?: Date;
+
+  /** File mode/permissions (default: 0644 for files, 0755 for directories) */
+  mode?: number;
+
+  /** User ID (default: 0) */
+  uid?: number;
+
+  /** Group ID (default: 0) */
+  gid?: number;
+
+  /** User name */
+  uname?: string;
+
+  /** Group name */
+  gname?: string;
+}
+
+/**
+ * Options for adding a directory to a TAR archive.
+ */
+export interface AddTarDirectoryOptions extends AddTarFileOptions {
+  /** Include the root directory itself (default: true) */
+  includeRoot?: boolean;
+
+  /** Recursively include subdirectories (default: true) */
+  recursive?: boolean;
+
+  /** Filter function to include/exclude files */
+  filter?: (path: string, stats: { isDirectory: boolean; size: number }) => boolean;
+
+  /** Follow symbolic links (default: false) */
+  followSymlinks?: boolean;
+}
+
+/**
+ * Options for adding files matching a glob pattern to a TAR archive.
+ */
+export interface AddTarGlobOptions extends AddTarFileOptions {
+  /** Current working directory for glob matching (default: process.cwd()) */
+  cwd?: string;
+
+  /** Patterns to ignore */
+  ignore?: string | string[];
+
+  /** Include dot files (default: false) */
+  dot?: boolean;
+
+  /** Follow symbolic links (default: false) */
+  followSymlinks?: boolean;
+
+  /** Filter function to include/exclude files */
+  filter?: (path: string, stats: { isDirectory: boolean; size: number }) => boolean;
 }

@@ -77,55 +77,7 @@ export {
 } from "@archive/compression/worker-pool";
 
 // Node.js file system convenience layer
-export {
-  ZipFile,
-  traverseDirectory,
-  traverseDirectorySync,
-  glob,
-  globSync,
-  globToRegex,
-  matchGlob,
-  matchGlobAny,
-  ensureDir,
-  ensureDirSync,
-  fileExists,
-  fileExistsSync,
-  readFileBytes,
-  readFileBytesSync,
-  writeFileBytes,
-  writeFileBytesSync,
-  setFileTime,
-  setFileTimeSync,
-  safeStats,
-  safeStatsSync,
-  readFileText,
-  readFileTextSync,
-  writeFileText,
-  writeFileTextSync,
-  remove,
-  removeSync,
-  copyFile,
-  copyFileSync,
-  createReadStream,
-  createWriteStream,
-  createTempDir,
-  createTempDirSync,
-  type FileEntry,
-  type TraverseOptions,
-  type GlobOptions,
-  type ReadStreamOptions,
-  type WriteStreamOptions,
-  type OverwriteStrategy,
-  type AddFileOptions,
-  type AddDirectoryOptions,
-  type AddGlobOptions,
-  type ExtractOptions,
-  type ExtractProgress,
-  type ZipFileOptions,
-  type OpenZipOptions,
-  type WriteZipOptions,
-  type ZipEntryInfo
-} from "@archive/fs";
+export * from "@archive/fs";
 
 // TAR + Gzip support (Node.js only - requires zlib)
 export {
