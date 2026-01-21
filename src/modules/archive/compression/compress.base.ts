@@ -189,7 +189,7 @@ export function hasDeflateRawWebStreams(): boolean {
   return hasDeflateRawCompressionStream() && hasDeflateRawDecompressionStream();
 }
 
-async function streamToUint8Array(
+export async function streamToUint8Array(
   reader: ReadableStreamDefaultReader<Uint8Array>
 ): Promise<Uint8Array> {
   const out = new ByteQueue();
@@ -205,7 +205,7 @@ async function streamToUint8Array(
   return out.read(out.length);
 }
 
-async function transformWithStream(
+export async function transformWithStream(
   data: Uint8Array,
   stream: CompressionStream | DecompressionStream
 ): Promise<Uint8Array> {
@@ -256,4 +256,79 @@ export async function compressWithStream(data: Uint8Array): Promise<Uint8Array> 
 export async function decompressWithStream(data: Uint8Array): Promise<Uint8Array> {
   const ds = new DecompressionStream("deflate-raw");
   return transformWithStream(data, ds);
+}
+
+// =============================================================================
+// GZIP Format Constants (RFC 1952)
+// =============================================================================
+
+/** GZIP magic number byte 1 */
+export const GZIP_ID1 = 0x1f;
+
+/** GZIP magic number byte 2 */
+export const GZIP_ID2 = 0x8b;
+
+/** Compression method: DEFLATE */
+export const GZIP_CM_DEFLATE = 8;
+
+// Header flags
+export const GZIP_FLAG_FTEXT = 0x01;
+export const GZIP_FLAG_FHCRC = 0x02;
+export const GZIP_FLAG_FEXTRA = 0x04;
+export const GZIP_FLAG_FNAME = 0x08;
+export const GZIP_FLAG_FCOMMENT = 0x10;
+
+/** Minimum valid GZIP size: 10-byte header + 8-byte trailer */
+export const GZIP_MIN_SIZE = 18;
+
+/**
+ * Check if data appears to be GZIP compressed (magic number check)
+ */
+export function isGzipData(data: Uint8Array): boolean {
+  return data.length >= 2 && data[0] === GZIP_ID1 && data[1] === GZIP_ID2;
+}
+
+// =============================================================================
+// GZIP Native Stream Detection
+// =============================================================================
+
+let _hasGzipCompressionStream: boolean | null = null;
+let _hasGzipDecompressionStream: boolean | null = null;
+
+/**
+ * Check if CompressionStream supports "gzip" format.
+ */
+export function hasGzipCompressionStream(): boolean {
+  if (typeof CompressionStream === "undefined") {
+    return false;
+  }
+  if (_hasGzipCompressionStream !== null) {
+    return _hasGzipCompressionStream;
+  }
+  try {
+    new CompressionStream("gzip");
+    _hasGzipCompressionStream = true;
+  } catch {
+    _hasGzipCompressionStream = false;
+  }
+  return _hasGzipCompressionStream;
+}
+
+/**
+ * Check if DecompressionStream supports "gzip" format.
+ */
+export function hasGzipDecompressionStream(): boolean {
+  if (typeof DecompressionStream === "undefined") {
+    return false;
+  }
+  if (_hasGzipDecompressionStream !== null) {
+    return _hasGzipDecompressionStream;
+  }
+  try {
+    new DecompressionStream("gzip");
+    _hasGzipDecompressionStream = true;
+  } catch {
+    _hasGzipDecompressionStream = false;
+  }
+  return _hasGzipDecompressionStream;
 }

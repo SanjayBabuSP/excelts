@@ -2,25 +2,17 @@
  * TAR + Gzip (tar.gz / tgz) Support
  *
  * Provides utilities for creating and extracting gzip-compressed TAR archives.
- * Uses Node.js native zlib for compression/decompression.
+ * Uses the unified compress module for compression/decompression.
  */
 
-import { promisify } from "util";
-import * as zlib from "zlib";
-
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
-import { uint8ArrayToBuffer, bufferToUint8Array } from "@archive/compression/compress";
+import { gunzip } from "@archive/compression/compress";
+import { createGzipStream } from "@archive/compression/streaming-compress";
 import type { ArchiveSource } from "@archive/io/archive-source";
 import { toUint8Array, isInMemoryArchiveSource, toAsyncIterable } from "@archive/io/archive-source";
 import { collect } from "@archive/io/archive-sink";
 import { TarArchive, addEntries, type TarArchiveOptions } from "./tar-archive";
 import { parseTar, untar, type TarEntry, type TarParseOptions } from "./tar-parser";
-
-const gzipAsync = promisify(zlib.gzip) as (
-  input: zlib.InputType,
-  options?: zlib.ZlibOptions
-) => Promise<Buffer>;
-const gunzipAsync = promisify(zlib.gunzip) as (input: zlib.InputType) => Promise<Buffer>;
 
 export interface TarGzOptions extends TarArchiveOptions {
   /** Compression level (0-9, default: 6) */
@@ -51,12 +43,36 @@ export class TarGzArchive extends TarArchive {
   }
 
   /**
-   * Generate compressed archive as async iterable
+   * Generate compressed archive as async iterable (true streaming)
    */
   override async *stream(): AsyncIterable<Uint8Array> {
-    const tarBytes = await collect(super.stream());
-    const compressed = await gzipAsync(uint8ArrayToBuffer(tarBytes), { level: this._gzLevel });
-    yield bufferToUint8Array(compressed);
+    const gzipStream = createGzipStream({ level: this._gzLevel });
+    const chunks: Uint8Array[] = [];
+
+    // Collect gzip output
+    gzipStream.on("data", (chunk: Uint8Array) => {
+      chunks.push(chunk);
+    });
+
+    // Pipe tar chunks through gzip
+    for await (const tarChunk of super.stream()) {
+      gzipStream.write(tarChunk);
+      // Yield any available gzip output
+      while (chunks.length > 0) {
+        yield chunks.shift()!;
+      }
+    }
+
+    // Finalize gzip stream
+    await new Promise<void>((resolve, reject) => {
+      gzipStream.on("error", reject);
+      gzipStream.end(() => resolve());
+    });
+
+    // Yield remaining chunks
+    for (const chunk of chunks) {
+      yield chunk;
+    }
   }
 }
 
@@ -73,6 +89,16 @@ export async function targz(
 }
 
 /**
+ * Helper to get compressed data from any archive source
+ */
+async function getCompressedData(source: ArchiveSource, signal?: AbortSignal): Promise<Uint8Array> {
+  if (isInMemoryArchiveSource(source)) {
+    return toUint8Array(source);
+  }
+  return collect(toAsyncIterable(source, { signal }));
+}
+
+/**
  * Parse a gzip-compressed TAR archive
  *
  * @param source - Compressed archive data
@@ -83,14 +109,7 @@ export async function parseTarGz(
   source: ArchiveSource,
   options: ParseTarGzOptions = {}
 ): Promise<TarEntry[]> {
-  // Get the compressed data
-  let compressed: Uint8Array;
-  if (isInMemoryArchiveSource(source)) {
-    compressed = await toUint8Array(source);
-  } else {
-    compressed = await collect(toAsyncIterable(source, { signal: options.signal }));
-  }
-
+  const compressed = await getCompressedData(source, options.signal);
   return parseTar(await gunzip(compressed), options);
 }
 
@@ -117,52 +136,6 @@ export async function untargz(
   source: ArchiveSource,
   options: ParseTarGzOptions = {}
 ): Promise<Map<string, { info: TarEntry["info"]; data: Uint8Array }>> {
-  // Get the compressed data
-  let compressed: Uint8Array;
-  if (isInMemoryArchiveSource(source)) {
-    compressed = await toUint8Array(source);
-  } else {
-    compressed = await collect(toAsyncIterable(source, { signal: options.signal }));
-  }
-  // Decompress and use existing untar
+  const compressed = await getCompressedData(source, options.signal);
   return untar(await gunzip(compressed), options);
-}
-
-/**
- * Compress an existing TAR archive to gzip (alias for gzip)
- */
-export const gzipTar = gzip;
-
-/**
- * Decompress a gzipped file
- */
-export async function gunzip(data: Uint8Array): Promise<Uint8Array> {
-  return bufferToUint8Array(await gunzipAsync(uint8ArrayToBuffer(data)));
-}
-
-/**
- * Compress data with gzip
- */
-export async function gzip(
-  data: Uint8Array,
-  options: { level?: number } = {}
-): Promise<Uint8Array> {
-  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  return bufferToUint8Array(await gzipAsync(uint8ArrayToBuffer(data), { level }));
-}
-
-/**
- * Synchronous gzip compression
- */
-export function gzipSync(data: Uint8Array, options: { level?: number } = {}): Uint8Array {
-  return bufferToUint8Array(
-    zlib.gzipSync(uint8ArrayToBuffer(data), { level: options.level ?? DEFAULT_COMPRESS_LEVEL })
-  );
-}
-
-/**
- * Synchronous gunzip decompression
- */
-export function gunzipSync(data: Uint8Array): Uint8Array {
-  return bufferToUint8Array(zlib.gunzipSync(uint8ArrayToBuffer(data)));
 }

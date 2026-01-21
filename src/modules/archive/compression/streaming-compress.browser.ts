@@ -12,7 +12,11 @@
 
 import { EventEmitter } from "@stream";
 import { deflateRawCompressed, inflateRaw } from "@archive/compression/deflate-fallback";
-import { hasDeflateRawWebStreams } from "@archive/compression/compress.base";
+import {
+  hasDeflateRawWebStreams,
+  hasGzipCompressionStream,
+  hasGzipDecompressionStream
+} from "@archive/compression/compress.base";
 import { concatUint8Arrays } from "@stream/shared";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 import type { WorkerPool, WorkerTaskType } from "@archive/compression/worker-pool/index.browser";
@@ -20,6 +24,7 @@ import {
   hasWorkerSupport,
   getDefaultWorkerPool
 } from "@archive/compression/worker-pool/index.browser";
+import { gzipSync, gunzipSync } from "@archive/compression/compress.browser";
 
 export type {
   DeflateStream,
@@ -142,11 +147,13 @@ class AsyncStreamCodec extends EventEmitter {
 // WebStream Codec - uses native CompressionStream/DecompressionStream
 // =============================================================================
 
-function createWebStreamCodec(type: "deflate" | "inflate"): DeflateStream | InflateStream {
-  const stream =
-    type === "deflate"
-      ? new CompressionStream("deflate-raw")
-      : new DecompressionStream("deflate-raw");
+type WebStreamFormat = "deflate-raw" | "gzip";
+
+function createNativeWebStreamCodec(
+  format: WebStreamFormat,
+  isCompress: boolean
+): DeflateStream | InflateStream {
+  const stream = isCompress ? new CompressionStream(format) : new DecompressionStream(format);
   const writer = stream.writable.getWriter() as WritableStreamDefaultWriter<Uint8Array>;
   const reader = stream.readable.getReader();
 
@@ -168,16 +175,8 @@ function createWebStreamCodec(type: "deflate" | "inflate"): DeflateStream | Infl
       codec.emit("end");
     },
     abort: err => {
-      try {
-        reader.cancel(err);
-      } catch {
-        /* ignore */
-      }
-      try {
-        writer.abort(err);
-      } catch {
-        /* ignore */
-      }
+      reader.cancel(err).catch(() => {});
+      writer.abort(err).catch(() => {});
     }
   });
 
@@ -324,7 +323,7 @@ function createStreamCodec(
   }
 
   if (hasDeflateRawWebStreams()) {
-    return createWebStreamCodec(type);
+    return createNativeWebStreamCodec("deflate-raw", type === "deflate");
   }
 
   return new BufferedCodec(type === "deflate" ? deflateRawCompressed : inflateRaw);
@@ -346,4 +345,49 @@ export function createDeflateStream(options: StreamCompressOptions = {}): Deflat
  */
 export function createInflateStream(options: StreamCompressOptions = {}): InflateStream {
   return createStreamCodec("inflate", options);
+}
+
+// =============================================================================
+// GZIP Streaming
+// =============================================================================
+
+export type GzipStream = DeflateStream;
+export type GunzipStream = InflateStream;
+
+/**
+ * Check if native GZIP web streams are available
+ */
+function hasGzipWebStreams(): boolean {
+  return hasGzipCompressionStream() && hasGzipDecompressionStream();
+}
+
+function createGzipStreamCodec(
+  type: "gzip" | "gunzip",
+  options: StreamCompressOptions
+): GzipStream | GunzipStream {
+  // Use native CompressionStream/DecompressionStream("gzip") when available
+  if (hasGzipWebStreams()) {
+    return createNativeWebStreamCodec("gzip", type === "gzip");
+  }
+
+  // Fallback: buffer and use one-shot gzip/gunzip
+  // Note: level is only used for gzip, not gunzip
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  return new BufferedCodec(
+    type === "gzip" ? data => gzipSync(data, { level }) : data => gunzipSync(data)
+  );
+}
+
+/**
+ * Create a streaming GZIP compressor
+ */
+export function createGzipStream(options: StreamCompressOptions = {}): GzipStream {
+  return createGzipStreamCodec("gzip", options);
+}
+
+/**
+ * Create a streaming GZIP decompressor
+ */
+export function createGunzipStream(options: StreamCompressOptions = {}): GunzipStream {
+  return createGzipStreamCodec("gunzip", options);
 }

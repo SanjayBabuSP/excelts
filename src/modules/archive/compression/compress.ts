@@ -1,8 +1,9 @@
 /**
  * Node.js compression utilities using native zlib
  *
- * Uses zlib module (C++ implementation, fastest) with "deflate-raw" format
- * (raw DEFLATE without zlib header/trailer, required for ZIP files)
+ * Supports multiple formats:
+ * - deflate-raw: Raw DEFLATE (for ZIP files)
+ * - gzip: GZIP format (for tar.gz, HTTP compression)
  */
 
 import { promisify } from "util";
@@ -11,7 +12,23 @@ import * as zlib from "zlib";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 
 // Re-export shared types and utilities
-export { type CompressOptions, hasCompressionStream } from "@archive/compression/compress.base";
+export {
+  type CompressOptions,
+  hasCompressionStream,
+  // GZIP constants and utilities
+  GZIP_ID1,
+  GZIP_ID2,
+  GZIP_CM_DEFLATE,
+  GZIP_FLAG_FTEXT,
+  GZIP_FLAG_FHCRC,
+  GZIP_FLAG_FEXTRA,
+  GZIP_FLAG_FNAME,
+  GZIP_FLAG_FCOMMENT,
+  GZIP_MIN_SIZE,
+  isGzipData,
+  hasGzipCompressionStream,
+  hasGzipDecompressionStream
+} from "@archive/compression/compress.base";
 
 import type { CompressOptions } from "@archive/compression/compress.base";
 
@@ -120,4 +137,59 @@ export async function decompress(
  */
 export function decompressSync(data: Uint8Array): Uint8Array {
   return bufferToUint8Array(zlib.inflateRawSync(uint8ArrayToBuffer(data)));
+}
+
+// =============================================================================
+// GZIP API
+// =============================================================================
+
+const gzipAsync = promisify(zlib.gzip) as (
+  input: zlib.InputType,
+  options?: zlib.ZlibOptions
+) => Promise<Buffer>;
+
+const gunzipAsync = promisify(zlib.gunzip) as (input: zlib.InputType) => Promise<Buffer>;
+
+/**
+ * Compress data with gzip
+ */
+export async function gzip(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  const thresholdBytes = resolveCompressThresholdBytes(options);
+
+  // Small-input fast path
+  if (data.byteLength <= thresholdBytes) {
+    return bufferToUint8Array(zlib.gzipSync(uint8ArrayToBuffer(data), { level }));
+  }
+
+  return bufferToUint8Array(await gzipAsync(uint8ArrayToBuffer(data), { level }));
+}
+
+/**
+ * Decompress gzip data
+ */
+export async function gunzip(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
+  const thresholdBytes = resolveCompressThresholdBytes(options);
+
+  // Small-input fast path
+  if (data.byteLength <= thresholdBytes) {
+    return bufferToUint8Array(zlib.gunzipSync(uint8ArrayToBuffer(data)));
+  }
+
+  return bufferToUint8Array(await gunzipAsync(uint8ArrayToBuffer(data)));
+}
+
+/**
+ * Compress data with gzip (sync)
+ */
+export function gzipSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  return bufferToUint8Array(zlib.gzipSync(uint8ArrayToBuffer(data), { level }));
+}
+
+/**
+ * Decompress gzip data (sync)
+ */
+export function gunzipSync(data: Uint8Array): Uint8Array {
+  return bufferToUint8Array(zlib.gunzipSync(uint8ArrayToBuffer(data)));
 }

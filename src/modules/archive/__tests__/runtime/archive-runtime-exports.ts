@@ -18,7 +18,20 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   // Streaming compression
   "createDeflateStream",
   "createInflateStream",
+  "createGzipStream",
+  "createGunzipStream",
   "hasDeflateRaw",
+  "hasGzipCompressionStream",
+  "hasGzipDecompressionStream",
+  "isGzipData",
+
+  // GZIP compression (available in both Node.js and browser)
+  "gzip",
+  "gunzip",
+  "gzipSync",
+  "gunzipSync",
+  "GZIP_ID1",
+  "GZIP_ID2",
 
   // Worker Pool (browser-only functionality, stub in Node)
   "WorkerPool",
@@ -153,17 +166,12 @@ export const ARCHIVE_NODE_EXPORTS = [
   "createTempDir",
   "createTempDirSync",
 
-  // TAR + Gzip support (Node.js only - requires zlib)
+  // TAR + Gzip support (Node.js only - requires zlib for streaming)
   "TarGzArchive",
   "targz",
   "parseTarGz",
   "parseTarGzStream",
-  "untargz",
-  "gzipTar",
-  "gunzip",
-  "gzip",
-  "gzipSync",
-  "gunzipSync"
+  "untargz"
 ] as const;
 
 /**

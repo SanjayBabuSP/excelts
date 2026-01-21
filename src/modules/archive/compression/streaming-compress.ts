@@ -5,7 +5,14 @@
  * Each write() immediately produces compressed output without waiting for end().
  */
 
-import { createDeflateRaw, createInflateRaw, constants, type DeflateRaw } from "zlib";
+import {
+  createDeflateRaw,
+  createInflateRaw,
+  createGzip,
+  createGunzip,
+  constants,
+  type Gunzip
+} from "zlib";
 import { Transform, type TransformCallback } from "@stream";
 
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
@@ -22,49 +29,39 @@ import type {
   StreamCompressOptions
 } from "@archive/compression/streaming-compress.base";
 
+// Reusable type for zlib streams with flush() method
+type ZlibFlushable = {
+  write: (chunk: Buffer, cb: (err?: Error | null) => void) => void;
+  flush: (mode: number, cb: () => void) => void;
+  end: (cb: () => void) => void;
+  on(event: "data", listener: (chunk: Buffer) => void): void;
+  on(event: "error", listener: (err: Error) => void): void;
+};
+
 /**
- * Wrapper around zlib DeflateRaw that flushes after every write
- * This ensures true streaming behavior - data is emitted immediately, not buffered
+ * Generic wrapper around zlib streams that flushes after every write.
+ * This ensures true streaming behavior - data is emitted immediately, not buffered.
  */
-class TrueStreamingDeflate extends Transform {
-  private deflate: DeflateRaw;
-
-  constructor(level: number) {
+class TrueStreamingZlib<T extends ZlibFlushable> extends Transform {
+  constructor(private readonly zstream: T) {
     super();
-    this.deflate = createDeflateRaw({ level });
-
-    // Forward data from deflate to this transform
-    this.deflate.on("data", chunk => {
-      this.push(chunk);
-    });
-
-    this.deflate.on("error", err => {
-      this.destroy(err);
-    });
+    zstream.on("data", chunk => this.push(chunk));
+    zstream.on("error", err => this.destroy(err));
   }
 
   _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
-    // Write to deflate
-    this.deflate.write(chunk, writeErr => {
+    this.zstream.write(chunk, writeErr => {
       if (writeErr) {
         callback(writeErr);
         return;
       }
-
-      // Explicitly flush to ensure data is emitted NOW, not later
-      this.deflate.flush(constants.Z_SYNC_FLUSH, () => {
-        callback();
-      });
+      this.zstream.flush(constants.Z_SYNC_FLUSH, () => callback());
     });
   }
 
   _flush(callback: TransformCallback): void {
-    // End the deflate stream with Z_FINISH to write proper termination
-    // This is critical - Z_SYNC_FLUSH doesn't write the final block marker
-    this.deflate.flush(constants.Z_FINISH, () => {
-      this.deflate.end(() => {
-        callback();
-      });
+    this.zstream.flush(constants.Z_FINISH, () => {
+      this.zstream.end(() => callback());
     });
   }
 }
@@ -74,7 +71,8 @@ class TrueStreamingDeflate extends Transform {
  * Returns a Transform stream that emits compressed data immediately after each write
  */
 export function createDeflateStream(options: StreamCompressOptions = {}): DeflateStream {
-  return new TrueStreamingDeflate(options.level ?? DEFAULT_COMPRESS_LEVEL);
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  return new TrueStreamingZlib(createDeflateRaw({ level }));
 }
 
 /**
@@ -94,4 +92,26 @@ export function createInflateStream(options: StreamCompressOptions = {}): Inflat
  */
 export function hasDeflateRaw(): boolean {
   return true;
+}
+
+// =============================================================================
+// GZIP Streaming
+// =============================================================================
+
+export type GzipStream = Transform;
+export type GunzipStream = Gunzip;
+
+/**
+ * Create a streaming GZIP compressor
+ */
+export function createGzipStream(options: StreamCompressOptions = {}): GzipStream {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  return new TrueStreamingZlib(createGzip({ level }));
+}
+
+/**
+ * Create a streaming GZIP decompressor
+ */
+export function createGunzipStream(_options: StreamCompressOptions = {}): GunzipStream {
+  return createGunzip();
 }

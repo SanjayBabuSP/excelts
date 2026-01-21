@@ -13,18 +13,14 @@
 // Re-export all browser-compatible exports
 export * from "./index.browser";
 
-// Gzip support (Node.js only - requires zlib)
+// Gzip support (Node.js only - requires zlib for streaming)
+// Note: gzip/gunzip/gzipSync/gunzipSync are now exported from @archive/compression/compress
 export {
   TarGzArchive,
   targz,
   parseTarGz,
   parseTarGzStream,
   untargz,
-  gzipTar,
-  gunzip,
-  gzip,
-  gzipSync,
-  gunzipSync,
   type TarGzOptions,
   type ParseTarGzOptions
 } from "./tar-gzip";

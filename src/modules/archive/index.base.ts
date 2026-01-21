@@ -73,7 +73,7 @@ export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive
 export { createArchive, createReader } from "@archive/formats";
 
 // TAR archive support (unified API compatible with ZIP)
-// Note: Gzip support exported separately in index.ts (Node.js only)
+// Note: Gzip helpers are exported separately in index.ts / index.browser.ts
 export {
   TAR_BLOCK_SIZE,
   TAR_TYPE,

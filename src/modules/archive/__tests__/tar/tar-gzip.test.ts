@@ -5,18 +5,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  TarGzArchive,
-  targz,
-  parseTarGz,
-  untargz,
-  gzip,
-  gunzip,
-  gzipSync,
-  gunzipSync,
-  gzipTar,
-  TarArchive
-} from "@archive/tar";
+import { TarGzArchive, targz, parseTarGz, untargz, TarArchive } from "@archive/tar";
+import { gzip, gunzip, gzipSync, gunzipSync } from "@archive/compression/compress";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -184,15 +174,15 @@ describe("TAR Gzip Module", () => {
     });
   });
 
-  describe("gzipTar", () => {
-    it("should compress an existing tar archive", async () => {
+  describe("gzip existing tar", () => {
+    it("should compress an existing tar archive with gzip", async () => {
       // Create uncompressed tar
       const archive = new TarArchive();
       archive.add("file.txt", "Uncompressed TAR content");
       const tarBytes = await archive.bytes();
 
-      // Compress with gzipTar
-      const compressed = await gzipTar(tarBytes);
+      // Compress with gzip
+      const compressed = await gzip(tarBytes);
 
       expect(compressed[0]).toBe(GZIP_MAGIC[0]);
       expect(compressed[1]).toBe(GZIP_MAGIC[1]);

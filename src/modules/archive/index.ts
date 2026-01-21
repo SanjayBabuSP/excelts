@@ -16,8 +16,18 @@ export {
   compressSync,
   decompress,
   decompressSync,
+  gzip,
+  gunzip,
+  gzipSync,
+  gunzipSync,
+  isGzipData,
   hasCompressionStream,
   hasWorkerSupport,
+  hasGzipCompressionStream,
+  hasGzipDecompressionStream,
+  // GZIP constants (RFC 1952)
+  GZIP_ID1,
+  GZIP_ID2,
   type CompressOptions
 } from "@archive/compression/compress";
 
@@ -25,8 +35,12 @@ export {
 export {
   createDeflateStream,
   createInflateStream,
+  createGzipStream,
+  createGunzipStream,
   hasDeflateRaw,
-  type StreamCompressOptions
+  type StreamCompressOptions,
+  type GzipStream,
+  type GunzipStream
 } from "@archive/compression/streaming-compress";
 
 // Worker Pool (stub exports for API parity - only functional in browser)
@@ -103,11 +117,6 @@ export {
   parseTarGz,
   parseTarGzStream,
   untargz,
-  gzipTar,
-  gunzip,
-  gzip,
-  gzipSync,
-  gunzipSync,
   type TarGzOptions,
   type ParseTarGzOptions
 } from "@archive/tar/tar-gzip";
