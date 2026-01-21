@@ -10,8 +10,11 @@ import {
   createInflateRaw,
   createGzip,
   createGunzip,
+  createDeflate,
+  createInflate,
   constants,
-  type Gunzip
+  type Gunzip,
+  type Inflate
 } from "zlib";
 import { Transform, type TransformCallback } from "@stream";
 
@@ -114,4 +117,26 @@ export function createGzipStream(options: StreamCompressOptions = {}): GzipStrea
  */
 export function createGunzipStream(_options: StreamCompressOptions = {}): GunzipStream {
   return createGunzip();
+}
+
+// =============================================================================
+// ZLIB Streaming (RFC 1950)
+// =============================================================================
+
+export type ZlibStream = Transform;
+export type UnzlibStream = Inflate;
+
+/**
+ * Create a streaming Zlib compressor
+ */
+export function createZlibStream(options: StreamCompressOptions = {}): ZlibStream {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  return new TrueStreamingZlib(createDeflate({ level }));
+}
+
+/**
+ * Create a streaming Zlib decompressor
+ */
+export function createUnzlibStream(_options: StreamCompressOptions = {}): UnzlibStream {
+  return createInflate();
 }

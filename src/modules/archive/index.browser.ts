@@ -28,6 +28,19 @@ export {
   // GZIP constants (RFC 1952)
   GZIP_ID1,
   GZIP_ID2,
+  // Zlib (RFC 1950)
+  zlib,
+  unzlib,
+  zlibSync,
+  unzlibSync,
+  isZlibData,
+  ZLIB_CM_DEFLATE,
+  ZLIB_CINFO_MAX,
+  ZLIB_MIN_SIZE,
+  // Auto-detect decompression
+  decompressAuto,
+  decompressAutoSync,
+  detectCompressionFormat,
   type CompressOptions
 } from "@archive/compression/compress.browser";
 
@@ -37,10 +50,14 @@ export {
   createInflateStream,
   createGzipStream,
   createGunzipStream,
+  createZlibStream,
+  createUnzlibStream,
   hasDeflateRaw,
   type StreamCompressOptions,
   type GzipStream,
-  type GunzipStream
+  type GunzipStream,
+  type ZlibStream,
+  type UnzlibStream
 } from "@archive/compression/streaming-compress.browser";
 
 // Worker Pool

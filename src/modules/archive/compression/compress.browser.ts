@@ -31,7 +31,22 @@ import {
   GZIP_FLAG_FHCRC,
   GZIP_MIN_SIZE,
   hasGzipCompressionStream,
-  hasGzipDecompressionStream
+  hasGzipDecompressionStream,
+  // Zlib
+  ZLIB_CM_DEFLATE,
+  ZLIB_CINFO_MAX,
+  ZLIB_MIN_SIZE,
+  isZlibData,
+  detectCompressionFormat,
+  adler32,
+  // Zlib helpers (shared)
+  hasDeflateCompressionStream,
+  hasDeflateDecompressionStream,
+  getZlibHeader,
+  buildZlibTrailer,
+  parseZlibHeader,
+  readZlibTrailer,
+  verifyAdler32
 } from "@archive/compression/compress.base";
 import {
   inflateRaw,
@@ -59,7 +74,16 @@ export {
   GZIP_CM_DEFLATE,
   GZIP_MIN_SIZE,
   hasGzipCompressionStream,
-  hasGzipDecompressionStream
+  hasGzipDecompressionStream,
+  // Zlib
+  ZLIB_CM_DEFLATE,
+  ZLIB_CINFO_MAX,
+  ZLIB_MIN_SIZE,
+  isZlibData,
+  detectCompressionFormat,
+  // Zlib native stream detection (for API parity)
+  hasDeflateCompressionStream,
+  hasDeflateDecompressionStream
 };
 export { isGzipData } from "@archive/compression/compress.base";
 
@@ -372,4 +396,150 @@ export function gunzipSync(data: Uint8Array): Uint8Array {
   const out = inflateRaw(deflateData);
   verifyGzipOutput(out, expectedCrc32, expectedSize);
   return out;
+}
+
+// =============================================================================
+// ZLIB API (RFC 1950: DEFLATE with zlib header/trailer + Adler-32)
+// =============================================================================
+
+/**
+ * Wrap raw DEFLATE data in Zlib format
+ */
+function wrapZlib(deflated: Uint8Array, original: Uint8Array, level: number): Uint8Array {
+  return concatUint8Arrays([getZlibHeader(level), deflated, buildZlibTrailer(adler32(original))]);
+}
+
+/**
+ * Parse Zlib data and extract the raw DEFLATE payload
+ */
+function parseZlibPayload(data: Uint8Array): {
+  deflateData: Uint8Array;
+  expectedAdler32: number;
+} {
+  const offset = parseZlibHeader(data);
+  const expectedAdler32 = readZlibTrailer(data);
+  return { deflateData: data.subarray(offset, data.length - 4), expectedAdler32 };
+}
+
+/**
+ * Compress data with Zlib wrapper (RFC 1950)
+ *
+ * Strategy:
+ * 1. Native CompressionStream("deflate") when available
+ * 2. Fallback: compress (deflate-raw) + manual Zlib wrapper
+ */
+export async function zlib(
+  data: Uint8Array,
+  options: CompressOptions = {}
+): Promise<Uint8Array> {
+  throwIfAborted(options.signal);
+
+  // Native "deflate" format is Zlib
+  if (hasDeflateCompressionStream()) {
+    const cs = new CompressionStream("deflate");
+    const out = await transformWithStream(data, cs);
+    throwIfAborted(options.signal);
+    return out;
+  }
+
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  const deflated =
+    level === 0 ? deflateRawStore(data) : await compress(data, { ...options, level });
+  return wrapZlib(deflated, data, level);
+}
+
+/**
+ * Compress data with Zlib wrapper (sync)
+ */
+export function zlibSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  const deflated = level === 0 ? deflateRawStore(data) : deflateRawCompressed(data);
+  return wrapZlib(deflated, data, level);
+}
+
+/**
+ * Decompress Zlib data (RFC 1950)
+ *
+ * Strategy:
+ * 1. Native DecompressionStream("deflate") when available
+ * 2. Fallback: parse header + decompress (inflate-raw) + verify Adler-32
+ */
+export async function unzlib(
+  data: Uint8Array,
+  options: CompressOptions = {}
+): Promise<Uint8Array> {
+  throwIfAborted(options.signal);
+
+  // Native "deflate" format is Zlib
+  if (hasDeflateDecompressionStream()) {
+    const ds = new DecompressionStream("deflate");
+    const out = await transformWithStream(data, ds);
+    throwIfAborted(options.signal);
+    return out;
+  }
+
+  const { deflateData, expectedAdler32 } = parseZlibPayload(data);
+  const out = await decompress(deflateData, options);
+  verifyAdler32(out, expectedAdler32);
+  return out;
+}
+
+/**
+ * Decompress Zlib data (sync)
+ */
+export function unzlibSync(data: Uint8Array): Uint8Array {
+  const { deflateData, expectedAdler32 } = parseZlibPayload(data);
+  const out = inflateRaw(deflateData);
+  verifyAdler32(out, expectedAdler32);
+  return out;
+}
+
+// =============================================================================
+// AUTO-DETECT DECOMPRESSION
+// =============================================================================
+
+/**
+ * Decompress data, automatically detecting the format (GZIP, Zlib, or raw DEFLATE)
+ *
+ * Detection order:
+ * 1. GZIP: magic bytes 0x1f 0x8b
+ * 2. Zlib: valid CMF/FLG header with checksum
+ * 3. Raw DEFLATE: fallback
+ *
+ * @example
+ * ```ts
+ * // Works with any format
+ * const data = await decompressAuto(compressed);
+ * ```
+ */
+export async function decompressAuto(
+  data: Uint8Array,
+  options: CompressOptions = {}
+): Promise<Uint8Array> {
+  const format = detectCompressionFormat(data);
+
+  switch (format) {
+    case "gzip":
+      return gunzip(data, options);
+    case "zlib":
+      return unzlib(data, options);
+    case "deflate-raw":
+      return decompress(data, options);
+  }
+}
+
+/**
+ * Decompress data synchronously, automatically detecting the format
+ */
+export function decompressAutoSync(data: Uint8Array): Uint8Array {
+  const format = detectCompressionFormat(data);
+
+  switch (format) {
+    case "gzip":
+      return gunzipSync(data);
+    case "zlib":
+      return unzlibSync(data);
+    case "deflate-raw":
+      return decompressSync(data);
+  }
 }

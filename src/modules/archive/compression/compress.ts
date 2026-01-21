@@ -7,7 +7,7 @@
  */
 
 import { promisify } from "util";
-import * as zlib from "zlib";
+import * as nodeZlib from "zlib";
 
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 
@@ -27,7 +27,16 @@ export {
   GZIP_MIN_SIZE,
   isGzipData,
   hasGzipCompressionStream,
-  hasGzipDecompressionStream
+  hasGzipDecompressionStream,
+  // Zlib constants and utilities
+  ZLIB_CM_DEFLATE,
+  ZLIB_CINFO_MAX,
+  ZLIB_MIN_SIZE,
+  isZlibData,
+  detectCompressionFormat,
+  // Zlib native stream detection (also available in Node.js for API parity)
+  hasDeflateCompressionStream,
+  hasDeflateDecompressionStream
 } from "@archive/compression/compress.base";
 
 import type { CompressOptions } from "@archive/compression/compress.base";
@@ -50,14 +59,19 @@ export function bufferToUint8Array(buffer: Buffer): Uint8Array {
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
-const deflateRawAsync = promisify(zlib.deflateRaw) as (
-  input: zlib.InputType,
-  options?: zlib.ZlibOptions
+const deflateRawAsync = promisify(nodeZlib.deflateRaw) as (
+  input: nodeZlib.InputType,
+  options?: nodeZlib.ZlibOptions
 ) => Promise<Buffer>;
 
-const inflateRawAsync = promisify(zlib.inflateRaw) as (input: zlib.InputType) => Promise<Buffer>;
+const inflateRawAsync = promisify(nodeZlib.inflateRaw) as (
+  input: nodeZlib.InputType
+) => Promise<Buffer>;
 
-import { resolveCompressThresholdBytes } from "@archive/compression/compress.base";
+import {
+  resolveCompressThresholdBytes,
+  detectCompressionFormat
+} from "@archive/compression/compress.base";
 
 /**
  * Compress data using Node.js native zlib
@@ -86,7 +100,7 @@ export async function compress(
 
   // Small-input fast path: avoid threadpool overhead.
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(zlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
+    return bufferToUint8Array(nodeZlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
   }
 
   return bufferToUint8Array(await deflateRawAsync(uint8ArrayToBuffer(data), { level }));
@@ -106,7 +120,7 @@ export function compressSync(data: Uint8Array, options: CompressOptions = {}): U
     return data;
   }
 
-  return bufferToUint8Array(zlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
+  return bufferToUint8Array(nodeZlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
 }
 
 /**
@@ -123,7 +137,7 @@ export async function decompress(
 
   // Small-input fast path: avoid threadpool overhead.
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(zlib.inflateRawSync(uint8ArrayToBuffer(data)));
+    return bufferToUint8Array(nodeZlib.inflateRawSync(uint8ArrayToBuffer(data)));
   }
 
   return bufferToUint8Array(await inflateRawAsync(uint8ArrayToBuffer(data)));
@@ -136,19 +150,19 @@ export async function decompress(
  * @returns Decompressed data
  */
 export function decompressSync(data: Uint8Array): Uint8Array {
-  return bufferToUint8Array(zlib.inflateRawSync(uint8ArrayToBuffer(data)));
+  return bufferToUint8Array(nodeZlib.inflateRawSync(uint8ArrayToBuffer(data)));
 }
 
 // =============================================================================
 // GZIP API
 // =============================================================================
 
-const gzipAsync = promisify(zlib.gzip) as (
-  input: zlib.InputType,
-  options?: zlib.ZlibOptions
+const gzipAsync = promisify(nodeZlib.gzip) as (
+  input: nodeZlib.InputType,
+  options?: nodeZlib.ZlibOptions
 ) => Promise<Buffer>;
 
-const gunzipAsync = promisify(zlib.gunzip) as (input: zlib.InputType) => Promise<Buffer>;
+const gunzipAsync = promisify(nodeZlib.gunzip) as (input: nodeZlib.InputType) => Promise<Buffer>;
 
 /**
  * Compress data with gzip
@@ -159,7 +173,7 @@ export async function gzip(data: Uint8Array, options: CompressOptions = {}): Pro
 
   // Small-input fast path
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(zlib.gzipSync(uint8ArrayToBuffer(data), { level }));
+    return bufferToUint8Array(nodeZlib.gzipSync(uint8ArrayToBuffer(data), { level }));
   }
 
   return bufferToUint8Array(await gzipAsync(uint8ArrayToBuffer(data), { level }));
@@ -173,7 +187,7 @@ export async function gunzip(data: Uint8Array, options: CompressOptions = {}): P
 
   // Small-input fast path
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(zlib.gunzipSync(uint8ArrayToBuffer(data)));
+    return bufferToUint8Array(nodeZlib.gunzipSync(uint8ArrayToBuffer(data)));
   }
 
   return bufferToUint8Array(await gunzipAsync(uint8ArrayToBuffer(data)));
@@ -184,12 +198,120 @@ export async function gunzip(data: Uint8Array, options: CompressOptions = {}): P
  */
 export function gzipSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  return bufferToUint8Array(zlib.gzipSync(uint8ArrayToBuffer(data), { level }));
+  return bufferToUint8Array(nodeZlib.gzipSync(uint8ArrayToBuffer(data), { level }));
 }
 
 /**
  * Decompress gzip data (sync)
  */
 export function gunzipSync(data: Uint8Array): Uint8Array {
-  return bufferToUint8Array(zlib.gunzipSync(uint8ArrayToBuffer(data)));
+  return bufferToUint8Array(nodeZlib.gunzipSync(uint8ArrayToBuffer(data)));
+}
+
+// =============================================================================
+// ZLIB API (RFC 1950: DEFLATE with zlib header/trailer + Adler-32)
+// =============================================================================
+
+const zlibAsync = promisify(nodeZlib.deflate) as (
+  input: nodeZlib.InputType,
+  options?: nodeZlib.ZlibOptions
+) => Promise<Buffer>;
+
+const unzlibAsync = promisify(nodeZlib.inflate) as (input: nodeZlib.InputType) => Promise<Buffer>;
+
+/**
+ * Compress data with Zlib wrapper (RFC 1950)
+ *
+ * Zlib format: CMF + FLG header + DEFLATE data + Adler-32 checksum
+ * Used for: PNG, HTTP deflate encoding, general-purpose compression
+ */
+export async function zlib(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  const thresholdBytes = resolveCompressThresholdBytes(options);
+
+  // Small-input fast path
+  if (data.byteLength <= thresholdBytes) {
+    return bufferToUint8Array(nodeZlib.deflateSync(uint8ArrayToBuffer(data), { level }));
+  }
+
+  return bufferToUint8Array(await zlibAsync(uint8ArrayToBuffer(data), { level }));
+}
+
+/**
+ * Decompress Zlib data (RFC 1950)
+ */
+export async function unzlib(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
+  const thresholdBytes = resolveCompressThresholdBytes(options);
+
+  // Small-input fast path
+  if (data.byteLength <= thresholdBytes) {
+    return bufferToUint8Array(nodeZlib.inflateSync(uint8ArrayToBuffer(data)));
+  }
+
+  return bufferToUint8Array(await unzlibAsync(uint8ArrayToBuffer(data)));
+}
+
+/**
+ * Compress data with Zlib wrapper (sync)
+ */
+export function zlibSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
+  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  return bufferToUint8Array(nodeZlib.deflateSync(uint8ArrayToBuffer(data), { level }));
+}
+
+/**
+ * Decompress Zlib data (sync)
+ */
+export function unzlibSync(data: Uint8Array): Uint8Array {
+  return bufferToUint8Array(nodeZlib.inflateSync(uint8ArrayToBuffer(data)));
+}
+
+// =============================================================================
+// AUTO-DETECT DECOMPRESSION
+// =============================================================================
+
+/**
+ * Decompress data, automatically detecting the format (GZIP, Zlib, or raw DEFLATE)
+ *
+ * Detection order:
+ * 1. GZIP: magic bytes 0x1f 0x8b
+ * 2. Zlib: valid CMF/FLG header with checksum
+ * 3. Raw DEFLATE: fallback
+ *
+ * @example
+ * ```ts
+ * // Works with any format
+ * const data = await decompressAuto(compressed);
+ * ```
+ */
+export async function decompressAuto(
+  data: Uint8Array,
+  options: CompressOptions = {}
+): Promise<Uint8Array> {
+  const format = detectCompressionFormat(data);
+
+  switch (format) {
+    case "gzip":
+      return gunzip(data, options);
+    case "zlib":
+      return unzlib(data, options);
+    case "deflate-raw":
+      return decompress(data, options);
+  }
+}
+
+/**
+ * Decompress data synchronously, automatically detecting the format
+ */
+export function decompressAutoSync(data: Uint8Array): Uint8Array {
+  const format = detectCompressionFormat(data);
+
+  switch (format) {
+    case "gzip":
+      return gunzipSync(data);
+    case "zlib":
+      return unzlibSync(data);
+    case "deflate-raw":
+      return decompressSync(data);
+  }
 }

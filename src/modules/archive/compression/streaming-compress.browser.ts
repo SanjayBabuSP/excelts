@@ -15,7 +15,9 @@ import { deflateRawCompressed, inflateRaw } from "@archive/compression/deflate-f
 import {
   hasDeflateRawWebStreams,
   hasGzipCompressionStream,
-  hasGzipDecompressionStream
+  hasGzipDecompressionStream,
+  hasDeflateCompressionStream,
+  hasDeflateDecompressionStream
 } from "@archive/compression/compress.base";
 import { concatUint8Arrays } from "@stream/shared";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
@@ -24,7 +26,12 @@ import {
   hasWorkerSupport,
   getDefaultWorkerPool
 } from "@archive/compression/worker-pool/index.browser";
-import { gzipSync, gunzipSync } from "@archive/compression/compress.browser";
+import {
+  gzipSync,
+  gunzipSync,
+  zlibSync,
+  unzlibSync
+} from "@archive/compression/compress.browser";
 
 export type {
   DeflateStream,
@@ -147,13 +154,15 @@ class AsyncStreamCodec extends EventEmitter {
 // WebStream Codec - uses native CompressionStream/DecompressionStream
 // =============================================================================
 
-type WebStreamFormat = "deflate-raw" | "gzip";
+type WebStreamFormat = "deflate-raw" | "deflate" | "gzip";
 
 function createNativeWebStreamCodec(
   format: WebStreamFormat,
   isCompress: boolean
 ): DeflateStream | InflateStream {
-  const stream = isCompress ? new CompressionStream(format) : new DecompressionStream(format);
+  const stream = isCompress
+    ? new CompressionStream(format as CompressionFormat)
+    : new DecompressionStream(format as CompressionFormat);
   const writer = stream.writable.getWriter() as WritableStreamDefaultWriter<Uint8Array>;
   const reader = stream.readable.getReader();
 
@@ -348,46 +357,65 @@ export function createInflateStream(options: StreamCompressOptions = {}): Inflat
 }
 
 // =============================================================================
-// GZIP Streaming
+// GZIP / ZLIB Streaming - unified factory pattern
 // =============================================================================
 
 export type GzipStream = DeflateStream;
 export type GunzipStream = InflateStream;
+export type ZlibStream = DeflateStream;
+export type UnzlibStream = InflateStream;
 
-/**
- * Check if native GZIP web streams are available
- */
-function hasGzipWebStreams(): boolean {
-  return hasGzipCompressionStream() && hasGzipDecompressionStream();
+interface WrappedCodecConfig {
+  format: WebStreamFormat;
+  hasNative: () => boolean;
+  compressFallback: (data: Uint8Array, level: number) => Uint8Array;
+  decompressFallback: (data: Uint8Array) => Uint8Array;
 }
 
-function createGzipStreamCodec(
-  type: "gzip" | "gunzip",
-  options: StreamCompressOptions
-): GzipStream | GunzipStream {
-  // Use native CompressionStream/DecompressionStream("gzip") when available
-  if (hasGzipWebStreams()) {
-    return createNativeWebStreamCodec("gzip", type === "gzip");
-  }
+const GZIP_CONFIG: WrappedCodecConfig = {
+  format: "gzip",
+  hasNative: () => hasGzipCompressionStream() && hasGzipDecompressionStream(),
+  compressFallback: (data, level) => gzipSync(data, { level }),
+  decompressFallback: gunzipSync
+};
 
-  // Fallback: buffer and use one-shot gzip/gunzip
-  // Note: level is only used for gzip, not gunzip
+const ZLIB_CONFIG: WrappedCodecConfig = {
+  format: "deflate",
+  hasNative: () => hasDeflateCompressionStream() && hasDeflateDecompressionStream(),
+  compressFallback: (data, level) => zlibSync(data, { level }),
+  decompressFallback: unzlibSync
+};
+
+function createWrappedStream(
+  config: WrappedCodecConfig,
+  isCompress: boolean,
+  options: StreamCompressOptions
+): DeflateStream | InflateStream {
+  if (config.hasNative()) {
+    return createNativeWebStreamCodec(config.format, isCompress);
+  }
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
   return new BufferedCodec(
-    type === "gzip" ? data => gzipSync(data, { level }) : data => gunzipSync(data)
+    isCompress ? data => config.compressFallback(data, level) : config.decompressFallback
   );
 }
 
-/**
- * Create a streaming GZIP compressor
- */
+/** Create a streaming GZIP compressor */
 export function createGzipStream(options: StreamCompressOptions = {}): GzipStream {
-  return createGzipStreamCodec("gzip", options);
+  return createWrappedStream(GZIP_CONFIG, true, options);
 }
 
-/**
- * Create a streaming GZIP decompressor
- */
+/** Create a streaming GZIP decompressor */
 export function createGunzipStream(options: StreamCompressOptions = {}): GunzipStream {
-  return createGzipStreamCodec("gunzip", options);
+  return createWrappedStream(GZIP_CONFIG, false, options);
+}
+
+/** Create a streaming Zlib compressor */
+export function createZlibStream(options: StreamCompressOptions = {}): ZlibStream {
+  return createWrappedStream(ZLIB_CONFIG, true, options);
+}
+
+/** Create a streaming Zlib decompressor */
+export function createUnzlibStream(options: StreamCompressOptions = {}): UnzlibStream {
+  return createWrappedStream(ZLIB_CONFIG, false, options);
 }

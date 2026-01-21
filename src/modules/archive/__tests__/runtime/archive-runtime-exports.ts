@@ -20,6 +20,8 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "createInflateStream",
   "createGzipStream",
   "createGunzipStream",
+  "createZlibStream",
+  "createUnzlibStream",
   "hasDeflateRaw",
   "hasGzipCompressionStream",
   "hasGzipDecompressionStream",
@@ -32,6 +34,21 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "gunzipSync",
   "GZIP_ID1",
   "GZIP_ID2",
+
+  // Zlib compression (RFC 1950)
+  "zlib",
+  "unzlib",
+  "zlibSync",
+  "unzlibSync",
+  "isZlibData",
+  "ZLIB_CM_DEFLATE",
+  "ZLIB_CINFO_MAX",
+  "ZLIB_MIN_SIZE",
+
+  // Auto-detect decompression
+  "decompressAuto",
+  "decompressAutoSync",
+  "detectCompressionFormat",
 
   // Worker Pool (browser-only functionality, stub in Node)
   "WorkerPool",
