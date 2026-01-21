@@ -4,13 +4,55 @@
  * This module provides common file system operations used across the library,
  * including directory traversal, glob matching, and file I/O helpers.
  *
+ * Supports custom file system injection via `useFs()` for Electron or testing.
+ *
  * @module
  */
 
-import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
+import * as nodeFs from "node:fs";
+import * as nodeFsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+
+// =============================================================================
+// File System Injection
+// =============================================================================
+
+/** File system module type (sync APIs) */
+export type FsModule = typeof nodeFs;
+
+/** File system promises module type (async APIs) */
+export type FsPromisesModule = typeof nodeFsp;
+
+// Internal mutable references
+let _fs: FsModule = nodeFs;
+let _fsp: FsPromisesModule = nodeFsp;
+
+/**
+ * Inject a custom file system module.
+ *
+ * Useful for:
+ * - Electron's `original-fs` to bypass ASAR
+ * - Virtual file systems like `memfs` for testing
+ *
+ * Call without arguments to reset to default Node.js fs.
+ *
+ * @example
+ * ```ts
+ * import originalFs from "original-fs";
+ * import { useFs } from "@aspect/archive";
+ *
+ * // Use Electron's original-fs
+ * useFs(originalFs);
+ *
+ * // Reset to default
+ * useFs();
+ * ```
+ */
+export function useFs(syncFs?: FsModule, asyncFs?: FsPromisesModule): void {
+  _fs = syncFs ?? nodeFs;
+  _fsp = asyncFs ?? (syncFs?.promises as FsPromisesModule) ?? nodeFsp;
+}
 
 // Re-export glob utilities from shared module
 export {
@@ -99,7 +141,11 @@ export interface GlobOptions {
 /**
  * Build a FileEntry from stats.
  */
-function buildFileEntry(absolutePath: string, relativePath: string, stats: fs.Stats): FileEntry {
+function buildFileEntry(
+  absolutePath: string,
+  relativePath: string,
+  stats: nodeFs.Stats
+): FileEntry {
   const isDirectory = stats.isDirectory();
   return {
     absolutePath,
@@ -136,9 +182,9 @@ export async function* traverseDirectory(
   const basePath = path.resolve(dirPath);
 
   async function* walk(currentPath: string, relativeTo: string): AsyncGenerator<FileEntry> {
-    let entries: fs.Dirent[];
+    let entries: nodeFs.Dirent[];
     try {
-      entries = await fsp.readdir(currentPath, { withFileTypes: true });
+      entries = await _fsp.readdir(currentPath, { withFileTypes: true });
     } catch (err: any) {
       if (isIgnorableError(err)) {
         return;
@@ -153,9 +199,9 @@ export async function* traverseDirectory(
       const absolutePath = path.join(currentPath, dirent.name);
       const relativePath = path.relative(relativeTo, absolutePath);
 
-      let stats: fs.Stats;
+      let stats: nodeFs.Stats;
       try {
-        stats = followSymlinks ? await fsp.stat(absolutePath) : await fsp.lstat(absolutePath);
+        stats = followSymlinks ? await _fsp.stat(absolutePath) : await _fsp.lstat(absolutePath);
       } catch (err: any) {
         if (isIgnorableError(err)) {
           continue;
@@ -193,9 +239,9 @@ export function traverseDirectorySync(dirPath: string, options: TraverseOptions 
   const results: FileEntry[] = [];
 
   function walk(currentPath: string, relativeTo: string): void {
-    let entries: fs.Dirent[];
+    let entries: nodeFs.Dirent[];
     try {
-      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+      entries = _fs.readdirSync(currentPath, { withFileTypes: true });
     } catch (err: any) {
       if (isIgnorableError(err)) {
         return;
@@ -209,9 +255,9 @@ export function traverseDirectorySync(dirPath: string, options: TraverseOptions 
       const absolutePath = path.join(currentPath, dirent.name);
       const relativePath = path.relative(relativeTo, absolutePath);
 
-      let stats: fs.Stats;
+      let stats: nodeFs.Stats;
       try {
-        stats = followSymlinks ? fs.statSync(absolutePath) : fs.lstatSync(absolutePath);
+        stats = followSymlinks ? _fs.statSync(absolutePath) : _fs.lstatSync(absolutePath);
       } catch (err: any) {
         if (isIgnorableError(err)) {
           continue;
@@ -337,7 +383,7 @@ export async function* glob(pattern: string, options: GlobOptions = {}): AsyncGe
 
   // Check if search base exists
   try {
-    await fsp.access(searchBase);
+    await _fsp.access(searchBase);
   } catch {
     return;
   }
@@ -359,7 +405,7 @@ export function globSync(pattern: string, options: GlobOptions = {}): FileEntry[
     parseGlobOptions(pattern, options);
 
   try {
-    fs.accessSync(searchBase);
+    _fs.accessSync(searchBase);
   } catch {
     return [];
   }
@@ -386,7 +432,7 @@ export function globSync(pattern: string, options: GlobOptions = {}): FileEntry[
  */
 export async function fileExists(filePath: string): Promise<boolean> {
   try {
-    await fsp.access(filePath, fs.constants.F_OK);
+    await _fsp.access(filePath, _fs.constants.F_OK);
     return true;
   } catch {
     return false;
@@ -398,7 +444,7 @@ export async function fileExists(filePath: string): Promise<boolean> {
  */
 export function fileExistsSync(filePath: string): boolean {
   try {
-    fs.accessSync(filePath, fs.constants.F_OK);
+    _fs.accessSync(filePath, _fs.constants.F_OK);
     return true;
   } catch {
     return false;
@@ -410,7 +456,7 @@ export function fileExistsSync(filePath: string): boolean {
  */
 export async function ensureDir(dirPath: string): Promise<void> {
   try {
-    await fsp.mkdir(dirPath, { recursive: true });
+    await _fsp.mkdir(dirPath, { recursive: true });
   } catch (err: any) {
     if (err.code !== "EEXIST") {
       throw err;
@@ -423,7 +469,7 @@ export async function ensureDir(dirPath: string): Promise<void> {
  */
 export function ensureDirSync(dirPath: string): void {
   try {
-    fs.mkdirSync(dirPath, { recursive: true });
+    _fs.mkdirSync(dirPath, { recursive: true });
   } catch (err: any) {
     if (err.code !== "EEXIST") {
       throw err;
@@ -434,9 +480,9 @@ export function ensureDirSync(dirPath: string): void {
 /**
  * Get file stats, or null if file doesn't exist.
  */
-export async function safeStats(filePath: string): Promise<fs.Stats | null> {
+export async function safeStats(filePath: string): Promise<nodeFs.Stats | null> {
   try {
-    return await fsp.stat(filePath);
+    return await _fsp.stat(filePath);
   } catch {
     return null;
   }
@@ -445,9 +491,9 @@ export async function safeStats(filePath: string): Promise<fs.Stats | null> {
 /**
  * Synchronously get file stats, or null if file doesn't exist.
  */
-export function safeStatsSync(filePath: string): fs.Stats | null {
+export function safeStatsSync(filePath: string): nodeFs.Stats | null {
   try {
-    return fs.statSync(filePath);
+    return _fs.statSync(filePath);
   } catch {
     return null;
   }
@@ -457,7 +503,7 @@ export function safeStatsSync(filePath: string): fs.Stats | null {
  * Read a file as Uint8Array.
  */
 export async function readFileBytes(filePath: string): Promise<Uint8Array> {
-  const buffer = await fsp.readFile(filePath);
+  const buffer = await _fsp.readFile(filePath);
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
@@ -465,7 +511,7 @@ export async function readFileBytes(filePath: string): Promise<Uint8Array> {
  * Synchronously read a file as Uint8Array.
  */
 export function readFileBytesSync(filePath: string): Uint8Array {
-  const buffer = fs.readFileSync(filePath);
+  const buffer = _fs.readFileSync(filePath);
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
@@ -473,28 +519,28 @@ export function readFileBytesSync(filePath: string): Uint8Array {
  * Write bytes to a file.
  */
 export async function writeFileBytes(filePath: string, data: Uint8Array): Promise<void> {
-  await fsp.writeFile(filePath, data);
+  await _fsp.writeFile(filePath, data);
 }
 
 /**
  * Synchronously write bytes to a file.
  */
 export function writeFileBytesSync(filePath: string, data: Uint8Array): void {
-  fs.writeFileSync(filePath, data);
+  _fs.writeFileSync(filePath, data);
 }
 
 /**
  * Set file modification time.
  */
 export async function setFileTime(filePath: string, mtime: Date): Promise<void> {
-  await fsp.utimes(filePath, mtime, mtime);
+  await _fsp.utimes(filePath, mtime, mtime);
 }
 
 /**
  * Synchronously set file modification time.
  */
 export function setFileTimeSync(filePath: string, mtime: Date): void {
-  fs.utimesSync(filePath, mtime, mtime);
+  _fs.utimesSync(filePath, mtime, mtime);
 }
 
 /**
@@ -504,14 +550,14 @@ export async function readFileText(
   filePath: string,
   encoding: BufferEncoding = "utf8"
 ): Promise<string> {
-  return fsp.readFile(filePath, { encoding });
+  return _fsp.readFile(filePath, { encoding });
 }
 
 /**
  * Synchronously read file as text.
  */
 export function readFileTextSync(filePath: string, encoding: BufferEncoding = "utf8"): string {
-  return fs.readFileSync(filePath, { encoding });
+  return _fs.readFileSync(filePath, { encoding });
 }
 
 /**
@@ -522,7 +568,7 @@ export async function writeFileText(
   content: string,
   encoding: BufferEncoding = "utf8"
 ): Promise<void> {
-  await fsp.writeFile(filePath, content, { encoding });
+  await _fsp.writeFile(filePath, content, { encoding });
 }
 
 /**
@@ -533,7 +579,7 @@ export function writeFileTextSync(
   content: string,
   encoding: BufferEncoding = "utf8"
 ): void {
-  fs.writeFileSync(filePath, content, { encoding });
+  _fs.writeFileSync(filePath, content, { encoding });
 }
 
 /**
@@ -541,7 +587,7 @@ export function writeFileTextSync(
  */
 export async function remove(targetPath: string): Promise<void> {
   try {
-    await fsp.rm(targetPath, { recursive: true, force: true });
+    await _fsp.rm(targetPath, { recursive: true, force: true });
   } catch {
     // Ignore errors (file may not exist)
   }
@@ -552,7 +598,7 @@ export async function remove(targetPath: string): Promise<void> {
  */
 export function removeSync(targetPath: string): void {
   try {
-    fs.rmSync(targetPath, { recursive: true, force: true });
+    _fs.rmSync(targetPath, { recursive: true, force: true });
   } catch {
     // Ignore errors (file may not exist)
   }
@@ -563,7 +609,7 @@ export function removeSync(targetPath: string): void {
  */
 export async function copyFile(src: string, dest: string): Promise<void> {
   await ensureDir(path.dirname(dest));
-  await fsp.copyFile(src, dest);
+  await _fsp.copyFile(src, dest);
 }
 
 /**
@@ -571,7 +617,7 @@ export async function copyFile(src: string, dest: string): Promise<void> {
  */
 export function copyFileSync(src: string, dest: string): void {
   ensureDirSync(path.dirname(dest));
-  fs.copyFileSync(src, dest);
+  _fs.copyFileSync(src, dest);
 }
 
 // =============================================================================
@@ -617,8 +663,8 @@ export interface WriteStreamOptions {
  * @param options - Stream options
  * @returns A readable stream
  */
-export function createReadStream(filePath: string, options?: ReadStreamOptions): fs.ReadStream {
-  return fs.createReadStream(filePath, options);
+export function createReadStream(filePath: string, options?: ReadStreamOptions): nodeFs.ReadStream {
+  return _fs.createReadStream(filePath, options);
 }
 
 /**
@@ -628,8 +674,11 @@ export function createReadStream(filePath: string, options?: ReadStreamOptions):
  * @param options - Stream options
  * @returns A writable stream
  */
-export function createWriteStream(filePath: string, options?: WriteStreamOptions): fs.WriteStream {
-  return fs.createWriteStream(filePath, options);
+export function createWriteStream(
+  filePath: string,
+  options?: WriteStreamOptions
+): nodeFs.WriteStream {
+  return _fs.createWriteStream(filePath, options);
 }
 
 /**
@@ -639,7 +688,7 @@ export function createWriteStream(filePath: string, options?: WriteStreamOptions
  * @returns Path to the created directory
  */
 export async function createTempDir(prefix: string = "tmp-"): Promise<string> {
-  return fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+  return _fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 /**
@@ -649,5 +698,5 @@ export async function createTempDir(prefix: string = "tmp-"): Promise<string> {
  * @returns Path to the created directory
  */
 export function createTempDirSync(prefix: string = "tmp-"): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return _fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
