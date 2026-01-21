@@ -24,6 +24,7 @@ import {
 } from "@archive/compression/compress.base";
 import { inflateRaw, deflateRawCompressed } from "@archive/compression/deflate-fallback";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
+import { createAbortError, isAbortError } from "@archive/shared/errors";
 import {
   deflateWithPool,
   inflateWithPool,
@@ -59,13 +60,91 @@ function shouldUseWorker(data: Uint8Array, options: CompressOptions): boolean {
 }
 
 /**
+ * Check if an error or signal indicates an abort. Rethrow as AbortError if so.
+ */
+function rethrowIfAborted(err: unknown, signal?: AbortSignal): void {
+  if (signal?.aborted || isAbortError(err)) {
+    throw createAbortError((signal as any)?.reason ?? err);
+  }
+}
+
+// =============================================================================
+// Unified Codec Strategy
+// =============================================================================
+
+interface CodecStrategy {
+  hasNative: () => boolean;
+  native: (data: Uint8Array) => Promise<Uint8Array>;
+  worker: (
+    data: Uint8Array,
+    opts: { level?: number; signal?: AbortSignal; allowTransfer?: boolean }
+  ) => Promise<Uint8Array>;
+  jsFallback: (data: Uint8Array) => Uint8Array;
+}
+
+const deflateStrategy: CodecStrategy = {
+  hasNative: hasDeflateRawCompressionStream,
+  native: compressWithStream,
+  worker: deflateWithPool,
+  jsFallback: deflateRawCompressed
+};
+
+const inflateStrategy: CodecStrategy = {
+  hasNative: hasDeflateRawDecompressionStream,
+  native: decompressWithStream,
+  worker: inflateWithPool,
+  jsFallback: inflateRaw
+};
+
+/**
+ * Unified compression/decompression with automatic strategy selection.
+ */
+async function processWithStrategy(
+  strategy: CodecStrategy,
+  data: Uint8Array,
+  options: CompressOptions
+): Promise<Uint8Array> {
+  const canUseNative = strategy.hasNative();
+
+  // If the user explicitly requested workers, honor it.
+  if (options.useWorker === true && hasWorkerSupport()) {
+    try {
+      return await strategy.worker(data, {
+        level: options.level,
+        signal: options.signal,
+        allowTransfer: options.allowTransfer
+      });
+    } catch (err) {
+      // If the user aborts, do NOT fall back to main-thread work.
+      rethrowIfAborted(err, options.signal);
+      // Fall through to best available in-process path.
+    }
+  }
+
+  // Default: use native stream if supported (fastest, no worker overhead).
+  if (canUseNative) {
+    return strategy.native(data);
+  }
+
+  // Use worker in fallback environments (no native deflate-raw) when appropriate.
+  if (shouldUseWorker(data, options)) {
+    return strategy.worker(data, {
+      level: options.level,
+      signal: options.signal,
+      allowTransfer: options.allowTransfer
+    });
+  }
+
+  // Fallback to pure JS implementation.
+  return strategy.jsFallback(data);
+}
+
+// =============================================================================
+// Public API
+// =============================================================================
+
+/**
  * Compress data using browser's native CompressionStream or JS fallback
- *
- * @param data - Data to compress
- * @param options - Compression options
- *   - useWorker: true = always use worker, false = never use worker, undefined = auto
- *   - autoWorkerThreshold: size threshold for auto-worker (default 1MB)
- * @returns Compressed data
  */
 export async function compress(
   data: Uint8Array,
@@ -78,78 +157,32 @@ export async function compress(
     return data;
   }
 
-  // Use worker if appropriate
-  if (shouldUseWorker(data, options)) {
-    return deflateWithPool(data, {
-      level,
-      signal: options.signal,
-      allowTransfer: options.allowTransfer
-    });
-  }
-
-  // Always use native CompressionStream when available - it's much faster than JS
-  if (hasDeflateRawCompressionStream()) {
-    return compressWithStream(data);
-  }
-
-  // Fallback to pure JS implementation only when native is unavailable
-  return deflateRawCompressed(data);
+  return processWithStrategy(deflateStrategy, data, { ...options, level });
 }
 
 /**
  * Compress data synchronously using pure JS implementation
- *
- * @param data - Data to compress
- * @param options - Compression options
- * @returns Compressed data
  */
 export function compressSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-
-  // Level 0 means no compression
   if (level === 0) {
     return data;
   }
-
-  // Pure JS implementation
   return deflateRawCompressed(data);
 }
 
 /**
  * Decompress data using browser's native DecompressionStream or JS fallback
- *
- * @param data - Compressed data (deflate-raw format)
- * @param options - Decompression options
- *   - useWorker: true = always use worker, false = never use worker, undefined = auto
- *   - autoWorkerThreshold: size threshold for auto-worker (default 1MB)
- * @returns Decompressed data
  */
 export async function decompress(
   data: Uint8Array,
   options: CompressOptions = {}
 ): Promise<Uint8Array> {
-  // Use worker if appropriate
-  if (shouldUseWorker(data, options)) {
-    return inflateWithPool(data, {
-      signal: options.signal,
-      allowTransfer: options.allowTransfer
-    });
-  }
-
-  // Always use native DecompressionStream when available - it's much faster than JS
-  if (hasDeflateRawDecompressionStream()) {
-    return decompressWithStream(data);
-  }
-
-  // Fallback to pure JS implementation only when native is unavailable
-  return inflateRaw(data);
+  return processWithStrategy(inflateStrategy, data, options);
 }
 
 /**
  * Decompress data synchronously using pure JS implementation
- *
- * @param data - Compressed data (deflate-raw format)
- * @returns Decompressed data
  */
 export function decompressSync(data: Uint8Array): Uint8Array {
   return inflateRaw(data);

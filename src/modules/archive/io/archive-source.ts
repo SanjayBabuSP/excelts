@@ -64,6 +64,12 @@ export function toUint8ArraySync(source: Uint8Array | ArrayBuffer | string): Uin
   return new Uint8Array(source);
 }
 
+export function isSyncArchiveSource(source: unknown): source is Uint8Array | ArrayBuffer | string {
+  return (
+    source instanceof Uint8Array || source instanceof ArrayBuffer || typeof source === "string"
+  );
+}
+
 export async function toUint8Array(
   source: Uint8Array | ArrayBuffer | string | Blob
 ): Promise<Uint8Array> {
@@ -112,6 +118,14 @@ export async function resolveArchiveSourceToBuffer(
   return concatUint8Arrays(chunks, totalLength);
 }
 
+export async function collectUint8ArrayStream(
+  stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+  options: { signal?: AbortSignal } = {}
+): Promise<Uint8Array> {
+  // Delegate to the general ArchiveSource collector so abort/cancellation semantics stay consistent.
+  return resolveArchiveSourceToBuffer(stream as unknown as ArchiveSource, options);
+}
+
 export async function* toAsyncIterable(
   source: ArchiveSource,
   options: { signal?: AbortSignal; onChunk?: (chunk: Uint8Array) => void } = {}
@@ -150,6 +164,16 @@ export async function* toAsyncIterable(
     return;
   }
   if (typeof Blob !== "undefined" && source instanceof Blob) {
+    // Prefer streaming the Blob to avoid a full Blob->ArrayBuffer copy.
+    // This reduces memory use and improves performance for both small and large inputs.
+    const maybeStream = (source as any).stream;
+    if (typeof maybeStream === "function") {
+      const stream = (source as any).stream();
+      yield* toAsyncIterable(stream, options);
+      return;
+    }
+
+    // Fallback for very old environments.
     const bytes = await toUint8Array(source);
     checkAborted();
     if (onChunk) {

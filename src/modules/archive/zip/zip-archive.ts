@@ -11,6 +11,7 @@ import {
   toAsyncIterable,
   toUint8Array,
   toUint8ArraySync,
+  isSyncArchiveSource,
   isInMemoryArchiveSource,
   type ArchiveSource
 } from "@archive/io/archive-source";
@@ -23,10 +24,25 @@ import {
 } from "@archive/shared/errors";
 import { ProgressEmitter } from "@archive/shared/progress";
 import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
-import type { Zip64Mode } from "@archive/zip-spec/zip-records";
+import {
+  buildDataDescriptor,
+  FLAG_DATA_DESCRIPTOR,
+  UINT16_MAX,
+  UINT32_MAX,
+  writeLocalFileHeaderInto,
+  type Zip64Mode
+} from "@archive/zip-spec/zip-records";
 import type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 import type { ArchiveFormat } from "@archive/formats/types";
+import { isBrowser } from "@utils/env";
+import { ByteQueue } from "@archive/shared/byte-queue";
+import {
+  buildCentralDirectoryAndEocd,
+  type ZipCentralDirectoryEntryInput
+} from "@archive/zip/writer-core";
+import { buildZipEntryMetadata } from "@archive/zip/zip-entry-metadata";
+import { crc32Finalize, crc32Update } from "@archive/compression/crc32";
 
 /** Archive options */
 export interface ZipOptions {
@@ -297,13 +313,8 @@ export class ZipArchive {
             });
           };
 
-          if (
-            entry.source instanceof Uint8Array ||
-            entry.source instanceof ArrayBuffer ||
-            typeof entry.source === "string" ||
-            (typeof Blob !== "undefined" && entry.source instanceof Blob)
-          ) {
-            const bytes = await toUint8Array(entry.source as any);
+          if (isSyncArchiveSource(entry.source)) {
+            const bytes = toUint8ArraySync(entry.source);
             throwIfAborted(signal);
             onChunk(bytes);
             await file.push(bytes, true);
@@ -361,14 +372,162 @@ export class ZipArchive {
     };
   }
 
+  /**
+   * Browser-only fast path: stream sources through CompressionStream while
+   * computing CRC incrementally. Avoids Blob.arrayBuffer() materialization.
+   */
+  private async _browserStreamingBytes(): Promise<Uint8Array> {
+    const out = new ByteQueue();
+    const cdEntries: ZipCentralDirectoryEntryInput[] = [];
+
+    if (this._entries.length > UINT16_MAX) {
+      throw new Error("Too many entries for non-ZIP64 fast path");
+    }
+
+    for (const input of this._entries) {
+      const level = input.options?.level ?? this._options.level;
+      const deflate = level > 0;
+
+      const meta = buildZipEntryMetadata({
+        name: input.name,
+        comment: input.options?.comment,
+        modTime: input.options?.modTime ?? this._options.modTime,
+        atime: input.options?.atime,
+        ctime: input.options?.ctime,
+        birthTime: input.options?.birthTime,
+        timestamps: this._options.timestamps,
+        useDataDescriptor: true,
+        deflate
+      });
+
+      const localHeaderOffset = out.length;
+      if (localHeaderOffset > UINT32_MAX) {
+        throw new Error("ZIP64 required for offsets");
+      }
+
+      const localHeader = new Uint8Array(30 + meta.nameBytes.length + meta.extraField.length);
+      const view = new DataView(localHeader.buffer, localHeader.byteOffset, localHeader.byteLength);
+      writeLocalFileHeaderInto(localHeader, view, 0, {
+        fileName: meta.nameBytes,
+        extraField: meta.extraField,
+        flags: meta.flags,
+        compressionMethod: meta.compressionMethod,
+        dosTime: meta.dosTime,
+        dosDate: meta.dosDate,
+        crc32: 0,
+        compressedSize: 0,
+        uncompressedSize: 0
+      });
+      out.append(localHeader);
+
+      let crcState = 0xffffffff;
+      let uncompressedSize = 0;
+      let compressedSize = 0;
+
+      if (!deflate) {
+        for await (const chunk of toAsyncIterable(input.source)) {
+          if (chunk.length === 0) {
+            continue;
+          }
+          crcState = crc32Update(crcState, chunk);
+          uncompressedSize += chunk.length;
+          compressedSize += chunk.length;
+          out.append(chunk);
+        }
+      } else {
+        const cs = new CompressionStream("deflate-raw");
+        const writer = cs.writable.getWriter();
+        const reader = cs.readable.getReader();
+
+        const readPromise = (async () => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              return;
+            }
+            compressedSize += value.length;
+            out.append(value);
+          }
+        })();
+
+        try {
+          for await (const chunk of toAsyncIterable(input.source)) {
+            if (chunk.length === 0) {
+              continue;
+            }
+            crcState = crc32Update(crcState, chunk);
+            uncompressedSize += chunk.length;
+            await writer.write(chunk as unknown as BufferSource);
+          }
+          await writer.close();
+          await readPromise;
+        } finally {
+          try {
+            writer.releaseLock();
+          } catch {
+            // ignore
+          }
+          try {
+            reader.releaseLock();
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const crc32 = crc32Finalize(crcState);
+
+      if (uncompressedSize > UINT32_MAX || compressedSize > UINT32_MAX || out.length > UINT32_MAX) {
+        throw new Error("ZIP64 required for sizes");
+      }
+
+      out.append(buildDataDescriptor(crc32, compressedSize, uncompressedSize));
+
+      cdEntries.push({
+        fileName: meta.nameBytes,
+        extraField: meta.extraField,
+        comment: meta.commentBytes,
+        flags: (meta.flags | FLAG_DATA_DESCRIPTOR) >>> 0,
+        crc32,
+        compressedSize,
+        uncompressedSize,
+        compressionMethod: meta.compressionMethod,
+        dosTime: meta.dosTime,
+        dosDate: meta.dosDate,
+        localHeaderOffset,
+        zip64: false,
+        externalAttributes: 0
+      });
+    }
+
+    const centralDirOffset = out.length;
+    if (centralDirOffset > UINT32_MAX) {
+      throw new Error("ZIP64 required for central directory offset");
+    }
+
+    const cdResult = buildCentralDirectoryAndEocd(cdEntries, {
+      zipComment: encodeUtf8(this._options.comment ?? ""),
+      zip64Mode: this._options.zip64,
+      centralDirOffset
+    });
+
+    for (const h of cdResult.centralDirectoryHeaders) {
+      out.append(h);
+    }
+    for (const t of cdResult.trailerRecords) {
+      out.append(t);
+    }
+
+    return out.read(out.length);
+  }
+
   async bytes(options: ZipStreamOptions = {}): Promise<Uint8Array> {
     this._sealed = true;
 
     const signalOpt = options.signal ?? this._streamDefaults.signal;
     const onProgress = options.onProgress ?? this._streamDefaults.onProgress;
 
-    // If progress/abort is requested, prefer the streaming pipeline so updates
-    // are meaningful and cancellation is responsive.
+    // If progress/abort is requested, prefer the streaming pipeline.
     if (onProgress || signalOpt) {
       return collect(this.stream(options));
     }
@@ -377,9 +536,23 @@ export class ZipArchive {
     const hasBlobSource =
       typeof Blob !== "undefined" && this._entries.some(e => e.source instanceof Blob);
 
-    // Fast-path: when all sources are already in memory and there are no
-    // per-entry compression overrides, use the single-buffer ZIP builder.
-    // This avoids the overhead of chunking + collecting from the streaming writer.
+    // Browser fast path: stream Blob sources through CompressionStream
+    const canUseBrowserFastPath =
+      isBrowser() &&
+      hasBlobSource &&
+      this._options.smartStore === false &&
+      this._options.zip64 !== true &&
+      typeof CompressionStream !== "undefined";
+
+    if (canUseBrowserFastPath && allSourcesInMemory) {
+      try {
+        return await this._browserStreamingBytes();
+      } catch {
+        // Fall back to the buffered builder
+      }
+    }
+
+    // Fast-path: when all sources are already in memory, use single-buffer ZIP builder.
     if (allSourcesInMemory) {
       // Prefer the sync builder when possible (Node.js hot path): it avoids
       // async/Promise overhead and uses zlib sync fast paths.

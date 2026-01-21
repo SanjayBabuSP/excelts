@@ -61,6 +61,47 @@ interface PoolWorker {
   busy: boolean;
   currentTaskId: number | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  streamSession: StreamSession | null;
+}
+
+/**
+ * Active streaming session bound to a single worker.
+ *
+ * This is used by streaming-compress.browser to avoid buffering entire input.
+ */
+interface StreamSession {
+  taskId: number;
+  taskType: WorkerTaskType;
+  startTime: number;
+  started: boolean;
+  startPromise: Promise<void>;
+  resolveStart: (() => void) | null;
+  rejectStart: ((err: Error) => void) | null;
+  level?: number;
+  writeChain: Promise<void>;
+  inflightAck: { resolve: () => void; reject: (err: Error) => void } | null;
+  ended: boolean;
+  onData: (chunk: Uint8Array) => void;
+  onEnd: () => void;
+  onError: (err: Error) => void;
+}
+
+function isStandaloneBuffer(data: Uint8Array): boolean {
+  return data.byteOffset === 0 && data.byteLength === data.buffer.byteLength;
+}
+
+/**
+ * When using Transferables, transferring a subarray/view would detach the entire
+ * underlying ArrayBuffer (including other views). Compact to a standalone buffer.
+ */
+function compactForTransfer(data: Uint8Array): Uint8Array {
+  return isStandaloneBuffer(data) ? data : data.slice();
+}
+
+export interface WorkerPoolStream {
+  write(data: Uint8Array): Promise<void>;
+  end(): Promise<void>;
+  abort(reason?: string): void;
 }
 
 /**
@@ -80,6 +121,7 @@ export class WorkerPool {
   private _failedTasks = 0;
   private readonly _workerUrl: string;
   private readonly _useCustomUrl: boolean;
+  private readonly _pendingStreamRequests: Array<(worker: PoolWorker) => void> = [];
 
   constructor(options?: WorkerPoolOptions) {
     this._options = resolvePoolOptions(options);
@@ -228,7 +270,8 @@ export class WorkerPool {
       worker,
       busy: false,
       currentTaskId: null,
-      idleTimer: null
+      idleTimer: null,
+      streamSession: null
     };
 
     // Set up message handler
@@ -356,8 +399,10 @@ export class WorkerPool {
     poolWorker.busy = true;
     poolWorker.currentTaskId = task.taskId;
 
-    // Use original buffer if allowTransfer is true, otherwise copy
-    const data = task.allowTransfer ? task.data : task.data.slice();
+    // If allowTransfer is enabled, we MAY transfer the buffer for performance.
+    // But never transfer a view into a larger shared buffer (that would detach
+    // unrelated data); compact it first.
+    const data = task.allowTransfer ? compactForTransfer(task.data) : task.data.slice();
 
     const message: WorkerRequestMessage = {
       type: "task",
@@ -382,6 +427,77 @@ export class WorkerPool {
     if (message.type === "ready") {
       // Worker is initialized and ready
       return;
+    }
+
+    // Streaming session messages
+    if (poolWorker.streamSession) {
+      const session = poolWorker.streamSession;
+      if (message.type === "started") {
+        if (message.taskId !== session.taskId) {
+          return;
+        }
+        session.resolveStart?.();
+        session.resolveStart = null;
+        session.rejectStart = null;
+        return;
+      }
+
+      if (message.type === "out") {
+        if (message.taskId !== session.taskId) {
+          return;
+        }
+        session.onData(message.data);
+        return;
+      }
+
+      if (message.type === "ack") {
+        if (message.taskId !== session.taskId) {
+          return;
+        }
+        session.inflightAck?.resolve();
+        session.inflightAck = null;
+        return;
+      }
+
+      if (message.type === "done") {
+        if (message.taskId !== session.taskId) {
+          return;
+        }
+        // If we somehow complete without a start handshake, unblock writers.
+        session.resolveStart?.();
+        session.resolveStart = null;
+        session.rejectStart = null;
+        // Resolve any in-flight ack just in case.
+        session.inflightAck?.resolve();
+        session.inflightAck = null;
+        this._completedTasks++;
+        const duration = message.duration ?? performance.now() - session.startTime;
+        void duration;
+        session.onEnd();
+        poolWorker.streamSession = null;
+        this._workerBecameIdle(poolWorker);
+        return;
+      }
+
+      if (message.type === "error") {
+        if (message.taskId !== session.taskId) {
+          return;
+        }
+        const error = new Error(message.error ?? "Unknown worker error");
+
+        // If the error happens during start, fail fast so writes don't hang.
+        session.rejectStart?.(error);
+        session.resolveStart = null;
+        session.rejectStart = null;
+
+        session.inflightAck?.reject(error);
+        session.inflightAck = null;
+        this._failedTasks++;
+        session.onError(error);
+        poolWorker.streamSession = null;
+        this._workerBecameIdle(poolWorker);
+        return;
+      }
     }
 
     if (message.type === "result" || message.type === "error") {
@@ -447,6 +563,15 @@ export class WorkerPool {
     poolWorker.busy = false;
     poolWorker.currentTaskId = null;
 
+    // Prefer pending streaming requests (long-lived) over batch queue.
+    if (this._pendingStreamRequests.length > 0) {
+      const resolve = this._pendingStreamRequests.shift();
+      if (resolve) {
+        resolve(poolWorker);
+        return;
+      }
+    }
+
     // Process more tasks if available
     if (this._taskQueue.length > 0) {
       this._processQueue();
@@ -463,6 +588,197 @@ export class WorkerPool {
         }
       }, this._options.idleTimeout);
     }
+  }
+
+  /**
+   * Open a streaming session bound to a worker.
+   *
+   * This enables true chunk-by-chunk compression/decompression in the worker without buffering
+   * the entire input on the main thread.
+   */
+  openStream(
+    taskType: WorkerTaskType,
+    options: {
+      level?: number;
+      allowTransfer?: boolean;
+      onData: (chunk: Uint8Array) => void;
+      onEnd: () => void;
+      onError: (err: Error) => void;
+    } = {
+      onData: () => {},
+      onEnd: () => {},
+      onError: () => {}
+    }
+  ): WorkerPoolStream {
+    if (this._terminated) {
+      throw new Error("Worker pool has been terminated");
+    }
+    if (!hasWorkerSupport()) {
+      throw new Error("Web Workers are not supported in this environment");
+    }
+
+    const taskId = this._nextTaskId++;
+
+    let sessionWorker: PoolWorker | null = null;
+
+    const ensureWorker = async (): Promise<PoolWorker> => {
+      if (sessionWorker) {
+        return sessionWorker;
+      }
+
+      const idleWorker = this._findIdleWorker() ?? this._createWorker() ?? undefined;
+      if (idleWorker) {
+        sessionWorker = idleWorker;
+        this._bindStreamSession(sessionWorker, taskId, taskType, options.level, options);
+        this._startStreamSession(sessionWorker);
+        return sessionWorker;
+      }
+
+      // Wait for a worker to become idle
+      sessionWorker = await new Promise<PoolWorker>(resolve => {
+        this._pendingStreamRequests.push(resolve);
+      });
+
+      this._bindStreamSession(sessionWorker, taskId, taskType, options.level, options);
+      this._startStreamSession(sessionWorker);
+      return sessionWorker;
+    };
+
+    // Kick off worker/session creation immediately to surface start errors early.
+    void ensureWorker();
+
+    const write = async (data: Uint8Array): Promise<void> => {
+      const worker = await ensureWorker();
+      const session = worker.streamSession;
+      if (!session || session.ended) {
+        throw new Error("Streaming session is not active");
+      }
+
+      // Serialize writes to guarantee ordering and keep a single in-flight ack.
+      session.writeChain = session.writeChain.then(async () => {
+        if (session.ended) {
+          return;
+        }
+
+        // Wait for the start handshake (or fail fast) before sending any chunks.
+        await session.startPromise;
+
+        // Avoid extra copies: postMessage() already clones when not transferring.
+        // When transferring, compact views to avoid transferring a larger-than-needed buffer.
+        const payload = options.allowTransfer ? compactForTransfer(data) : data;
+
+        const ackPromise = new Promise<void>((resolve, reject) => {
+          session.inflightAck = { resolve, reject };
+        });
+
+        const message: WorkerRequestMessage = {
+          type: "chunk",
+          taskId,
+          data: payload
+        };
+
+        if (this._options.useTransferables && options.allowTransfer) {
+          worker.worker.postMessage(message, [payload.buffer]);
+        } else {
+          worker.worker.postMessage(message);
+        }
+
+        await ackPromise;
+      });
+
+      await session.writeChain;
+    };
+
+    const end = async (): Promise<void> => {
+      const worker = await ensureWorker();
+      const session = worker.streamSession;
+      if (!session || session.ended) {
+        return;
+      }
+
+      // If start failed, propagate the rejection.
+      await session.startPromise;
+
+      // Flush any pending writes before ending.
+      await session.writeChain;
+
+      session.ended = true;
+      const message: WorkerRequestMessage = { type: "end", taskId };
+      worker.worker.postMessage(message);
+    };
+
+    const abort = (reason?: string): void => {
+      void ensureWorker().then(worker => {
+        const message: WorkerRequestMessage = { type: "abort", taskId, error: reason };
+        worker.worker.postMessage(message);
+      });
+    };
+
+    return { write, end, abort };
+  }
+
+  private _bindStreamSession(
+    worker: PoolWorker,
+    taskId: number,
+    taskType: WorkerTaskType,
+    level: number | undefined,
+    handlers: {
+      onData: (chunk: Uint8Array) => void;
+      onEnd: () => void;
+      onError: (err: Error) => void;
+    }
+  ): void {
+    this._clearIdleTimer(worker);
+    worker.busy = true;
+    worker.currentTaskId = taskId;
+
+    let resolveStart: (() => void) | null = null;
+    let rejectStart: ((err: Error) => void) | null = null;
+    const startPromise = new Promise<void>((resolve, reject) => {
+      resolveStart = resolve;
+      rejectStart = reject;
+    });
+
+    // Safety net: avoid hanging forever if the worker never responds.
+    const START_TIMEOUT_MS = 5000;
+    const startTimeout = setTimeout(() => {
+      rejectStart?.(new Error("Worker stream start timeout"));
+    }, START_TIMEOUT_MS);
+    startPromise.finally(() => clearTimeout(startTimeout));
+
+    worker.streamSession = {
+      taskId,
+      taskType,
+      startTime: performance.now(),
+      started: false,
+      startPromise,
+      resolveStart,
+      rejectStart,
+      level,
+      writeChain: Promise.resolve(),
+      inflightAck: null,
+      ended: false,
+      onData: handlers.onData,
+      onEnd: handlers.onEnd,
+      onError: handlers.onError
+    };
+  }
+
+  private _startStreamSession(worker: PoolWorker): void {
+    const session = worker.streamSession;
+    if (!session || session.started) {
+      return;
+    }
+    session.started = true;
+
+    const startMessage: WorkerRequestMessage = {
+      type: "start",
+      taskId: session.taskId,
+      taskType: session.taskType,
+      level: session.level
+    };
+
+    worker.worker.postMessage(startMessage);
   }
 
   /**

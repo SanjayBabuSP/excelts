@@ -70,6 +70,32 @@ async function processWithStream(stream, data) {
   return result;
 }
 
+/**
+ * Streaming sessions keyed by taskId.
+ * Each session keeps a transform stream open and produces output chunks as they are available.
+ */
+const streamingSessions = new Map();
+
+function closeSession(taskId) {
+  const session = streamingSessions.get(taskId);
+  if (!session) return;
+  streamingSessions.delete(taskId);
+  try {
+    if (session.reader) {
+      session.reader.cancel();
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    if (session.writer) {
+      session.writer.abort();
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // Signal ready
 self.postMessage({ type: 'ready' });
 
@@ -86,6 +112,147 @@ self.onmessage = async function(event) {
   // Handle termination request
   if (msg.type === 'terminate') {
     self.close();
+    return;
+  }
+
+  // Streaming: start
+  if (msg.type === 'start') {
+    const { taskId, taskType, level } = msg;
+    const startTime = performance.now();
+    try {
+      if (!hasDeflateRaw) {
+        throw new Error('deflate-raw not supported in this worker');
+      }
+      if (typeof taskId !== 'number') {
+        throw new Error('Invalid taskId');
+      }
+      if (streamingSessions.has(taskId)) {
+        throw new Error('Streaming task already started');
+      }
+
+      const stream = taskType === 'deflate'
+        ? new CompressionStream('deflate-raw')
+        : taskType === 'inflate'
+          ? new DecompressionStream('deflate-raw')
+          : null;
+      if (!stream) {
+        throw new Error('Unknown task type: ' + taskType);
+      }
+
+      // Note: CompressionStream does not expose compression level.
+      // We keep level for API shape parity (ignored in worker).
+      void level;
+
+      const writer = stream.writable.getWriter();
+      const reader = stream.readable.getReader();
+
+      const session = {
+        writer,
+        reader,
+        startTime,
+        closed: false,
+        readLoop: null
+      };
+
+      session.readLoop = (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              self.postMessage({ type: 'out', taskId, data: value }, [value.buffer]);
+            }
+          }
+        } catch (err) {
+          // Reader failures will be handled by chunk/end paths too.
+        }
+      })();
+
+      streamingSessions.set(taskId, session);
+      self.postMessage({ type: 'started', taskId });
+      return;
+    } catch (err) {
+      self.postMessage({
+        type: 'error',
+        taskId,
+        error: err?.message || String(err),
+        duration: performance.now() - startTime
+      });
+      closeSession(taskId);
+      return;
+    }
+  }
+
+  // Streaming: chunk
+  if (msg.type === 'chunk') {
+    const { taskId, data } = msg;
+    const session = streamingSessions.get(taskId);
+    if (!session || session.closed) {
+      // If the session is gone, ignore.
+      return;
+    }
+    try {
+      await session.writer.write(data);
+      self.postMessage({ type: 'ack', taskId });
+    } catch (err) {
+      self.postMessage({
+        type: 'error',
+        taskId,
+        error: err?.message || String(err),
+        duration: performance.now() - session.startTime
+      });
+      session.closed = true;
+      closeSession(taskId);
+    }
+    return;
+  }
+
+  // Streaming: end
+  if (msg.type === 'end') {
+    const { taskId } = msg;
+    const session = streamingSessions.get(taskId);
+    if (!session || session.closed) {
+      return;
+    }
+    session.closed = true;
+    try {
+      await session.writer.close();
+      if (session.readLoop) {
+        await session.readLoop;
+      }
+      self.postMessage({
+        type: 'done',
+        taskId,
+        duration: performance.now() - session.startTime
+      });
+    } catch (err) {
+      self.postMessage({
+        type: 'error',
+        taskId,
+        error: err?.message || String(err),
+        duration: performance.now() - session.startTime
+      });
+    } finally {
+      closeSession(taskId);
+    }
+    return;
+  }
+
+  // Streaming: abort
+  if (msg.type === 'abort') {
+    const { taskId } = msg;
+    const session = streamingSessions.get(taskId);
+    if (!session) {
+      return;
+    }
+    session.closed = true;
+    closeSession(taskId);
+    self.postMessage({
+      type: 'error',
+      taskId,
+      error: msg.error || 'aborted',
+      duration: performance.now() - session.startTime
+    });
     return;
   }
 

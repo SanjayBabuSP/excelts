@@ -13,7 +13,8 @@ import * as path from "node:path";
 
 import { ZipParser, type ZipEntryInfo as ParserEntryInfo } from "@archive/unzip/zip-parser";
 import { createZip, createZipSync, type ZipEntry } from "@archive/zip/zip-bytes";
-import { concatUint8Arrays, textEncoder as utf8Encoder } from "@stream/shared";
+import { textEncoder as utf8Encoder } from "@stream/shared";
+import { collectUint8ArrayStream } from "@archive/io/archive-source";
 import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import { ZipEditView } from "@archive/zip/zip-edit-view";
 
@@ -191,30 +192,7 @@ function shouldExtractSync(
 async function collectStream(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
 ): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-
-  // Handle ReadableStream
-  if ("getReader" in stream) {
-    const reader = stream.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-  } else {
-    // Handle AsyncIterable
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-  }
-
-  return concatUint8Arrays(chunks);
+  return collectUint8ArrayStream(stream);
 }
 
 /**

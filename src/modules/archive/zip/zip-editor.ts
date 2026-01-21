@@ -1,6 +1,6 @@
 import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 import { dateToZipDos } from "@archive/zip-spec/timestamps";
-import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@stream/shared";
+import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
 import {
   DEFAULT_ZIP_LEVEL,
   DEFAULT_ZIP_TIMESTAMPS,
@@ -12,9 +12,11 @@ import { BufferReader, HttpRangeReader } from "@archive/io/random-access";
 import { RemoteZipReader } from "@archive/io/remote-zip-reader";
 import {
   toAsyncIterable,
-  toUint8Array,
+  collectUint8ArrayStream,
   toUint8ArraySync,
+  isSyncArchiveSource,
   isInMemoryArchiveSource,
+  resolveArchiveSourceToBuffer,
   type ArchiveSource
 } from "@archive/io/archive-source";
 import { collect, pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
@@ -327,21 +329,7 @@ export class ZipEditor {
 
     // Normalize any ArchiveSource into an in-memory buffer, then use RemoteZipReader
     // (via BufferReader) for a single unified read path.
-    let bytes: Uint8Array;
-    if (
-      source instanceof Uint8Array ||
-      source instanceof ArrayBuffer ||
-      typeof source === "string" ||
-      (typeof Blob !== "undefined" && source instanceof Blob)
-    ) {
-      bytes = await toUint8Array(source);
-    } else {
-      const chunks: Uint8Array[] = [];
-      for await (const chunk of toAsyncIterable(source, { signal: options.signal })) {
-        chunks.push(chunk);
-      }
-      bytes = concatUint8Arrays(chunks);
-    }
+    const bytes = await resolveArchiveSourceToBuffer(source, { signal: options.signal });
 
     return ZipEditor.openReader(new BufferReader(bytes), options);
   }
@@ -693,17 +681,13 @@ export class ZipEditor {
             });
           };
 
-          if (
-            entry.source instanceof Uint8Array ||
-            entry.source instanceof ArrayBuffer ||
-            typeof entry.source === "string" ||
-            (typeof Blob !== "undefined" && entry.source instanceof Blob)
-          ) {
-            const bytes = await toUint8Array(entry.source);
+          if (isSyncArchiveSource(entry.source)) {
+            const bytes = toUint8ArraySync(entry.source);
             throwIfAborted(signal);
             onChunk(bytes);
             await file.push(bytes, true);
           } else {
+            // Streaming path (includes Blob via toAsyncIterable(Blob) which prefers Blob.stream())
             for await (const chunk of toAsyncIterable(entry.source, { signal, onChunk })) {
               throwIfAborted(signal);
               await file.push(chunk, false);
@@ -788,7 +772,7 @@ export class ZipEditor {
     const sets = this._buildSetEntries();
 
     const allSourcesInMemory = sets.every(e => isInMemoryArchiveSource(e.source));
-    const hasBlobSource = typeof Blob !== "undefined" && sets.some(e => e.source instanceof Blob);
+    const allSourcesSync = sets.every(e => isSyncArchiveSource(e.source));
 
     const rawEntries: ZipRawEntry[] = await Promise.all(
       preservedMeta.map(async p => {
@@ -808,8 +792,8 @@ export class ZipEditor {
       })
     );
 
-    // Fast path: all sources are in-memory and not Blob (can use sync API)
-    if (allSourcesInMemory && !hasBlobSource) {
+    // Fast path: all sources are sync primitives (can use sync API)
+    if (allSourcesInMemory && allSourcesSync) {
       const normalEntries: ZipEntry[] = sets.map(e => {
         // Type narrowing: we know source is in-memory and not Blob
         const src = e.source as Uint8Array | ArrayBuffer | string;
@@ -832,20 +816,16 @@ export class ZipEditor {
       return createZipSync([...rawEntries, ...normalEntries], this._getBuildOptions());
     }
 
-    // Async path: some sources need async conversion (Blob or streaming)
+    // Async path: some sources need streaming collection (Blob or streaming)
     const normalEntries: ZipEntry[] = await Promise.all(
       sets.map(async e => {
         // Collect bytes from any source type
         let data: Uint8Array;
-        if (isInMemoryArchiveSource(e.source)) {
-          data = await toUint8Array(e.source);
+        if (isSyncArchiveSource(e.source)) {
+          data = toUint8ArraySync(e.source);
         } else {
-          // Streaming source: collect all chunks
-          const chunks: Uint8Array[] = [];
-          for await (const chunk of toAsyncIterable(e.source)) {
-            chunks.push(chunk);
-          }
-          data = concatUint8Arrays(chunks);
+          // Streaming source: collect all chunks (includes Blob via toAsyncIterable(Blob) which prefers Blob.stream())
+          data = await collectUint8ArrayStream(toAsyncIterable(e.source));
         }
 
         return {

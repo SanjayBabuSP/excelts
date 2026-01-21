@@ -13,34 +13,92 @@ export type WorkerTaskType = "deflate" | "inflate";
 /**
  * Worker message types from main thread to worker
  */
-export interface WorkerRequestMessage {
-  /** Message type identifier */
-  type: "task" | "terminate";
-  /** Unique task ID for correlation */
-  taskId?: number;
-  /** Task type (deflate or inflate) */
-  taskType?: WorkerTaskType;
-  /** Input data to process */
-  data?: Uint8Array;
-  /** Compression level (for deflate) */
-  level?: number;
-}
+export type WorkerRequestMessage =
+  | {
+      /** Batch task request */
+      type: "task";
+      /** Unique task ID for correlation */
+      taskId: number;
+      /** Task type (deflate or inflate) */
+      taskType: WorkerTaskType;
+      /** Input data to process */
+      data: Uint8Array;
+      /** Compression level (for deflate) */
+      level?: number;
+    }
+  | {
+      /** Streaming task start */
+      type: "start";
+      taskId: number;
+      taskType: WorkerTaskType;
+      level?: number;
+    }
+  | {
+      /** Streaming data chunk */
+      type: "chunk";
+      taskId: number;
+      data: Uint8Array;
+    }
+  | {
+      /** Streaming end (flush + close) */
+      type: "end";
+      taskId: number;
+    }
+  | {
+      /** Streaming abort/cancel */
+      type: "abort";
+      taskId: number;
+      error?: string;
+    }
+  | {
+      /** Terminate worker */
+      type: "terminate";
+    };
 
 /**
  * Worker message types from worker to main thread
  */
-export interface WorkerResponseMessage {
-  /** Message type identifier */
-  type: "ready" | "result" | "error";
-  /** Unique task ID for correlation */
-  taskId?: number;
-  /** Processed output data */
-  data?: Uint8Array;
-  /** Error message if failed */
-  error?: string;
-  /** Processing duration in milliseconds */
-  duration?: number;
-}
+export type WorkerResponseMessage =
+  | {
+      /** Worker is ready */
+      type: "ready";
+    }
+  | {
+      /** Streaming task started successfully (start handshake) */
+      type: "started";
+      taskId: number;
+    }
+  | {
+      /** Batch task result */
+      type: "result";
+      taskId: number;
+      data: Uint8Array;
+      duration?: number;
+    }
+  | {
+      /** Streaming output chunk */
+      type: "out";
+      taskId: number;
+      data: Uint8Array;
+    }
+  | {
+      /** Acknowledge that an input chunk was consumed */
+      type: "ack";
+      taskId: number;
+    }
+  | {
+      /** Streaming task completed */
+      type: "done";
+      taskId: number;
+      duration?: number;
+    }
+  | {
+      /** Any task error (batch or streaming) */
+      type: "error";
+      taskId: number;
+      error?: string;
+      duration?: number;
+    };
 
 /**
  * Worker pool configuration options
