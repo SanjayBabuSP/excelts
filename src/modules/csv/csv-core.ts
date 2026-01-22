@@ -80,15 +80,6 @@ export interface CsvParseOptions {
   renameHeaders?: boolean;
   /** Comment character - lines starting with this are ignored */
   comment?: string;
-  /**
-   * Decimal separator used when parsing numbers from CSV (default: ".").
-   *
-   * Note: core CSV parsing returns strings; number conversion is handled by higher-level
-   * consumers (e.g. the default value mapper in the CSV module).
-   *
-   * @deprecated Use CsvReadOptions.valueMapperOptions.decimalSeparator instead.
-   */
-  decimalSeparator?: "." | ",";
   /** Maximum number of data rows to parse (excluding header) */
   maxRows?: number;
   /** Number of lines to skip at the beginning (before header detection) */

@@ -8,6 +8,48 @@ interface ParseEvent {
   value: any;
 }
 
+// HAN CELL namespace prefix normalization
+// HAN CELL uses non-standard namespace prefixes (ep:, cp:, dc:, etc.)
+// See: https://github.com/exceljs/exceljs/issues/3014
+const HAN_CELL_PREFIXES = new Set(["ep", "cp", "dc", "dcterms", "dcmitype", "vt"]);
+const SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+// Detect HAN CELL mode from first tag. Returns:
+// - undefined: normal file (no prefix handling needed)
+// - null: HAN CELL file without spreadsheetml prefix (uses static prefixes only)
+// - string: HAN CELL file with spreadsheetml prefix (e.g., "x")
+function detectHanCellPrefix(
+  tagName: string,
+  attrs: Record<string, string>
+): string | null | undefined {
+  for (const key in attrs) {
+    if (key.length > 6 && key.startsWith("xmlns:")) {
+      const prefix = key.slice(6);
+      // Check for spreadsheetml namespace prefix
+      if (attrs[key] === SPREADSHEETML_NS) {
+        return prefix;
+      }
+      // Check if xmlns declares a known HAN CELL prefix (e.g., xmlns:dc, xmlns:dcterms)
+      if (HAN_CELL_PREFIXES.has(prefix)) {
+        return null;
+      }
+    }
+  }
+  // Check if tag name has a known static prefix
+  const i = tagName.indexOf(":");
+  return i !== -1 && HAN_CELL_PREFIXES.has(tagName.slice(0, i)) ? null : undefined;
+}
+
+// Strip known namespace prefix from element name
+function stripPrefix(name: string, nsPrefix: string | null): string {
+  const i = name.indexOf(":");
+  if (i === -1) {
+    return name;
+  }
+  const p = name.slice(0, i);
+  return p === nsPrefix || HAN_CELL_PREFIXES.has(p) ? name.slice(i + 1) : name;
+}
+
 // Base class for Xforms
 class BaseXform {
   declare public map?: { [key: string]: any };
@@ -71,17 +113,49 @@ class BaseXform {
     let done = false;
     let finalModel: any;
 
+    // HAN CELL compatibility: 0 = not checked, 1 = normal file, 2 = HAN CELL file
+    let nsMode = 0;
+    let nsPrefix: string | null = null;
+
     for await (const events of saxParser) {
       if (done) {
         continue;
       }
       for (const { eventType, value } of events) {
         if (eventType === "opentag") {
+          // Fast path for normal Excel files (majority case)
+          if (nsMode === 1) {
+            this.parseOpen(value);
+            continue;
+          }
+          // First tag - detect mode
+          if (nsMode === 0) {
+            const prefix = detectHanCellPrefix(value.name, value.attributes);
+            if (prefix === undefined) {
+              nsMode = 1;
+              this.parseOpen(value);
+              continue;
+            }
+            nsMode = 2;
+            nsPrefix = prefix;
+          }
+          // HAN CELL mode - strip prefix
+          value.name = stripPrefix(value.name, nsPrefix);
           this.parseOpen(value);
         } else if (eventType === "text") {
           this.parseText(value);
         } else if (eventType === "closetag") {
-          if (!this.parseClose(value.name)) {
+          // Fast path for normal files
+          if (nsMode === 1) {
+            if (!this.parseClose(value.name)) {
+              done = true;
+              finalModel = (this as any).model;
+              break;
+            }
+            continue;
+          }
+          // HAN CELL mode - strip prefix
+          if (!this.parseClose(stripPrefix(value.name, nsPrefix))) {
             done = true;
             finalModel = (this as any).model;
             break;

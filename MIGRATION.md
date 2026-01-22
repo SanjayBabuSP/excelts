@@ -2,18 +2,17 @@
 
 This document describes user-facing breaking changes and recommended migrations.
 
-## CSV: `decimalSeparator` option moved (recommended)
+## CSV: `decimalSeparator` option moved
 
 ### What changed
 
-Previously, some examples used `parserOptions.decimalSeparator` to control how CSV string values are converted to numbers.
+Previously, some examples used `parserOptions.decimalSeparator` to control how CSV string values are converted to numbers. That option has been removed.
 
 The CSV parser (`parseCsv` / `CsvParserStream`) still returns strings. Number conversion happens in the higher-level CSV worksheet integration (the default value mapper).
 
 To make this clearer, the preferred configuration is now:
 
-- **New (recommended):** `CsvReadOptions.valueMapperOptions.decimalSeparator`
-- **Old (still supported, deprecated):** `CsvParseOptions.decimalSeparator`
+- **Use:** `CsvReadOptions.valueMapperOptions.decimalSeparator`
 
 ### Why
 
@@ -21,22 +20,9 @@ To make this clearer, the preferred configuration is now:
 - Keeping the parser string-only avoids surprising implicit conversions.
 - The new API makes it explicit that this option affects the default mapper.
 
-### Before → After
+### How to migrate
 
 #### In-memory read (`workbook.csv.load` / `parseCsvToWorksheet`)
-
-Before:
-
-```ts
-workbook.csv.load(csvText, {
-  parserOptions: {
-    delimiter: ";",
-    decimalSeparator: "," // deprecated
-  }
-});
-```
-
-After (recommended):
 
 ```ts
 workbook.csv.load(csvText, {
@@ -50,19 +36,6 @@ workbook.csv.load(csvText, {
 ```
 
 #### Streaming read (`workbook.csv.read` / `createWriteStream`)
-
-Before:
-
-```ts
-await workbook.csv.read(readableStream, {
-  parserOptions: {
-    delimiter: ";",
-    decimalSeparator: "," // deprecated
-  }
-});
-```
-
-After (recommended):
 
 ```ts
 await workbook.csv.read(readableStream, {
