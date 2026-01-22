@@ -95,10 +95,16 @@ interface ParsedPivotTableModel {
   compact?: boolean;
   compactData?: boolean;
   multipleFieldFilters?: boolean;
+  outline?: boolean;
+  outlineData?: boolean;
+  chartFormat?: number;
 
   // Row/col items (for grand totals etc)
-  rowItems?: any[];
-  colItems?: any[];
+  rowItems?: RowColItem[];
+  colItems?: RowColItem[];
+
+  // Chart formats (for pivot charts)
+  chartFormats?: ChartFormatItem[];
 
   // Flag indicating this was loaded from file
   isLoaded?: boolean;
@@ -107,37 +113,74 @@ interface ParsedPivotTableModel {
   extensions?: any[];
 }
 
+/**
+ * Row or column item in pivot table
+ */
+interface RowColItem {
+  t?: string; // type (e.g., "grand" for grand total)
+  x: Array<{ v: number }>; // x element values
+}
+
+/**
+ * Chart format item for pivot charts
+ */
+interface ChartFormatItem {
+  chart: number;
+  format: number;
+  series?: boolean;
+  // Preserved pivotArea XML for round-trip
+  pivotAreaXml?: string;
+}
+
+/**
+ * Parser state for PivotTableXform
+ */
+interface ParserState {
+  inPivotFields: boolean;
+  inRowFields: boolean;
+  inColFields: boolean;
+  inDataFields: boolean;
+  inRowItems: boolean;
+  inColItems: boolean;
+  inLocation: boolean;
+  inItems: boolean;
+  inPivotTableStyleInfo: boolean;
+  inChartFormats: boolean;
+  inPivotArea: boolean;
+}
+
 class PivotTableXform extends BaseXform {
   declare public map: { [key: string]: any };
   declare public model: ParsedPivotTableModel | null;
 
-  // Parser state
-  private inPivotFields: boolean;
-  private inRowFields: boolean;
-  private inColFields: boolean;
-  private inDataFields: boolean;
-  private inRowItems: boolean;
-  private inColItems: boolean;
-  private inLocation: boolean;
-  private currentPivotField: ParsedPivotField | null;
-  private inItems: boolean;
-  private inPivotTableStyleInfo: boolean;
+  // Parser state consolidated into object for easier reset
+  private state: ParserState = {
+    inPivotFields: false,
+    inRowFields: false,
+    inColFields: false,
+    inDataFields: false,
+    inRowItems: false,
+    inColItems: false,
+    inLocation: false,
+    inItems: false,
+    inPivotTableStyleInfo: false,
+    inChartFormats: false,
+    inPivotArea: false
+  };
+
+  // Current parsing context
+  private currentPivotField: ParsedPivotField | null = null;
+  private currentRowItem: RowColItem | null = null;
+  private currentColItem: RowColItem | null = null;
+  private currentChartFormat: ChartFormatItem | null = null;
+  // Buffer for collecting pivotArea XML
+  private pivotAreaXmlBuffer: string[] = [];
+  private pivotAreaDepth = 0;
 
   constructor() {
     super();
-
     this.map = {};
     this.model = null;
-    this.inPivotFields = false;
-    this.inRowFields = false;
-    this.inColFields = false;
-    this.inDataFields = false;
-    this.inRowItems = false;
-    this.inColItems = false;
-    this.inLocation = false;
-    this.currentPivotField = null;
-    this.inItems = false;
-    this.inPivotTableStyleInfo = false;
   }
 
   prepare(_model: any): void {
@@ -151,16 +194,17 @@ class PivotTableXform extends BaseXform {
 
   reset(): void {
     this.model = null;
-    this.inPivotFields = false;
-    this.inRowFields = false;
-    this.inColFields = false;
-    this.inDataFields = false;
-    this.inRowItems = false;
-    this.inColItems = false;
-    this.inLocation = false;
+    // Reset all parser state flags using object
+    Object.keys(this.state).forEach(key => {
+      (this.state as any)[key] = false;
+    });
+    // Reset current context
     this.currentPivotField = null;
-    this.inItems = false;
-    this.inPivotTableStyleInfo = false;
+    this.currentRowItem = null;
+    this.currentColItem = null;
+    this.currentChartFormat = null;
+    this.pivotAreaXmlBuffer = [];
+    this.pivotAreaDepth = 0;
   }
 
   /**
@@ -293,8 +337,7 @@ class PivotTableXform extends BaseXform {
    * Render loaded pivot table (preserving original structure)
    */
   private renderLoaded(xmlStream: any, model: ParsedPivotTableModel): void {
-    xmlStream.openXml(XmlStream.StdDocAttributes);
-    xmlStream.openNode(this.tag, {
+    const attrs: any = {
       ...PivotTableXform.PIVOT_TABLE_ATTRIBUTES,
       name: model.name || "PivotTable1",
       cacheId: model.cacheId,
@@ -303,7 +346,8 @@ class PivotTableXform extends BaseXform {
       applyFontFormats: model.applyFontFormats || "0",
       applyPatternFormats: model.applyPatternFormats || "0",
       applyAlignmentFormats: model.applyAlignmentFormats || "0",
-      applyWidthHeightFormats: model.applyWidthHeightFormats || "0",
+      // Preserve original value when present; default to Excel's typical "0".
+      applyWidthHeightFormats: model.applyWidthHeightFormats ?? "0",
       dataCaption: model.dataCaption || "Values",
       updatedVersion: model.updatedVersion || "8",
       minRefreshableVersion: model.minRefreshableVersion || "3",
@@ -311,10 +355,29 @@ class PivotTableXform extends BaseXform {
       itemPrintTitles: model.itemPrintTitles ? "1" : "0",
       createdVersion: model.createdVersion || "8",
       indent: model.indent !== undefined ? String(model.indent) : "0",
-      compact: model.compact ? "1" : "0",
-      compactData: model.compactData ? "1" : "0",
       multipleFieldFilters: model.multipleFieldFilters ? "1" : "0"
-    });
+    };
+
+    // Add outline attributes if present
+    if (model.outline) {
+      attrs.outline = "1";
+    }
+    if (model.outlineData) {
+      attrs.outlineData = "1";
+    }
+    if (model.chartFormat !== undefined) {
+      attrs.chartFormat = String(model.chartFormat);
+    }
+    // Only add compact/compactData if they are true (some files don't have them)
+    if (model.compact) {
+      attrs.compact = "1";
+    }
+    if (model.compactData) {
+      attrs.compactData = "1";
+    }
+
+    xmlStream.openXml(XmlStream.StdDocAttributes);
+    xmlStream.openNode(this.tag, attrs);
 
     // Location
     if (model.location) {
@@ -344,13 +407,19 @@ class PivotTableXform extends BaseXform {
       xmlStream.closeNode();
     }
 
-    // Row items (simplified - just grand total)
-    xmlStream.writeXml(`
-      <rowItems count="1">
-        <i t="grand"><x /></i>
-      </rowItems>`);
+    // Row items - use parsed items if available; otherwise emit a minimal grand total
+    if (model.rowItems && model.rowItems.length > 0) {
+      xmlStream.openNode("rowItems", { count: model.rowItems.length });
+      for (const item of model.rowItems) {
+        this.renderRowColItem(xmlStream, item);
+      }
+      xmlStream.closeNode();
+    } else {
+      xmlStream.writeXml('<rowItems count="1"><i t="grand"><x/></i></rowItems>');
+    }
 
     // Col fields
+    // Excel commonly emits a synthetic field x=-2 when there are no column fields.
     const colFieldCount = model.colFields.length === 0 ? 1 : model.colFields.length;
     xmlStream.openNode("colFields", { count: colFieldCount });
     if (model.colFields.length === 0) {
@@ -362,26 +431,54 @@ class PivotTableXform extends BaseXform {
     }
     xmlStream.closeNode();
 
-    // Col items (simplified - just grand total)
-    xmlStream.writeXml(`
-      <colItems count="1">
-        <i t="grand"><x /></i>
-      </colItems>`);
+    // Col items - use parsed items if available
+    if (model.colItems && model.colItems.length > 0) {
+      xmlStream.openNode("colItems", { count: model.colItems.length });
+      for (const item of model.colItems) {
+        this.renderRowColItem(xmlStream, item);
+      }
+      xmlStream.closeNode();
+    } else {
+      xmlStream.writeXml('<colItems count="1"><i t="grand"><x/></i></colItems>');
+    }
 
     // Data fields
     if (model.dataFields.length > 0) {
       xmlStream.openNode("dataFields", { count: model.dataFields.length });
       for (const dataField of model.dataFields) {
-        const attrs: any = {
+        const dfAttrs: any = {
           name: dataField.name,
           fld: dataField.fld,
           baseField: dataField.baseField ?? 0,
           baseItem: dataField.baseItem ?? 0
         };
         if (dataField.subtotal && dataField.subtotal !== "sum") {
-          attrs.subtotal = dataField.subtotal;
+          dfAttrs.subtotal = dataField.subtotal;
         }
-        xmlStream.leafNode("dataField", attrs);
+        xmlStream.leafNode("dataField", dfAttrs);
+      }
+      xmlStream.closeNode();
+    }
+
+    // Chart formats (for pivot charts) - preserve original pivotArea XML
+    if (model.chartFormats && model.chartFormats.length > 0) {
+      xmlStream.openNode("chartFormats", { count: model.chartFormats.length });
+      for (const cf of model.chartFormats) {
+        xmlStream.openNode("chartFormat", {
+          chart: cf.chart,
+          format: cf.format,
+          series: cf.series ? "1" : undefined
+        });
+        // Use preserved pivotArea XML or fallback to default
+        if (cf.pivotAreaXml) {
+          xmlStream.writeXml(cf.pivotAreaXml);
+        } else {
+          // Fallback for newly created chart formats (shouldn't happen for loaded models)
+          xmlStream.writeXml(
+            `<pivotArea type="data" outline="0" fieldPosition="0"><references count="1"><reference field="4294967294" count="1" selected="0"><x v="0"/></reference></references></pivotArea>`
+          );
+        }
+        xmlStream.closeNode();
       }
       xmlStream.closeNode();
     }
@@ -397,49 +494,53 @@ class PivotTableXform extends BaseXform {
     });
 
     // Extensions
-    xmlStream.writeXml(`
-      <extLst>
-        <ext
-          uri="{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}"
-          xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
-        >
-          <x14:pivotTableDefinition
-            hideValuesRow="1"
-            xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"
-          />
-        </ext>
-        <ext
-          uri="{747A6164-185A-40DC-8AA5-F01512510D54}"
-          xmlns:xpdl="http://schemas.microsoft.com/office/spreadsheetml/2016/pivotdefaultlayout"
-        >
-          <xpdl:pivotTableDefinition16
-            EnabledSubtotalsDefault="0"
-            SubtotalsOnTopDefault="0"
-          />
-        </ext>
-      </extLst>
-    `);
+    xmlStream.writeXml(
+      `<extLst><ext uri="{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:pivotTableDefinition hideValuesRow="1" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"/></ext><ext uri="{747A6164-185A-40DC-8AA5-F01512510D54}" xmlns:xpdl="http://schemas.microsoft.com/office/spreadsheetml/2016/pivotdefaultlayout"><xpdl:pivotTableDefinition16/></ext></extLst>`
+    );
 
     xmlStream.closeNode();
+  }
+
+  /**
+   * Render a row or column item element
+   */
+  private renderRowColItem(xmlStream: any, item: any): void {
+    const attrs: any = {};
+    if (item.t) {
+      attrs.t = item.t;
+    }
+
+    if (item.x && item.x.length > 0) {
+      xmlStream.openNode("i", attrs);
+      for (const x of item.x) {
+        if (x.v && x.v !== 0) {
+          xmlStream.leafNode("x", { v: x.v });
+        } else {
+          xmlStream.leafNode("x");
+        }
+      }
+      xmlStream.closeNode();
+    } else {
+      // Empty item (like <i/> in colItems)
+      xmlStream.leafNode("i", attrs);
+    }
   }
 
   /**
    * Render a loaded pivot field
    */
   private renderPivotFieldLoaded(xmlStream: any, field: ParsedPivotField): void {
-    const attrs: any = {
-      compact: field.compact ? "1" : "0",
-      outline: field.outline ? "1" : "0",
-      showAll: field.showAll ? "1" : "0",
-      defaultSubtotal: field.defaultSubtotal ? "1" : "0"
-    };
+    const attrs: any = {};
 
+    // Only add attributes that were present in the original
     if (field.axis) {
       attrs.axis = field.axis;
     }
     if (field.dataField) {
       attrs.dataField = "1";
     }
+    // showAll is typically always present
+    attrs.showAll = field.showAll ? "1" : "0";
 
     if (field.items && field.items.length > 0) {
       xmlStream.openNode("pivotField", attrs);
@@ -448,7 +549,7 @@ class PivotTableXform extends BaseXform {
         xmlStream.leafNode("item", { x: itemIndex });
       }
       // Grand total item
-      xmlStream.writeXml('<item t="default" />');
+      xmlStream.writeXml('<item t="default"/>');
       xmlStream.closeNode(); // items
       xmlStream.closeNode(); // pivotField
     } else {
@@ -487,6 +588,12 @@ class PivotTableXform extends BaseXform {
           compact: attributes.compact === "1",
           compactData: attributes.compactData === "1",
           multipleFieldFilters: attributes.multipleFieldFilters === "1",
+          outline: attributes.outline === "1",
+          outlineData: attributes.outlineData === "1",
+          chartFormat: attributes.chartFormat ? parseInt(attributes.chartFormat, 10) : undefined,
+          rowItems: [],
+          colItems: [],
+          chartFormats: [],
           isLoaded: true
         };
         break;
@@ -509,11 +616,11 @@ class PivotTableXform extends BaseXform {
         break;
 
       case "pivotFields":
-        this.inPivotFields = true;
+        this.state.inPivotFields = true;
         break;
 
       case "pivotField":
-        if (this.inPivotFields) {
+        if (this.state.inPivotFields) {
           this.currentPivotField = {
             axis: attributes.axis as any,
             dataField: attributes.dataField === "1",
@@ -528,50 +635,111 @@ class PivotTableXform extends BaseXform {
 
       case "items":
         if (this.currentPivotField) {
-          this.inItems = true;
+          this.state.inItems = true;
         }
         break;
 
       case "item":
-        if (this.inItems && this.currentPivotField && attributes.x !== undefined) {
+        if (this.state.inItems && this.currentPivotField && attributes.x !== undefined) {
           this.currentPivotField.items!.push(parseInt(attributes.x, 10));
         }
         break;
 
       case "rowFields":
-        this.inRowFields = true;
+        this.state.inRowFields = true;
         break;
 
       case "colFields":
-        this.inColFields = true;
+        this.state.inColFields = true;
         break;
 
       case "dataFields":
-        this.inDataFields = true;
+        this.state.inDataFields = true;
         break;
 
       case "rowItems":
-        this.inRowItems = true;
+        this.state.inRowItems = true;
         break;
 
       case "colItems":
-        this.inColItems = true;
+        this.state.inColItems = true;
+        break;
+
+      case "i":
+        // Handle row/col item element
+        if (this.state.inRowItems && this.model) {
+          this.currentRowItem = { t: attributes.t, x: [] };
+        } else if (this.state.inColItems && this.model) {
+          this.currentColItem = { t: attributes.t, x: [] };
+        }
+        break;
+
+      case "x":
+        // Handle x element inside row/col items or pivotArea
+        if (this.state.inPivotArea) {
+          // Collect x element for pivotArea XML
+          const xAttrs = Object.entries(attributes)
+            .map(([k, v]) => `${k}="${v}"`)
+            .join(" ");
+          this.pivotAreaXmlBuffer.push(xAttrs ? `<x ${xAttrs}/>` : "<x/>");
+        } else if (this.currentRowItem) {
+          this.currentRowItem.x.push({ v: attributes.v ? parseInt(attributes.v, 10) : 0 });
+        } else if (this.currentColItem) {
+          this.currentColItem.x.push({ v: attributes.v ? parseInt(attributes.v, 10) : 0 });
+        }
+        break;
+
+      case "chartFormats":
+        this.state.inChartFormats = true;
+        break;
+
+      case "chartFormat":
+        if (this.state.inChartFormats && this.model) {
+          this.currentChartFormat = {
+            chart: attributes.chart ? parseInt(attributes.chart, 10) : 0,
+            format: attributes.format ? parseInt(attributes.format, 10) : 0,
+            series: attributes.series === "1"
+          };
+        }
+        break;
+
+      case "pivotArea":
+        // Start collecting pivotArea XML for chartFormat
+        if (this.currentChartFormat) {
+          this.state.inPivotArea = true;
+          const attrsStr = Object.entries(attributes)
+            .map(([k, v]) => `${k}="${v}"`)
+            .join(" ");
+          this.pivotAreaXmlBuffer = [attrsStr ? `<pivotArea ${attrsStr}>` : "<pivotArea>"];
+        }
+        break;
+
+      case "references":
+      case "reference":
+        // Collect nested elements in pivotArea
+        if (this.state.inPivotArea) {
+          this.pivotAreaDepth++;
+          const attrsStr = Object.entries(attributes)
+            .map(([k, v]) => `${k}="${v}"`)
+            .join(" ");
+          this.pivotAreaXmlBuffer.push(`<${name}${attrsStr ? " " + attrsStr : ""}>`);
+        }
         break;
 
       case "field":
         // Handle field element (used in rowFields, colFields)
         if (this.model) {
           const fieldIndex = parseInt(attributes.x || "0", 10);
-          if (this.inRowFields) {
+          if (this.state.inRowFields) {
             this.model.rowFields.push(fieldIndex);
-          } else if (this.inColFields) {
+          } else if (this.state.inColFields) {
             this.model.colFields.push(fieldIndex);
           }
         }
         break;
 
       case "dataField":
-        if (this.inDataFields && this.model) {
+        if (this.state.inDataFields && this.model) {
           this.model.dataFields.push({
             name: xmlDecode(attributes.name || ""),
             fld: parseInt(attributes.fld || "0", 10),
@@ -597,13 +765,33 @@ class PivotTableXform extends BaseXform {
   }
 
   parseClose(name: string): boolean {
+    // Handle pivotArea nested elements - close tags
+    if (this.state.inPivotArea) {
+      if (name === "pivotArea") {
+        this.pivotAreaXmlBuffer.push("</pivotArea>");
+        if (this.currentChartFormat) {
+          this.currentChartFormat.pivotAreaXml = this.pivotAreaXmlBuffer.join("");
+        }
+        this.state.inPivotArea = false;
+        this.pivotAreaXmlBuffer = [];
+        this.pivotAreaDepth = 0;
+        return true;
+      } else if (name === "references" || name === "reference") {
+        this.pivotAreaXmlBuffer.push(`</${name}>`);
+        this.pivotAreaDepth--;
+        return true;
+      }
+      // x elements are self-closing, no need to handle close
+      return true;
+    }
+
     switch (name) {
       case this.tag:
         // End of pivotTableDefinition
         return false;
 
       case "pivotFields":
-        this.inPivotFields = false;
+        this.state.inPivotFields = false;
         break;
 
       case "pivotField":
@@ -614,27 +802,49 @@ class PivotTableXform extends BaseXform {
         break;
 
       case "items":
-        this.inItems = false;
+        this.state.inItems = false;
         break;
 
       case "rowFields":
-        this.inRowFields = false;
+        this.state.inRowFields = false;
         break;
 
       case "colFields":
-        this.inColFields = false;
+        this.state.inColFields = false;
         break;
 
       case "dataFields":
-        this.inDataFields = false;
+        this.state.inDataFields = false;
         break;
 
       case "rowItems":
-        this.inRowItems = false;
+        this.state.inRowItems = false;
         break;
 
       case "colItems":
-        this.inColItems = false;
+        this.state.inColItems = false;
+        break;
+
+      case "i":
+        // Finish row/col item
+        if (this.currentRowItem && this.model) {
+          this.model.rowItems!.push(this.currentRowItem);
+          this.currentRowItem = null;
+        } else if (this.currentColItem && this.model) {
+          this.model.colItems!.push(this.currentColItem);
+          this.currentColItem = null;
+        }
+        break;
+
+      case "chartFormats":
+        this.state.inChartFormats = false;
+        break;
+
+      case "chartFormat":
+        if (this.currentChartFormat && this.model) {
+          this.model.chartFormats!.push(this.currentChartFormat);
+          this.currentChartFormat = null;
+        }
         break;
     }
 

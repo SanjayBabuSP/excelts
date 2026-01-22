@@ -61,7 +61,7 @@
   "scripts": {
     "example": "node scripts/run-examples.ts",
     "check": "concurrently --raw \"npm run type\" \"npm run lint\"",
-    "test": "vitest run && npm run test:browser",
+    "test": "vitest run && npm run test:browser --",
     "test:browser": "rimraf dist && npm run build:browser:bundle && vitest run --config vitest.browser.config.ts",
     "test:watch": "vitest",
     "build": "rimraf dist && concurrently \"npm run build:esm\" \"npm run build:cjs\" \"npm run build:browser\" \"npm run build:browser:bundle\" && npm run build:verify",

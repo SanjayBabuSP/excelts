@@ -84,6 +84,7 @@ import {
   worksheetPath,
   worksheetRelsPath
 } from "@excel/utils/ooxml-paths";
+import { PassthroughManager } from "@excel/utils/passthrough-manager";
 
 import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 
@@ -352,6 +353,7 @@ class XLSX {
     this.addDrawings(zip, model);
     this.addTables(zip, model);
     this.addPivotTables(zip, model);
+    this.addPassthrough(zip, model);
     await Promise.all([this.addThemes(zip, model), this.addStyles(zip, model)]);
     await this.addFeaturePropertyBag(zip, model);
     await this.addMedia(zip, model);
@@ -469,11 +471,12 @@ class XLSX {
    * This is the foundation for TRUE streaming reads on platforms that have a
    * streaming ZIP parser (e.g. Node.js `modules/archive` Parse).
    */
-  protected async loadFromZipEntries(
-    entries: AsyncIterable<ZipEntryLike>,
-    options?: XlsxOptions
-  ): Promise<any> {
-    const model: any = {
+  /**
+   * Create an empty model for parsing XLSX files.
+   * Shared by loadFromZipEntries and loadFromFiles.
+   */
+  private createEmptyModel(): any {
+    return {
       worksheets: [],
       worksheetHash: {},
       worksheetRels: [],
@@ -482,6 +485,8 @@ class XLSX {
       mediaIndex: {},
       drawings: {},
       drawingRels: {},
+      // Raw drawing XML data for passthrough (when drawing contains chart references)
+      rawDrawings: {} as Record<string, Uint8Array>,
       comments: {},
       tables: {},
       vmlDrawings: {},
@@ -489,8 +494,120 @@ class XLSX {
       pivotTableRels: {},
       pivotCacheDefinitions: {},
       pivotCacheDefinitionRels: {},
-      pivotCacheRecords: {}
+      pivotCacheRecords: {},
+      // Passthrough storage for unknown/unsupported files (charts, etc.)
+      passthrough: {} as Record<string, Uint8Array>
     };
+  }
+
+  /**
+   * Collect all data from a stream into a single Uint8Array.
+   * Reusable helper for passthrough and drawing processing.
+   */
+  protected async collectStreamData(stream: IParseStream): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    await new Promise<void>((resolve, reject) => {
+      stream.on("data", (chunk: any) => {
+        if (typeof chunk === "string") {
+          chunks.push(new TextEncoder().encode(chunk));
+        } else if (chunk instanceof Uint8Array) {
+          chunks.push(chunk);
+        } else {
+          chunks.push(new Uint8Array(chunk));
+        }
+      });
+      stream.on("end", () => resolve());
+      stream.on("error", reject);
+    });
+    return concatUint8Arrays(chunks);
+  }
+
+  /**
+   * Check if a drawing has chart references in its relationships
+   */
+  private drawingHasChartReference(drawing: any): boolean {
+    return (
+      drawing.rels && drawing.rels.some((rel: any) => rel.Target && rel.Target.includes("/charts/"))
+    );
+  }
+
+  /**
+   * Check if a drawing rels list references charts.
+   * Used to decide whether we need to keep raw drawing XML for passthrough.
+   */
+  private drawingRelsHasChartReference(drawingRels: any[] | undefined): boolean {
+    return (
+      Array.isArray(drawingRels) &&
+      drawingRels.some(rel => typeof rel?.Target === "string" && rel.Target.includes("/charts/"))
+    );
+  }
+
+  /**
+   * Process a known OOXML entry (workbook, styles, shared strings, etc.)
+   * Returns true if handled, false if should be passed to _processDefaultEntry
+   */
+  protected async _processKnownEntry(
+    stream: IParseStream,
+    model: any,
+    entryName: string,
+    options?: XlsxOptions
+  ): Promise<boolean> {
+    const sheetNo = getWorksheetNoFromWorksheetPath(entryName);
+    if (sheetNo !== undefined) {
+      await this._processWorksheetEntry(stream, model, sheetNo, options, entryName);
+      return true;
+    }
+
+    switch (entryName) {
+      case OOXML_PATHS.rootRels:
+        model.globalRels = await this.parseRels(stream);
+        return true;
+      case OOXML_PATHS.xlWorkbook: {
+        const workbook = await this.parseWorkbook(stream);
+        model.sheets = workbook.sheets;
+        model.definedNames = workbook.definedNames;
+        model.views = workbook.views;
+        model.properties = workbook.properties;
+        model.calcProperties = workbook.calcProperties;
+        model.pivotCaches = workbook.pivotCaches;
+        return true;
+      }
+      case OOXML_PATHS.xlSharedStrings:
+        model.sharedStrings = new SharedStringsXform();
+        await model.sharedStrings.parseStream(stream);
+        return true;
+      case OOXML_PATHS.xlWorkbookRels:
+        model.workbookRels = await this.parseRels(stream);
+        return true;
+      case OOXML_PATHS.docPropsApp: {
+        const appXform = new AppXform();
+        const appProperties = await appXform.parseStream(stream);
+        if (appProperties) {
+          model.company = appProperties.company;
+          model.manager = appProperties.manager;
+        }
+        return true;
+      }
+      case OOXML_PATHS.docPropsCore: {
+        const coreXform = new CoreXform();
+        const coreProperties = await coreXform.parseStream(stream);
+        Object.assign(model, coreProperties);
+        return true;
+      }
+      case OOXML_PATHS.xlStyles:
+        model.styles = new StylesXform();
+        await model.styles.parseStream(stream);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  protected async loadFromZipEntries(
+    entries: AsyncIterable<ZipEntryLike>,
+    options?: XlsxOptions
+  ): Promise<any> {
+    const model: any = this.createEmptyModel();
 
     for await (const entry of entries) {
       let drained = false;
@@ -508,62 +625,15 @@ class XLSX {
       }
 
       const entryName = normalizeZipPath(entry.name);
-
       const stream = entry.stream;
-      try {
-        const sheetNo = getWorksheetNoFromWorksheetPath(entryName);
-        if (sheetNo !== undefined) {
-          await this._processWorksheetEntry(stream, model, sheetNo, options, entryName);
-          continue;
-        }
 
-        switch (entryName) {
-          case OOXML_PATHS.rootRels:
-            model.globalRels = await this.parseRels(stream);
-            break;
-          case OOXML_PATHS.xlWorkbook: {
-            const workbook = await this.parseWorkbook(stream);
-            model.sheets = workbook.sheets;
-            model.definedNames = workbook.definedNames;
-            model.views = workbook.views;
-            model.properties = workbook.properties;
-            model.calcProperties = workbook.calcProperties;
-            model.pivotCaches = workbook.pivotCaches;
-            break;
-          }
-          case OOXML_PATHS.xlSharedStrings:
-            model.sharedStrings = new SharedStringsXform();
-            await model.sharedStrings.parseStream(stream);
-            break;
-          case OOXML_PATHS.xlWorkbookRels:
-            model.workbookRels = await this.parseRels(stream);
-            break;
-          case OOXML_PATHS.docPropsApp: {
-            const appXform = new AppXform();
-            const appProperties = await appXform.parseStream(stream);
-            if (appProperties) {
-              model.company = appProperties.company;
-              model.manager = appProperties.manager;
-            }
-            break;
-          }
-          case OOXML_PATHS.docPropsCore: {
-            const coreXform = new CoreXform();
-            const coreProperties = await coreXform.parseStream(stream);
-            Object.assign(model, coreProperties);
-            break;
-          }
-          case OOXML_PATHS.xlStyles:
-            model.styles = new StylesXform();
-            await model.styles.parseStream(stream);
-            break;
-          default: {
-            const handled = await this._processDefaultEntry(stream, model, entryName);
-            if (!handled) {
-              // Important for true streaming parsers: always consume unknown entries
-              await drainEntry();
-            }
-            break;
+      try {
+        const handled = await this._processKnownEntry(stream, model, entryName, options);
+        if (!handled) {
+          const defaultHandled = await this._processDefaultEntry(stream, model, entryName);
+          if (!defaultHandled) {
+            // Important for true streaming parsers: always consume unknown entries
+            await drainEntry();
           }
         }
       } finally {
@@ -701,6 +771,16 @@ class XLSX {
       }
     });
 
+    // Trim raw drawings for non-chart drawings to avoid bloating the serialized workbook model.
+    if (model.rawDrawings && model.drawingRels) {
+      for (const name of Object.keys(model.rawDrawings)) {
+        const drawingRel = model.drawingRels[name];
+        if (drawingRel && !this.drawingRelsHasChartReference(drawingRel)) {
+          delete model.rawDrawings[name];
+        }
+      }
+    }
+
     // reconcile tables with the default styles
     const tableOptions = {
       styles: model.styles
@@ -719,6 +799,7 @@ class XLSX {
       mediaIndex: model.mediaIndex,
       date1904: model.properties && model.properties.date1904,
       drawings: model.drawings,
+      drawingRels: model.drawingRels,
       comments: model.comments,
       tables: model.tables,
       vmlDrawings: model.vmlDrawings,
@@ -941,9 +1022,17 @@ class XLSX {
   }
 
   async _processDrawingEntry(entry: any, model: any, name: string): Promise<void> {
+    // Collect raw data first so we can preserve drawings that reference charts.
+    const rawData = await this.collectStreamData(entry);
+
+    // Parse the drawing for normal processing (images, etc.)
     const xform = new DrawingXform();
-    const drawing = await xform.parseStream(entry);
+    const xmlString = this.bufferToString(rawData);
+    const drawing = await xform.parseStream(this.createTextStream(xmlString));
     model.drawings[name] = drawing;
+
+    // Store raw data; reconcile() may later drop it if charts are not referenced.
+    model.rawDrawings[name] = rawData;
   }
 
   async _processDrawingRelsEntry(entry: any, model: any, name: string): Promise<void> {
@@ -1044,24 +1133,7 @@ class XLSX {
   // ===========================================================================
 
   async loadFromFiles(zipData: Record<string, Uint8Array>, options?: any): Promise<any> {
-    const model: any = {
-      worksheets: [],
-      worksheetHash: {},
-      worksheetRels: [],
-      themes: {},
-      media: [],
-      mediaIndex: {},
-      drawings: {},
-      drawingRels: {},
-      comments: {},
-      tables: {},
-      vmlDrawings: {},
-      pivotTables: {},
-      pivotTableRels: {},
-      pivotCacheDefinitions: {},
-      pivotCacheDefinitionRels: {},
-      pivotCacheRecords: {}
-    };
+    const model: any = this.createEmptyModel();
 
     const entries = Object.keys(zipData).map(name => ({
       name,
@@ -1079,53 +1151,10 @@ class XLSX {
           ? this.createBinaryStream(entry.data)
           : this.createTextStream(this.bufferToString(entry.data));
 
-        const sheetNo = getWorksheetNoFromWorksheetPath(entryName);
-        if (sheetNo !== undefined) {
-          await this._processWorksheetEntry(stream, model, sheetNo, options, entryName);
-        } else {
-          switch (entryName) {
-            case OOXML_PATHS.rootRels:
-              model.globalRels = await this.parseRels(stream);
-              break;
-            case OOXML_PATHS.xlWorkbook: {
-              const workbook = await this.parseWorkbook(stream);
-              model.sheets = workbook.sheets;
-              model.definedNames = workbook.definedNames;
-              model.views = workbook.views;
-              model.properties = workbook.properties;
-              model.calcProperties = workbook.calcProperties;
-              model.pivotCaches = workbook.pivotCaches;
-              break;
-            }
-            case OOXML_PATHS.xlSharedStrings:
-              model.sharedStrings = new SharedStringsXform();
-              await model.sharedStrings.parseStream(stream);
-              break;
-            case OOXML_PATHS.xlWorkbookRels:
-              model.workbookRels = await this.parseRels(stream);
-              break;
-            case OOXML_PATHS.docPropsApp: {
-              const appXform = new AppXform();
-              const appProperties = await appXform.parseStream(stream);
-              if (appProperties) {
-                model.company = appProperties.company;
-                model.manager = appProperties.manager;
-              }
-              break;
-            }
-            case OOXML_PATHS.docPropsCore: {
-              const coreXform = new CoreXform();
-              const coreProperties = await coreXform.parseStream(stream);
-              Object.assign(model, coreProperties);
-              break;
-            }
-            case OOXML_PATHS.xlStyles:
-              model.styles = new StylesXform();
-              await model.styles.parseStream(stream);
-              break;
-            default:
-              await this._processDefaultEntry(stream, model, entryName);
-          }
+        const handled = await this._processKnownEntry(stream, model, entryName, options);
+        if (!handled) {
+          // Pass raw entry data for drawings to enable passthrough
+          await this._processDefaultEntry(stream, model, entryName, entry.data);
         }
       }
     }
@@ -1137,15 +1166,16 @@ class XLSX {
 
   /**
    * Process default entries (drawings, comments, tables, etc.)
+   * @param rawData Optional raw entry data for passthrough preservation (used by loadFromFiles)
    */
   protected async _processDefaultEntry(
     stream: IParseStream,
     model: any,
-    entryName: string
+    entryName: string,
+    rawData?: Uint8Array
   ): Promise<boolean> {
-    const worksheetRelsSheetNo = getWorksheetNoFromWorksheetRelsPath(entryName);
-    if (worksheetRelsSheetNo !== undefined) {
-      const sheetNo = worksheetRelsSheetNo;
+    const sheetNo = getWorksheetNoFromWorksheetRelsPath(entryName);
+    if (sheetNo !== undefined) {
       await this._processWorksheetRelsEntry(stream, model, sheetNo);
       return true;
     }
@@ -1159,6 +1189,10 @@ class XLSX {
     const drawingName = getDrawingNameFromPath(entryName);
     if (drawingName) {
       await this._processDrawingEntry(stream, model, drawingName);
+      // For loadFromFiles path, store raw data for passthrough (drawings with charts)
+      if (rawData) {
+        model.rawDrawings[drawingName] = rawData;
+      }
       return true;
     }
 
@@ -1224,7 +1258,31 @@ class XLSX {
       return true;
     }
 
+    // Store passthrough files (charts, etc.) for preservation
+    if (PassthroughManager.isPassthroughPath(entryName)) {
+      // If raw data is available (loadFromFiles path), use it directly
+      if (rawData) {
+        model.passthrough[entryName] = rawData;
+      } else {
+        await this._processPassthroughEntry(stream, model, entryName);
+      }
+      return true;
+    }
+
     return false;
+  }
+
+  /**
+   * Store a passthrough file for preservation during read/write cycles.
+   * These files are not parsed but stored as raw bytes to be written back unchanged.
+   */
+  async _processPassthroughEntry(
+    stream: IParseStream,
+    model: any,
+    entryName: string
+  ): Promise<void> {
+    const data = await this.collectStreamData(stream);
+    model.passthrough[entryName] = data;
   }
 
   // ===========================================================================
@@ -1388,16 +1446,48 @@ class XLSX {
   addDrawings(zip: IZipWriter, model: any): void {
     const drawingXform = new DrawingXform();
     const relsXform = new RelationshipsXform();
+    const rawDrawings = model.rawDrawings || {};
 
     model.worksheets.forEach((worksheet: any) => {
       const { drawing } = worksheet;
       if (drawing) {
-        drawingXform.prepare(drawing);
-        let xml = drawingXform.toXml(drawing);
-        zip.append(xml, { name: drawingPath(drawing.name) });
+        // Check if drawing rels contain chart references using helper
+        const hasChartReference = this.drawingHasChartReference(drawing);
 
-        xml = relsXform.toXml(drawing.rels);
-        zip.append(xml, { name: drawingRelsPath(drawing.name) });
+        if (hasChartReference && rawDrawings[drawing.name]) {
+          // Use raw data for drawings with chart references (passthrough)
+          zip.append(rawDrawings[drawing.name], { name: drawingPath(drawing.name) });
+        } else {
+          // Use regenerated XML for normal drawings (images, shapes)
+          // Filter out invalid anchors (null, undefined, or missing content)
+          const filteredAnchors = (drawing.anchors || []).filter((a: any) => {
+            if (a == null) {
+              return false;
+            }
+            // Form controls have range.br and shape properties
+            if (a.range?.br && a.shape) {
+              return true;
+            }
+            // One-cell anchors need a valid picture
+            if (!a.br && !a.picture) {
+              return false;
+            }
+            // Two-cell anchors need either picture or shape
+            if (a.br && !a.picture && !a.shape) {
+              return false;
+            }
+            return true;
+          });
+          const drawingForWrite = drawing.anchors
+            ? { ...drawing, anchors: filteredAnchors }
+            : drawing;
+          drawingXform.prepare(drawingForWrite);
+          const xml = drawingXform.toXml(drawingForWrite);
+          zip.append(xml, { name: drawingPath(drawing.name) });
+        }
+
+        const relsXml = relsXform.toXml(drawing.rels);
+        zip.append(relsXml, { name: drawingRelsPath(drawing.name) });
       }
     });
   }
@@ -1413,6 +1503,16 @@ class XLSX {
         zip.append(tableXml, { name: tablePath(table.target) });
       });
     });
+  }
+
+  /**
+   * Write passthrough files (charts, etc.) that were preserved during read.
+   * These files are written back unchanged to preserve unsupported features.
+   */
+  addPassthrough(zip: IZipWriter, model: any): void {
+    const passthroughManager = new PassthroughManager();
+    passthroughManager.fromRecord(model.passthrough || {});
+    passthroughManager.writeToZip(zip);
   }
 
   addPivotTables(zip: IZipWriter, model: any): void {
@@ -1522,6 +1622,12 @@ class XLSX {
 
     // ContentTypesXform expects this flag
     model.hasCheckboxes = model.styles.hasCheckboxes;
+
+    // Build passthroughContentTypes for ContentTypesXform using PassthroughManager
+    const passthrough = model.passthrough || {};
+    const passthroughManager = new PassthroughManager();
+    passthroughManager.fromRecord(passthrough);
+    model.passthroughContentTypes = passthroughManager.getContentTypes();
   }
 }
 
