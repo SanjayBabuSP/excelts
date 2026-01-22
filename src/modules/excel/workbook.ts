@@ -69,6 +69,10 @@ export interface WorkbookModel {
   /** Loaded pivot tables from file - used during reconciliation */
   loadedPivotTables?: any[];
   calcProperties: Partial<CalculationProperties>;
+  /** Passthrough files (charts, etc.) preserved for round-trip */
+  passthrough?: Record<string, Uint8Array>;
+  /** Raw drawing XML data for passthrough (when drawing contains chart references) */
+  rawDrawings?: Record<string, Uint8Array>;
 }
 
 // =============================================================================
@@ -133,6 +137,10 @@ class Workbook {
   declare private _worksheets: Worksheet[];
   declare private _definedNames: DefinedNames;
   declare private _themes?: unknown;
+  /** Passthrough files (charts, etc.) preserved for round-trip */
+  declare private _passthrough: Record<string, Uint8Array>;
+  /** Raw drawing XML data for passthrough (when drawing contains chart references) */
+  declare private _rawDrawings: Record<string, Uint8Array>;
   private _xlsx?: XLSX;
   private _csv?: CSV;
 
@@ -156,6 +164,8 @@ class Workbook {
     this.views = [];
     this.media = [];
     this.pivotTables = [];
+    this._passthrough = {};
+    this._rawDrawings = {};
     this._definedNames = new DefinedNames();
   }
 
@@ -401,7 +411,9 @@ class Workbook {
       themes: this._themes,
       media: this.media,
       pivotTables: this.pivotTables,
-      calcProperties: this.calcProperties
+      calcProperties: this.calcProperties,
+      passthrough: this._passthrough,
+      rawDrawings: this._rawDrawings
     };
   }
 
@@ -446,6 +458,11 @@ class Workbook {
     // Handle pivot tables - either newly created or loaded from file
     // Loaded pivot tables come from loadedPivotTables after reconciliation
     this.pivotTables = value.pivotTables || value.loadedPivotTables || [];
+
+    // Preserve passthrough files (charts, etc.) for round-trip preservation
+    this._passthrough = value.passthrough || {};
+    // Preserve raw drawing data for drawings with chart references
+    this._rawDrawings = value.rawDrawings || {};
   }
 }
 

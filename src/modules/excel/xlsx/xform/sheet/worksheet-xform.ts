@@ -226,6 +226,24 @@ class WorkSheetXform extends BaseXform {
       });
     }
 
+    // Handle pre-loaded drawing (from file read) that may contain charts or other non-image content
+    // This preserves drawings through round-trip even if they don't contain images
+    // Note: Always assign a new rId since rels are rebuilt during write
+    if (model.drawing && model.drawing.anchors) {
+      // This is a loaded drawing that needs to be added to relationships
+      const drawing = model.drawing;
+      drawing.rId = nextRid(rels);
+      if (!drawing.name) {
+        drawing.name = `drawing${++options.drawingsCount}`;
+      }
+      options.drawings.push(drawing);
+      rels.push({
+        Id: drawing.rId,
+        Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+        Target: drawingRelTargetFromWorksheet(drawing.name)
+      });
+    }
+
     const drawingRelsHash = [];
     let bookImage;
     model.media.forEach(medium => {
@@ -681,17 +699,28 @@ class WorkSheetXform extends BaseXform {
       if (match) {
         const drawingName = match[1];
         const drawing = options.drawings[drawingName];
-        drawing.anchors.forEach(anchor => {
-          if (anchor.medium) {
-            const image = {
-              type: "image",
-              imageId: anchor.medium.index,
-              range: anchor.range,
-              hyperlinks: anchor.picture.hyperlinks
-            };
-            model.media.push(image);
-          }
-        });
+        if (drawing) {
+          // Preserve the drawing object for round-trip (charts, etc.)
+          // This includes the name, anchors, and rels
+          model.drawing = {
+            ...drawing,
+            name: drawingName,
+            rels: options.drawingRels?.[drawingName] || drawing.rels || []
+          };
+
+          // Also extract images to model.media for backward compatibility
+          drawing.anchors.forEach(anchor => {
+            if (anchor.medium) {
+              const image = {
+                type: "image",
+                imageId: anchor.medium.index,
+                range: anchor.range,
+                hyperlinks: anchor.picture.hyperlinks
+              };
+              model.media.push(image);
+            }
+          });
+        }
       }
     }
 

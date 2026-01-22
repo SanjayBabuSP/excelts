@@ -119,12 +119,17 @@ class ContentTypesXform extends BaseXform {
       });
     }
 
-    if (model.commentRefs) {
+    // VML extension is needed for comments or form controls
+    const hasComments = model.commentRefs && model.commentRefs.length > 0;
+    const hasFormControls = model.formControlRefs && model.formControlRefs.length > 0;
+    if (hasComments || hasFormControls) {
       xmlStream.leafNode("Default", {
         Extension: "vml",
         ContentType: "application/vnd.openxmlformats-officedocument.vmlDrawing"
       });
+    }
 
+    if (hasComments) {
       model.commentRefs.forEach(({ commentName }: { commentName: string }) => {
         xmlStream.leafNode("Override", {
           PartName: toContentTypesPartName(commentsPathFromName(commentName)),
@@ -133,20 +138,21 @@ class ContentTypesXform extends BaseXform {
       });
     }
 
-    // Add form control (ctrlProps) content types
-    if (model.formControlRefs) {
-      // Ensure vml extension is declared (may already be declared for comments)
-      if (!model.commentRefs) {
-        xmlStream.leafNode("Default", {
-          Extension: "vml",
-          ContentType: "application/vnd.openxmlformats-officedocument.vmlDrawing"
-        });
-      }
-
+    if (hasFormControls) {
       for (const ctrlPropId of model.formControlRefs) {
         xmlStream.leafNode("Override", {
           PartName: toContentTypesPartName(ctrlPropPath(ctrlPropId)),
           ContentType: "application/vnd.ms-excel.controlproperties+xml"
+        });
+      }
+    }
+
+    // Add passthrough content types (charts, etc.)
+    if (model.passthroughContentTypes) {
+      for (const { partName, contentType } of model.passthroughContentTypes) {
+        xmlStream.leafNode("Override", {
+          PartName: toContentTypesPartName(partName),
+          ContentType: contentType
         });
       }
     }

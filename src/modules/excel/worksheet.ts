@@ -139,6 +139,8 @@ interface WorksheetModel {
   dimensions?: Range;
   merges?: string[];
   mergeCells?: string[];
+  /** Loaded drawing data (for charts, etc.) - preserved for round-trip */
+  drawing?: any;
 }
 
 // Worksheet requirements
@@ -173,6 +175,8 @@ class Worksheet {
   declare public conditionalFormattings: ConditionalFormattingOptions[];
   declare public formControls: FormCheckbox[];
   declare private _headerRowCount?: number;
+  /** Loaded drawing data (for charts, etc.) - preserved for round-trip */
+  declare private _drawing: any;
 
   constructor(options: WorksheetOptions) {
     options = options || {};
@@ -1204,7 +1208,8 @@ class Worksheet {
       tables: Object.values(this.tables).map(table => table.model),
       pivotTables: this.pivotTables,
       conditionalFormattings: this.conditionalFormattings,
-      formControls: this.formControls.map(fc => fc.model)
+      formControls: this.formControls.map(fc => fc.model),
+      drawing: this._drawing
     };
 
     // =================================================
@@ -1280,6 +1285,8 @@ class Worksheet {
     this.conditionalFormattings = value.conditionalFormattings;
     // Form controls are currently write-only (not parsed from XLSX)
     this.formControls = [];
+    // Preserve loaded drawing data (charts, etc.)
+    this._drawing = value.drawing;
   }
 }
 
