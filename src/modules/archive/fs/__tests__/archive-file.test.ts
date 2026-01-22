@@ -441,4 +441,132 @@ describe("ArchiveFile", () => {
       expect(archive.entryCount).toBe(2);
     });
   });
+
+  describe("Streaming", () => {
+    it("should stream ZIP archive chunks", async () => {
+      const archive = new ArchiveFile();
+      archive.addText("Hello, World!", "hello.txt");
+      archive.addText("Goodbye, World!", "goodbye.txt");
+
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of archive.stream()) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.length).toBeGreaterThan(0);
+
+      // Verify the output is valid ZIP
+      const combined = new Uint8Array(chunks.reduce((sum, c) => sum + c.length, 0));
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const reader = ArchiveFile.fromBuffer(combined);
+      const entries = reader.getEntriesSync();
+      expect(entries.length).toBe(2);
+    });
+
+    it("should stream TAR archive chunks", async () => {
+      const archive = new ArchiveFile({ format: "tar" });
+      archive.addText("Hello, World!", "hello.txt");
+      archive.addText("Goodbye, World!", "goodbye.txt");
+
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of archive.stream()) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.length).toBeGreaterThan(0);
+
+      // Verify the output is valid TAR
+      const combined = new Uint8Array(chunks.reduce((sum, c) => sum + c.length, 0));
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const reader = ArchiveFile.fromBuffer(combined, { format: "tar" });
+      const entries = await reader.getEntries();
+      expect(entries.length).toBe(2);
+    });
+
+    it("should report progress during streaming", async () => {
+      const archive = new ArchiveFile();
+      archive.addText("File 1 content", "file1.txt");
+      archive.addText("File 2 content", "file2.txt");
+
+      const progressUpdates: number[] = [];
+      const op = archive.operation({
+        onProgress: (p) => {
+          progressUpdates.push(p.entriesDone);
+        }
+      });
+
+      for await (const _ of op.iterable) {
+        // Consume chunks
+      }
+
+      // Should have received progress updates
+      expect(progressUpdates.length).toBeGreaterThan(0);
+    });
+
+    it("should streamToFile write directly to disk", async () => {
+      const archive = new ArchiveFile();
+      archive.addText("Hello, World!", "hello.txt");
+      archive.addText("Goodbye, World!", "goodbye.txt");
+
+      const zipPath = path.join(testDir, "streamed.zip");
+      await archive.streamToFile(zipPath);
+
+      expect(fs.existsSync(zipPath)).toBe(true);
+
+      // Verify the file is valid
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const entries = await reader.getEntries();
+      expect(entries.length).toBe(2);
+    });
+
+    it("should pipeTo write to a WritableStream", async () => {
+      const archive = new ArchiveFile();
+      archive.addText("Hello, World!", "hello.txt");
+
+      const zipPath = path.join(testDir, "piped.zip");
+      const writeStream = fs.createWriteStream(zipPath);
+
+      await archive.pipeTo(writeStream);
+
+      expect(fs.existsSync(zipPath)).toBe(true);
+
+      // Verify the file is valid
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const entries = await reader.getEntries();
+      expect(entries.length).toBe(1);
+    });
+
+    it("should stream with file inputs using createReadStream internally", async () => {
+      // Create a test file
+      const testFilePath = path.join(testDir, "input.txt");
+      await fs.promises.writeFile(testFilePath, "This is test file content");
+
+      const archive = new ArchiveFile();
+      archive.addFile(testFilePath, { name: "streamed-input.txt" });
+
+      const zipPath = path.join(testDir, "file-streamed.zip");
+      await archive.streamToFile(zipPath);
+
+      expect(fs.existsSync(zipPath)).toBe(true);
+
+      // Verify the file is valid and contains the right content
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const entries = await reader.getEntries();
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toBe("streamed-input.txt");
+
+      const content = await reader.readAsText("streamed-input.txt");
+      expect(content).toBe("This is test file content");
+    });
+  });
 });

@@ -169,6 +169,76 @@ export interface AddGlobOptions {
 }
 
 // =============================================================================
+// Streaming Options
+// =============================================================================
+
+/**
+ * Progress phase for archive streaming operations.
+ */
+export type ArchiveStreamPhase = "running" | "done" | "aborted" | "error";
+
+/**
+ * Progress information during archive streaming.
+ */
+export interface ArchiveStreamProgress {
+  /** Operation phase */
+  phase: ArchiveStreamPhase;
+
+  /** Total number of entries to process */
+  entriesTotal: number;
+
+  /** Number of entries processed so far */
+  entriesDone: number;
+
+  /** Total bytes read from input sources */
+  bytesIn: number;
+
+  /** Total bytes written to output */
+  bytesOut: number;
+
+  /** Current entry being processed */
+  currentEntry?: {
+    name: string;
+    index: number;
+    bytesIn: number;
+  };
+}
+
+/**
+ * Options for streaming archive creation.
+ */
+export interface ArchiveStreamOptions {
+  /** Abort signal for cancellation */
+  signal?: AbortSignal;
+
+  /** Progress callback */
+  onProgress?: (progress: ArchiveStreamProgress) => void;
+
+  /** Throttle progress callbacks (ms); 0 emits on the next microtask */
+  progressIntervalMs?: number;
+}
+
+/**
+ * Operation handle for streaming archive creation.
+ */
+export interface ArchiveStreamOperation {
+  /** Async iterable of archive output chunks */
+  iterable: AsyncIterable<Uint8Array>;
+
+  /** Abort signal linked to this operation */
+  signal: AbortSignal;
+
+  /** Abort the operation */
+  abort(reason?: unknown): void;
+
+  /** Returns bytes written so far */
+  pointer(): number;
+
+  /** Latest progress snapshot */
+  progress(): ArchiveStreamProgress;
+}
+
+// =============================================================================
 // Extract Options
 // =============================================================================
 

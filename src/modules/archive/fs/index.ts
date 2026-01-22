@@ -88,8 +88,18 @@ export type {
   ArchiveFileOptionsTar,
   OpenArchiveOptions,
   OpenArchiveOptionsZip,
-  OpenArchiveOptionsTar
+  OpenArchiveOptionsTar,
+  // Streaming types
+  ArchiveStreamOptions,
+  ArchiveStreamProgress,
+  ArchiveStreamOperation,
+  ArchiveStreamPhase,
+  // Warning types
+  ArchiveWarning
 } from "./types";
+
+// Re-export ArchiveSink for pipeTo() usage
+export type { ArchiveSink } from "@archive/io/archive-sink";
 
 // File system utilities (for advanced users)
 export {
