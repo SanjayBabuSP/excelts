@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { ArchiveFile } from "../archive-file";
+import { ArchiveFile } from "../archive-file.js";
 
 describe("ArchiveFile", () => {
   let testDir: string;
@@ -304,6 +304,27 @@ describe("ArchiveFile", () => {
       expect(content1).toBe("content1");
     });
 
+    it("should emit onWarning for non-writable target (ZIP)", async () => {
+      const archive = new ArchiveFile();
+      archive.addText("content", "file.txt");
+
+      const zipPath = path.join(testDir, "test.zip");
+      await archive.writeToFile(zipPath);
+
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const extractDir = path.join(testDir, "extracted-ro");
+      await fs.promises.mkdir(extractDir, { recursive: true });
+      await fs.promises.chmod(extractDir, 0o555);
+
+      const warnings: any[] = [];
+      await reader.extractTo(extractDir, {
+        onWarning: w => warnings.push(w)
+      });
+
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(extractDir, "file.txt"))).toBe(false);
+    });
+
     it("should extract TAR to directory", async () => {
       const archive = new ArchiveFile({ format: "tar" });
       archive.addText("content1", "file1.txt");
@@ -321,6 +342,48 @@ describe("ArchiveFile", () => {
 
       const content1 = await fs.promises.readFile(path.join(extractDir, "file1.txt"), "utf-8");
       expect(content1).toBe("content1");
+    });
+
+    it("should report onProgress during TAR extraction", async () => {
+      const archive = new ArchiveFile({ format: "tar" });
+      archive.addText("content1", "file1.txt");
+      archive.addText("content2", "subdir/file2.txt");
+
+      const tarPath = path.join(testDir, "test.tar");
+      await archive.writeToFile(tarPath);
+
+      const reader = await ArchiveFile.fromFile(tarPath, { format: "tar" });
+      const extractDir = path.join(testDir, "extracted-progress");
+
+      const progress: any[] = [];
+      await reader.extractTo(extractDir, {
+        onProgress: p => progress.push(p)
+      });
+
+      expect(progress.length).toBeGreaterThan(0);
+      expect(progress.at(-1)?.extractedEntries).toBe(2);
+      expect(fs.existsSync(path.join(extractDir, "subdir/file2.txt"))).toBe(true);
+    });
+
+    it("should emit onWarning for non-writable target (TAR)", async () => {
+      const archive = new ArchiveFile({ format: "tar" });
+      archive.addText("content", "file.txt");
+
+      const tarPath = path.join(testDir, "test.tar");
+      await archive.writeToFile(tarPath);
+
+      const reader = await ArchiveFile.fromFile(tarPath, { format: "tar" });
+      const extractDir = path.join(testDir, "extracted-ro-tar");
+      await fs.promises.mkdir(extractDir, { recursive: true });
+      await fs.promises.chmod(extractDir, 0o555);
+
+      const warnings: any[] = [];
+      await reader.extractTo(extractDir, {
+        onWarning: w => warnings.push(w)
+      });
+
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(extractDir, "file.txt"))).toBe(false);
     });
   });
 

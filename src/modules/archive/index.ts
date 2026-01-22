@@ -79,6 +79,9 @@ export {
 // Node.js file system convenience layer
 export * from "@archive/fs";
 
+// Node stream adapter helpers
+export { toNodeReadable } from "@archive/io/archive-source.node";
+
 // TAR + Gzip support (Node.js only - requires zlib)
 export {
   TarGzArchive,

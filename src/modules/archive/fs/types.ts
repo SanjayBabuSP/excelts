@@ -193,6 +193,26 @@ export interface ExtractToOptions {
 
   /** Progress callback */
   onProgress?: (info: ExtractProgress) => void;
+
+  /** Warning callback (non-fatal errors / skips). */
+  onWarning?: (warning: ArchiveWarning) => void;
+}
+
+export interface ArchiveWarning {
+  /** Operation that emitted the warning. */
+  operation: "extract";
+
+  /** Entry path within the archive, if applicable. */
+  entryPath?: string;
+
+  /** Resolved target path on disk, if applicable. */
+  targetPath?: string;
+
+  /** Human-readable message. */
+  message: string;
+
+  /** Original error object (if any). */
+  error?: unknown;
 }
 
 /**

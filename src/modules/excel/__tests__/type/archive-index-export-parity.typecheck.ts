@@ -48,6 +48,7 @@ type NonClassKeys<T> = Exclude<keyof T, ClassKeys<T>>;
 // Node-only exports (file system convenience layer + gzip support)
 type NodeOnlyClassExports = "ArchiveFile" | "TarGzArchive";
 type NodeOnlyNonClassExports =
+  | "toNodeReadable"
   | "traverseDirectory"
   | "traverseDirectorySync"
   | "glob"

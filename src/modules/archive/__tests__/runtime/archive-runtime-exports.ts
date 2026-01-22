@@ -2,6 +2,10 @@
  * Core archive exports available in all environments (Node.js + browser)
  */
 export const ARCHIVE_BROWSER_EXPORTS = [
+  // ArchiveSource adapters
+  "toAsyncIterable",
+  "toReadableStream",
+
   // CRC32
   "crc32",
   "crc32Update",
@@ -150,6 +154,9 @@ export const ARCHIVE_BROWSER_EXPORTS = [
  * File system convenience layer exports (Node.js only)
  */
 export const ARCHIVE_NODE_EXPORTS = [
+  // Node stream adapter
+  "toNodeReadable",
+
   "ArchiveFile",
   "traverseDirectory",
   "traverseDirectorySync",

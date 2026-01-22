@@ -11,6 +11,38 @@ export type ArchiveSource =
   | ReadableStream<unknown>
   | { [Symbol.asyncIterator](): AsyncIterator<unknown> };
 
+/**
+ * Convert an ArchiveSource to a web ReadableStream of Uint8Array chunks.
+ *
+ * This is a convenience adapter for environments where consumers expect
+ * `ReadableStream` instead of `AsyncIterable`.
+ */
+export function toReadableStream(
+  source: ArchiveSource,
+  options: { signal?: AbortSignal } = {}
+): ReadableStream<Uint8Array> {
+  const iterable = toAsyncIterable(source, options);
+  const iterator = iterable[Symbol.asyncIterator]();
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { value, done } = await iterator.next();
+      if (done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(value);
+    },
+    async cancel() {
+      try {
+        await iterator.return?.();
+      } catch {
+        // ignore
+      }
+    }
+  });
+}
+
 export function isInMemoryArchiveSource(
   source: ArchiveSource
 ): source is Uint8Array | ArrayBuffer | string | Blob {

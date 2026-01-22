@@ -10,6 +10,8 @@
 export type { ArchiveSource } from "@archive/io/archive-source";
 export type { ArchiveSink } from "@archive/io/archive-sink";
 
+export { toAsyncIterable, toReadableStream } from "@archive/io/archive-source";
+
 // Random Access / HTTP Range reading
 export {
   HttpRangeReader,

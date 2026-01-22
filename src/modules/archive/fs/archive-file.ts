@@ -63,7 +63,8 @@ import type {
   ArchiveEntryInfo,
   ZipEntryInfo,
   ZipFileOptions,
-  OverwriteStrategy
+  OverwriteStrategy,
+  ArchiveWarning
 } from "./types";
 
 import {
@@ -238,6 +239,83 @@ function assertZipFormat(format: ArchiveFormat, methodName: string): asserts for
  */
 function throwTarSyncNotSupported(methodName: string): never {
   throw new Error(`${methodName} is not supported for TAR archives (use async version)`);
+}
+
+const DEFAULT_IO_CONCURRENCY = 8;
+
+function isIgnorableFsError(err: unknown): boolean {
+  const code = (err as any)?.code;
+  return code === "ENOENT" || code === "EACCES" || code === "EPERM";
+}
+
+type WarningCallback = ((warning: ArchiveWarning) => void) | undefined;
+
+function emitExtractWarning(
+  onWarning: WarningCallback,
+  entryPath: string,
+  targetPath: string,
+  err: unknown
+): void {
+  if (!onWarning) {
+    return;
+  }
+  const code = (err as any)?.code;
+  const message =
+    code != null
+      ? `Skipping extraction due to filesystem error (${String(code)})`
+      : "Skipping extraction due to filesystem error";
+  onWarning({ operation: "extract", entryPath, targetPath, message, error: err });
+}
+
+/**
+ * Try a filesystem operation, emit warning and return false if it's an ignorable error.
+ * Throws if the error is not ignorable.
+ */
+async function tryFsOpWithWarning(
+  fn: () => Promise<void>,
+  onWarning: WarningCallback,
+  entryPath: string,
+  targetPath: string
+): Promise<boolean> {
+  try {
+    await fn();
+    return true;
+  } catch (err) {
+    if (isIgnorableFsError(err)) {
+      emitExtractWarning(onWarning, entryPath, targetPath, err);
+      return false;
+    }
+    throw err;
+  }
+}
+
+async function processInOrderWithConcurrency<T>(
+  iterable: AsyncIterable<T> | Iterable<T>,
+  concurrency: number,
+  task: (item: T) => Promise<() => void>
+): Promise<void> {
+  const inFlight = new Map<number, Promise<() => void>>();
+  let index = 0;
+  let next = 0;
+
+  for await (const item of iterable as any) {
+    const current = index++;
+    inFlight.set(current, task(item));
+
+    while (inFlight.size >= concurrency) {
+      const apply = await inFlight.get(next)!;
+      inFlight.delete(next);
+      next++;
+      apply();
+    }
+  }
+
+  while (next < index) {
+    const apply = await inFlight.get(next)!;
+    inFlight.delete(next);
+    next++;
+    apply();
+  }
 }
 
 /** Default mode for TAR directories */
@@ -587,28 +665,36 @@ async function processZipPendingEntry(
         filter: wrapFilter(filter)
       });
 
-      // Handle both sync (Iterable) and async (AsyncIterable) traversal
-      for await (const entry of traverseResult) {
-        ctx.checkAbort?.();
+      await processInOrderWithConcurrency<FileEntry>(
+        traverseResult as any,
+        DEFAULT_IO_CONCURRENCY,
+        async (entry: FileEntry) => {
+          ctx.checkAbort?.();
+          const zipPath = joinZipPath(ctx.pathOptions, basePrefix, entry.relativePath);
 
-        const zipPath = joinZipPath(ctx.pathOptions, basePrefix, entry.relativePath);
+          if (entry.isDirectory) {
+            return () => {
+              ctx.entries.push(
+                buildDirectoryEntry(zipPath, entry, ctx.globalOptions, pending.options)
+              );
+            };
+          }
 
-        if (entry.isDirectory) {
-          ctx.entries.push(buildDirectoryEntry(zipPath, entry, ctx.globalOptions, pending.options));
-        } else {
           const data = await fsOps.readFile(entry.absolutePath);
-          ctx.entries.push(
-            buildZipEntry(zipPath, data, pending.options, ctx.globalOptions, ctx.globalPassword, {
-              modTime: entry.mtime,
-              mode: entry.mode,
-              atime: entry.atime,
-              ctime: entry.ctime,
-              birthTime: entry.birthTime
-            })
-          );
-          ctx.bytesWritten += data.length;
+          return () => {
+            ctx.entries.push(
+              buildZipEntry(zipPath, data, pending.options, ctx.globalOptions, ctx.globalPassword, {
+                modTime: entry.mtime,
+                mode: entry.mode,
+                atime: entry.atime,
+                ctime: entry.ctime,
+                birthTime: entry.birthTime
+              })
+            );
+            ctx.bytesWritten += data.length;
+          };
         }
-      }
+      );
       break;
     }
 
@@ -623,22 +709,27 @@ async function processZipPendingEntry(
         filter: wrapFilter(filter)
       });
 
-      for await (const entry of globResult) {
-        ctx.checkAbort?.();
-
-        const zipPath = joinZipPath(ctx.pathOptions, prefix ?? "", entry.relativePath);
-        const data = await fsOps.readFile(entry.absolutePath);
-        ctx.entries.push(
-          buildZipEntry(zipPath, data, pending.options, ctx.globalOptions, ctx.globalPassword, {
-            modTime: entry.mtime,
-            mode: entry.mode,
-            atime: entry.atime,
-            ctime: entry.ctime,
-            birthTime: entry.birthTime
-          })
-        );
-        ctx.bytesWritten += data.length;
-      }
+      await processInOrderWithConcurrency<FileEntry>(
+        globResult as any,
+        DEFAULT_IO_CONCURRENCY,
+        async (entry: FileEntry) => {
+          ctx.checkAbort?.();
+          const zipPath = joinZipPath(ctx.pathOptions, prefix ?? "", entry.relativePath);
+          const data = await fsOps.readFile(entry.absolutePath);
+          return () => {
+            ctx.entries.push(
+              buildZipEntry(zipPath, data, pending.options, ctx.globalOptions, ctx.globalPassword, {
+                modTime: entry.mtime,
+                mode: entry.mode,
+                atime: entry.atime,
+                ctime: entry.ctime,
+                birthTime: entry.birthTime
+              })
+            );
+            ctx.bytesWritten += data.length;
+          };
+        }
+      );
       break;
     }
   }
@@ -2109,7 +2200,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       preserveTimestamps = true,
       password,
       signal,
-      onProgress
+      onProgress,
+      onWarning
     } = options;
 
     const resolvedTarget = path.resolve(targetDir);
@@ -2133,25 +2225,69 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       assertNoPathTraversal(targetPath, resolvedTarget, entry.path);
 
       if (entry.isDirectory) {
-        await ensureDir(targetPath);
+        if (
+          !(await tryFsOpWithWarning(
+            () => ensureDir(targetPath),
+            onWarning,
+            entry.path,
+            targetPath
+          ))
+        ) {
+          continue;
+        }
       } else {
         // Check overwrite strategy
-        if (!(await shouldExtract(targetPath, entry.lastModified, overwrite))) {
+        let shouldWrite = false;
+        try {
+          shouldWrite = await shouldExtract(targetPath, entry.lastModified, overwrite);
+        } catch (err) {
+          if (isIgnorableFsError(err)) {
+            emitExtractWarning(onWarning, entry.path, targetPath, err);
+            continue;
+          }
+          throw err;
+        }
+
+        if (!shouldWrite) {
           continue;
         }
 
         // Ensure parent directory exists
-        await ensureDir(path.dirname(targetPath));
+        if (
+          !(await tryFsOpWithWarning(
+            () => ensureDir(path.dirname(targetPath)),
+            onWarning,
+            entry.path,
+            targetPath
+          ))
+        ) {
+          continue;
+        }
 
         // Extract
         const data = await this._zip_parser!.extract(entry.path, password ?? this._zip_password);
         if (data) {
-          await writeFileBytes(targetPath, data);
-          bytesWritten += data.length;
+          let writeSuccess = false;
+          try {
+            await writeFileBytes(targetPath, data);
+            bytesWritten += data.length;
+            writeSuccess = true;
+          } catch (err) {
+            if (isIgnorableFsError(err)) {
+              emitExtractWarning(onWarning, entry.path, targetPath, err);
+              continue;
+            }
+            throw err;
+          }
 
-          // Preserve timestamps
-          if (preserveTimestamps) {
-            await setFileTime(targetPath, entry.lastModified);
+          if (writeSuccess && preserveTimestamps) {
+            // Best effort timestamp; ignore ignorable errors
+            await tryFsOpWithWarning(
+              () => setFileTime(targetPath, entry.lastModified),
+              onWarning,
+              entry.path,
+              targetPath
+            );
           }
         }
       }
@@ -2284,28 +2420,61 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
 
       case "directory": {
         const filter = wrapFilter(entry.options.filter);
-        for await (const file of traverseDirectory(entry.localPath, {
+        const fileIterable = traverseDirectory(entry.localPath, {
           recursive: entry.options.recursive ?? true,
           followSymlinks: entry.options.followSymlinks,
           filter
-        })) {
-          await this._addTarFileEntry(archive, file, entry.options);
-        }
+        });
+
+        await processInOrderWithConcurrency<FileEntry>(
+          fileIterable as any,
+          DEFAULT_IO_CONCURRENCY,
+          async (file: FileEntry) => {
+            const tarPath = normalizeTarPath(file.relativePath, entry.options.prefix);
+
+            if (file.isDirectory) {
+              return () => {
+                archive.add(tarPath + "/", "", { mode: TAR_DIR_MODE });
+              };
+            }
+
+            const data = await readFileBytes(file.absolutePath);
+            return () => {
+              archive.add(tarPath, data, buildTarAddOptions(entry.options, file));
+            };
+          }
+        );
         break;
       }
 
       case "glob": {
         const cwd = entry.options.cwd ?? process.cwd();
         const filter = wrapFilter(entry.options.filter);
-        for await (const file of globFiles(entry.pattern, {
+        const fileIterable = globFiles(entry.pattern, {
           cwd,
           dot: entry.options.dot,
           followSymlinks: entry.options.followSymlinks,
           ignore: entry.options.ignore,
           filter
-        })) {
-          await this._addTarFileEntry(archive, file, entry.options);
-        }
+        });
+
+        await processInOrderWithConcurrency<FileEntry>(
+          fileIterable as any,
+          DEFAULT_IO_CONCURRENCY,
+          async (file: FileEntry) => {
+            const tarPath = normalizeTarPath(file.relativePath, entry.options.prefix);
+            if (file.isDirectory) {
+              return () => {
+                archive.add(tarPath + "/", "", { mode: TAR_DIR_MODE });
+              };
+            }
+
+            const data = await readFileBytes(file.absolutePath);
+            return () => {
+              archive.add(tarPath, data, buildTarAddOptions(entry.options, file));
+            };
+          }
+        );
         break;
       }
     }
@@ -2368,30 +2537,6 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
   }
 
   /**
-   * Add a file entry from directory/glob traversal to the TAR archive (async version).
-   */
-  private async _addTarFileEntry(
-    archive: TarArchive,
-    file: {
-      relativePath: string;
-      absolutePath: string;
-      isDirectory: boolean;
-      mode?: number;
-      mtime?: Date;
-    },
-    options: AddTarDirectoryOptions | AddTarGlobOptions
-  ): Promise<void> {
-    const tarPath = normalizeTarPath(file.relativePath, options.prefix);
-
-    if (file.isDirectory) {
-      archive.add(tarPath + "/", "", { mode: TAR_DIR_MODE });
-    } else {
-      const data = await readFileBytes(file.absolutePath);
-      archive.add(tarPath, data, buildTarAddOptions(options, file));
-    }
-  }
-
-  /**
    * Add a file entry from directory/glob traversal to the TAR archive (sync version).
    */
   private _addTarFileEntrySync(
@@ -2427,10 +2572,23 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     const reader = this._tarReader as TarReader;
     const resolvedTargetDir = path.resolve(targetDir);
     const overwrite = options.overwrite ?? "overwrite";
+    const filter = options.filter;
+    const preserveTimestamps = options.preserveTimestamps ?? true;
+    const signal = options.signal;
+    const onProgress = options.onProgress;
+    const onWarning = options.onWarning;
+
+    // TAR is streamed; totalEntries unknown until fully consumed
+    let extractedEntries = 0;
+    let bytesWritten = 0;
 
     await ensureDir(resolvedTargetDir);
 
     for await (const entry of reader.entries()) {
+      if (signal?.aborted) {
+        throw new Error("Extraction aborted");
+      }
+
       const entryPath = entry.path;
       const info = entry.info;
       const targetPath = path.resolve(resolvedTargetDir, entryPath);
@@ -2438,19 +2596,64 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       // Security: check for path traversal
       assertNoPathTraversal(targetPath, resolvedTargetDir, entryPath);
 
+      if (filter && !filter(entryPath, isTarDirectory(info))) {
+        continue;
+      }
+
       if (isTarDirectory(info)) {
-        await ensureDir(targetPath);
+        if (
+          !(await tryFsOpWithWarning(() => ensureDir(targetPath), onWarning, entryPath, targetPath))
+        ) {
+          continue;
+        }
       } else {
         // Check overwrite strategy
-        const shouldWrite = await shouldExtract(targetPath, info.mtime, overwrite);
+        let shouldWrite = false;
+        try {
+          shouldWrite = await shouldExtract(targetPath, info.mtime, overwrite);
+        } catch (err) {
+          if (isIgnorableFsError(err)) {
+            emitExtractWarning(onWarning, entryPath, targetPath, err);
+            continue;
+          }
+          throw err;
+        }
 
         if (shouldWrite) {
-          await ensureDir(path.dirname(targetPath));
-          const data = await entry.bytes();
-          await writeFileBytes(targetPath, data);
-          await setFileTime(targetPath, info.mtime);
+          let writeSuccess = false;
+          try {
+            await ensureDir(path.dirname(targetPath));
+            const data = await entry.bytes();
+            await writeFileBytes(targetPath, data);
+            bytesWritten += data.length;
+            writeSuccess = true;
+          } catch (err) {
+            if (isIgnorableFsError(err)) {
+              emitExtractWarning(onWarning, entryPath, targetPath, err);
+              continue;
+            }
+            throw err;
+          }
+
+          if (writeSuccess && preserveTimestamps) {
+            // Best effort timestamp; ignore ignorable errors
+            await tryFsOpWithWarning(
+              () => setFileTime(targetPath, info.mtime),
+              onWarning,
+              entryPath,
+              targetPath
+            );
+          }
         }
       }
+
+      extractedEntries++;
+      onProgress?.({
+        currentEntry: entryPath,
+        totalEntries: 0, // TAR: unknown until fully consumed
+        extractedEntries,
+        bytesWritten
+      });
     }
   }
 }
