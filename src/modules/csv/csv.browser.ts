@@ -177,8 +177,7 @@ class CSV {
     const map =
       options?.map ||
       createDefaultValueMapper(dateFormats, {
-        decimalSeparator:
-          options?.valueMapperOptions?.decimalSeparator ?? options?.parserOptions?.decimalSeparator
+        decimalSeparator: options?.valueMapperOptions?.decimalSeparator
       });
     const rows = parseCsv(str, options?.parserOptions) as string[][];
 
@@ -231,8 +230,7 @@ class CSV {
     const map =
       options?.map ||
       createDefaultValueMapper(dateFormats, {
-        decimalSeparator:
-          options?.valueMapperOptions?.decimalSeparator ?? options?.parserOptions?.decimalSeparator
+        decimalSeparator: options?.valueMapperOptions?.decimalSeparator
       });
     const parser = new CsvParserStream(options?.parserOptions);
 
@@ -311,8 +309,7 @@ class CSV {
     const map =
       options?.map ||
       createDefaultValueMapper(dateFormats, {
-        decimalSeparator:
-          options?.valueMapperOptions?.decimalSeparator ?? options?.parserOptions?.decimalSeparator
+        decimalSeparator: options?.valueMapperOptions?.decimalSeparator
       });
     const parser = new CsvParserStream(options?.parserOptions);
     parser.on("data", (row: string[]) => worksheet.addRow(row.map(map)));
