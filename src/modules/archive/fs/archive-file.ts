@@ -45,7 +45,7 @@ import { pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
 import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import { ZipEditView } from "@archive/zip/zip-edit-view";
 import type { ZipStringEncoding } from "@archive/shared/text";
-import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 
 import type { ArchiveFormat } from "@archive/formats/types";
 import type {
@@ -296,6 +296,27 @@ async function tryFsOpWithWarning(
   }
 }
 
+/**
+ * Synchronous version of tryFsOpWithWarning.
+ */
+function tryFsOpWithWarningSync(
+  fn: () => void,
+  onWarning: WarningCallback,
+  entryPath: string,
+  targetPath: string
+): boolean {
+  try {
+    fn();
+    return true;
+  } catch (err) {
+    if (isIgnorableFsError(err)) {
+      emitExtractWarning(onWarning, entryPath, targetPath, err);
+      return false;
+    }
+    throw err;
+  }
+}
+
 async function processInOrderWithConcurrency<T>(
   iterable: AsyncIterable<T> | Iterable<T>,
   concurrency: number,
@@ -422,6 +443,29 @@ function wrapFilter(
 }
 
 /**
+ * Map a ZipParser entry to ArchiveEntryInfo format.
+ */
+function mapZipEntryToInfo(e: ParserEntryInfo): ZipEntryInfo {
+  return {
+    path: e.path,
+    isDirectory: e.isDirectory,
+    size: e.uncompressedSize,
+    compressedSize: e.compressedSize,
+    lastModified: e.lastModified,
+    crc32: e.crc32,
+    isEncrypted: e.isEncrypted,
+    encryptionMethod:
+      e.encryptionMethod === "aes"
+        ? "aes"
+        : e.encryptionMethod === "zipcrypto"
+          ? "zipcrypto"
+          : undefined,
+    aesKeyStrength: e.aesKeyStrength,
+    comment: e.comment
+  };
+}
+
+/**
  * Build a ZipEntry from common parameters.
  */
 function buildZipEntry(
@@ -538,10 +582,6 @@ function normalizeTarPath(name: string, prefix?: string): string {
   }
   return result;
 }
-
-/** TAR symlink type constant (RFC 1062) */
-const TAR_SYMLINK_TYPE = "2";
-
 /**
  * Build TAR entry add options from pending entry options and optional file stats.
  */
@@ -556,6 +596,40 @@ function buildTarAddOptions(
     gid: entryOptions.gid,
     uname: entryOptions.uname,
     gname: entryOptions.gname
+  };
+}
+
+/**
+ * Build TAR symlink entry options.
+ * Type "2" is the symlink type per RFC 1062.
+ */
+function buildTarSymlinkOptions(target: string, mode?: number) {
+  return {
+    type: "2" as any, // TAR symlink type (RFC 1062)
+    linkname: target,
+    mode
+  };
+}
+
+/**
+ * Wrap a streaming operation to conform to ArchiveStreamOperation interface.
+ */
+function wrapStreamOperation(
+  op: {
+    iterable: AsyncIterable<Uint8Array>;
+    signal: AbortSignal;
+    abort: (reason?: unknown) => void;
+    pointer: () => number;
+    progress: () => ArchiveStreamProgress;
+  },
+  overrideIterable?: AsyncIterable<Uint8Array>
+): ArchiveStreamOperation {
+  return {
+    iterable: overrideIterable ?? op.iterable,
+    signal: op.signal,
+    abort: reason => op.abort(reason),
+    pointer: () => op.pointer(),
+    progress: () => op.progress()
   };
 }
 
@@ -947,6 +1021,42 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     this._setZipState("_zipEditView", editView);
   }
 
+  /**
+   * Initialize a TAR archive from raw data.
+   */
+  private _initTarFromData(data: Uint8Array, gzip?: boolean): void {
+    let tarData = data;
+    if (gzip) {
+      tarData = gunzipSync(data);
+    }
+    this._setTarReader(new TarReader(tarData));
+  }
+
+  /**
+   * Shared factory logic for creating an archive from data.
+   */
+  private static _fromData(
+    data: Uint8Array,
+    options: OpenArchiveOptions,
+    sourcePath?: string,
+    autoDetectGzip?: boolean
+  ): ArchiveFile<ArchiveFormat> {
+    const format = options.format ?? "zip";
+
+    if (format === "zip") {
+      const archive = new ArchiveFile<"zip">({ format: "zip" });
+      const zipOptions = options as OpenArchiveOptionsZip;
+      archive._initZipFromData(data, zipOptions.password, sourcePath, zipOptions.encoding);
+      return archive;
+    } else {
+      const archive = new ArchiveFile<"tar">(options as ArchiveFileOptionsTar);
+      const tarOptions = options as OpenArchiveOptionsTar;
+      const shouldGunzip = tarOptions.gzip || autoDetectGzip;
+      archive._initTarFromData(data, shouldGunzip);
+      return archive;
+    }
+  }
+
   // =============================================================================
   // Static Factory Methods
   // =============================================================================
@@ -960,32 +1070,9 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     filePath: string,
     options: OpenArchiveOptions = {}
   ): Promise<ArchiveFile<ArchiveFormat>> {
-    const format = options.format ?? "zip";
     const data = await readFileBytes(filePath);
-
-    if (format === "zip") {
-      const archive = new ArchiveFile<"zip">({ format: "zip" });
-      const zipOptions = options as OpenArchiveOptionsZip;
-      archive._initZipFromData(
-        data,
-        zipOptions.password,
-        path.resolve(filePath),
-        zipOptions.encoding
-      );
-      return archive;
-    } else {
-      const archive = new ArchiveFile<"tar">(options as ArchiveFileOptionsTar);
-      const tarOptions = options as OpenArchiveOptionsTar;
-
-      // Decompress if gzip
-      let tarData = data;
-      if (tarOptions.gzip || filePath.endsWith(".gz") || filePath.endsWith(".tgz")) {
-        tarData = gunzipSync(data);
-      }
-
-      archive._setTarReader(new TarReader(tarData));
-      return archive;
-    }
+    const autoDetectGzip = filePath.endsWith(".gz") || filePath.endsWith(".tgz");
+    return ArchiveFile._fromData(data, options, path.resolve(filePath), autoDetectGzip);
   }
 
   /**
@@ -997,32 +1084,9 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     filePath: string,
     options: OpenArchiveOptions = {}
   ): ArchiveFile<ArchiveFormat> {
-    const format = options.format ?? "zip";
     const data = readFileBytesSync(filePath);
-
-    if (format === "zip") {
-      const archive = new ArchiveFile<"zip">({ format: "zip" });
-      const zipOptions = options as OpenArchiveOptionsZip;
-      archive._initZipFromData(
-        data,
-        zipOptions.password,
-        path.resolve(filePath),
-        zipOptions.encoding
-      );
-      return archive;
-    } else {
-      const archive = new ArchiveFile<"tar">(options as ArchiveFileOptionsTar);
-      const tarOptions = options as OpenArchiveOptionsTar;
-
-      // Decompress if gzip
-      let tarData = data;
-      if (tarOptions.gzip || filePath.endsWith(".gz") || filePath.endsWith(".tgz")) {
-        tarData = gunzipSync(data);
-      }
-
-      archive._setTarReader(new TarReader(tarData));
-      return archive;
-    }
+    const autoDetectGzip = filePath.endsWith(".gz") || filePath.endsWith(".tgz");
+    return ArchiveFile._fromData(data, options, path.resolve(filePath), autoDetectGzip);
   }
 
   /**
@@ -1034,25 +1098,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     data: Uint8Array,
     options: OpenArchiveOptions = {}
   ): ArchiveFile<ArchiveFormat> {
-    const format = options.format ?? "zip";
-
-    if (format === "zip") {
-      const archive = new ArchiveFile<"zip">({ format: "zip" });
-      const zipOptions = options as OpenArchiveOptionsZip;
-      archive._initZipFromData(data, zipOptions.password, undefined, zipOptions.encoding);
-      return archive;
-    } else {
-      const archive = new ArchiveFile<"tar">(options as ArchiveFileOptionsTar);
-      const tarOptions = options as OpenArchiveOptionsTar;
-
-      let tarData = data;
-      if (tarOptions.gzip) {
-        tarData = gunzipSync(data);
-      }
-
-      archive._setTarReader(new TarReader(tarData));
-      return archive;
-    }
+    return ArchiveFile._fromData(data, options);
   }
 
   // =============================================================================
@@ -1627,7 +1673,10 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
    * });
    * ```
    */
-  async streamToFile(filePath: string, options: ArchiveStreamOptions & WriteArchiveOptions = {}): Promise<void> {
+  async streamToFile(
+    filePath: string,
+    options: ArchiveStreamOptions & WriteArchiveOptions = {}
+  ): Promise<void> {
     const targetPath = path.resolve(filePath);
     const { overwrite = "error" } = options;
 
@@ -1661,23 +1710,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         throw new Error("Cannot read entries: archive not loaded. Use fromFile() or fromBuffer().");
       }
 
-      return this._zip_parser!.getEntries().map(e => ({
-        path: e.path,
-        isDirectory: e.isDirectory,
-        size: e.uncompressedSize,
-        compressedSize: e.compressedSize,
-        lastModified: e.lastModified,
-        crc32: e.crc32,
-        isEncrypted: e.isEncrypted,
-        encryptionMethod:
-          e.encryptionMethod === "aes"
-            ? "aes"
-            : e.encryptionMethod === "zipcrypto"
-              ? "zipcrypto"
-              : undefined,
-        aesKeyStrength: e.aesKeyStrength,
-        comment: e.comment
-      }));
+      return this._zip_parser!.getEntries().map(mapZipEntryToInfo);
     } else {
       if (!this._tarReader) {
         throw new Error("Cannot read entries: archive is in write mode");
@@ -1711,23 +1744,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       if (!this._zipParser) {
         throw new Error("Cannot read entries: archive not loaded.");
       }
-      return this._zip_parser!.getEntries().map(e => ({
-        path: e.path,
-        isDirectory: e.isDirectory,
-        size: e.uncompressedSize,
-        compressedSize: e.compressedSize,
-        lastModified: e.lastModified,
-        crc32: e.crc32,
-        isEncrypted: e.isEncrypted,
-        encryptionMethod:
-          e.encryptionMethod === "aes"
-            ? "aes"
-            : e.encryptionMethod === "zipcrypto"
-              ? "zipcrypto"
-              : undefined,
-        aesKeyStrength: e.aesKeyStrength,
-        comment: e.comment
-      }));
+      return this._zip_parser!.getEntries().map(mapZipEntryToInfo);
     } else {
       throwTarSyncNotSupported("getEntriesSync");
     }
@@ -2427,12 +2444,29 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       throw new Error("Cannot extract: archive not loaded.");
     }
 
-    const { overwrite = "error", filter, preserveTimestamps = true, password } = options;
+    const {
+      overwrite = "error",
+      filter,
+      preserveTimestamps = true,
+      password,
+      signal,
+      onProgress,
+      onWarning
+    } = options;
 
     const resolvedTarget = path.resolve(targetDir);
     const entries = this._zip_parser!.getEntries();
+    const totalEntries = entries.length;
+    let extractedEntries = 0;
+    let bytesWritten = 0;
 
     for (const entry of entries) {
+      // Check abort signal
+      if (signal?.aborted) {
+        throw new Error("Extraction aborted");
+      }
+
+      // Apply filter
       if (filter && !filter(entry.path, entry.isDirectory)) {
         continue;
       }
@@ -2441,22 +2475,83 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       assertNoPathTraversal(targetPath, resolvedTarget, entry.path);
 
       if (entry.isDirectory) {
-        ensureDirSync(targetPath);
+        if (
+          !tryFsOpWithWarningSync(
+            () => ensureDirSync(targetPath),
+            onWarning,
+            entry.path,
+            targetPath
+          )
+        ) {
+          continue;
+        }
       } else {
-        if (!shouldExtractSync(targetPath, entry.lastModified, overwrite)) {
+        // Check overwrite strategy
+        let shouldWrite = false;
+        try {
+          shouldWrite = shouldExtractSync(targetPath, entry.lastModified, overwrite);
+        } catch (err) {
+          if (isIgnorableFsError(err)) {
+            emitExtractWarning(onWarning, entry.path, targetPath, err);
+            continue;
+          }
+          throw err;
+        }
+
+        if (!shouldWrite) {
           continue;
         }
 
-        ensureDirSync(path.dirname(targetPath));
+        // Ensure parent directory exists
+        if (
+          !tryFsOpWithWarningSync(
+            () => ensureDirSync(path.dirname(targetPath)),
+            onWarning,
+            entry.path,
+            targetPath
+          )
+        ) {
+          continue;
+        }
 
+        // Extract
         const data = this._zip_parser!.extractSync(entry.path, password ?? this._zip_password);
         if (data) {
-          writeFileBytesSync(targetPath, data);
+          let writeSuccess = false;
+          try {
+            writeFileBytesSync(targetPath, data);
+            bytesWritten += data.length;
+            writeSuccess = true;
+          } catch (err) {
+            if (isIgnorableFsError(err)) {
+              emitExtractWarning(onWarning, entry.path, targetPath, err);
+              continue;
+            }
+            throw err;
+          }
 
-          if (preserveTimestamps) {
-            setFileTimeSync(targetPath, entry.lastModified);
+          if (writeSuccess && preserveTimestamps) {
+            // Best effort timestamp; ignore ignorable errors
+            tryFsOpWithWarningSync(
+              () => setFileTimeSync(targetPath, entry.lastModified),
+              onWarning,
+              entry.path,
+              targetPath
+            );
           }
         }
+      }
+
+      extractedEntries++;
+
+      // Report progress
+      if (onProgress) {
+        onProgress({
+          currentEntry: entry.path,
+          totalEntries,
+          extractedEntries,
+          bytesWritten
+        });
       }
     }
   }
@@ -2526,11 +2621,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       }
 
       case "symlink": {
-        archive.add(entry.tarPath, "", {
-          type: TAR_SYMLINK_TYPE as any,
-          linkname: entry.target,
-          mode: entry.mode
-        });
+        archive.add(entry.tarPath, "", buildTarSymlinkOptions(entry.target, entry.mode));
         break;
       }
 
@@ -2615,11 +2706,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       }
 
       case "symlink": {
-        archive.add(entry.tarPath, "", {
-          type: TAR_SYMLINK_TYPE as any,
-          linkname: entry.target,
-          mode: entry.mode
-        });
+        archive.add(entry.tarPath, "", buildTarSymlinkOptions(entry.target, entry.mode));
         break;
       }
 
@@ -2809,38 +2896,11 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     // Get the operation from ZipArchive
     const zipOp = zipArchive.operation({
       signal: options.signal,
-      onProgress: options.onProgress
-        ? (p) => {
-            options.onProgress!({
-              phase: p.phase,
-              entriesTotal: p.entriesTotal,
-              entriesDone: p.entriesDone,
-              bytesIn: p.bytesIn,
-              bytesOut: p.bytesOut,
-              currentEntry: p.currentEntry
-            });
-          }
-        : undefined,
+      onProgress: options.onProgress,
       progressIntervalMs: options.progressIntervalMs
     });
 
-    return {
-      iterable: zipOp.iterable,
-      signal: zipOp.signal,
-      abort: (reason) => zipOp.abort(reason),
-      pointer: () => zipOp.pointer(),
-      progress: () => {
-        const p = zipOp.progress();
-        return {
-          phase: p.phase,
-          entriesTotal: p.entriesTotal,
-          entriesDone: p.entriesDone,
-          bytesIn: p.bytesIn,
-          bytesOut: p.bytesOut,
-          currentEntry: p.currentEntry
-        };
-      }
-    };
+    return wrapStreamOperation(zipOp);
   }
 
   /**
@@ -2858,7 +2918,11 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         case "file": {
           // Use createReadStream for true streaming input
           const fileStream = createReadStream(pending.localPath);
-          tarArchive.add(pending.tarPath, fileStream as any, buildTarAddOptions(pending.options, null));
+          tarArchive.add(
+            pending.tarPath,
+            fileStream as any,
+            buildTarAddOptions(pending.options, null)
+          );
           break;
         }
 
@@ -2868,16 +2932,16 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         }
 
         case "stream": {
-          tarArchive.add(pending.tarPath, toAsyncIterable(pending.stream) as any, buildTarAddOptions(pending.options, null));
+          tarArchive.add(
+            pending.tarPath,
+            toAsyncIterable(pending.stream) as any,
+            buildTarAddOptions(pending.options, null)
+          );
           break;
         }
 
         case "symlink": {
-          tarArchive.add(pending.tarPath, "", {
-            type: TAR_SYMLINK_TYPE as any,
-            linkname: pending.target,
-            mode: pending.mode
-          });
+          tarArchive.add(pending.tarPath, "", buildTarSymlinkOptions(pending.target, pending.mode));
           break;
         }
 
@@ -2928,30 +2992,19 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     // Get the operation from TarArchive
     const tarOp = tarArchive.operation({
       signal: options.signal,
-      onProgress: options.onProgress
-        ? (p) => {
-            options.onProgress!({
-              phase: p.phase,
-              entriesTotal: p.entriesTotal,
-              entriesDone: p.entriesDone,
-              bytesIn: p.bytesIn,
-              bytesOut: p.bytesOut,
-              currentEntry: p.currentEntry
-            });
-          }
-        : undefined,
+      onProgress: options.onProgress,
       progressIntervalMs: options.progressIntervalMs
     });
 
     // Wrap with gzip if needed
     const opts = this._tar_options;
-    let iterable = tarOp.iterable;
+    let gzippedIterable: AsyncIterable<Uint8Array> | undefined;
 
     if (opts?.gzip) {
       // Create a gzip-wrapped async iterable
       const tarIterable = tarOp.iterable;
       const gzLevel = opts.gzipLevel;
-      iterable = (async function* () {
+      gzippedIterable = (async function* () {
         const gzipStream = createGzipStream({ level: gzLevel });
         const chunks: Uint8Array[] = [];
 
@@ -2982,23 +3035,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       })();
     }
 
-    return {
-      iterable,
-      signal: tarOp.signal,
-      abort: (reason) => tarOp.abort(reason),
-      pointer: () => tarOp.pointer(),
-      progress: () => {
-        const p = tarOp.progress();
-        return {
-          phase: p.phase,
-          entriesTotal: p.entriesTotal,
-          entriesDone: p.entriesDone,
-          bytesIn: p.bytesIn,
-          bytesOut: p.bytesOut,
-          currentEntry: p.currentEntry
-        };
-      }
-    };
+    return wrapStreamOperation(tarOp, gzippedIterable);
   }
 
   // =============================================================================

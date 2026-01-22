@@ -500,7 +500,7 @@ describe("ArchiveFile", () => {
 
       const progressUpdates: number[] = [];
       const op = archive.operation({
-        onProgress: (p) => {
+        onProgress: p => {
           progressUpdates.push(p.entriesDone);
         }
       });
