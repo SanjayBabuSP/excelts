@@ -1023,18 +1023,33 @@ class XLSX {
     }
   }
 
-  async _processDrawingEntry(entry: any, model: any, name: string): Promise<void> {
-    // Collect raw data first so we can preserve drawings that reference charts.
-    const rawData = await this.collectStreamData(entry);
+  /**
+   * Process a drawing XML entry.
+   *
+   * @param stream - Stream to read from (used in loadFromZipEntries path)
+   * @param model - Model to populate
+   * @param name - Drawing name (e.g., "drawing1")
+   * @param rawData - Pre-read raw data (used in loadFromFiles path to avoid re-reading stream)
+   */
+  async _processDrawingEntry(
+    stream: IParseStream,
+    model: any,
+    name: string,
+    rawData?: Uint8Array
+  ): Promise<void> {
+    // Use provided rawData if available (loadFromFiles path), otherwise collect from stream.
+    // In loadFromFiles, the stream is created from already-decoded text, and collecting from
+    // it may not work correctly due to PassThrough stream timing issues.
+    const data = rawData ?? (await this.collectStreamData(stream));
 
     // Parse the drawing for normal processing (images, etc.)
     const xform = new DrawingXform();
-    const xmlString = this.bufferToString(rawData);
+    const xmlString = this.bufferToString(data);
     const drawing = await xform.parseStream(this.createTextStream(xmlString));
     model.drawings[name] = drawing;
 
     // Store raw data; reconcile() may later drop it if charts are not referenced.
-    model.rawDrawings[name] = rawData;
+    model.rawDrawings[name] = data;
   }
 
   async _processDrawingRelsEntry(entry: any, model: any, name: string): Promise<void> {
@@ -1190,11 +1205,8 @@ class XLSX {
 
     const drawingName = getDrawingNameFromPath(entryName);
     if (drawingName) {
-      await this._processDrawingEntry(stream, model, drawingName);
-      // For loadFromFiles path, store raw data for passthrough (drawings with charts)
-      if (rawData) {
-        model.rawDrawings[drawingName] = rawData;
-      }
+      await this._processDrawingEntry(stream, model, drawingName, rawData);
+      // rawData is now stored inside _processDrawingEntry
       return true;
     }
 
