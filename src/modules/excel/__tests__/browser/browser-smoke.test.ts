@@ -649,5 +649,116 @@ describe("ExcelTS Browser Tests", () => {
       expect(ws2.getCell("A1").value).toBe("Created with JS fallback");
       expect(ws2.getCell("A2").value).toBe(123);
     });
+
+    // Regression test: loading files with drawings via loadFromFiles path
+    // Previously, _processDrawingEntry would fail because it tried to collect
+    // data from an already-consumed text stream instead of using the provided rawData
+    it("should load files with embedded images via buffer (loadFromFiles path)", async () => {
+      const { Workbook } = ExcelTS;
+
+      // Create a workbook with an embedded image
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("with-image");
+      ws.getCell("A1").value = "Image Test";
+
+      // Add a simple 1x1 PNG image (smallest valid PNG)
+      // This is a 1x1 red pixel PNG
+      const pngData = new Uint8Array([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a, // PNG signature
+        0x00,
+        0x00,
+        0x00,
+        0x0d,
+        0x49,
+        0x48,
+        0x44,
+        0x52, // IHDR chunk length + type
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x01, // 1x1 dimensions
+        0x08,
+        0x02,
+        0x00,
+        0x00,
+        0x00,
+        0x90,
+        0x77,
+        0x53, // bit depth, color type, etc
+        0xde,
+        0x00,
+        0x00,
+        0x00,
+        0x0c,
+        0x49,
+        0x44,
+        0x41, // IDAT chunk
+        0x54,
+        0x08,
+        0xd7,
+        0x63,
+        0xf8,
+        0xcf,
+        0xc0,
+        0x00, // compressed data
+        0x00,
+        0x00,
+        0x03,
+        0x00,
+        0x01,
+        0x00,
+        0x05,
+        0xfe, //
+        0xd4,
+        0xef,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x49,
+        0x45, // IEND chunk
+        0x4e,
+        0x44,
+        0xae,
+        0x42,
+        0x60,
+        0x82
+      ]);
+
+      const imageId = wb.addImage({
+        buffer: pngData,
+        extension: "png"
+      });
+      ws.addImage(imageId, "B2:D6");
+
+      // Write to buffer
+      const buffer = await wb.xlsx.writeBuffer();
+
+      // Load via xlsx.load() which uses loadFromFiles internally
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      // Verify data
+      const ws2 = wb2.getWorksheet("with-image");
+      expect(ws2).toBeTruthy();
+      expect(ws2!.getCell("A1").value).toBe("Image Test");
+
+      // Verify image was loaded
+      const images = ws2!.getImages();
+      expect(images.length).toBe(1);
+      expect(images[0].range.tl.col).toBe(1); // B column = 1
+      expect(images[0].range.tl.row).toBe(1); // Row 2 = 1 (0-indexed)
+    });
   });
 });
