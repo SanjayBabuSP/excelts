@@ -435,7 +435,8 @@ class WorkSheetXform extends BaseXform {
           defaultRowHeight: model.properties.defaultRowHeight,
           dyDescent: model.properties.dyDescent,
           outlineLevelCol: model.properties.outlineLevelCol,
-          outlineLevelRow: model.properties.outlineLevelRow
+          outlineLevelRow: model.properties.outlineLevelRow,
+          customHeight: model.properties.customHeight
         }
       : undefined;
     if (model.properties && model.properties.defaultColWidth) {

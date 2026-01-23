@@ -19,6 +19,7 @@ interface RowModel {
   outlineLevel?: number;
   collapsed?: boolean;
   style?: any;
+  dyDescent?: number;
 }
 
 class RowXform extends BaseXform {
@@ -79,7 +80,10 @@ class RowXform extends BaseXform {
       xmlStream.addAttribute("s", model.styleId);
       xmlStream.addAttribute("customFormat", "1");
     }
-    // Note: dyDescent is MS extension, not output by default (Excel auto-calculates)
+    // Output dyDescent if present (MS extension for font descent)
+    if (model.dyDescent !== undefined) {
+      xmlStream.addAttribute("x14ac:dyDescent", model.dyDescent);
+    }
     if (model.outlineLevel) {
       xmlStream.addAttribute("outlineLevel", model.outlineLevel);
     }
@@ -132,6 +136,9 @@ class RowXform extends BaseXform {
       }
       if (parseBoolean(node.attributes.collapsed)) {
         model.collapsed = true;
+      }
+      if (node.attributes["x14ac:dyDescent"] !== undefined) {
+        model.dyDescent = parseFloat(node.attributes["x14ac:dyDescent"]);
       }
       return true;
     }

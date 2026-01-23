@@ -1383,7 +1383,8 @@ describe("Workbook", () => {
               showRowColHeaders: true,
               zoomScale: 100,
               zoomScaleNormal: 100,
-              rightToLeft: false
+              rightToLeft: false,
+              tabSelected: false
             },
             {
               workbookViewId: 0,
@@ -1396,7 +1397,8 @@ describe("Workbook", () => {
               showRowColHeaders: true,
               zoomScale: 100,
               zoomScaleNormal: 100,
-              rightToLeft: false
+              rightToLeft: false,
+              tabSelected: false
             },
             {
               workbookViewId: 0,
@@ -1409,7 +1411,8 @@ describe("Workbook", () => {
               showRowColHeaders: true,
               zoomScale: 100,
               zoomScaleNormal: 100,
-              rightToLeft: false
+              rightToLeft: false,
+              tabSelected: false
             }
           ]);
         });
@@ -1461,7 +1464,8 @@ describe("Workbook", () => {
               showRowColHeaders: true,
               zoomScale: 100,
               zoomScaleNormal: 100,
-              rightToLeft: false
+              rightToLeft: false,
+              tabSelected: false
             },
             {
               workbookViewId: 0,
@@ -1475,7 +1479,8 @@ describe("Workbook", () => {
               showRowColHeaders: true,
               zoomScale: 100,
               zoomScaleNormal: 100,
-              rightToLeft: false
+              rightToLeft: false,
+              tabSelected: false
             },
             {
               workbookViewId: 0,
@@ -1489,7 +1494,8 @@ describe("Workbook", () => {
               showRowColHeaders: true,
               zoomScale: 100,
               zoomScaleNormal: 100,
-              rightToLeft: false
+              rightToLeft: false,
+              tabSelected: false
             }
           ]);
         });

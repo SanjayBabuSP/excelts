@@ -39,6 +39,7 @@ class StylesXform extends BaseXform {
   declare private index?: StyleIndex;
   declare private weakMap?: WeakMap<any, number>;
   declare private _hasCheckboxes?: boolean;
+  declare public defaultFont?: any;
   declare public parser: any;
   static Mock: typeof StylesXform;
 
@@ -123,6 +124,14 @@ class StylesXform extends BaseXform {
     this._hasCheckboxes = false;
   }
 
+  /**
+   * Set the default font to use when no font is explicitly specified.
+   * This preserves the original file's default font during round-trip.
+   */
+  setDefaultFont(font: any): void {
+    this.defaultFont = font;
+  }
+
   render(xmlStream: any, model?: StylesModel): void {
     const renderModel = model || this.model;
     //
@@ -142,14 +151,16 @@ class StylesXform extends BaseXform {
       }
 
       if (!renderModel.fonts!.length) {
-        // default (zero) font
-        this._addFont({
-          size: 11,
-          color: { theme: 1 },
-          name: "Calibri",
-          family: 2,
-          scheme: "minor"
-        });
+        // default (zero) font - use preserved font or fallback to Calibri
+        this._addFont(
+          this.defaultFont || {
+            size: 11,
+            color: { theme: 1 },
+            name: "Calibri",
+            family: 2,
+            scheme: "minor"
+          }
+        );
       }
       xmlStream.openNode("fonts", { count: renderModel.fonts!.length, "x14ac:knownFonts": 1 });
       renderModel.fonts!.forEach((fontXml: string) => {
@@ -246,6 +257,11 @@ class StylesXform extends BaseXform {
         add("styles", this.map.cellXfs);
         add("dxfs", this.map.dxfs);
 
+        // preserve the default (first) font from the original file
+        if (this.map.fonts.model && this.map.fonts.model.length > 0) {
+          this.defaultFont = this.map.fonts.model[0];
+        }
+
         // index numFmts
         this.index = {
           model: [],
@@ -276,8 +292,16 @@ class StylesXform extends BaseXform {
 
     // if we have no default font, add it here now
     if (!this.model.fonts.length) {
-      // default (zero) font
-      this._addFont({ size: 11, color: { theme: 1 }, name: "Calibri", family: 2, scheme: "minor" });
+      // default (zero) font - use preserved font or fallback to Calibri
+      this._addFont(
+        this.defaultFont || {
+          size: 11,
+          color: { theme: 1 },
+          name: "Calibri",
+          family: 2,
+          scheme: "minor"
+        }
+      );
     }
 
     const type = cellType || Enums.ValueType.Number;
@@ -325,6 +349,22 @@ class StylesXform extends BaseXform {
 
     if (model.protection) {
       style.protection = model.protection;
+    }
+
+    // Preserve xf-level attributes (pivotButton, apply* flags)
+    const xfFlags = [
+      "pivotButton",
+      "applyNumberFormat",
+      "applyFont",
+      "applyFill",
+      "applyBorder",
+      "applyAlignment",
+      "applyProtection"
+    ] as const;
+    for (const flag of xfFlags) {
+      if (model[flag]) {
+        style[flag] = true;
+      }
     }
 
     if (type === Enums.ValueType.Checkbox) {
@@ -396,6 +436,23 @@ class StylesXform extends BaseXform {
     // protection
     if (style.protection) {
       model.protection = style.protection;
+    }
+
+    // -------------------------------------------------------
+    // xf-level attributes (pivotButton, apply* flags)
+    const xfFlags = [
+      "pivotButton",
+      "applyNumberFormat",
+      "applyFont",
+      "applyFill",
+      "applyBorder",
+      "applyAlignment",
+      "applyProtection"
+    ] as const;
+    for (const flag of xfFlags) {
+      if (style[flag]) {
+        model[flag] = true;
+      }
     }
 
     return model;

@@ -41,8 +41,14 @@ const expectations = [
       alignment: { horizontal: "center", vertical: "middle" }
     },
     xml: '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>',
-    get parsedModel() {
-      return this.preparedModel;
+    parsedModel: {
+      numFmtId: 0,
+      fontId: 0,
+      fillId: 0,
+      borderId: 0,
+      xfId: 0,
+      alignment: { horizontal: "center", vertical: "middle" },
+      applyAlignment: true
     },
     tests: ["render", "renderIn", "parse"]
   },
@@ -53,9 +59,7 @@ const expectations = [
     },
     preparedModel: { numFmtId: 0, fontId: 5, fillId: 0, borderId: 0, xfId: 0 },
     xml: '<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1"/>',
-    get parsedModel() {
-      return this.preparedModel;
-    },
+    parsedModel: { numFmtId: 0, fontId: 5, fillId: 0, borderId: 0, xfId: 0, applyFont: true },
     tests: ["render", "renderIn", "parse"]
   },
   {
@@ -65,9 +69,7 @@ const expectations = [
     },
     preparedModel: { numFmtId: 0, fontId: 0, fillId: 0, borderId: 7, xfId: 0 },
     xml: '<xf numFmtId="0" fontId="0" fillId="0" borderId="7" xfId="0" applyBorder="1"/>',
-    get parsedModel() {
-      return this.preparedModel;
-    },
+    parsedModel: { numFmtId: 0, fontId: 0, fillId: 0, borderId: 7, xfId: 0, applyBorder: true },
     tests: ["render", "renderIn", "parse"]
   },
   {
@@ -77,8 +79,13 @@ const expectations = [
     },
     preparedModel: { numFmtId: 1, fontId: 0, fillId: 0, borderId: 0, xfId: 0 },
     xml: '<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
-    get parsedModel() {
-      return this.preparedModel;
+    parsedModel: {
+      numFmtId: 1,
+      fontId: 0,
+      fillId: 0,
+      borderId: 0,
+      xfId: 0,
+      applyNumberFormat: true
     },
     tests: ["render", "renderIn", "parse"]
   },
@@ -89,9 +96,7 @@ const expectations = [
     },
     preparedModel: { numFmtId: 0, fontId: 0, fillId: 2, borderId: 0, xfId: 0 },
     xml: '<xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/>',
-    get parsedModel() {
-      return this.preparedModel;
-    },
+    parsedModel: { numFmtId: 0, fontId: 0, fillId: 2, borderId: 0, xfId: 0, applyFill: true },
     tests: ["render", "renderIn", "parse"]
   },
   {
@@ -116,7 +121,12 @@ const expectations = [
       numFmtId: 0,
       xfId: 0,
       alignment: { horizontal: "center", vertical: "middle" },
-      protection: { locked: false, hidden: false }
+      protection: { locked: false, hidden: false },
+      applyProtection: true,
+      applyAlignment: true,
+      applyFill: true,
+      applyBorder: true,
+      applyFont: true
     },
     tests: ["parse", "parseIn"]
   }

@@ -17,6 +17,13 @@ interface StyleModel {
   protection?: any;
   checkbox?: boolean;
   xfComplementIndex?: number;
+  pivotButton?: boolean;
+  applyNumberFormat?: boolean;
+  applyFont?: boolean;
+  applyFill?: boolean;
+  applyBorder?: boolean;
+  applyAlignment?: boolean;
+  applyProtection?: boolean;
 }
 
 interface StyleOptions {
@@ -54,23 +61,26 @@ class StyleXform extends BaseXform {
       xmlStream.addAttribute("xfId", model.xfId || 0);
     }
 
-    if (model.numFmtId) {
+    if (model.applyNumberFormat || model.numFmtId) {
       xmlStream.addAttribute("applyNumberFormat", "1");
     }
-    if (model.fontId) {
+    if (model.applyFont || model.fontId) {
       xmlStream.addAttribute("applyFont", "1");
     }
-    if (model.fillId) {
+    if (model.applyFill || model.fillId) {
       xmlStream.addAttribute("applyFill", "1");
     }
-    if (model.borderId) {
+    if (model.applyBorder || model.borderId) {
       xmlStream.addAttribute("applyBorder", "1");
     }
-    if (model.alignment) {
+    if (model.applyAlignment || model.alignment) {
       xmlStream.addAttribute("applyAlignment", "1");
     }
-    if (model.protection) {
+    if (model.applyProtection || model.protection) {
       xmlStream.addAttribute("applyProtection", "1");
+    }
+    if (model.pivotButton) {
+      xmlStream.addAttribute("pivotButton", "1");
     }
 
     /**
@@ -116,6 +126,23 @@ class StyleXform extends BaseXform {
         };
         if (this.xfId) {
           this.model.xfId = parseInt(node.attributes.xfId, 10);
+        }
+        if (node.attributes.pivotButton === "1") {
+          this.model.pivotButton = true;
+        }
+        // Preserve apply* flags from original file
+        const applyFlags = [
+          "applyNumberFormat",
+          "applyFont",
+          "applyFill",
+          "applyBorder",
+          "applyAlignment",
+          "applyProtection"
+        ] as const;
+        for (const flag of applyFlags) {
+          if (node.attributes[flag] === "1") {
+            this.model[flag] = true;
+          }
         }
         return true;
       case "alignment":

@@ -9,6 +9,32 @@ import { XmlStream } from "@excel/utils/xml-stream";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Helper function to add apply* flags to styles based on their non-zero IDs and alignments
+function addApplyFlags(model: any): any {
+  const result = JSON.parse(JSON.stringify(model));
+  if (result.styles) {
+    // Map of style property to apply flag
+    const flagMappings: Array<[string, string]> = [
+      ["fontId", "applyFont"],
+      ["fillId", "applyFill"],
+      ["borderId", "applyBorder"],
+      ["numFmtId", "applyNumberFormat"],
+      ["alignment", "applyAlignment"],
+      ["protection", "applyProtection"]
+    ];
+    result.styles = result.styles.map((style: any) => {
+      const newStyle = { ...style };
+      for (const [prop, flag] of flagMappings) {
+        if (style[prop]) {
+          newStyle[flag] = true;
+        }
+      }
+      return newStyle;
+    });
+  }
+  return result;
+}
+
 const expectations = [
   {
     title: "Styles with fonts",
@@ -18,7 +44,8 @@ const expectations = [
     preparedModel: JSON.parse(fs.readFileSync(join(__dirname, "data/styles.1.1.json")).toString()),
     xml: fs.readFileSync(join(__dirname, "data/styles.1.2.xml")).toString(),
     get parsedModel() {
-      return this.preparedModel;
+      // parsedModel includes apply* flags from the XML
+      return addApplyFlags(this.preparedModel);
     },
     tests: ["render", "renderIn", "parse"]
   }

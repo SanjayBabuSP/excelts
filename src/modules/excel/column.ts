@@ -29,6 +29,8 @@ export interface ColumnDefn {
   outlineLevel?: number;
   hidden?: boolean;
   style?: Partial<Style>;
+  /** Whether the column width is auto-fitted to content */
+  bestFit?: boolean;
 }
 
 export interface ColumnModel {
@@ -40,6 +42,7 @@ export interface ColumnModel {
   hidden?: boolean;
   outlineLevel?: number;
   collapsed?: boolean;
+  bestFit?: boolean;
 }
 
 /**
@@ -56,6 +59,8 @@ class Column {
   declare public width?: number;
   declare private _hidden: boolean | undefined;
   declare private _outlineLevel: number | undefined;
+  /** Whether the column width is auto-fitted to content */
+  declare public bestFit?: boolean;
   /** Styles applied to the column */
   declare public style: Partial<Style>;
 
@@ -94,7 +99,8 @@ class Column {
       width: this.width,
       style: this.style,
       hidden: this.hidden,
-      outlineLevel: this.outlineLevel
+      outlineLevel: this.outlineLevel,
+      bestFit: this.bestFit
     };
   }
 
@@ -112,12 +118,14 @@ class Column {
       // headers must be set after style
       this.header = value.header;
       this._hidden = !!value.hidden;
+      this.bestFit = value.bestFit;
     } else {
       delete this._header;
       delete this._key;
       delete this.width;
       this.style = {};
       this.outlineLevel = 0;
+      delete this.bestFit;
     }
   }
 
@@ -225,6 +233,7 @@ class Column {
       this.width === model.width &&
       this.hidden === model.hidden &&
       this.outlineLevel === model.outlineLevel &&
+      this.bestFit === model.bestFit &&
       isEqual(this.style, model.style)
     );
   }
@@ -237,6 +246,9 @@ class Column {
       return false;
     }
     if (this.outlineLevel) {
+      return false;
+    }
+    if (this.bestFit) {
       return false;
     }
     const s = this.style;
@@ -422,7 +434,8 @@ class Column {
             isCustomWidth: column.isCustomWidth,
             hidden: column.hidden,
             outlineLevel: column.outlineLevel,
-            collapsed: column.collapsed
+            collapsed: column.collapsed,
+            bestFit: column.bestFit
           };
           cols.push(col);
         } else {

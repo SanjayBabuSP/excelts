@@ -6,6 +6,7 @@ interface SheetFormatPropertiesModel {
   outlineLevelRow: number;
   outlineLevelCol: number;
   defaultColWidth?: number;
+  customHeight?: boolean;
 }
 
 class SheetFormatPropertiesXform extends BaseXform {
@@ -21,15 +22,16 @@ class SheetFormatPropertiesXform extends BaseXform {
         outlineLevelRow: model.outlineLevelRow || undefined,
         outlineLevelCol: model.outlineLevelCol || undefined,
         // Only output dyDescent if explicitly set (MS extension, not ECMA-376 standard)
-        "x14ac:dyDescent": model.dyDescent || undefined
+        "x14ac:dyDescent":
+          model.dyDescent !== undefined && model.dyDescent !== 0 ? model.dyDescent : undefined
       };
       // Only output defaultColWidth if explicitly set
       if (model.defaultColWidth) {
         attributes.defaultColWidth = model.defaultColWidth;
       }
 
-      // default value for 'defaultRowHeight' is 15, this should not be 'custom'
-      if (!model.defaultRowHeight || model.defaultRowHeight !== 15) {
+      // Only output customHeight if it was present in the original file
+      if (model.customHeight) {
         attributes.customHeight = "1";
       }
 
@@ -43,12 +45,18 @@ class SheetFormatPropertiesXform extends BaseXform {
     if (node.name === "sheetFormatPr") {
       this.model = {
         defaultRowHeight: parseFloat(node.attributes.defaultRowHeight || "0"),
-        dyDescent: parseFloat(node.attributes["x14ac:dyDescent"] || "0"),
+        dyDescent:
+          node.attributes["x14ac:dyDescent"] !== undefined
+            ? parseFloat(node.attributes["x14ac:dyDescent"])
+            : undefined,
         outlineLevelRow: parseInt(node.attributes.outlineLevelRow || "0", 10),
         outlineLevelCol: parseInt(node.attributes.outlineLevelCol || "0", 10)
       };
       if (node.attributes.defaultColWidth) {
         this.model.defaultColWidth = parseFloat(node.attributes.defaultColWidth);
+      }
+      if (node.attributes.customHeight === "1") {
+        this.model.customHeight = true;
       }
       return true;
     }
