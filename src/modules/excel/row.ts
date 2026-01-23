@@ -33,6 +33,7 @@ export interface RowModel {
   hidden: boolean;
   outlineLevel: number;
   collapsed: boolean;
+  dyDescent?: number;
 }
 
 class Row {
@@ -44,6 +45,7 @@ class Row {
   declare private _hidden?: boolean;
   declare private _outlineLevel?: number;
   declare public height?: number;
+  declare public dyDescent?: number;
 
   constructor(worksheet: Worksheet, number: number) {
     this._worksheet = worksheet;
@@ -481,7 +483,8 @@ class Row {
           style: this.style,
           hidden: this.hidden,
           outlineLevel: this.outlineLevel,
-          collapsed: this.collapsed
+          collapsed: this.collapsed,
+          dyDescent: this.dyDescent
         }
       : null;
   }
@@ -529,6 +532,7 @@ class Row {
 
     this.hidden = value.hidden;
     this.outlineLevel = value.outlineLevel || 0;
+    this.dyDescent = value.dyDescent;
 
     this.style = (value.style && JSON.parse(JSON.stringify(value.style))) || {};
   }

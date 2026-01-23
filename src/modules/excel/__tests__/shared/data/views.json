@@ -23,6 +23,7 @@
     "frozen": {
       "workbookViewId": 0,
       "rightToLeft": false,
+      "tabSelected": false,
       "state": "frozen",
       "xSplit": 2,
       "ySplit": 3,
@@ -37,6 +38,7 @@
     "split": {
       "workbookViewId": 1,
       "rightToLeft": false,
+      "tabSelected": false,
       "state": "split",
       "xSplit": 2000,
       "ySplit": 3000,

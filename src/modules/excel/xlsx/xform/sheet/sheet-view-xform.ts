@@ -65,8 +65,12 @@ class SheetViewXform extends BaseXform {
     add("showRuler", "0", model.showRuler === false);
     add("showRowColHeaders", "0", model.showRowColHeaders === false);
     add("showGridLines", "0", model.showGridLines === false);
-    add("zoomScale", model.zoomScale, model.zoomScale);
-    add("zoomScaleNormal", model.zoomScaleNormal, model.zoomScaleNormal);
+    add("zoomScale", model.zoomScale, model.zoomScale !== undefined && model.zoomScale !== 100);
+    add(
+      "zoomScaleNormal",
+      model.zoomScaleNormal,
+      model.zoomScaleNormal !== undefined && model.zoomScaleNormal !== 100
+    );
     add("view", model.style, model.style);
 
     let topLeftCell;
@@ -179,6 +183,7 @@ class SheetViewXform extends BaseXform {
           model = this.model = {
             workbookViewId: this.sheetView.workbookViewId,
             rightToLeft: this.sheetView.rightToLeft,
+            tabSelected: this.sheetView.tabSelected,
             state: VIEW_STATES[this.pane.state] || "split", // split is default
             xSplit: this.pane.xSplit,
             ySplit: this.pane.ySplit,
@@ -203,6 +208,7 @@ class SheetViewXform extends BaseXform {
           model = this.model = {
             workbookViewId: this.sheetView.workbookViewId,
             rightToLeft: this.sheetView.rightToLeft,
+            tabSelected: this.sheetView.tabSelected,
             state: "normal",
             showRuler: this.sheetView.showRuler,
             showRowColHeaders: this.sheetView.showRowColHeaders,

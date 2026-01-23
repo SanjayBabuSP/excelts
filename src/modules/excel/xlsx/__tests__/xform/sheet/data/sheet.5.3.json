@@ -4,7 +4,8 @@
     "defaultRowHeight": 14.4,
     "dyDescent": 0.55,
     "outlineLevelRow": 2,
-    "outlineLevelCol": 0
+    "outlineLevelCol": 0,
+    "customHeight": true
   },
   "pageSetup": {
     "fitToPage": false,

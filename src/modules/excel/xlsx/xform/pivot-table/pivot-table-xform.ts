@@ -103,6 +103,10 @@ interface ParsedPivotTableModel {
   rowItems?: RowColItem[];
   colItems?: RowColItem[];
 
+  // Track if colFields element was present in original file
+  // Some pivot tables don't have colFields even when they have colItems
+  hasColFields?: boolean;
+
   // Chart formats (for pivot charts)
   chartFormats?: ChartFormatItem[];
 
@@ -419,17 +423,20 @@ class PivotTableXform extends BaseXform {
     }
 
     // Col fields
-    // Excel commonly emits a synthetic field x=-2 when there are no column fields.
-    const colFieldCount = model.colFields.length === 0 ? 1 : model.colFields.length;
-    xmlStream.openNode("colFields", { count: colFieldCount });
-    if (model.colFields.length === 0) {
-      xmlStream.leafNode("field", { x: -2 });
-    } else {
-      for (const fieldIndex of model.colFields) {
-        xmlStream.leafNode("field", { x: fieldIndex });
+    // Only render colFields if it was present in the original file or if there are actual column fields
+    // Some pivot tables don't have colFields element at all
+    if (model.hasColFields || model.colFields.length > 0) {
+      const colFieldCount = model.colFields.length === 0 ? 1 : model.colFields.length;
+      xmlStream.openNode("colFields", { count: colFieldCount });
+      if (model.colFields.length === 0) {
+        xmlStream.leafNode("field", { x: -2 });
+      } else {
+        for (const fieldIndex of model.colFields) {
+          xmlStream.leafNode("field", { x: fieldIndex });
+        }
       }
+      xmlStream.closeNode();
     }
-    xmlStream.closeNode();
 
     // Col items - use parsed items if available
     if (model.colItems && model.colItems.length > 0) {
@@ -651,6 +658,10 @@ class PivotTableXform extends BaseXform {
 
       case "colFields":
         this.state.inColFields = true;
+        // Track that colFields element was present in original file
+        if (this.model) {
+          this.model.hasColFields = true;
+        }
         break;
 
       case "dataFields":

@@ -13,6 +13,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "normal",
       activeCell: "G4",
       showRuler: true,
@@ -40,6 +41,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "normal",
       activeCell: "G4",
       showRuler: true,
@@ -68,6 +70,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "normal",
       activeCell: "G4",
       showRuler: false,
@@ -94,6 +97,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "normal",
       activeCell: "G4",
       showRuler: true,
@@ -125,6 +129,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "split",
       xSplit: 1234,
       ySplit: 3456,
@@ -159,6 +164,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "split",
       xSplit: 1234,
       ySplit: 3456,
@@ -192,6 +198,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: false,
+      tabSelected: false,
       state: "frozen",
       xSplit: 2,
       ySplit: 3,
@@ -238,6 +245,7 @@ const expectations = [
       {
         workbookViewId: 0,
         rightToLeft: false,
+        tabSelected: false,
         state: "normal",
         activeCell: "G4",
         showRuler: true,
@@ -249,6 +257,7 @@ const expectations = [
       {
         workbookViewId: 1,
         rightToLeft: false,
+        tabSelected: false,
         state: "frozen",
         xSplit: 2,
         ySplit: 3,
@@ -271,6 +280,7 @@ const expectations = [
     parsedModel: {
       workbookViewId: 0,
       rightToLeft: true,
+      tabSelected: false,
       state: "normal",
       showRuler: true,
       showGridLines: true,

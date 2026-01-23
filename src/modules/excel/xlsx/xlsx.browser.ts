@@ -817,6 +817,8 @@ class XLSX {
     delete model.sharedStrings;
     delete model.workbookRels;
     delete model.sheetDefs;
+    // Preserve default font before deleting styles
+    model.defaultFont = model.styles?.defaultFont;
     delete model.styles;
     delete model.mediaIndex;
     delete model.drawings;
@@ -1590,7 +1592,13 @@ class XLSX {
     model.useStyles = options.useStyles !== undefined ? options.useStyles : true;
 
     model.sharedStrings = new SharedStringsXform();
+
+    // Preserve default font from parsed styles if available
+    const oldDefaultFont = model.defaultFont;
     model.styles = model.useStyles ? new StylesXform(true) : new (StylesXform as any).Mock();
+    if (oldDefaultFont && model.styles.setDefaultFont) {
+      model.styles.setDefaultFont(oldDefaultFont);
+    }
 
     const workbookXform = new WorkbookXform();
     const worksheetXform = new WorkSheetXform();

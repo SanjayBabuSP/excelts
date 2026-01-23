@@ -73,6 +73,8 @@ export interface WorkbookModel {
   passthrough?: Record<string, Uint8Array>;
   /** Raw drawing XML data for passthrough (when drawing contains chart references) */
   rawDrawings?: Record<string, Uint8Array>;
+  /** Default font preserved from the original file for round-trip fidelity */
+  defaultFont?: any;
 }
 
 // =============================================================================
@@ -141,6 +143,8 @@ class Workbook {
   declare private _passthrough: Record<string, Uint8Array>;
   /** Raw drawing XML data for passthrough (when drawing contains chart references) */
   declare private _rawDrawings: Record<string, Uint8Array>;
+  /** Default font preserved from original file for round-trip fidelity */
+  declare private _defaultFont?: any;
   private _xlsx?: XLSX;
   private _csv?: CSV;
 
@@ -413,7 +417,8 @@ class Workbook {
       pivotTables: this.pivotTables,
       calcProperties: this.calcProperties,
       passthrough: this._passthrough,
-      rawDrawings: this._rawDrawings
+      rawDrawings: this._rawDrawings,
+      defaultFont: this._defaultFont
     };
   }
 
@@ -463,6 +468,8 @@ class Workbook {
     this._passthrough = value.passthrough || {};
     // Preserve raw drawing data for drawings with chart references
     this._rawDrawings = value.rawDrawings || {};
+    // Preserve default font for round-trip fidelity
+    this._defaultFont = value.defaultFont;
   }
 }
 
