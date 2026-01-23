@@ -182,7 +182,7 @@ const ATOMIC_EXCLUSIONS: AtomicExclusion[] = [
   // ============================================
   {
     reason: "workbookView may have different closing style",
-    normalize: s => s.replace(/<\/bookViews>/g, "</bookViews>").replace(/ \//g, "/")
+    normalize: s => s.replace(/ \//g, "/")
   },
 
   // ============================================
