@@ -427,6 +427,136 @@ export function runZipEditTests(): void {
     });
 
     // -------------------------------------------------------------------------
+    // deleteDirectory()
+    // -------------------------------------------------------------------------
+
+    describe("deleteDirectory()", () => {
+      it("should delete a directory and all its contents", async () => {
+        const original = await zip({ reproducible: true })
+          .add("root.txt", "root")
+          .add("folder/", "")
+          .add("folder/file1.txt", "file1")
+          .add("folder/file2.txt", "file2")
+          .add("folder/sub/", "")
+          .add("folder/sub/deep.txt", "deep")
+          .add("other.txt", "other")
+          .bytes();
+
+        const editor = await editZip(original, { reproducible: true });
+        const count = editor.deleteDirectory("folder");
+
+        expect(count).toBe(5); // folder/, file1, file2, sub/, deep.txt
+        expect(editor.has("folder/")).toBe(false);
+        expect(editor.has("folder/file1.txt")).toBe(false);
+        expect(editor.has("folder/sub/deep.txt")).toBe(false);
+        expect(editor.has("root.txt")).toBe(true);
+        expect(editor.has("other.txt")).toBe(true);
+
+        const out = await editor.bytes();
+        const parser = new ZipParser(out);
+        const paths = parser
+          .getEntries()
+          .map(e => e.path)
+          .sort();
+        expect(paths).toEqual(["other.txt", "root.txt"]);
+      });
+
+      it("should work with trailing slash", async () => {
+        const original = await zip({ reproducible: true })
+          .add("folder/", "")
+          .add("folder/file.txt", "content")
+          .add("other.txt", "other")
+          .bytes();
+
+        const editor = await editZip(original, { reproducible: true });
+        const count = editor.deleteDirectory("folder/");
+
+        expect(count).toBe(2);
+        expect(editor.has("folder/")).toBe(false);
+        expect(editor.has("folder/file.txt")).toBe(false);
+        expect(editor.has("other.txt")).toBe(true);
+      });
+
+      it("should return 0 when directory does not exist", async () => {
+        const original = await zip({ reproducible: true }).add("file.txt", "content").bytes();
+
+        const editor = await editZip(original, { reproducible: true });
+        const count = editor.deleteDirectory("nonexistent");
+
+        expect(count).toBe(0);
+      });
+
+      it("should not delete files with similar prefix but not in directory", async () => {
+        const original = await zip({ reproducible: true })
+          .add("test/file.txt", "in folder")
+          .add("test-file.txt", "similar prefix")
+          .add("testing/file.txt", "different folder")
+          .bytes();
+
+        const editor = await editZip(original, { reproducible: true });
+        const count = editor.deleteDirectory("test");
+
+        expect(count).toBe(1); // Only test/file.txt
+        expect(editor.has("test/file.txt")).toBe(false);
+        expect(editor.has("test-file.txt")).toBe(true);
+        expect(editor.has("testing/file.txt")).toBe(true);
+      });
+
+      it("should delete nested directories correctly", async () => {
+        const original = await zip({ reproducible: true })
+          .add("a/b/c/file.txt", "deep")
+          .add("a/b/other.txt", "mid")
+          .add("a/top.txt", "top")
+          .bytes();
+
+        const editor = await editZip(original, { reproducible: true });
+        const count = editor.deleteDirectory("a/b");
+
+        expect(count).toBe(2); // c/file.txt and other.txt
+        expect(editor.has("a/b/c/file.txt")).toBe(false);
+        expect(editor.has("a/b/other.txt")).toBe(false);
+        expect(editor.has("a/top.txt")).toBe(true);
+      });
+
+      it("should work via ZipEditPlan", async () => {
+        const original = await zip({ reproducible: true })
+          .add("keep.txt", "keep")
+          .add("delete/a.txt", "a")
+          .add("delete/b.txt", "b")
+          .bytes();
+
+        const plan = new ZipEditPlan().deleteDirectory("delete").set("new.txt", "new");
+
+        const editor = await editZip(original, { reproducible: true });
+        editor.apply(plan);
+
+        const out = await editor.bytes();
+        const parser = new ZipParser(out);
+        const paths = parser
+          .getEntries()
+          .map(e => e.path)
+          .sort();
+        expect(paths).toEqual(["keep.txt", "new.txt"]);
+      });
+
+      it("should delete pending set entries in the directory", async () => {
+        const original = await zip({ reproducible: true }).add("existing.txt", "existing").bytes();
+
+        const editor = await editZip(original, { reproducible: true });
+        editor.set("folder/new1.txt", "new1");
+        editor.set("folder/sub/new2.txt", "new2");
+        editor.set("other/file.txt", "other");
+
+        const count = editor.deleteDirectory("folder");
+
+        expect(count).toBe(2); // new1.txt and sub/new2.txt
+        expect(editor.has("folder/new1.txt")).toBe(false);
+        expect(editor.has("folder/sub/new2.txt")).toBe(false);
+        expect(editor.has("other/file.txt")).toBe(true);
+      });
+    });
+
+    // -------------------------------------------------------------------------
     // setComment()
     // -------------------------------------------------------------------------
 

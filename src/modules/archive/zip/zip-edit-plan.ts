@@ -17,6 +17,10 @@ export type ZipEditOp =
       name: string;
     }
   | {
+      type: "deleteDirectory";
+      prefix: string;
+    }
+  | {
       type: "rename";
       from: string;
       to: string;
@@ -43,6 +47,10 @@ export type SerializedZipEditOp =
   | {
       type: "delete";
       name: string;
+    }
+  | {
+      type: "deleteDirectory";
+      prefix: string;
     }
   | {
       type: "rename";
@@ -89,6 +97,16 @@ export class ZipEditPlan {
     return this;
   }
 
+  /**
+   * Delete a directory and all its contents recursively.
+   *
+   * @param prefix - The directory path prefix to delete (with or without trailing slash)
+   */
+  deleteDirectory(prefix: string): this {
+    this._ops.push({ type: "deleteDirectory", prefix });
+    return this;
+  }
+
   rename(from: string, to: string): this {
     this._ops.push({ type: "rename", from, to });
     return this;
@@ -105,6 +123,7 @@ export class ZipEditPlan {
   applyTo(target: {
     set(name: string, source: ArchiveSource, options?: ZipEntryOptions): unknown;
     delete(name: string): unknown;
+    deleteDirectory(prefix: string): unknown;
     rename(from: string, to: string): unknown;
     setComment(comment?: string): unknown;
   }): void {
@@ -115,6 +134,9 @@ export class ZipEditPlan {
           break;
         case "delete":
           target.delete(op.name);
+          break;
+        case "deleteDirectory":
+          target.deleteDirectory(op.prefix);
           break;
         case "rename":
           target.rename(op.from, op.to);

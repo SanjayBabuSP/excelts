@@ -375,6 +375,31 @@ export class ZipEditor {
   }
 
   /**
+   * Delete a directory and all its contents recursively.
+   *
+   * This method deletes the directory entry itself (if it exists) and all entries
+   * whose paths start with the directory prefix. Similar to `rm -rf` behavior.
+   *
+   * @param prefix - The directory path prefix to delete (with or without trailing slash)
+   * @returns The number of entries deleted
+   *
+   * @example
+   * ```ts
+   * // Delete "assets/" folder and all files inside it
+   * const deletedCount = editor.deleteDirectory("assets");
+   *
+   * // With trailing slash (same result)
+   * editor.deleteDirectory("assets/");
+   *
+   * // Delete nested directory
+   * editor.deleteDirectory("src/components/old");
+   * ```
+   */
+  deleteDirectory(prefix: string): number {
+    return this._view.deleteDirectory(prefix);
+  }
+
+  /**
    * Add or update an entry.
    *
    * If an entry with the same name already exists, it will be replaced.

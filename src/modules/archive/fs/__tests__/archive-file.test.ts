@@ -284,6 +284,106 @@ describe("ArchiveFile", () => {
     });
   });
 
+  describe("transform function", () => {
+    it("should skip entries when transform returns false (ZIP)", async () => {
+      const srcDir = path.join(testDir, "src");
+      await fs.promises.mkdir(srcDir, { recursive: true });
+      await fs.promises.writeFile(path.join(srcDir, "keep.txt"), "keep");
+      await fs.promises.writeFile(path.join(srcDir, "skip.log"), "skip");
+
+      const archive = new ArchiveFile();
+      archive.addDirectory(srcDir, {
+        transform: data => (data.name.endsWith(".log") ? false : data)
+      });
+
+      const buffer = await archive.toBuffer();
+      const reader = ArchiveFile.fromBuffer(buffer);
+      const entries = reader.getEntriesSync();
+
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toContain("keep.txt");
+    });
+
+    it("should rename entries via transform (ZIP)", async () => {
+      const srcDir = path.join(testDir, "src");
+      await fs.promises.mkdir(srcDir, { recursive: true });
+      await fs.promises.writeFile(path.join(srcDir, "old.txt"), "content");
+
+      const archive = new ArchiveFile();
+      archive.addDirectory(srcDir, {
+        transform: data => ({ ...data, name: data.name.replace("old", "new") })
+      });
+
+      const buffer = await archive.toBuffer();
+      const reader = ArchiveFile.fromBuffer(buffer);
+      const entries = reader.getEntriesSync();
+
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toContain("new.txt");
+    });
+
+    it("should skip entries when transform returns false (TAR)", async () => {
+      const srcDir = path.join(testDir, "src");
+      await fs.promises.mkdir(srcDir, { recursive: true });
+      await fs.promises.writeFile(path.join(srcDir, "keep.txt"), "keep");
+      await fs.promises.writeFile(path.join(srcDir, "skip.log"), "skip");
+
+      const archive = new ArchiveFile({ format: "tar" });
+      archive.addDirectory(srcDir, {
+        transform: data => (data.name.endsWith(".log") ? false : data)
+      });
+
+      const buffer = await archive.toBuffer();
+      const reader = ArchiveFile.fromBuffer(buffer, { format: "tar" });
+      const entries = await reader.getEntries();
+
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toContain("keep.txt");
+    });
+
+    it("should rename entries via transform (TAR)", async () => {
+      const srcDir = path.join(testDir, "src");
+      await fs.promises.mkdir(srcDir, { recursive: true });
+      await fs.promises.writeFile(path.join(srcDir, "old.txt"), "content");
+
+      const archive = new ArchiveFile({ format: "tar" });
+      archive.addDirectory(srcDir, {
+        transform: data => ({ ...data, name: data.name.replace("old", "new") })
+      });
+
+      const buffer = await archive.toBuffer();
+      const reader = ArchiveFile.fromBuffer(buffer, { format: "tar" });
+      const entries = await reader.getEntries();
+
+      expect(entries.length).toBe(1);
+      expect(entries[0].path).toContain("new.txt");
+    });
+
+    it("should work with addGlob transform", async () => {
+      await fs.promises.writeFile(path.join(testDir, "a.txt"), "a");
+      await fs.promises.writeFile(path.join(testDir, "b.txt"), "b");
+      await fs.promises.writeFile(path.join(testDir, "c.log"), "c");
+
+      const archive = new ArchiveFile();
+      archive.addGlob("*.*", {
+        cwd: testDir,
+        transform: data => {
+          if (data.name.endsWith(".log")) {
+            return false;
+          }
+          return { ...data, prefix: "files/" };
+        }
+      });
+
+      const buffer = await archive.toBuffer();
+      const reader = ArchiveFile.fromBuffer(buffer);
+      const entries = reader.getEntriesSync();
+
+      expect(entries.length).toBe(2);
+      expect(entries.every(e => e.path.startsWith("files/"))).toBe(true);
+    });
+  });
+
   describe("extraction", () => {
     it("should extract ZIP to directory", async () => {
       const archive = new ArchiveFile();

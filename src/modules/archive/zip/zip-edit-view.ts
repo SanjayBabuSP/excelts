@@ -172,6 +172,43 @@ export class ZipEditView<TInfo> {
   }
 
   /**
+   * Delete a directory and all its contents recursively.
+   *
+   * This method deletes the directory entry itself (if it exists) and all entries
+   * whose paths start with the directory prefix (e.g., "folder/" will delete
+   * "folder/", "folder/file.txt", "folder/sub/file.txt", etc.).
+   *
+   * @param prefix - The directory path prefix to delete (with or without trailing slash)
+   * @returns The number of entries deleted
+   *
+   * @example
+   * ```ts
+   * // Delete "assets/" and all files/folders inside it
+   * const count = view.deleteDirectory("assets");
+   * // Or with trailing slash (same result)
+   * const count = view.deleteDirectory("assets/");
+   * ```
+   */
+  deleteDirectory(prefix: string): number {
+    const normalizedPrefix = this._normalize(prefix);
+    // Ensure prefix ends with "/" for proper matching
+    const dirPrefix = normalizedPrefix.endsWith("/") ? normalizedPrefix : normalizedPrefix + "/";
+
+    const toDelete: string[] = [];
+    for (const name of this._view.keys()) {
+      // Match: exact directory entry (without slash) OR anything inside the directory
+      if (name === normalizedPrefix || name.startsWith(dirPrefix)) {
+        toDelete.push(name);
+      }
+    }
+
+    for (const name of toDelete) {
+      this._view.delete(name);
+    }
+    return toDelete.length;
+  }
+
+  /**
    * Add or update an entry with new content.
    */
   set(name: string, source: ArchiveSource, options?: ZipEntryOptions): void {
