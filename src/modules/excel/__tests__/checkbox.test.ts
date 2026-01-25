@@ -97,7 +97,6 @@ describe("Checkbox Feature", () => {
 
       expect(entries.has("xl/featurePropertyBag/featurePropertyBag.xml")).toBe(true);
 
-      // Validate featurePropertyBag.xml structure (as per issue #35 minimal diff)
       const featureBag = entries.get("xl/featurePropertyBag/featurePropertyBag.xml");
       expect(featureBag).toBeDefined();
       const featureBagText = new TextDecoder().decode(featureBag!.data);

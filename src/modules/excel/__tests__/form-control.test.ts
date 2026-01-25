@@ -264,7 +264,6 @@ describe("Form Control Checkbox", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Sheet1");
 
-      // Repro ranges from issue #35 (Excel Online reported "workbook is damaged")
       ws.addFormCheckbox("J2:K3", { link: "D6", checked: false, text: "J2:K3" });
       ws.addFormCheckbox("J4:J4", { link: "D7", checked: false, text: "J4:J4" });
       ws.addFormCheckbox("J5:J5", { link: "D8", checked: false, text: "J5:J5" });
