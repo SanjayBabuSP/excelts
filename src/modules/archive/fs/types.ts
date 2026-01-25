@@ -17,6 +17,38 @@ import type { ArchiveFormat } from "@archive/formats/types";
 export type { ArchiveFormat };
 
 // =============================================================================
+// Transform Function Types
+// =============================================================================
+
+/** Entry data passed to transform function */
+export interface TransformEntryData {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  mtime: Date;
+  atime?: Date;
+  ctime?: Date;
+  birthTime?: Date;
+  mode?: number;
+  prefix?: string;
+}
+
+/** Transform result: modified data, `false` to skip, or `undefined` to keep as-is */
+export type TransformResult = TransformEntryData | false | undefined;
+
+/**
+ * Transform function for per-entry customization.
+ * @example
+ * ```ts
+ * const transform: TransformFunction = (data) => {
+ *   if (data.name.endsWith('.log')) return false; // skip
+ *   return { ...data, name: data.name.replace('src/', 'dist/') }; // rename
+ * };
+ * ```
+ */
+export type TransformFunction = (data: TransformEntryData) => TransformResult;
+
+// =============================================================================
 // Overwrite Strategies
 // =============================================================================
 
@@ -104,6 +136,31 @@ export interface AddDirectoryOptions {
   /** Filter function to include/exclude files */
   filter?: (path: string, stats: { isDirectory: boolean; size: number }) => boolean;
 
+  /**
+   * Transform function to modify entry metadata or skip entries.
+   *
+   * Similar to archiver's data function:
+   * - Return modified data to customize the entry
+   * - Return `false` to skip the entry
+   * - Return `undefined` to include as-is
+   *
+   * @example
+   * ```ts
+   * archive.addDirectory('src/', {
+   *   transform: (data) => {
+   *     // Skip log files
+   *     if (data.name.endsWith('.log')) return false;
+   *     // Rename config
+   *     if (data.name === 'config.dev.json') {
+   *       return { ...data, name: 'config.json' };
+   *     }
+   *     return data;
+   *   }
+   * });
+   * ```
+   */
+  transform?: TransformFunction;
+
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
 
@@ -151,6 +208,9 @@ export interface AddGlobOptions {
 
   /** Filter function to include/exclude files */
   filter?: (path: string, stats: { isDirectory: boolean; size: number }) => boolean;
+
+  /** Transform function to modify entry metadata or skip entries. */
+  transform?: TransformFunction;
 
   /** Encryption method */
   encryptionMethod?: ZipEncryptionMethod;
@@ -351,6 +411,15 @@ export interface ZipFileOptions {
 
   /** Optional string encoding for entry names/comments. */
   encoding?: ZipStringEncoding;
+
+  /**
+   * Maximum number of concurrent file I/O operations (default: 8).
+   *
+   * Controls how many files are read from disk simultaneously when
+   * processing directory or glob entries. Lower values reduce memory
+   * usage; higher values may improve throughput on SSDs.
+   */
+  concurrency?: number;
 }
 
 /**
@@ -474,6 +543,14 @@ export interface TarFileOptions {
 
   /** Gzip compression level (1-9, default: 6) */
   gzipLevel?: number;
+
+  /**
+   * Maximum number of concurrent file I/O operations (default: 8).
+   *
+   * Controls how many files are read from disk simultaneously when
+   * processing directory or glob entries.
+   */
+  concurrency?: number;
 }
 
 /**
@@ -579,6 +656,9 @@ export interface AddTarDirectoryOptions extends AddTarFileOptions {
   /** Filter function to include/exclude files */
   filter?: (path: string, stats: { isDirectory: boolean; size: number }) => boolean;
 
+  /** Transform function to modify entry metadata or skip entries. */
+  transform?: TransformFunction;
+
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
 }
@@ -601,4 +681,7 @@ export interface AddTarGlobOptions extends AddTarFileOptions {
 
   /** Filter function to include/exclude files */
   filter?: (path: string, stats: { isDirectory: boolean; size: number }) => boolean;
+
+  /** Transform function to modify entry metadata or skip entries. */
+  transform?: TransformFunction;
 }

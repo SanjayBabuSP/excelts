@@ -71,7 +71,9 @@ import type {
   ArchiveWarning,
   ArchiveStreamOptions,
   ArchiveStreamProgress,
-  ArchiveStreamOperation
+  ArchiveStreamOperation,
+  TransformFunction,
+  TransformEntryData
 } from "./types";
 
 import {
@@ -93,6 +95,48 @@ import {
   safeStats,
   safeStatsSync
 } from "@utils/fs";
+
+// =============================================================================
+// Transform Helpers (internal)
+// =============================================================================
+
+function applyTransform(
+  entry: FileEntry,
+  prefix: string | undefined,
+  transform?: TransformFunction
+): TransformEntryData | null {
+  const data: TransformEntryData = {
+    name: entry.relativePath,
+    isDirectory: entry.isDirectory,
+    size: entry.size,
+    mtime: entry.mtime,
+    atime: entry.atime,
+    ctime: entry.ctime,
+    birthTime: entry.birthTime,
+    mode: entry.mode,
+    prefix
+  };
+  if (!transform) {
+    return data;
+  }
+  const result = transform(data);
+  return result === false ? null : (result ?? data);
+}
+
+function mergeToZipOptions(t: TransformEntryData, opts: AddFileOptions): AddFileOptions {
+  return {
+    ...opts,
+    modTime: t.mtime,
+    atime: t.atime,
+    ctime: t.ctime,
+    birthTime: t.birthTime,
+    mode: t.mode ?? opts.mode
+  };
+}
+
+function mergeToTarOptions(t: TransformEntryData, opts: AddTarFileOptions): AddTarFileOptions {
+  return { ...opts, modTime: t.mtime, mode: t.mode ?? opts.mode };
+}
 
 // =============================================================================
 // ZIP Helper Types
@@ -647,6 +691,8 @@ interface ZipBuildContext {
   pathOptions: ZipPathOptions;
   bytesWritten: number;
   checkAbort?: () => void;
+  /** I/O concurrency limit for directory/glob operations */
+  concurrency: number;
 }
 
 /**
@@ -736,40 +782,67 @@ async function processZipPendingEntry(
     }
 
     case "directory": {
-      const { prefix, includeRoot = true, recursive = true, filter } = pending.options;
+      const { prefix, includeRoot = true, recursive = true, filter, transform } = pending.options;
       const dirName = path.basename(pending.localPath);
       const basePrefix = prefix ?? (includeRoot ? dirName : "");
 
       const traverseResult = fsOps.traverseDir(pending.localPath, {
         recursive,
         followSymlinks: pending.options.followSymlinks,
-        filter: wrapFilter(filter)
+        // Only use filter if no transform is provided (transform supersedes filter)
+        filter: transform ? undefined : wrapFilter(filter)
       });
 
       await processInOrderWithConcurrency<FileEntry>(
         traverseResult as any,
-        DEFAULT_IO_CONCURRENCY,
+        ctx.concurrency,
         async (entry: FileEntry) => {
           ctx.checkAbort?.();
-          const zipPath = joinZipPath(ctx.pathOptions, basePrefix, entry.relativePath);
+
+          // Apply transform function if provided
+          const transformed = applyTransform(entry, basePrefix, transform);
+          if (transformed === null) {
+            // Entry was filtered out by transform returning false
+            return () => {};
+          }
+
+          // Use transformed name and prefix
+          const effectivePrefix = transformed.prefix ?? basePrefix;
+          const zipPath = joinZipPath(ctx.pathOptions, effectivePrefix, transformed.name);
 
           if (entry.isDirectory) {
             return () => {
               ctx.entries.push(
-                buildDirectoryEntry(zipPath, entry, ctx.globalOptions, pending.options)
+                buildDirectoryEntry(
+                  zipPath,
+                  {
+                    ...entry,
+                    mtime: transformed.mtime,
+                    atime: transformed.atime ?? entry.atime,
+                    ctime: transformed.ctime ?? entry.ctime,
+                    birthTime: transformed.birthTime ?? entry.birthTime,
+                    mode: transformed.mode ?? entry.mode
+                  },
+                  ctx.globalOptions,
+                  pending.options
+                )
               );
             };
           }
 
           const data = await fsOps.readFile(entry.absolutePath);
+          const mergedOptions = transform
+            ? mergeToZipOptions(transformed, pending.options)
+            : pending.options;
+
           return () => {
             ctx.entries.push(
-              buildZipEntry(zipPath, data, pending.options, ctx.globalOptions, ctx.globalPassword, {
-                modTime: entry.mtime,
-                mode: entry.mode,
-                atime: entry.atime,
-                ctime: entry.ctime,
-                birthTime: entry.birthTime
+              buildZipEntry(zipPath, data, mergedOptions, ctx.globalOptions, ctx.globalPassword, {
+                modTime: transformed.mtime,
+                mode: transformed.mode ?? entry.mode,
+                atime: transformed.atime ?? entry.atime,
+                ctime: transformed.ctime ?? entry.ctime,
+                birthTime: transformed.birthTime ?? entry.birthTime
               })
             );
             ctx.bytesWritten += data.length;
@@ -780,31 +853,46 @@ async function processZipPendingEntry(
     }
 
     case "glob": {
-      const { cwd, prefix, ignore, dot, followSymlinks, filter } = pending.options;
+      const { cwd, prefix, ignore, dot, followSymlinks, filter, transform } = pending.options;
 
       const globResult = fsOps.globFiles(pending.pattern, {
         cwd,
         ignore,
         dot,
         followSymlinks,
-        filter: wrapFilter(filter)
+        // Only use filter if no transform is provided (transform supersedes filter)
+        filter: transform ? undefined : wrapFilter(filter)
       });
 
       await processInOrderWithConcurrency<FileEntry>(
         globResult as any,
-        DEFAULT_IO_CONCURRENCY,
+        ctx.concurrency,
         async (entry: FileEntry) => {
           ctx.checkAbort?.();
-          const zipPath = joinZipPath(ctx.pathOptions, prefix ?? "", entry.relativePath);
+
+          // Apply transform function if provided
+          const transformed = applyTransform(entry, prefix, transform);
+          if (transformed === null) {
+            // Entry was filtered out by transform returning false
+            return () => {};
+          }
+
+          // Use transformed name and prefix
+          const effectivePrefix = transformed.prefix ?? prefix ?? "";
+          const zipPath = joinZipPath(ctx.pathOptions, effectivePrefix, transformed.name);
           const data = await fsOps.readFile(entry.absolutePath);
+          const mergedOptions = transform
+            ? mergeToZipOptions(transformed, pending.options)
+            : pending.options;
+
           return () => {
             ctx.entries.push(
-              buildZipEntry(zipPath, data, pending.options, ctx.globalOptions, ctx.globalPassword, {
-                modTime: entry.mtime,
-                mode: entry.mode,
-                atime: entry.atime,
-                ctime: entry.ctime,
-                birthTime: entry.birthTime
+              buildZipEntry(zipPath, data, mergedOptions, ctx.globalOptions, ctx.globalPassword, {
+                modTime: transformed.mtime,
+                mode: transformed.mode ?? entry.mode,
+                atime: transformed.atime ?? entry.atime,
+                ctime: transformed.ctime ?? entry.ctime,
+                birthTime: transformed.birthTime ?? entry.birthTime
               })
             );
             ctx.bytesWritten += data.length;
@@ -2057,7 +2145,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       globalPassword,
       pathOptions: resolveZipPathOptions(globalOptions),
       bytesWritten: 0,
-      checkAbort
+      checkAbort,
+      concurrency: globalOptions.concurrency ?? DEFAULT_IO_CONCURRENCY
     };
 
     // Async file system operations
@@ -2139,7 +2228,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       globalOptions,
       globalPassword,
       pathOptions: resolveZipPathOptions(globalOptions),
-      bytesWritten: 0
+      bytesWritten: 0,
+      concurrency: globalOptions.concurrency ?? DEFAULT_IO_CONCURRENCY
     };
 
     // Sync file system operations (no collectStream - streams not supported)
@@ -2626,18 +2716,29 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       }
 
       case "directory": {
-        const filter = wrapFilter(entry.options.filter);
+        const { filter, transform } = entry.options;
+        const tarConcurrency = this._tar_options?.concurrency ?? DEFAULT_IO_CONCURRENCY;
         const fileIterable = traverseDirectory(entry.localPath, {
           recursive: entry.options.recursive ?? true,
           followSymlinks: entry.options.followSymlinks,
-          filter
+          // Only use filter if no transform is provided (transform supersedes filter)
+          filter: transform ? undefined : wrapFilter(filter)
         });
 
         await processInOrderWithConcurrency<FileEntry>(
           fileIterable as any,
-          DEFAULT_IO_CONCURRENCY,
+          tarConcurrency,
           async (file: FileEntry) => {
-            const tarPath = normalizeTarPath(file.relativePath, entry.options.prefix);
+            // Apply transform function if provided
+            const transformed = applyTransform(file, entry.options.prefix, transform);
+            if (transformed === null) {
+              // Entry was filtered out by transform returning false
+              return () => {};
+            }
+
+            // Use transformed name and prefix
+            const effectivePrefix = transformed.prefix ?? entry.options.prefix;
+            const tarPath = normalizeTarPath(transformed.name, effectivePrefix);
 
             if (file.isDirectory) {
               return () => {
@@ -2646,8 +2747,20 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
             }
 
             const data = await readFileBytes(file.absolutePath);
+            const mergedOptions = transform
+              ? mergeToTarOptions(transformed, entry.options)
+              : entry.options;
+
             return () => {
-              archive.add(tarPath, data, buildTarAddOptions(entry.options, file));
+              // Note: TAR only supports mode and mtime (no atime/ctime/birthTime)
+              archive.add(
+                tarPath,
+                data,
+                buildTarAddOptions(mergedOptions, {
+                  mtime: transformed.mtime,
+                  mode: transformed.mode ?? file.mode
+                })
+              );
             };
           }
         );
@@ -2656,20 +2769,32 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
 
       case "glob": {
         const cwd = entry.options.cwd ?? process.cwd();
-        const filter = wrapFilter(entry.options.filter);
+        const { filter, transform } = entry.options;
+        const tarConcurrency = this._tar_options?.concurrency ?? DEFAULT_IO_CONCURRENCY;
         const fileIterable = globFiles(entry.pattern, {
           cwd,
           dot: entry.options.dot,
           followSymlinks: entry.options.followSymlinks,
           ignore: entry.options.ignore,
-          filter
+          // Only use filter if no transform is provided (transform supersedes filter)
+          filter: transform ? undefined : wrapFilter(filter)
         });
 
         await processInOrderWithConcurrency<FileEntry>(
           fileIterable as any,
-          DEFAULT_IO_CONCURRENCY,
+          tarConcurrency,
           async (file: FileEntry) => {
-            const tarPath = normalizeTarPath(file.relativePath, entry.options.prefix);
+            // Apply transform function if provided
+            const transformed = applyTransform(file, entry.options.prefix, transform);
+            if (transformed === null) {
+              // Entry was filtered out by transform returning false
+              return () => {};
+            }
+
+            // Use transformed name and prefix
+            const effectivePrefix = transformed.prefix ?? entry.options.prefix;
+            const tarPath = normalizeTarPath(transformed.name, effectivePrefix);
+
             if (file.isDirectory) {
               return () => {
                 archive.add(tarPath + "/", "", { mode: TAR_DIR_MODE });
@@ -2677,8 +2802,20 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
             }
 
             const data = await readFileBytes(file.absolutePath);
+            const mergedOptions = transform
+              ? mergeToTarOptions(transformed, entry.options)
+              : entry.options;
+
             return () => {
-              archive.add(tarPath, data, buildTarAddOptions(entry.options, file));
+              // Note: TAR only supports mode and mtime (no atime/ctime/birthTime)
+              archive.add(
+                tarPath,
+                data,
+                buildTarAddOptions(mergedOptions, {
+                  mtime: transformed.mtime,
+                  mode: transformed.mode ?? file.mode
+                })
+              );
             };
           }
         );
@@ -2711,28 +2848,30 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       }
 
       case "directory": {
-        const filter = wrapFilter(entry.options.filter);
+        const { filter, transform } = entry.options;
         for (const file of traverseDirectorySync(entry.localPath, {
           recursive: entry.options.recursive ?? true,
           followSymlinks: entry.options.followSymlinks,
-          filter
+          // Only use filter if no transform is provided (transform supersedes filter)
+          filter: transform ? undefined : wrapFilter(filter)
         })) {
-          this._addTarFileEntrySync(archive, file, entry.options);
+          this._addTarFileEntrySync(archive, file, entry.options, entry.options.prefix, transform);
         }
         break;
       }
 
       case "glob": {
         const cwd = entry.options.cwd ?? process.cwd();
-        const filter = wrapFilter(entry.options.filter);
+        const { filter, transform } = entry.options;
         for (const file of globFilesSync(entry.pattern, {
           cwd,
           dot: entry.options.dot,
           followSymlinks: entry.options.followSymlinks,
           ignore: entry.options.ignore,
-          filter
+          // Only use filter if no transform is provided (transform supersedes filter)
+          filter: transform ? undefined : wrapFilter(filter)
         })) {
-          this._addTarFileEntrySync(archive, file, entry.options);
+          this._addTarFileEntrySync(archive, file, entry.options, entry.options.prefix, transform);
         }
         break;
       }
@@ -2744,22 +2883,37 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
    */
   private _addTarFileEntrySync(
     archive: TarArchive,
-    file: {
-      relativePath: string;
-      absolutePath: string;
-      isDirectory: boolean;
-      mode?: number;
-      mtime?: Date;
-    },
-    options: AddTarDirectoryOptions | AddTarGlobOptions
+    file: FileEntry,
+    options: AddTarDirectoryOptions | AddTarGlobOptions,
+    prefix: string | undefined,
+    transform: TransformFunction | undefined
   ): void {
-    const tarPath = normalizeTarPath(file.relativePath, options.prefix);
+    // Apply transform function if provided
+    const transformed = applyTransform(file, prefix, transform);
+    if (transformed === null) {
+      // Entry was filtered out by transform returning false
+      return;
+    }
+
+    // Use transformed name and prefix
+    const effectivePrefix = transformed.prefix ?? prefix;
+    const tarPath = normalizeTarPath(transformed.name, effectivePrefix);
 
     if (file.isDirectory) {
       archive.add(tarPath + "/", "", { mode: TAR_DIR_MODE });
     } else {
       const data = readFileBytesSync(file.absolutePath);
-      archive.add(tarPath, data, buildTarAddOptions(options, file));
+      const mergedOptions = transform ? mergeToTarOptions(transformed, options) : options;
+
+      // Note: TAR only supports mode and mtime (no atime/ctime/birthTime)
+      archive.add(
+        tarPath,
+        data,
+        buildTarAddOptions(mergedOptions, {
+          mtime: transformed.mtime,
+          mode: transformed.mode ?? file.mode
+        })
+      );
     }
   }
 

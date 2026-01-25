@@ -95,7 +95,11 @@ export type {
   ArchiveStreamOperation,
   ArchiveStreamPhase,
   // Warning types
-  ArchiveWarning
+  ArchiveWarning,
+  // Transform function types
+  TransformFunction,
+  TransformEntryData,
+  TransformResult
 } from "./types";
 
 // Re-export ArchiveSink for pipeTo() usage
