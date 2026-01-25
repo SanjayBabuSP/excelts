@@ -34,6 +34,17 @@ class ConditionalFormattingsXform extends BaseXform {
         if (rule.style) {
           rule.dxfId = options.styles.addDxfStyle(rule.style);
         }
+
+        // Ensure dataBar rules have required cfvo and color properties
+        if (rule.type === "dataBar") {
+          if (!rule.cfvo || rule.cfvo.length < 2) {
+            rule.cfvo = [{ type: "min" }, { type: "max" }];
+          }
+          if (!rule.color) {
+            // Default blue color for data bars (same as Excel's default)
+            rule.color = { argb: "FF638EC6" };
+          }
+        }
       });
     });
   }

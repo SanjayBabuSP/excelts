@@ -189,6 +189,82 @@ const expectations = [
       return this.preparedModel;
     },
     tests: ["render", "parse"]
+  },
+  {
+    title: "Data Bar",
+    create() {
+      return new CfRuleXform();
+    },
+    preparedModel: {
+      type: "dataBar",
+      priority: 1,
+      x14Id: "{TEST-UUID-1234}",
+      cfvo: [{ type: "min" }, { type: "max" }],
+      color: { argb: "FF638EC6" }
+    },
+    xml: `
+      <cfRule type="dataBar" priority="1">
+        <dataBar>
+          <cfvo type="min"/>
+          <cfvo type="max"/>
+          <color rgb="FF638EC6"/>
+        </dataBar>
+        <extLst>
+          <ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">
+            <x14:id>{TEST-UUID-1234}</x14:id>
+          </ext>
+        </extLst>
+      </cfRule>
+    `,
+    parsedModel: {
+      type: "dataBar",
+      priority: 1,
+      x14Id: "{TEST-UUID-1234}",
+      cfvo: [{ type: "min" }, { type: "max" }],
+      color: { argb: "FF638EC6" }
+    },
+    tests: ["render", "parse"]
+  },
+  {
+    title: "Data Bar with custom values",
+    create() {
+      return new CfRuleXform();
+    },
+    preparedModel: {
+      type: "dataBar",
+      priority: 1,
+      x14Id: "{TEST-UUID-5678}",
+      cfvo: [
+        { type: "num", value: 5 },
+        { type: "num", value: 20 }
+      ],
+      color: { argb: "FFFF0000" }
+    },
+    xml: `
+      <cfRule type="dataBar" priority="1">
+        <dataBar>
+          <cfvo type="num" val="5"/>
+          <cfvo type="num" val="20"/>
+          <color rgb="FFFF0000"/>
+        </dataBar>
+        <extLst>
+          <ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">
+            <x14:id>{TEST-UUID-5678}</x14:id>
+          </ext>
+        </extLst>
+      </cfRule>
+    `,
+    parsedModel: {
+      type: "dataBar",
+      priority: 1,
+      x14Id: "{TEST-UUID-5678}",
+      cfvo: [
+        { type: "num", value: 5 },
+        { type: "num", value: 20 }
+      ],
+      color: { argb: "FFFF0000" }
+    },
+    tests: ["render", "parse"]
   }
 ];
 
