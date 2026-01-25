@@ -381,72 +381,7 @@ describe("TAR Module", () => {
     });
   });
 
-  describe("Roundtrip tests", () => {
-    const testCases = [
-      { name: "Simple text file", entries: [{ name: "hello.txt", content: "Hello World" }] },
-      {
-        name: "Multiple files and directories",
-        entries: [
-          { name: "README.md", content: "# README" },
-          { name: "src/", content: null },
-          { name: "src/index.ts", content: 'console.log("hello")' },
-          { name: "src/utils/", content: null },
-          { name: "src/utils/helper.ts", content: "export const helper = () => {}" }
-        ]
-      },
-      {
-        name: "Binary and text mixed",
-        entries: [
-          { name: "text.txt", content: "Plain text" },
-          {
-            name: "binary.bin",
-            content: new Uint8Array([0x00, 0x01, 0xff, 0xfe, 0x00, 0x42])
-          }
-        ]
-      }
-    ];
-
-    for (const tc of testCases) {
-      it(`should roundtrip: ${tc.name}`, async () => {
-        const archive = new TarArchive();
-
-        for (const entry of tc.entries) {
-          if (entry.content === null) {
-            archive.addDirectory(entry.name);
-          } else {
-            archive.add(entry.name, entry.content);
-          }
-        }
-
-        const bytes = await archive.bytes();
-        const parsed = parseTar(bytes);
-
-        expect(parsed.length).toBe(tc.entries.length);
-
-        for (let i = 0; i < tc.entries.length; i++) {
-          const original = tc.entries[i];
-          const restored = parsed[i];
-
-          // Normalize directory names
-          const expectedPath =
-            original.content === null && !original.name.endsWith("/")
-              ? original.name + "/"
-              : original.name;
-
-          expect(restored.info.path).toBe(expectedPath);
-
-          if (original.content !== null) {
-            const data = await restored.data();
-            if (typeof original.content === "string") {
-              expect(textDecoder.decode(data)).toBe(original.content);
-            } else {
-              expect(data).toEqual(original.content);
-            }
-          }
-        }
-      });
-    }
-  });
+  // NOTE: Comprehensive roundtrip tests are in archive-roundtrip.test.ts
 
   describe("Error handling", () => {
     it("should throw on empty entry name", () => {
