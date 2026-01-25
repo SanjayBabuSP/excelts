@@ -452,7 +452,6 @@ describe("Workbook Round-trip Preservation", () => {
       expect(outputDataFields).toBe(inputDataFields);
       expect(outputContent).toContain('name="Sum of Revenue"');
 
-      // Critical: colFields presence must match input (Issue #41 fix)
       const inputHasColFields = inputContent.includes("<colFields");
       const outputHasColFields = outputContent.includes("<colFields");
       expect(outputHasColFields, "colFields presence must match input").toBe(inputHasColFields);

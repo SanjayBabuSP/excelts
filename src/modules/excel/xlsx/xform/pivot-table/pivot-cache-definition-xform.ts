@@ -1,6 +1,9 @@
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { CacheField } from "@excel/xlsx/xform/pivot-table/cache-field";
-import { CacheFieldXform, type CacheFieldModel } from "@excel/xlsx/xform/pivot-table/cache-field-xform";
+import {
+  CacheFieldXform,
+  type CacheFieldModel
+} from "@excel/xlsx/xform/pivot-table/cache-field-xform";
 import { XmlStream } from "@excel/utils/xml-stream";
 import type { PivotTableSource } from "@excel/pivot-table";
 
@@ -8,9 +11,11 @@ import type { PivotTableSource } from "@excel/pivot-table";
  * Model for parsed pivot cache definition
  */
 interface ParsedCacheDefinitionModel {
-  // Source worksheet reference
+  // Source worksheet reference (ref + sheet style)
   sourceRef?: string;
   sourceSheet?: string;
+  // Source table name (name style - references a named Table)
+  sourceTableName?: string;
   // Cache fields with their shared items
   cacheFields: CacheFieldModel[];
   // Record count
@@ -125,7 +130,7 @@ class PivotCacheDefinitionXform extends BaseXform {
    * Render loaded pivot cache definition (preserving original structure)
    */
   private renderLoaded(xmlStream: any, model: ParsedCacheDefinitionModel): void {
-    const { cacheFields, sourceRef, sourceSheet, recordCount } = model;
+    const { cacheFields, sourceRef, sourceSheet, sourceTableName, recordCount } = model;
 
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
@@ -139,10 +144,13 @@ class PivotCacheDefinitionXform extends BaseXform {
     });
 
     xmlStream.openNode("cacheSource", { type: "worksheet" });
-    xmlStream.leafNode("worksheetSource", {
-      ref: sourceRef,
-      sheet: sourceSheet
-    });
+    // worksheetSource supports two reference styles:
+    // 1. name: references a named Table
+    // 2. ref + sheet: references a cell range on a worksheet
+    const worksheetSourceAttrs: Record<string, string | undefined> = sourceTableName
+      ? { name: sourceTableName }
+      : { ref: sourceRef, sheet: sourceSheet };
+    xmlStream.leafNode("worksheetSource", worksheetSourceAttrs);
     xmlStream.closeNode();
 
     xmlStream.openNode("cacheFields", { count: cacheFields.length });
@@ -189,6 +197,7 @@ class PivotCacheDefinitionXform extends BaseXform {
         if (this.inCacheSource && this.model) {
           this.model.sourceRef = attributes.ref;
           this.model.sourceSheet = attributes.sheet;
+          this.model.sourceTableName = attributes.name;
         }
         break;
 
