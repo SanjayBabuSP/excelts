@@ -153,11 +153,14 @@ describe("zip-bytes", () => {
 
     it("should handle unicode filenames", async () => {
       const content = new TextEncoder().encode("Unicode content");
-      const zip = await createZip([
-        { name: "文件.txt", data: content },
-        { name: "файл.txt", data: content },
-        { name: "αρχείο.txt", data: content }
-      ]);
+      const zip = await createZip(
+        [
+          { name: "文件.txt", data: content },
+          { name: "файл.txt", data: content },
+          { name: "αρχείο.txt", data: content }
+        ],
+        { noSort: true }
+      );
 
       const { entries } = parseEntries(zip);
       expect(entries[0]!.path).toBe("文件.txt");
@@ -167,10 +170,13 @@ describe("zip-bytes", () => {
 
     it("should handle filenames with spaces", async () => {
       const content = new TextEncoder().encode("Content");
-      const zip = await createZip([
-        { name: "file with spaces.txt", data: content },
-        { name: "folder name/file name.txt", data: content }
-      ]);
+      const zip = await createZip(
+        [
+          { name: "file with spaces.txt", data: content },
+          { name: "folder name/file name.txt", data: content }
+        ],
+        { noSort: true }
+      );
 
       const { entries } = parseEntries(zip);
       expect(entries[0]!.path).toBe("file with spaces.txt");
@@ -365,7 +371,12 @@ describe("zip-bytes", () => {
         "file [with] brackets.txt"
       ];
 
-      const zip = await createZip(specialNames.map(name => ({ name, data: content })));
+      const zip = await createZip(
+        specialNames.map(name => ({ name, data: content })),
+        {
+          noSort: true
+        }
+      );
 
       const { entries } = parseEntries(zip);
       specialNames.forEach((name, i) => {
@@ -390,11 +401,14 @@ describe("zip-bytes", () => {
     });
 
     it("should handle mixed empty and non-empty files", async () => {
-      const zip = await createZip([
-        { name: "empty1.txt", data: new Uint8Array(0) },
-        { name: "content.txt", data: new TextEncoder().encode("Has content") },
-        { name: "empty2.txt", data: new Uint8Array(0) }
-      ]);
+      const zip = await createZip(
+        [
+          { name: "empty1.txt", data: new Uint8Array(0) },
+          { name: "content.txt", data: new TextEncoder().encode("Has content") },
+          { name: "empty2.txt", data: new Uint8Array(0) }
+        ],
+        { noSort: true }
+      );
 
       const { entries } = parseEntries(zip);
       expect(entries[0]!.uncompressedSize).toBe(0);
@@ -433,7 +447,7 @@ describe("zip-bytes", () => {
       expect(parsed.length).toBe(100);
     });
 
-    it("should maintain file order", async () => {
+    it("should sort entries alphabetically by default", async () => {
       const entries: ZipEntry[] = [
         { name: "c.txt", data: new TextEncoder().encode("C") },
         { name: "a.txt", data: new TextEncoder().encode("A") },
@@ -444,7 +458,22 @@ describe("zip-bytes", () => {
 
       const { entries: parsed } = parseEntries(zip);
 
-      // Order should be preserved
+      expect(parsed[0]!.path).toBe("a.txt");
+      expect(parsed[1]!.path).toBe("b.txt");
+      expect(parsed[2]!.path).toBe("c.txt");
+    });
+
+    it("should preserve original order with noSort: true", async () => {
+      const entries: ZipEntry[] = [
+        { name: "c.txt", data: new TextEncoder().encode("C") },
+        { name: "a.txt", data: new TextEncoder().encode("A") },
+        { name: "b.txt", data: new TextEncoder().encode("B") }
+      ];
+
+      const zip = await createZip(entries, { noSort: true });
+
+      const { entries: parsed } = parseEntries(zip);
+
       expect(parsed[0]!.path).toBe("c.txt");
       expect(parsed[1]!.path).toBe("a.txt");
       expect(parsed[2]!.path).toBe("b.txt");

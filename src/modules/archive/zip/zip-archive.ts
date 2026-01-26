@@ -100,6 +100,14 @@ export interface ZipOptions {
    * If false, always follow `level` (DEFLATE when level > 0).
    */
   smartStore?: boolean;
+
+  /**
+   * If true, entries are written in their original input order.
+   * If false (default), entries are sorted alphabetically by name.
+   *
+   * Note: streaming output preserves the input order.
+   */
+  noSort?: boolean;
 }
 
 export interface ZipEntryOptions {
@@ -145,6 +153,7 @@ export class ZipArchive {
     zip64: Zip64Mode;
     path: false | ZipPathOptions;
     encoding?: ZipStringEncoding;
+    noSort: boolean;
   };
   private readonly _streamDefaults: {
     signal?: AbortSignal;
@@ -164,7 +173,8 @@ export class ZipArchive {
       smartStore: options.smartStore ?? true,
       zip64: options.zip64 ?? "auto",
       path: options.path ?? false,
-      encoding: options.encoding
+      encoding: options.encoding,
+      noSort: options.noSort ?? false
     };
     this._streamDefaults = {
       signal: options.signal,
@@ -181,7 +191,8 @@ export class ZipArchive {
       comment: this._options.comment,
       smartStore: this._options.smartStore,
       zip64: this._options.zip64,
-      encoding: this._options.encoding
+      encoding: this._options.encoding,
+      noSort: this._options.noSort
     };
   }
 

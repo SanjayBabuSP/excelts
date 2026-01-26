@@ -49,6 +49,8 @@ import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 interface ProcessedEntry {
   name: Uint8Array;
+  /** Case-insensitive sort key for deterministic ordering. */
+  sortKey: string;
   uncompressedSize: number;
   compressedData: Uint8Array;
   crc: number;
@@ -130,6 +132,35 @@ interface ZipBuildSettings {
 type ZipPathOptionValue = false | ZipPathOptions;
 
 /**
+ * Sort entries alphabetically by name (case-insensitive).
+ *
+ * Uses a decorate-sort-undecorate step to guarantee stability even when
+ * multiple entries share the same `sortKey`.
+ */
+function sortProcessedEntriesByName(entries: ProcessedEntry[]): void {
+  if (entries.length <= 1) {
+    return;
+  }
+
+  const decorated = entries.map((entry, index) => ({ entry, index }));
+  decorated.sort((a, b) => {
+    const ak = a.entry.sortKey;
+    const bk = b.entry.sortKey;
+    if (ak < bk) {
+      return -1;
+    }
+    if (ak > bk) {
+      return 1;
+    }
+    return a.index - b.index;
+  });
+
+  for (let i = 0; i < decorated.length; i++) {
+    entries[i] = decorated[i]!.entry;
+  }
+}
+
+/**
  * Validate encryption options and throw if invalid.
  */
 function validateEncryptionOptions(
@@ -156,6 +187,7 @@ function parseZipBuildOptions(options: ZipOptions): {
   smartStore: boolean;
   thresholdBytes: number | undefined;
   path: ZipPathOptionValue;
+  noSort: boolean;
 } {
   const reproducible = options.reproducible ?? false;
   const level = options.level ?? DEFAULT_ZIP_LEVEL;
@@ -176,7 +208,8 @@ function parseZipBuildOptions(options: ZipOptions): {
     zip64Mode: options.zip64 ?? "auto",
     smartStore: options.smartStore ?? true,
     thresholdBytes: options.thresholdBytes,
-    path: options.path ?? false
+    path: options.path ?? false,
+    noSort: options.noSort ?? false
   };
 }
 
@@ -290,6 +323,7 @@ function buildProcessedEntry(
 
   return {
     name: metadata.nameBytes,
+    sortKey: resolvedName.toLowerCase(),
     uncompressedSize: entry.data.length,
     compressedData: finalData,
     crc: crc32(entry.data),
@@ -332,6 +366,7 @@ function buildProcessedRawEntry(
 
   return {
     name: metadata.nameBytes,
+    sortKey: resolvedName.toLowerCase(),
     uncompressedSize: entry.uncompressedSize,
     compressedData: entry.compressedData,
     crc: entry.crc32 >>> 0,
@@ -367,6 +402,12 @@ export interface ZipOptions extends CompressOptions {
    * - default `timestamps` becomes "dos" (no UTC extra field)
    */
   reproducible?: boolean;
+
+  /**
+   * If true, entries are written in their original input order.
+   * If false (default), entries are sorted alphabetically by name.
+   */
+  noSort?: boolean;
 
   /**
    * Max number of entries to compress concurrently in `createZip()`.
@@ -610,7 +651,7 @@ export async function createZip(
   entries: ZipBuildEntry[],
   options: ZipOptions = {}
 ): Promise<Uint8Array> {
-  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path } =
+  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path, noSort } =
     parseZipBuildOptions(options);
   validateEncryptionOptions(settings.encryptionMethod, settings.password, false);
 
@@ -680,6 +721,10 @@ export async function createZip(
     await Promise.all(workers);
   }
 
+  if (!noSort) {
+    sortProcessedEntriesByName(processedEntries);
+  }
+
   return finalizeZip(processedEntries, zipComment, zip64Mode);
 }
 
@@ -690,7 +735,7 @@ export async function createZip(
  * Note: AES encryption is not supported in sync mode.
  */
 export function createZipSync(entries: ZipBuildEntry[], options: ZipOptions = {}): Uint8Array {
-  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path } =
+  const { settings, zipComment, zip64Mode, smartStore, thresholdBytes, path, noSort } =
     parseZipBuildOptions(options);
   validateEncryptionOptions(settings.encryptionMethod, settings.password, true);
 
@@ -736,6 +781,10 @@ export function createZipSync(entries: ZipBuildEntry[], options: ZipOptions = {}
     processedEntries.push(
       buildProcessedEntry(entry, settings, path, compressedData, deflate, encryptionResult)
     );
+  }
+
+  if (!noSort) {
+    sortProcessedEntriesByName(processedEntries);
   }
   return finalizeZip(processedEntries, zipComment, zip64Mode);
 }

@@ -253,5 +253,45 @@ describe("ZipParser", () => {
       expect(entry!.path).toBe("file.txt");
       expect(entry!.isDirectory).toBe(false);
     });
+
+    it("should count children in a directory", async () => {
+      const testFiles: Record<string, Uint8Array> = {
+        "root.txt": new TextEncoder().encode("root"),
+        "folder/": new Uint8Array(0),
+        "folder/a.txt": new TextEncoder().encode("a"),
+        "folder/b.txt": new TextEncoder().encode("b"),
+        "folder/sub/": new Uint8Array(0),
+        "folder/sub/c.txt": new TextEncoder().encode("c")
+      };
+
+      const zipData = await createZip(toEntries(testFiles), { noSort: true });
+      const parser = new ZipParser(zipData);
+
+      // folder/ has 4 children: a.txt, b.txt, sub/, sub/c.txt
+      expect(parser.childCount("folder/")).toBe(4);
+      // Path without trailing slash should behave the same.
+      expect(parser.childCount("folder")).toBe(4);
+
+      // folder/sub/ has 1 child: c.txt
+      expect(parser.childCount("folder/sub/")).toBe(1);
+
+      // Non-directory returns 0
+      expect(parser.childCount("root.txt")).toBe(0);
+
+      // Non-existent returns 0
+      expect(parser.childCount("nonexistent/")).toBe(0);
+
+      // Implicit directory: no explicit "implicit/" entry.
+      const zipImplicit = await createZip(
+        toEntries({
+          "implicit/a.txt": new TextEncoder().encode("a"),
+          "implicit/b.txt": new TextEncoder().encode("b")
+        }),
+        { noSort: true }
+      );
+      const parserImplicit = new ZipParser(zipImplicit);
+      expect(parserImplicit.childCount("implicit")).toBe(2);
+      expect(parserImplicit.childCount("implicit/")).toBe(2);
+    });
   });
 });

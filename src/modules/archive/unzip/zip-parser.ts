@@ -196,6 +196,39 @@ export class ZipParser {
   }
 
   /**
+   * Get the number of child entries in a directory.
+   *
+   * Returns the count of entries whose paths start with the directory prefix,
+   * excluding the directory entry itself. For non-directory entries, returns 0.
+   *
+   * @param path - Directory path (with or without trailing slash)
+   * @returns Number of child entries
+   */
+  childCount(path: string): number {
+    const direct = this.entryMap.get(path);
+    if (direct && !direct.isDirectory) {
+      return 0;
+    }
+
+    const slashPath = path.endsWith("/") ? path : path + "/";
+    const dirEntry = direct?.isDirectory ? direct : this.entryMap.get(slashPath);
+
+    // If there is no explicit directory entry, still support implicit directories
+    // as long as there are entries under the prefix.
+    const prefix = (dirEntry?.path ?? slashPath).endsWith("/")
+      ? (dirEntry?.path ?? slashPath)
+      : (dirEntry?.path ?? slashPath) + "/";
+
+    let count = 0;
+    for (const e of this.entries) {
+      if (e.path.startsWith(prefix) && e.path !== prefix) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
    * Get the archive comment.
    */
   getZipComment(): string {
