@@ -124,6 +124,34 @@ archive APIs directly, ZIP string encoding can be customized via `ZipStringEncod
 When a non-UTF-8 encoding is used, Unicode extra fields can be emitted for better
 cross-tool compatibility.
 
+### Editing an existing ZIP (ZipEditor)
+
+ExcelTS also includes a ZIP editor that can apply filesystem-like edits to an existing archive
+and then output a new ZIP.
+
+- Supports `set()`, `delete()`, `rename()`, `deleteDirectory()`, `setComment()`
+- Unchanged entries are passed through efficiently when possible
+
+```js
+import { editZip } from "@cj-tech-master/excelts";
+
+const editor = await editZip(existingZipBytes, {
+  reproducible: true,
+
+  // Passthrough behavior for unchanged entries:
+  // - "strict" (default): raw passthrough must be available or it throws
+  // - "best-effort": if raw passthrough is unavailable, fall back to extract+re-add
+  preserve: "best-effort",
+  onWarning: w => console.warn(w.code, w.entry, w.message)
+});
+
+editor.delete("old.txt");
+editor.rename("a.txt", "renamed.txt");
+editor.set("new.txt", "hello");
+
+const out = await editor.bytes();
+```
+
 ## Streaming API
 
 For processing large Excel files without loading them entirely into memory, ExcelTS provides streaming reader and writer APIs.

@@ -75,6 +75,16 @@ export interface ZipEditOptions {
   /** Password for decrypting encrypted entries (only needed for extraction, not passthrough). */
   password?: string | Uint8Array;
 
+  /**
+   * How to handle passthrough of unchanged entries.
+   *
+   * - `"strict"` (default): require raw passthrough data to be available; otherwise throw.
+   * - `"best-effort"`: if raw passthrough data is unavailable, fall back to extracting and
+   *   re-adding the entry (may increase CPU/memory usage). If extraction also fails, the entry
+   *   is skipped and a warning is emitted (if `onWarning` is set).
+   */
+  preserve?: "strict" | "best-effort";
+
   // --- Write defaults ---
 
   /** Default compression level (0=store, 1-9=deflate). Default: 6 */
@@ -229,6 +239,7 @@ export class ZipEditor {
     zip64: Zip64Mode;
     path: false | ZipPathOptions;
     encoding?: ZipStringEncoding;
+    preserve: "strict" | "best-effort";
   };
   private readonly _streamDefaults: {
     signal?: AbortSignal;
@@ -259,7 +270,8 @@ export class ZipEditor {
       smartStore: options.smartStore ?? true,
       zip64: options.zip64 ?? "auto",
       path: options.path ?? false,
-      encoding: options.encoding
+      encoding: options.encoding,
+      preserve: options.preserve ?? "strict"
     };
 
     this._stringCodec = resolveZipStringCodec(options.encoding);
@@ -579,32 +591,51 @@ export class ZipEditor {
     const preservedMeta = this._buildRawPreservedEntries();
     const sets = this._buildSetEntries();
 
-    const preserved = preservedMeta
-      .map(p => {
-        const compressedData = this._remote.getRawCompressedStream(p.info.path, { signal });
+    const preservedRaw: Array<PreservedEntry & { compressedData: AsyncIterable<Uint8Array> }> = [];
+    const preservedRecompressed: Array<{
+      name: string;
+      info: ZipEntryInfo;
+    }> = [];
 
-        if (!compressedData) {
-          this._emitWarning(
-            p.info.path,
-            "raw_unavailable",
-            `Cannot read raw compressed payload for entry "${p.info.path}".`
-          );
-          throw new Error(
-            `Cannot preserve entry "${p.info.path}" because its raw compressed payload is unavailable.`
-          );
-        }
+    for (const p of preservedMeta) {
+      const compressedData = this._remote.getRawCompressedStream(p.info.path, { signal });
+      if (compressedData) {
+        preservedRaw.push({ ...p, compressedData });
+        continue;
+      }
 
-        return { ...p, compressedData };
-      })
-      .filter((p): p is PreservedEntry & { compressedData: AsyncIterable<Uint8Array> } =>
-        Boolean(p)
+      this._emitWarning(
+        p.info.path,
+        "raw_unavailable",
+        `Cannot read raw compressed payload for entry "${p.info.path}".`
       );
+
+      if (this._options.preserve === "strict") {
+        throw new Error(
+          `Cannot preserve entry "${p.info.path}" because its raw compressed payload is unavailable.`
+        );
+      }
+
+      // We cannot re-encrypt entries; best-effort must not silently output decrypted content.
+      if (p.info.isEncrypted) {
+        this._emitWarning(
+          p.info.path,
+          "encryption_unsupported",
+          `Cannot best-effort preserve encrypted entry "${p.info.path}" without raw passthrough.`
+        );
+        continue;
+      }
+
+      // Best-effort fallback: extract and re-add the entry.
+      // This may require holding the entry in memory.
+      preservedRecompressed.push({ name: p.outName, info: p.info });
+    }
 
     const progress = new ProgressEmitter<ZipProgress>(
       {
         type: "zip",
         phase: "running",
-        entriesTotal: preserved.length + sets.length,
+        entriesTotal: preservedRaw.length + preservedRecompressed.length + sets.length,
         entriesDone: 0,
         bytesIn: 0,
         bytesOut: 0,
@@ -668,10 +699,10 @@ export class ZipEditor {
     (async () => {
       try {
         // 1) Preserved entries: passthrough raw payload.
-        for (let i = 0; i < preserved.length; i++) {
+        for (let i = 0; i < preservedRaw.length; i++) {
           throwIfAborted(signal);
 
-          const entry = preserved[i]!;
+          const entry = preservedRaw[i]!;
           progress.update({ currentEntry: { name: entry.outName, index: i, bytesIn: 0 } });
 
           const rawFile = this._buildPreservedRawFile(
@@ -689,11 +720,70 @@ export class ZipEditor {
           progress.set("entriesDone", progress.snapshot.entriesDone + 1);
         }
 
+        // 1b) Best-effort preserved entries: extract and re-add.
+        for (let k = 0; k < preservedRecompressed.length; k++) {
+          throwIfAborted(signal);
+
+          const idx = preservedRaw.length + k;
+          const entry = preservedRecompressed[k]!;
+
+          let entryBytesIn = 0;
+          progress.update({ currentEntry: { name: entry.name, index: idx, bytesIn: 0 } });
+
+          let data: Uint8Array;
+          try {
+            data = await this._remote.extractEntry(entry.info);
+          } catch (e) {
+            const err = toError(e);
+            this._emitWarning(
+              entry.info.path,
+              "unknown",
+              `Failed to extract entry "${entry.info.path}" for best-effort preserve: ${err.message}`
+            );
+            progress.set("entriesDone", progress.snapshot.entriesDone + 1);
+            continue;
+          }
+
+          const fallbackLevel = entry.info.compressionMethod === 0 ? 0 : this._options.level;
+
+          const file = new ZipDeflateFile(
+            entry.name,
+            buildZipDeflateFileOptions(
+              {
+                level: fallbackLevel,
+                modTime: entry.info.lastModified,
+                comment: entry.info.comment,
+                externalAttributes: entry.info.externalAttributes,
+                versionMadeBy: entry.info.versionMadeBy
+              },
+              {
+                level: this._options.level,
+                modTime: this._options.modTime,
+                timestamps: this._options.timestamps,
+                smartStore: this._options.smartStore,
+                zip64: this._options.zip64,
+                path: this._options.path,
+                encoding: this._options.encoding
+              }
+            )
+          );
+
+          zip.add(file);
+          entryBytesIn += data.length;
+          progress.mutate(s => {
+            s.bytesIn += data.length;
+            s.currentEntry = { name: entry.name, index: idx, bytesIn: entryBytesIn };
+          });
+          await file.push(data, true);
+          await file.complete();
+          progress.set("entriesDone", progress.snapshot.entriesDone + 1);
+        }
+
         // 2) Set/update entries: compress from source.
         for (let j = 0; j < sets.length; j++) {
           throwIfAborted(signal);
 
-          const idx = preserved.length + j;
+          const idx = preservedRaw.length + preservedRecompressed.length + j;
           const entry = sets[j]!;
 
           let entryBytesIn = 0;
@@ -815,76 +905,120 @@ export class ZipEditor {
     const allSourcesInMemory = sets.every(e => isInMemoryArchiveSource(e.source));
     const allSourcesSync = sets.every(e => isSyncArchiveSource(e.source));
 
-    const rawEntries: ZipRawEntry[] = await Promise.all(
-      preservedMeta.map(async p => {
-        const compressedData = await this._remote.getRawCompressedData(p.info.path);
-        if (!compressedData) {
-          this._emitWarning(
-            p.info.path,
-            "raw_unavailable",
-            `Cannot read raw compressed payload for entry "${p.info.path}".`
-          );
-          throw new Error(
-            `Cannot preserve entry "${p.info.path}" because its raw compressed payload is unavailable.`
-          );
-        }
+    const rawEntries: ZipRawEntry[] = [];
+    const recompressedPreserved: ZipEntry[] = [];
 
-        return this._buildPreservedRawEntry(p.outName, p.info, compressedData);
-      })
-    );
+    for (const p of preservedMeta) {
+      const compressedData = await this._remote.getRawCompressedData(p.info.path);
+      if (compressedData) {
+        rawEntries.push(this._buildPreservedRawEntry(p.outName, p.info, compressedData));
+        continue;
+      }
+
+      this._emitWarning(
+        p.info.path,
+        "raw_unavailable",
+        `Cannot read raw compressed payload for entry "${p.info.path}".`
+      );
+
+      if (this._options.preserve === "strict") {
+        throw new Error(
+          `Cannot preserve entry "${p.info.path}" because its raw compressed payload is unavailable.`
+        );
+      }
+
+      // We cannot re-encrypt entries; best-effort must not silently output decrypted content.
+      if (p.info.isEncrypted) {
+        this._emitWarning(
+          p.info.path,
+          "encryption_unsupported",
+          `Cannot best-effort preserve encrypted entry "${p.info.path}" without raw passthrough.`
+        );
+        continue;
+      }
+
+      // Best-effort fallback: extract and re-add.
+      try {
+        const data = await this._remote.extractEntry(p.info);
+        const fallbackLevel = p.info.compressionMethod === 0 ? 0 : this._options.level;
+        recompressedPreserved.push({
+          name: p.outName,
+          data,
+          level: fallbackLevel,
+          modTime: p.info.lastModified,
+          comment: p.info.comment,
+          externalAttributes: p.info.externalAttributes,
+          versionMadeBy: p.info.versionMadeBy
+        });
+      } catch (e) {
+        const err = toError(e);
+        this._emitWarning(
+          p.info.path,
+          "unknown",
+          `Failed to extract entry "${p.info.path}" for best-effort preserve: ${err.message}`
+        );
+        // Skip entry.
+      }
+    }
 
     // Fast path: all sources are sync primitives (can use sync API)
     if (allSourcesInMemory && allSourcesSync) {
-      const normalEntries: ZipEntry[] = sets.map(e => {
-        // Type narrowing: we know source is in-memory and not Blob
-        const src = e.source as Uint8Array | ArrayBuffer | string;
-        return {
-          name: e.name,
-          data: toUint8ArraySync(src),
-          level: e.options?.level,
-          modTime: e.options?.modTime,
-          atime: e.options?.atime,
-          ctime: e.options?.ctime,
-          birthTime: e.options?.birthTime,
-          comment: e.options?.comment,
-          mode: e.options?.mode,
-          msDosAttributes: e.options?.msDosAttributes,
-          externalAttributes: e.options?.externalAttributes,
-          versionMadeBy: e.options?.versionMadeBy
-        };
-      });
+      const normalEntries: ZipEntry[] = [
+        ...recompressedPreserved,
+        ...sets.map(e => {
+          // Type narrowing: we know source is in-memory and not Blob
+          const src = e.source as Uint8Array | ArrayBuffer | string;
+          return {
+            name: e.name,
+            data: toUint8ArraySync(src),
+            level: e.options?.level,
+            modTime: e.options?.modTime,
+            atime: e.options?.atime,
+            ctime: e.options?.ctime,
+            birthTime: e.options?.birthTime,
+            comment: e.options?.comment,
+            mode: e.options?.mode,
+            msDosAttributes: e.options?.msDosAttributes,
+            externalAttributes: e.options?.externalAttributes,
+            versionMadeBy: e.options?.versionMadeBy
+          };
+        })
+      ];
 
       return createZipSync([...rawEntries, ...normalEntries], this._getBuildOptions());
     }
 
     // Async path: some sources need streaming collection (Blob or streaming)
-    const normalEntries: ZipEntry[] = await Promise.all(
-      sets.map(async e => {
-        // Collect bytes from any source type
-        let data: Uint8Array;
-        if (isSyncArchiveSource(e.source)) {
-          data = toUint8ArraySync(e.source);
-        } else {
-          // Streaming source: collect all chunks (includes Blob via toAsyncIterable(Blob) which prefers Blob.stream())
-          data = await collectUint8ArrayStream(toAsyncIterable(e.source));
-        }
+    const normalEntries: ZipEntry[] = [
+      ...recompressedPreserved,
+      ...(await Promise.all(
+        sets.map(async e => {
+          // Collect bytes from any source type
+          let data: Uint8Array;
+          if (isSyncArchiveSource(e.source)) {
+            data = toUint8ArraySync(e.source);
+          } else {
+            // Streaming source: collect all chunks (includes Blob via toAsyncIterable(Blob) which prefers Blob.stream())
+            data = await collectUint8ArrayStream(toAsyncIterable(e.source));
+          }
 
-        return {
-          name: e.name,
-          data,
-          level: e.options?.level,
-          modTime: e.options?.modTime,
-          atime: e.options?.atime,
-          ctime: e.options?.ctime,
-          birthTime: e.options?.birthTime,
-          comment: e.options?.comment,
-          mode: e.options?.mode,
-          msDosAttributes: e.options?.msDosAttributes,
-          externalAttributes: e.options?.externalAttributes,
-          versionMadeBy: e.options?.versionMadeBy
-        };
-      })
-    );
+          return {
+            name: e.name,
+            data,
+            level: e.options?.level,
+            modTime: e.options?.modTime,
+            atime: e.options?.atime,
+            ctime: e.options?.ctime,
+            birthTime: e.options?.birthTime,
+            comment: e.options?.comment,
+            mode: e.options?.mode,
+            msDosAttributes: e.options?.msDosAttributes,
+            externalAttributes: e.options?.externalAttributes,
+            versionMadeBy: e.options?.versionMadeBy
+          };
+        })
+      ))
+    ];
 
     return createZip([...rawEntries, ...normalEntries], this._getBuildOptions());
   }

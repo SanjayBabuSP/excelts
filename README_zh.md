@@ -123,6 +123,33 @@ ExcelTS 内置 ZIP/TAR 归档工具（用于 XLSX 管线）。若直接使用归
 
 当使用非 UTF-8 编码时，可写入 Unicode Extra Field 以提升跨工具兼容性。
 
+### 编辑现有 ZIP（ZipEditor）
+
+ExcelTS 也提供 ZIP 编辑器：对已有压缩包做类似文件系统的编辑，然后输出一个新的 ZIP。
+
+- 支持 `set()` / `delete()` / `rename()` / `deleteDirectory()` / `setComment()`
+- 对未改动条目会尽量走高效 passthrough（可用时不重压缩）
+
+```js
+import { editZip } from "@cj-tech-master/excelts";
+
+const editor = await editZip(existingZipBytes, {
+  reproducible: true,
+
+  // 未改动条目的保留策略：
+  // - "strict"（默认）：必须能读取 raw passthrough，否则直接抛错
+  // - "best-effort"：raw 不可用时退化为 extract + 重新写入（可能更耗 CPU/内存）
+  preserve: "best-effort",
+  onWarning: w => console.warn(w.code, w.entry, w.message)
+});
+
+editor.delete("old.txt");
+editor.rename("a.txt", "renamed.txt");
+editor.set("new.txt", "hello");
+
+const out = await editor.bytes();
+```
+
 ## 流式 API
 
 处理大型 Excel 文件时无需将整个文件加载到内存中，ExcelTS 提供了流式读写 API。

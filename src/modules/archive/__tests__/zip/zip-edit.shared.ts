@@ -1,10 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
 import { zip, editZip, editZipUrl, BufferReader, ZipEditPlan, type ZipEditWarning } from "@archive";
 import { ZipParser } from "@archive/unzip/zip-parser";
+import { createZip, type ZipEntry } from "@archive/zip/zip-bytes";
 import { concatUint8Arrays } from "@stream/shared";
 
 const decode = (data: Uint8Array): string => new TextDecoder().decode(data);
 const encode = (str: string): Uint8Array => new TextEncoder().encode(str);
+
+function toEntries(files: Record<string, Uint8Array | string>): ZipEntry[] {
+  return Object.entries(files).map(([name, data]) => ({
+    name,
+    data: typeof data === "string" ? encode(data) : data
+  }));
+}
 
 function expectBytesEqual(a: Uint8Array, b: Uint8Array): void {
   expect(a.length).toBe(b.length);
@@ -71,6 +79,114 @@ export function runZipEditTests(): void {
         const moved = await outParser.extract("moved.txt");
         expect(moved).not.toBeNull();
         expect(moved!).toEqual(big);
+      });
+
+      it("should fall back to recompress when raw passthrough is unavailable (bytes)", async () => {
+        const big = encode("x".repeat(1024 * 64));
+        const original = await zip({ level: 6, reproducible: true }).add("big.txt", big).bytes();
+
+        const onWarning = vi.fn<(w: ZipEditWarning) => void>();
+        const editor = await editZip(original, {
+          level: 6,
+          reproducible: true,
+          preserve: "best-effort",
+          onWarning
+        });
+
+        // Simulate a reader that cannot provide raw compressed bytes.
+        const remote = (editor as any)._remote;
+        const originalGetRawCompressedData = remote.getRawCompressedData.bind(remote);
+        remote.getRawCompressedData = async (path: string) => {
+          if (path === "big.txt") {
+            return null;
+          }
+          return originalGetRawCompressedData(path);
+        };
+
+        editor.rename("big.txt", "moved.txt");
+        const out = await editor.bytes();
+
+        expect(onWarning).toHaveBeenCalled();
+        expect(onWarning.mock.calls.some(c => c[0].code === "raw_unavailable")).toBe(true);
+
+        const outParser = new ZipParser(out);
+        const moved = await outParser.extract("moved.txt");
+        expect(moved).not.toBeNull();
+        expect(moved!).toEqual(big);
+      });
+
+      it("should fall back to recompress when raw passthrough is unavailable (stream)", async () => {
+        const big = encode("x".repeat(1024 * 64));
+        const original = await zip({ level: 6, reproducible: true }).add("big.txt", big).bytes();
+
+        const onWarning = vi.fn<(w: ZipEditWarning) => void>();
+        const editor = await editZip(original, {
+          level: 6,
+          reproducible: true,
+          preserve: "best-effort",
+          onWarning
+        });
+
+        // Simulate a reader that cannot provide raw compressed streaming payload.
+        const remote = (editor as any)._remote;
+        const originalGetRawCompressedStream = remote.getRawCompressedStream.bind(remote);
+        remote.getRawCompressedStream = (path: string) => {
+          if (path === "big.txt") {
+            return null;
+          }
+          return originalGetRawCompressedStream(path);
+        };
+
+        editor.rename("big.txt", "moved.txt");
+
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of editor.stream()) {
+          chunks.push(chunk);
+        }
+        const out = concatUint8Arrays(chunks);
+
+        expect(onWarning).toHaveBeenCalled();
+        expect(onWarning.mock.calls.some(c => c[0].code === "raw_unavailable")).toBe(true);
+
+        const outParser = new ZipParser(out);
+        const moved = await outParser.extract("moved.txt");
+        expect(moved).not.toBeNull();
+        expect(moved!).toEqual(big);
+      });
+
+      it("should not output decrypted content for encrypted entries in best-effort mode", async () => {
+        const password = "pw";
+        const original = await createZip(toEntries({ "secret.txt": "secret" }), {
+          password,
+          encryptionMethod: "zipcrypto",
+          reproducible: true
+        } as any);
+
+        const onWarning = vi.fn<(w: ZipEditWarning) => void>();
+        const editor = await editZip(original, {
+          reproducible: true,
+          preserve: "best-effort",
+          password,
+          onWarning
+        });
+
+        // Force raw passthrough to be unavailable.
+        const remote = (editor as any)._remote;
+        remote.getRawCompressedData = async (_path: string) => null;
+
+        // Add a new file so the output isn't empty.
+        editor.set("public.txt", "OK");
+        const out = await editor.bytes();
+
+        expect(onWarning.mock.calls.some(c => c[0].code === "encryption_unsupported")).toBe(true);
+
+        const outParser = new ZipParser(out);
+        const paths = outParser
+          .getEntries()
+          .map(e => e.path)
+          .sort();
+        expect(paths).toEqual(["public.txt"]);
+        expect(decode((await outParser.extract("public.txt"))!)).toBe("OK");
       });
 
       it("should support RandomAccessReader input (BufferReader)", async () => {
