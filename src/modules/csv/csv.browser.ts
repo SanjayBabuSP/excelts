@@ -64,10 +64,23 @@ export interface CsvOptions {
   comment?: string;
   /** Maximum rows to parse */
   maxRows?: number;
+  /**
+   * Fast parsing mode - skips quote detection for simple data.
+   * Provides 20-50% performance improvement for clean data without quoted fields.
+   * WARNING: Only use when data contains no quotes, delimiters, or newlines within fields.
+   * @default false
+   */
+  fastMode?: boolean;
 
   // === Formatter options ===
   rowDelimiter?: string;
   alwaysQuote?: boolean;
+  /**
+   * Escape formulae to prevent CSV injection attacks.
+   * Fields starting with =, +, -, @, or tab are prefixed with a tab character.
+   * @see https://owasp.org/www-community/attacks/CSV_Injection
+   */
+  escapeFormulae?: boolean;
 
   // === Value mapping ===
   dateFormats?: readonly DateFormat[];
@@ -295,7 +308,8 @@ class CSV {
       delimiter: options?.delimiter ?? options?.formatterOptions?.delimiter ?? ",",
       quote: options?.quote ?? options?.formatterOptions?.quote,
       rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
-      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote
+      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
+      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae
     });
   }
 
@@ -320,7 +334,8 @@ class CSV {
       skipEmptyLines: options?.skipEmptyLines ?? legacy?.skipEmptyLines,
       trim: options?.trim ?? legacy?.trim,
       comment: options?.comment ?? legacy?.comment,
-      maxRows: options?.maxRows ?? legacy?.maxRows
+      maxRows: options?.maxRows ?? legacy?.maxRows,
+      fastMode: options?.fastMode
     };
   }
 
@@ -485,7 +500,8 @@ class CSV {
       delimiter: options?.delimiter ?? options?.formatterOptions?.delimiter ?? ",",
       quote: options?.quote ?? options?.formatterOptions?.quote,
       rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
-      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote
+      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
+      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae
     });
     const pipelinePromise = pipeline(formatter, stream);
 
@@ -514,7 +530,8 @@ class CSV {
       delimiter: options?.delimiter ?? options?.formatterOptions?.delimiter ?? ",",
       quote: options?.quote ?? options?.formatterOptions?.quote,
       rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
-      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote
+      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
+      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae
     });
 
     if (worksheet) {

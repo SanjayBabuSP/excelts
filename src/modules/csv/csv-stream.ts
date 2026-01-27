@@ -54,6 +54,7 @@ export class CsvParserStream extends Transform {
   private quote: string;
   private escape: string;
   private quoteEnabled: boolean;
+  private fastMode: boolean;
   private trimField: (s: string) => string;
   private decoder: TextDecoder;
   private _rowTransform: ((row: Row, cb: RowTransformCallback<Row>) => void) | null = null;
@@ -85,6 +86,9 @@ export class CsvParserStream extends Transform {
     } else {
       this.delimiter = delimiterOption;
     }
+
+    // Fast mode - skip quote detection
+    this.fastMode = options.fastMode ?? false;
 
     // Pre-compute trim function for performance
     const { trim = false, ltrim = false, rtrim = false } = options;
@@ -245,20 +249,20 @@ export class CsvParserStream extends Transform {
   }
 
   private processBuffer(callback: (error?: Error | null) => void): void {
-    const {
-      skipEmptyLines = false,
-      ignoreEmpty = false,
-      headers = false,
-      renameHeaders = false,
-      comment,
-      maxRows,
-      skipLines = 0,
-      skipRows = 0,
-      strictColumnHandling = false,
-      discardUnmappedColumns = false
-    } = this.options;
-
+    const { skipEmptyLines = false, ignoreEmpty = false, skipLines = 0 } = this.options;
     const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
+
+    // ==========================================================================
+    // Fast Mode: Skip quote detection, split directly by delimiter
+    // ==========================================================================
+    if (this.fastMode) {
+      this.processBufferFastMode(callback, shouldSkipEmpty);
+      return;
+    }
+
+    // ==========================================================================
+    // Standard Mode: Full RFC 4180 compliant parsing with quote handling
+    // ==========================================================================
     let i = 0;
     const len = this.buffer.length;
     const pendingRows: Row[] = [];
@@ -313,116 +317,23 @@ export class CsvParserStream extends Transform {
             continue;
           }
 
-          // Skip comment lines
-          if (comment && this.currentRow[0]?.startsWith(comment)) {
-            this.currentRow = [];
-            i++;
-            continue;
-          }
-
-          // Skip empty lines
+          // Skip comment/empty lines
           const isEmpty = this.currentRow.length === 1 && this.currentRow[0] === "";
-          if (shouldSkipEmpty && isEmpty) {
+          if (this.shouldSkipLine(this.currentRow[0] ?? "", isEmpty, shouldSkipEmpty)) {
             this.currentRow = [];
             i++;
             continue;
           }
 
-          // Handle headers
-          if (
-            (headers === true ||
-              typeof headers === "function" ||
-              (Array.isArray(headers) && renameHeaders)) &&
-            this.headerRow === null
-          ) {
-            if (typeof headers === "function") {
-              const transformed = headers(this.currentRow);
-              this.headerRow = transformed.filter((h): h is string => h != null);
-            } else if (Array.isArray(headers) && renameHeaders) {
-              // Discard first row, use provided headers
-              this.headerRow = headers.filter((h): h is string => h != null);
-            } else {
-              this.headerRow = this.currentRow;
-            }
-            // Emit headers event
-            if (!this.headersEmitted) {
-              this.headersEmitted = true;
-              this.emit("headers", this.headerRow);
-            }
-            this.currentRow = [];
-            i++;
-            continue;
-          }
-
-          // Use provided headers array directly if no renameHeaders
-          if (Array.isArray(headers) && !renameHeaders && this.headerRow === null) {
-            this.headerRow = headers.filter((h): h is string => h != null);
-            // Emit headers event for provided headers
-            if (!this.headersEmitted) {
-              this.headersEmitted = true;
-              this.emit("headers", this.headerRow);
-            }
-          }
-
-          // Skip data rows
-          if (this.skippedDataRows < skipRows) {
-            this.skippedDataRows++;
-            this.currentRow = [];
-            i++;
-            continue;
-          }
-
-          // Column validation
-          if (this.headerRow && this.headerRow.length > 0) {
-            const expectedCols = this.headerRow.length;
-            const actualCols = this.currentRow.length;
-
-            if (actualCols > expectedCols) {
-              if (strictColumnHandling && !discardUnmappedColumns) {
-                // Emit data-invalid event
-                this.emit(
-                  "data-invalid",
-                  this.currentRow,
-                  `Column mismatch: expected ${expectedCols}, got ${actualCols}`
-                );
-                this.currentRow = [];
-                i++;
-                continue;
-              } else {
-                // Discard extra columns
-                this.currentRow.length = expectedCols;
-              }
-            } else if (actualCols < expectedCols) {
-              if (strictColumnHandling) {
-                this.emit(
-                  "data-invalid",
-                  this.currentRow,
-                  `Column mismatch: expected ${expectedCols}, got ${actualCols}`
-                );
-                this.currentRow = [];
-                i++;
-                continue;
-              }
-              // Pad with empty strings
-              while (this.currentRow.length < expectedCols) {
-                this.currentRow.push("");
-              }
-            }
-          }
-
-          this.rowCount++;
-
-          // Check max rows
-          if (maxRows !== undefined && this.rowCount > maxRows) {
+          // Process completed row (handles headers, skipRows, column validation, maxRows)
+          const rowToProcess = this.currentRow;
+          this.currentRow = [];
+          if (!this.processCompletedRow(rowToProcess, pendingRows)) {
             this.buffer = "";
             this.processPendingRows(pendingRows, callback);
             return;
           }
 
-          // Queue this row for emission
-          const rowToEmit = this.currentRow;
-          this.currentRow = [];
-          pendingRows.push(this.buildRow(rowToEmit));
           i++;
         } else {
           this.appendToField(char);
@@ -432,6 +343,66 @@ export class CsvParserStream extends Transform {
     }
 
     this.buffer = "";
+    this.processPendingRows(pendingRows, callback);
+  }
+
+  /**
+   * Fast mode buffer processing - skips quote detection, splits directly by delimiter
+   */
+  private processBufferFastMode(
+    callback: (error?: Error | null) => void,
+    shouldSkipEmpty: boolean
+  ): void {
+    const { skipLines = 0 } = this.options;
+    const pendingRows: Row[] = [];
+
+    // Find last complete line in buffer
+    const lastLF = this.buffer.lastIndexOf("\n");
+    const lastCR = this.buffer.lastIndexOf("\r");
+    const lastNewlineIndex = Math.max(lastLF, lastCR);
+
+    // If no complete line, wait for more data
+    if (lastNewlineIndex === -1) {
+      callback();
+      return;
+    }
+
+    // Process complete lines
+    const completeData = this.buffer.slice(0, lastNewlineIndex + 1);
+    this.buffer = this.buffer.slice(lastNewlineIndex + 1);
+
+    // Split by lines, handling different line endings
+    const lines = completeData.split(/\r\n|\r|\n/);
+
+    for (const line of lines) {
+      // Skip empty entries from split
+      if (line === "") {
+        continue;
+      }
+
+      this.lineNumber++;
+
+      // Skip lines at beginning
+      if (this.lineNumber <= skipLines) {
+        continue;
+      }
+
+      // Skip comment/empty lines
+      const isEmpty = line.trim() === "";
+      if (this.shouldSkipLine(line, isEmpty, shouldSkipEmpty)) {
+        continue;
+      }
+
+      // Split by delimiter (fast path - no quote detection)
+      const row = line.split(this.delimiter).map(this.trimField);
+
+      // Process completed row (handles headers, skipRows, column validation, maxRows)
+      if (!this.processCompletedRow(row, pendingRows)) {
+        this.processPendingRows(pendingRows, callback);
+        return;
+      }
+    }
+
     this.processPendingRows(pendingRows, callback);
   }
 
@@ -447,12 +418,125 @@ export class CsvParserStream extends Transform {
     return rawRow;
   }
 
+  /**
+   * Process a completed row (shared logic for standard and fast mode)
+   * Returns true if processing should continue, false if maxRows reached
+   */
+  private processCompletedRow(row: string[], pendingRows: Row[]): boolean {
+    const {
+      headers = false,
+      renameHeaders = false,
+      maxRows,
+      skipRows = 0,
+      strictColumnHandling = false,
+      discardUnmappedColumns = false
+    } = this.options;
+
+    // Handle headers - first row or provided array
+    if (this.headerRow === null) {
+      if (
+        headers === true ||
+        typeof headers === "function" ||
+        (Array.isArray(headers) && renameHeaders)
+      ) {
+        if (typeof headers === "function") {
+          this.headerRow = headers(row).filter((h): h is string => h != null);
+        } else if (Array.isArray(headers) && renameHeaders) {
+          this.headerRow = headers.filter((h): h is string => h != null);
+        } else {
+          this.headerRow = row;
+        }
+        this.emitHeaders();
+        return true;
+      }
+      if (Array.isArray(headers) && !renameHeaders) {
+        this.headerRow = headers.filter((h): h is string => h != null);
+        this.emitHeaders();
+      }
+    }
+
+    // Skip data rows
+    if (this.skippedDataRows < skipRows) {
+      this.skippedDataRows++;
+      return true;
+    }
+
+    // Column validation
+    if (this.headerRow && this.headerRow.length > 0) {
+      const expectedCols = this.headerRow.length;
+      const actualCols = row.length;
+
+      if (actualCols !== expectedCols) {
+        if (actualCols > expectedCols) {
+          if (strictColumnHandling && !discardUnmappedColumns) {
+            this.emit(
+              "data-invalid",
+              row,
+              `Column mismatch: expected ${expectedCols}, got ${actualCols}`
+            );
+            return true;
+          }
+          row.length = expectedCols;
+        } else {
+          if (strictColumnHandling) {
+            this.emit(
+              "data-invalid",
+              row,
+              `Column mismatch: expected ${expectedCols}, got ${actualCols}`
+            );
+            return true;
+          }
+          while (row.length < expectedCols) {
+            row.push("");
+          }
+        }
+      }
+    }
+
+    this.rowCount++;
+    if (maxRows !== undefined && this.rowCount > maxRows) {
+      return false;
+    }
+
+    pendingRows.push(this.buildRow(row));
+    return true;
+  }
+
+  private emitHeaders(): void {
+    if (!this.headersEmitted) {
+      this.headersEmitted = true;
+      this.emit("headers", this.headerRow);
+    }
+  }
+
+  /**
+   * Check if a line should be skipped (comment or empty)
+   */
+  private shouldSkipLine(line: string, isEmpty: boolean, shouldSkipEmpty: boolean): boolean {
+    const { comment } = this.options;
+    if (comment && line.startsWith(comment)) {
+      return true;
+    }
+    return shouldSkipEmpty && isEmpty;
+  }
+
   private processPendingRows(rows: Row[], callback: (error?: Error | null) => void): void {
     if (rows.length === 0) {
       callback();
       return;
     }
 
+    // Fast path: no transform or validate, push all rows directly
+    if (!this._rowTransform && !this._rowValidator) {
+      const useJson = this.options.objectMode === false;
+      for (const row of rows) {
+        this.push(useJson ? JSON.stringify(row) : row);
+      }
+      callback();
+      return;
+    }
+
+    // Slow path: process rows one by one with transform/validate
     let index = 0;
     const processNext = (): void => {
       if (index >= rows.length) {
@@ -460,9 +544,7 @@ export class CsvParserStream extends Transform {
         return;
       }
 
-      const row = rows[index];
-      index++;
-
+      const row = rows[index++];
       this.transformAndValidateRow(row, (err, result) => {
         if (err) {
           callback(err);
@@ -470,12 +552,7 @@ export class CsvParserStream extends Transform {
         }
 
         if (result && result.isValid && result.row !== null) {
-          // Push the row (respect objectMode)
-          if (this.options.objectMode === false) {
-            this.push(JSON.stringify(result.row));
-          } else {
-            this.push(result.row);
-          }
+          this.push(this.options.objectMode === false ? JSON.stringify(result.row) : result.row);
         } else if (result && !result.isValid) {
           this.emit("data-invalid", result.row, result.reason);
         }
@@ -597,6 +674,7 @@ export class CsvFormatterStream extends Transform {
   private quoteEnabled: boolean;
   private alwaysQuote: boolean;
   private decimalSeparator: "." | ",";
+  private escapeFormulae: boolean;
   private headerWritten: boolean = false;
   private headers: string[] | null = null;
   private shouldWriteHeaders: boolean;
@@ -627,6 +705,7 @@ export class CsvFormatterStream extends Transform {
     this.rowDelimiter = options.rowDelimiter ?? "\n";
     this.alwaysQuote = options.alwaysQuote ?? false;
     this.decimalSeparator = options.decimalSeparator ?? ".";
+    this.escapeFormulae = options.escapeFormulae ?? false;
     // writeHeaders defaults to true when headers is provided
     this.shouldWriteHeaders = options.writeHeaders ?? true;
 
@@ -824,8 +903,22 @@ export class CsvFormatterStream extends Transform {
       return "";
     }
 
-    const str =
+    let str =
       typeof value === "number" ? formatNumberForCsv(value, this.decimalSeparator) : String(value);
+
+    // Escape formulae to prevent CSV injection (OWASP recommendation)
+    if (this.escapeFormulae && str.length > 0) {
+      const firstChar = str[0];
+      if (
+        firstChar === "=" ||
+        firstChar === "+" ||
+        firstChar === "-" ||
+        firstChar === "@" ||
+        firstChar === "\t"
+      ) {
+        str = "\t" + str;
+      }
+    }
 
     if (!this.quoteEnabled) {
       return str;
