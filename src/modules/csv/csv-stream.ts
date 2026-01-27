@@ -16,7 +16,14 @@ import type {
   RowTransformCallback,
   RowValidateCallback
 } from "@csv/csv-core";
-import { isSyncTransform, isSyncValidate } from "@csv/csv-core";
+import {
+  isSyncTransform,
+  isSyncValidate,
+  isRowHashArray,
+  rowHashArrayMapByHeaders,
+  rowHashArrayToValues,
+  rowHashArrayToHeaders
+} from "@csv/csv-core";
 import { formatNumberForCsv } from "@csv/csv-number";
 
 /**
@@ -644,6 +651,17 @@ export class CsvFormatterStream extends Transform {
     return this;
   }
 
+  /**
+   * Auto-detect headers from a row (object or RowHashArray)
+   */
+  private detectHeadersFromRow(chunk: Row): void {
+    if (isRowHashArray(chunk)) {
+      this.headers = rowHashArrayToHeaders(chunk);
+    } else if (!Array.isArray(chunk) && typeof chunk === "object" && chunk !== null) {
+      this.headers = Object.keys(chunk);
+    }
+  }
+
   override _transform(
     chunk: Row,
     _encoding: string,
@@ -655,24 +673,16 @@ export class CsvFormatterStream extends Transform {
         this.push("\uFEFF");
       }
 
-      // Write headers if needed
-      if (!this.headerWritten && this.headers && this.shouldWriteHeaders) {
-        this.push(this.formatRow(this.headers, true));
-        this.headerWritten = true;
-      } else if (
-        !this.headerWritten &&
-        this.options.headers === true &&
-        !Array.isArray(chunk) &&
-        this.shouldWriteHeaders
-      ) {
-        // Auto-detect headers from first object
-        this.headers = Object.keys(chunk);
-        this.push(this.formatRow(this.headers, true));
-        this.headerWritten = true;
-      } else if (!this.headerWritten) {
-        // Mark header as "written" even if we skip it (to handle subsequent rows)
-        if (this.options.headers === true && !Array.isArray(chunk)) {
-          this.headers = Object.keys(chunk);
+      // Handle header writing on first row
+      if (!this.headerWritten) {
+        // Auto-detect headers from first row if needed
+        if (this.options.headers === true && !this.headers) {
+          this.detectHeadersFromRow(chunk);
+        }
+
+        // Write headers if we should and have them
+        if (this.shouldWriteHeaders && this.headers) {
+          this.push(this.formatRow(this.headers, true));
         }
         this.headerWritten = true;
       }
@@ -727,7 +737,13 @@ export class CsvFormatterStream extends Transform {
 
   private formatAndPush(chunk: Row): void {
     let row: unknown[];
-    if (Array.isArray(chunk)) {
+    if (isRowHashArray(chunk)) {
+      // Handle RowHashArray: array of [key, value] tuples
+      // Optimized: use rowHashArrayMapByHeaders for header ordering, else preserve tuple order
+      row = this.headers
+        ? rowHashArrayMapByHeaders(chunk, this.headers)
+        : rowHashArrayToValues(chunk);
+    } else if (Array.isArray(chunk)) {
       row = chunk;
     } else if (typeof chunk === "object" && chunk !== null) {
       row = this.headers

@@ -24,7 +24,9 @@ export type HeaderTransformFunction = (headers: string[]) => HeaderArray;
 /** Row types */
 export type RowArray = string[];
 export type RowMap = Record<string, string>;
-export type Row = RowArray | RowMap;
+/** Row as array of [header, value] tuples */
+export type RowHashArray<V = any> = [string, V][];
+export type Row = RowArray | RowMap | RowHashArray;
 
 /** Row transform callback */
 export type RowTransformCallback<T> = (error?: Error | null, row?: T | null) => void;
@@ -230,6 +232,74 @@ export function isSyncValidate<T>(
   validate: RowValidateFunction<T>
 ): validate is (row: T) => boolean {
   return validate.length === 1;
+}
+
+/**
+ * Check if a row is a RowHashArray (array of [key, value] tuples)
+ */
+export function isRowHashArray(row: unknown): row is RowHashArray {
+  if (!Array.isArray(row) || row.length === 0) {
+    return false;
+  }
+  // Check if first element is a 2-element array with string key
+  const first = row[0];
+  return Array.isArray(first) && first.length === 2 && typeof first[0] === "string";
+}
+
+/**
+ * Convert RowHashArray to RowMap
+ * Note: Manual loop is ~4x faster than Object.fromEntries
+ */
+export function rowHashArrayToMap<V = any>(row: RowHashArray<V>): Record<string, V> {
+  const obj: Record<string, V> = {};
+  for (const [key, value] of row) {
+    obj[key] = value;
+  }
+  return obj;
+}
+
+/**
+ * Convert RowHashArray to values array (preserving order)
+ */
+export function rowHashArrayToValues<V = any>(row: RowHashArray<V>): V[] {
+  return row.map(([, value]) => value);
+}
+
+/**
+ * Get headers from RowHashArray
+ */
+export function rowHashArrayToHeaders(row: RowHashArray): string[] {
+  return row.map(([key]) => key);
+}
+
+/**
+ * Get value by key from RowHashArray (returns undefined if not found)
+ * More efficient than creating a full map when you need only specific values
+ */
+export function rowHashArrayGet<V = any>(row: RowHashArray<V>, key: string): V | undefined {
+  for (const [k, v] of row) {
+    if (k === key) {
+      return v;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Map RowHashArray values according to header order
+ * Optimized: builds values array in single pass without intermediate object
+ */
+export function rowHashArrayMapByHeaders<V = any>(
+  row: RowHashArray<V>,
+  headers: string[]
+): (V | undefined)[] {
+  // For small headers array, linear search per header is faster than building a map
+  // For larger headers (>10), build a map once
+  if (headers.length <= 10) {
+    return headers.map(h => rowHashArrayGet(row, h));
+  }
+  const map = rowHashArrayToMap(row);
+  return headers.map(h => map[h]);
 }
 
 /**
@@ -735,7 +805,7 @@ export function formatCsv(
     return row;
   };
 
-  // Handle array of objects
+  // Handle array of objects (non-array first element)
   if (data.length > 0 && !Array.isArray(data[0])) {
     const objects = data as Record<string, any>[];
     keys = headers === true ? Object.keys(objects[0]) : Array.isArray(headers) ? headers : null;
@@ -754,8 +824,45 @@ export function formatCsv(
       const row = keys ? keys.map(key => transformedObj[key]) : Object.values(transformedObj);
       lines.push(formatRow(row, keys ?? undefined));
     }
+  } else if (data.length > 0 && isRowHashArray(data[0])) {
+    // Handle array of RowHashArray (array of [key, value] tuples)
+    const hashArrays = data as RowHashArray[];
+
+    // Determine headers: auto-detect from first row, use custom headers, or null
+    keys =
+      headers === true
+        ? rowHashArrayToHeaders(hashArrays[0])
+        : Array.isArray(headers)
+          ? headers
+          : null;
+
+    if (keys && shouldWriteHeaders) {
+      lines.push(formatRow(keys, keys, true));
+    }
+
+    // Add data rows
+    for (const hashArray of hashArrays) {
+      const transformedRow = applyTransform(hashArray);
+      if (transformedRow === null || transformedRow === undefined) {
+        continue;
+      }
+
+      // Convert to values array based on row type after transform
+      let values: any[];
+      if (isRowHashArray(transformedRow)) {
+        values = keys
+          ? rowHashArrayMapByHeaders(transformedRow, keys)
+          : rowHashArrayToValues(transformedRow);
+      } else if (Array.isArray(transformedRow)) {
+        values = transformedRow;
+      } else {
+        values = keys ? keys.map(key => transformedRow[key]) : Object.values(transformedRow);
+      }
+
+      lines.push(formatRow(values, keys ?? undefined));
+    }
   } else if (data.length > 0) {
-    // Handle 2D array with data
+    // Handle 2D array with data (plain arrays)
     const arrays = data as any[][];
 
     // Add custom headers if provided

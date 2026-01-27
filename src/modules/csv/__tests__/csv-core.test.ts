@@ -14,7 +14,171 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, formatCsv, parseCsvStream } from "@csv/csv-core";
+import {
+  parseCsv,
+  formatCsv,
+  parseCsvStream,
+  isRowHashArray,
+  rowHashArrayToMap,
+  rowHashArrayToValues,
+  rowHashArrayToHeaders,
+  rowHashArrayMapByHeaders,
+  rowHashArrayGet
+} from "@csv/csv-core";
+
+// ===========================================================================
+// Helper Functions Tests
+// ===========================================================================
+describe("RowHashArray Helper Functions", () => {
+  describe("isRowHashArray", () => {
+    it("should return true for valid RowHashArray", () => {
+      expect(
+        isRowHashArray([
+          ["name", "Alice"],
+          ["age", 30]
+        ])
+      ).toBe(true);
+    });
+
+    it("should return false for plain array", () => {
+      expect(isRowHashArray(["Alice", "30"])).toBe(false);
+    });
+
+    it("should return false for empty array", () => {
+      expect(isRowHashArray([])).toBe(false);
+    });
+
+    it("should return false for object", () => {
+      expect(isRowHashArray({ name: "Alice" })).toBe(false);
+    });
+
+    it("should return false for array with non-string keys", () => {
+      expect(
+        isRowHashArray([
+          [123, "value"],
+          ["key", "value"]
+        ])
+      ).toBe(false);
+    });
+
+    it("should return false for array with wrong tuple length", () => {
+      expect(isRowHashArray([["name", "Alice", "extra"]])).toBe(false);
+    });
+  });
+
+  describe("rowHashArrayToMap", () => {
+    it("should convert RowHashArray to object", () => {
+      const result = rowHashArrayToMap<string | number>([
+        ["name", "Alice"],
+        ["age", 30]
+      ]);
+      expect(result).toEqual({ name: "Alice", age: 30 });
+    });
+
+    it("should handle empty RowHashArray", () => {
+      expect(rowHashArrayToMap([])).toEqual({});
+    });
+  });
+
+  describe("rowHashArrayToValues", () => {
+    it("should extract values from RowHashArray", () => {
+      const result = rowHashArrayToValues<string | number>([
+        ["name", "Alice"],
+        ["age", 30]
+      ]);
+      expect(result).toEqual(["Alice", 30]);
+    });
+
+    it("should handle empty RowHashArray", () => {
+      expect(rowHashArrayToValues([])).toEqual([]);
+    });
+  });
+
+  describe("rowHashArrayToHeaders", () => {
+    it("should extract headers from RowHashArray", () => {
+      const data: [string, string | number][] = [
+        ["name", "Alice"],
+        ["age", 30]
+      ];
+      const result = rowHashArrayToHeaders(data);
+      expect(result).toEqual(["name", "age"]);
+    });
+
+    it("should handle empty RowHashArray", () => {
+      expect(rowHashArrayToHeaders([])).toEqual([]);
+    });
+  });
+
+  describe("rowHashArrayGet", () => {
+    it("should get value by key", () => {
+      const row: [string, any][] = [
+        ["name", "Alice"],
+        ["age", 30]
+      ];
+      expect(rowHashArrayGet(row, "name")).toBe("Alice");
+      expect(rowHashArrayGet(row, "age")).toBe(30);
+    });
+
+    it("should return undefined for non-existent key", () => {
+      const row: [string, any][] = [["name", "Alice"]];
+      expect(rowHashArrayGet(row, "city")).toBeUndefined();
+    });
+  });
+
+  describe("rowHashArrayMapByHeaders", () => {
+    it("should map values according to header order", () => {
+      const row: [string, any][] = [
+        ["name", "Alice"],
+        ["age", 30],
+        ["city", "NYC"]
+      ];
+      const result = rowHashArrayMapByHeaders(row, ["city", "name", "age"]);
+      expect(result).toEqual(["NYC", "Alice", 30]);
+    });
+
+    it("should return undefined for missing keys", () => {
+      const row: [string, any][] = [["name", "Alice"]];
+      const result = rowHashArrayMapByHeaders(row, ["name", "age", "city"]);
+      expect(result).toEqual(["Alice", undefined, undefined]);
+    });
+
+    it("should handle empty RowHashArray", () => {
+      const result = rowHashArrayMapByHeaders([], ["name", "age"]);
+      expect(result).toEqual([undefined, undefined]);
+    });
+
+    it("should handle empty headers", () => {
+      const row: [string, any][] = [["name", "Alice"]];
+      const result = rowHashArrayMapByHeaders(row, []);
+      expect(result).toEqual([]);
+    });
+
+    it("should use optimized linear search for small headers", () => {
+      // With <= 10 headers, uses linear search per header
+      const row: [string, any][] = [
+        ["a", 1],
+        ["b", 2],
+        ["c", 3]
+      ];
+      const result = rowHashArrayMapByHeaders(row, ["c", "a", "b"]);
+      expect(result).toEqual([3, 1, 2]);
+    });
+
+    it("should handle large headers efficiently", () => {
+      // With > 10 headers, builds a map once
+      const row: [string, any][] = [];
+      const headers: string[] = [];
+      for (let i = 0; i < 15; i++) {
+        row.push([`key${i}`, `value${i}`]);
+        headers.push(`key${14 - i}`); // Reverse order
+      }
+      const result = rowHashArrayMapByHeaders(row, headers);
+      // Should be reversed values
+      expect(result[0]).toBe("value14");
+      expect(result[14]).toBe("value0");
+    });
+  });
+});
 
 describe("CSV Core - RFC 4180 Compliance", () => {
   // ===========================================================================
@@ -595,6 +759,115 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       const data = [["你好,世界", "测试"]];
       const result = formatCsv(data);
       expect(result).toBe('"你好,世界",测试');
+    });
+  });
+
+  // ===========================================================================
+  // Section 15.5: formatCsv - RowHashArray Support
+  // ===========================================================================
+  describe("formatCsv - RowHashArray Support", () => {
+    it("should format RowHashArray (array of [key, value] tuples)", () => {
+      const data: [string, any][][] = [
+        [
+          ["name", "Alice"],
+          ["age", 30]
+        ],
+        [
+          ["name", "Bob"],
+          ["age", 25]
+        ]
+      ];
+      const result = formatCsv(data);
+      expect(result).toBe("Alice,30\nBob,25");
+    });
+
+    it("should format RowHashArray with headers: true", () => {
+      const data: [string, any][][] = [
+        [
+          ["name", "Alice"],
+          ["age", 30]
+        ],
+        [
+          ["name", "Bob"],
+          ["age", 25]
+        ]
+      ];
+      const result = formatCsv(data, { headers: true });
+      expect(result).toBe("name,age\nAlice,30\nBob,25");
+    });
+
+    it("should format RowHashArray with custom headers (reorder columns)", () => {
+      const data: [string, any][][] = [
+        [
+          ["name", "Alice"],
+          ["age", 30],
+          ["city", "NYC"]
+        ],
+        [
+          ["name", "Bob"],
+          ["age", 25],
+          ["city", "LA"]
+        ]
+      ];
+      const result = formatCsv(data, { headers: ["city", "age", "name"] });
+      expect(result).toBe("city,age,name\nNYC,30,Alice\nLA,25,Bob");
+    });
+
+    it("should handle RowHashArray with missing keys when using custom headers", () => {
+      const data: [string, any][][] = [
+        [
+          ["name", "Alice"],
+          ["age", 30]
+        ],
+        [
+          ["name", "Bob"],
+          ["city", "LA"]
+        ]
+      ];
+      const result = formatCsv(data, { headers: ["name", "age", "city"] });
+      expect(result).toBe("name,age,city\nAlice,30,\nBob,,LA");
+    });
+
+    it("should format single RowHashArray row", () => {
+      const data: [string, any][][] = [
+        [
+          ["firstName", "John"],
+          ["lastName", "Doe"]
+        ]
+      ];
+      const result = formatCsv(data, { headers: true });
+      expect(result).toBe("firstName,lastName\nJohn,Doe");
+    });
+
+    it("should format RowHashArray with special characters", () => {
+      const data: [string, any][][] = [
+        [
+          ["message", "Hello, World"],
+          ["note", 'He said "hi"']
+        ]
+      ];
+      const result = formatCsv(data);
+      expect(result).toBe('"Hello, World","He said ""hi"""');
+    });
+
+    it("should format empty RowHashArray with alwaysWriteHeaders", () => {
+      const data: [string, any][][] = [];
+      const result = formatCsv(data, {
+        headers: ["name", "age"],
+        alwaysWriteHeaders: true
+      });
+      expect(result).toBe("name,age");
+    });
+
+    it("should format RowHashArray without writing headers when writeHeaders: false", () => {
+      const data: [string, any][][] = [
+        [
+          ["name", "Alice"],
+          ["age", 30]
+        ]
+      ];
+      const result = formatCsv(data, { headers: true, writeHeaders: false });
+      expect(result).toBe("Alice,30");
     });
   });
 

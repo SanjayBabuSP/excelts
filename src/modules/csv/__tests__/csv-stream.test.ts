@@ -685,6 +685,115 @@ describe("CSV Stream - CsvFormatterStream", () => {
       expect(chunks.join("")).toBe("age,name\n30,Alice");
     });
   });
+
+  // ===========================================================================
+  // Section 5: RowHashArray Support
+  // ===========================================================================
+  describe("RowHashArray Support", () => {
+    it("should format RowHashArray (array of [key, value] tuples)", async () => {
+      const formatter = new CsvFormatterStream();
+      const chunks: string[] = [];
+
+      formatter.on("data", chunk => {
+        chunks.push(chunk.toString());
+      });
+
+      formatter.write([
+        ["name", "Alice"],
+        ["age", "30"]
+      ]);
+      formatter.write([
+        ["name", "Bob"],
+        ["age", "25"]
+      ]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+
+      expect(chunks.join("")).toBe("Alice,30\nBob,25");
+    });
+
+    it("should auto-detect headers from RowHashArray when headers: true", async () => {
+      const formatter = new CsvFormatterStream({ headers: true });
+      const chunks: string[] = [];
+
+      formatter.on("data", chunk => {
+        chunks.push(chunk.toString());
+      });
+
+      formatter.write([
+        ["firstName", "Alice"],
+        ["lastName", "Smith"]
+      ]);
+      formatter.write([
+        ["firstName", "Bob"],
+        ["lastName", "Jones"]
+      ]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+
+      expect(chunks.join("")).toBe("firstName,lastName\nAlice,Smith\nBob,Jones");
+    });
+
+    it("should reorder RowHashArray columns based on custom headers", async () => {
+      const formatter = new CsvFormatterStream({ headers: ["age", "name", "city"] });
+      const chunks: string[] = [];
+
+      formatter.on("data", chunk => {
+        chunks.push(chunk.toString());
+      });
+
+      formatter.write([
+        ["name", "Alice"],
+        ["city", "NYC"],
+        ["age", "30"]
+      ]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+
+      expect(chunks.join("")).toBe("age,name,city\n30,Alice,NYC");
+    });
+
+    it("should handle missing keys in RowHashArray when using custom headers", async () => {
+      const formatter = new CsvFormatterStream({ headers: ["name", "age", "city"] });
+      const chunks: string[] = [];
+
+      formatter.on("data", chunk => {
+        chunks.push(chunk.toString());
+      });
+
+      formatter.write([
+        ["name", "Alice"],
+        ["age", "30"]
+      ]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+
+      expect(chunks.join("")).toBe("name,age,city\nAlice,30,");
+    });
+
+    it("should format RowHashArray with special characters", async () => {
+      const formatter = new CsvFormatterStream();
+      const chunks: string[] = [];
+
+      formatter.on("data", chunk => {
+        chunks.push(chunk.toString());
+      });
+
+      formatter.write([
+        ["greeting", "Hello, World"],
+        ["quote", 'He said "hi"']
+      ]);
+      formatter.end();
+
+      await new Promise(resolve => formatter.on("finish", resolve));
+
+      expect(chunks.join("")).toBe('"Hello, World","He said ""hi"""');
+    });
+  });
 });
 
 describe("CSV Stream - Round-trip Tests", () => {
