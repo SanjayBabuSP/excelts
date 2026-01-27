@@ -93,7 +93,12 @@ import {
   setFileTime,
   setFileTimeSync,
   safeStats,
-  safeStatsSync
+  safeStatsSync,
+  createSymlink,
+  createSymlinkSync,
+  chmod,
+  chmodSync,
+  supportsUnixPermissions
 } from "@utils/fs";
 
 // =============================================================================
@@ -277,6 +282,28 @@ function assertNoPathTraversal(targetPath: string, baseDir: string, entryPath: s
 }
 
 /**
+ * Get effective Unix mode for extraction.
+ * If the archive entry has no mode info (mode=0), returns sensible defaults.
+ *
+ * @param mode - The mode from the archive entry
+ * @param kind - "file" or "directory"
+ * @returns Effective mode with permission bits
+ */
+function getEffectiveMode(mode: number, kind: "file" | "directory"): number {
+  // Extract permission bits (lower 12 bits: rwx for owner/group/other + sticky/setuid/setgid)
+  const permBits = mode & 0o7777;
+
+  if (permBits !== 0) {
+    // Entry has permission info
+    return permBits;
+  }
+
+  // No permission info (e.g., Windows-created ZIP) - use defaults
+  // Default: directories 0o755 (rwxr-xr-x), files 0o644 (rw-r--r--)
+  return kind === "directory" ? 0o755 : 0o644;
+}
+
+/**
  * Assert that the archive format is ZIP, throw a descriptive error otherwise.
  */
 function assertZipFormat(format: ArchiveFormat, methodName: string): asserts format is "zip" {
@@ -311,10 +338,12 @@ function emitExtractWarning(
     return;
   }
   const code = (err as any)?.code;
+  const errMessage = err instanceof Error ? err.message : String(err);
+  // For filesystem errors with a code, use a generic message; otherwise preserve the original
   const message =
     code != null
       ? `Skipping extraction due to filesystem error (${String(code)})`
-      : "Skipping extraction due to filesystem error";
+      : errMessage || "Skipping extraction due to error";
   onWarning({ operation: "extract", entryPath, targetPath, message, error: err });
 }
 
@@ -492,7 +521,7 @@ function wrapFilter(
 function mapZipEntryToInfo(e: ParserEntryInfo): ZipEntryInfo {
   return {
     path: e.path,
-    isDirectory: e.isDirectory,
+    isDirectory: e.type === "directory",
     size: e.uncompressedSize,
     compressedSize: e.compressedSize,
     lastModified: e.lastModified,
@@ -1956,7 +1985,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     const { overwrite = "error", preserveTimestamps = true, password } = options;
     const resolvedTarget = path.resolve(targetPath);
 
-    if (entry.isDirectory) {
+    if (entry.type === "directory") {
       await ensureDir(resolvedTarget);
       return true;
     }
@@ -2001,7 +2030,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     const { overwrite = "error", preserveTimestamps = true, password } = options;
     const resolvedTarget = path.resolve(targetPath);
 
-    if (entry.isDirectory) {
+    if (entry.type === "directory") {
       ensureDirSync(resolvedTarget);
       return true;
     }
@@ -2421,6 +2450,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       overwrite = "error",
       filter,
       preserveTimestamps = true,
+      preservePermissions = supportsUnixPermissions(),
+      createSymlinks = true,
       password,
       signal,
       onProgress,
@@ -2433,21 +2464,29 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     let extractedEntries = 0;
     let bytesWritten = 0;
 
+    // Deferred symlinks - process after all files/dirs to ensure targets exist
+    const deferredSymlinks: Array<{
+      entry: ParserEntryInfo;
+      targetPath: string;
+      linkTarget: string;
+    }> = [];
+
     for (const entry of entries) {
       // Check abort signal
       if (signal?.aborted) {
         throw new Error("Extraction aborted");
       }
 
-      // Apply filter
-      if (filter && !filter(entry.path, entry.isDirectory)) {
+      // Apply filter (pass isDirectory for both dirs and symlinks pointing to dirs)
+      if (filter && !filter(entry.path, entry.type === "directory")) {
         continue;
       }
 
       const targetPath = path.join(resolvedTarget, entry.path);
       assertNoPathTraversal(targetPath, resolvedTarget, entry.path);
 
-      if (entry.isDirectory) {
+      if (entry.type === "directory") {
+        // --- Directory ---
         if (
           !(await tryFsOpWithWarning(
             () => ensureDir(targetPath),
@@ -2458,7 +2497,52 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         ) {
           continue;
         }
+
+        // Set directory permissions
+        if (preservePermissions) {
+          const dirMode = getEffectiveMode(entry.mode, "directory");
+          await tryFsOpWithWarning(
+            () => chmod(targetPath, dirMode & 0o7777), // Strip file type bits
+            onWarning,
+            entry.path,
+            targetPath
+          );
+        }
+      } else if (entry.type === "symlink") {
+        // --- Symlink ---
+        if (!createSymlinks) {
+          // Skip symlinks if disabled
+          continue;
+        }
+
+        // Extract symlink target (content of the entry is the link target path)
+        const data = await this._zip_parser!.extract(entry.path, password ?? this._zip_password);
+        if (!data) {
+          continue;
+        }
+
+        const linkTarget = new TextDecoder().decode(data);
+
+        // Validate symlink target doesn't escape the extraction directory
+        const resolvedLinkTarget = path.resolve(path.dirname(targetPath), linkTarget);
+        if (
+          !resolvedLinkTarget.startsWith(resolvedTarget + path.sep) &&
+          resolvedLinkTarget !== resolvedTarget
+        ) {
+          // Symlink points outside extraction directory - emit warning and skip
+          emitExtractWarning(
+            onWarning,
+            entry.path,
+            targetPath,
+            new Error(`Symlink target "${linkTarget}" points outside extraction directory`)
+          );
+          continue;
+        }
+
+        // Defer symlink creation to ensure target exists
+        deferredSymlinks.push({ entry, targetPath, linkTarget });
       } else {
+        // --- Regular File ---
         // Check overwrite strategy
         let shouldWrite = false;
         try {
@@ -2487,7 +2571,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
           continue;
         }
 
-        // Extract
+        // Extract file content
         const data = await this._zip_parser!.extract(entry.path, password ?? this._zip_password);
         if (data) {
           let writeSuccess = false;
@@ -2503,14 +2587,27 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
             throw err;
           }
 
-          if (writeSuccess && preserveTimestamps) {
-            // Best effort timestamp; ignore ignorable errors
-            await tryFsOpWithWarning(
-              () => setFileTime(targetPath, entry.lastModified),
-              onWarning,
-              entry.path,
-              targetPath
-            );
+          if (writeSuccess) {
+            // Set file permissions
+            if (preservePermissions) {
+              const fileMode = getEffectiveMode(entry.mode, "file");
+              await tryFsOpWithWarning(
+                () => chmod(targetPath, fileMode & 0o7777),
+                onWarning,
+                entry.path,
+                targetPath
+              );
+            }
+
+            // Set timestamps
+            if (preserveTimestamps) {
+              await tryFsOpWithWarning(
+                () => setFileTime(targetPath, entry.lastModified),
+                onWarning,
+                entry.path,
+                targetPath
+              );
+            }
           }
         }
       }
@@ -2527,6 +2624,62 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         });
       }
     }
+
+    // Process deferred symlinks
+    for (const { entry, targetPath, linkTarget } of deferredSymlinks) {
+      if (signal?.aborted) {
+        throw new Error("Extraction aborted");
+      }
+
+      // Check overwrite strategy for symlink
+      let shouldWrite = false;
+      try {
+        shouldWrite = await shouldExtract(targetPath, entry.lastModified, overwrite);
+      } catch (err) {
+        if (isIgnorableFsError(err)) {
+          emitExtractWarning(onWarning, entry.path, targetPath, err);
+          continue;
+        }
+        throw err;
+      }
+
+      if (!shouldWrite) {
+        continue;
+      }
+
+      // Ensure parent directory exists
+      if (
+        !(await tryFsOpWithWarning(
+          () => ensureDir(path.dirname(targetPath)),
+          onWarning,
+          entry.path,
+          targetPath
+        ))
+      ) {
+        continue;
+      }
+
+      // Create symlink
+      const symlinkCreated = await tryFsOpWithWarning(
+        () => createSymlink(linkTarget, targetPath),
+        onWarning,
+        entry.path,
+        targetPath
+      );
+
+      if (symlinkCreated) {
+        extractedEntries++;
+
+        if (onProgress) {
+          onProgress({
+            currentEntry: entry.path,
+            totalEntries,
+            extractedEntries,
+            bytesWritten
+          });
+        }
+      }
+    }
   }
 
   private _extractZipSync(targetDir: string, options: ExtractToOptions): void {
@@ -2538,6 +2691,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       overwrite = "error",
       filter,
       preserveTimestamps = true,
+      preservePermissions = supportsUnixPermissions(),
+      createSymlinks = true,
       password,
       signal,
       onProgress,
@@ -2550,6 +2705,13 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     let extractedEntries = 0;
     let bytesWritten = 0;
 
+    // Deferred symlinks - process after all files/dirs to ensure targets exist
+    const deferredSymlinks: Array<{
+      entry: ParserEntryInfo;
+      targetPath: string;
+      linkTarget: string;
+    }> = [];
+
     for (const entry of entries) {
       // Check abort signal
       if (signal?.aborted) {
@@ -2557,14 +2719,15 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       }
 
       // Apply filter
-      if (filter && !filter(entry.path, entry.isDirectory)) {
+      if (filter && !filter(entry.path, entry.type === "directory")) {
         continue;
       }
 
       const targetPath = path.join(resolvedTarget, entry.path);
       assertNoPathTraversal(targetPath, resolvedTarget, entry.path);
 
-      if (entry.isDirectory) {
+      if (entry.type === "directory") {
+        // --- Directory ---
         if (
           !tryFsOpWithWarningSync(
             () => ensureDirSync(targetPath),
@@ -2575,8 +2738,50 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         ) {
           continue;
         }
+
+        // Set directory permissions
+        if (preservePermissions) {
+          const dirMode = getEffectiveMode(entry.mode, "directory");
+          tryFsOpWithWarningSync(
+            () => chmodSync(targetPath, dirMode & 0o7777),
+            onWarning,
+            entry.path,
+            targetPath
+          );
+        }
+      } else if (entry.type === "symlink") {
+        // --- Symlink ---
+        if (!createSymlinks) {
+          continue;
+        }
+
+        // Extract symlink target
+        const data = this._zip_parser!.extractSync(entry.path, password ?? this._zip_password);
+        if (!data) {
+          continue;
+        }
+
+        const linkTarget = new TextDecoder().decode(data);
+
+        // Validate symlink target doesn't escape the extraction directory
+        const resolvedLinkTarget = path.resolve(path.dirname(targetPath), linkTarget);
+        if (
+          !resolvedLinkTarget.startsWith(resolvedTarget + path.sep) &&
+          resolvedLinkTarget !== resolvedTarget
+        ) {
+          emitExtractWarning(
+            onWarning,
+            entry.path,
+            targetPath,
+            new Error(`Symlink target "${linkTarget}" points outside extraction directory`)
+          );
+          continue;
+        }
+
+        // Defer symlink creation
+        deferredSymlinks.push({ entry, targetPath, linkTarget });
       } else {
-        // Check overwrite strategy
+        // --- Regular File ---
         let shouldWrite = false;
         try {
           shouldWrite = shouldExtractSync(targetPath, entry.lastModified, overwrite);
@@ -2592,7 +2797,6 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
           continue;
         }
 
-        // Ensure parent directory exists
         if (
           !tryFsOpWithWarningSync(
             () => ensureDirSync(path.dirname(targetPath)),
@@ -2604,7 +2808,6 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
           continue;
         }
 
-        // Extract
         const data = this._zip_parser!.extractSync(entry.path, password ?? this._zip_password);
         if (data) {
           let writeSuccess = false;
@@ -2620,21 +2823,31 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
             throw err;
           }
 
-          if (writeSuccess && preserveTimestamps) {
-            // Best effort timestamp; ignore ignorable errors
-            tryFsOpWithWarningSync(
-              () => setFileTimeSync(targetPath, entry.lastModified),
-              onWarning,
-              entry.path,
-              targetPath
-            );
+          if (writeSuccess) {
+            if (preservePermissions) {
+              const fileMode = getEffectiveMode(entry.mode, "file");
+              tryFsOpWithWarningSync(
+                () => chmodSync(targetPath, fileMode & 0o7777),
+                onWarning,
+                entry.path,
+                targetPath
+              );
+            }
+
+            if (preserveTimestamps) {
+              tryFsOpWithWarningSync(
+                () => setFileTimeSync(targetPath, entry.lastModified),
+                onWarning,
+                entry.path,
+                targetPath
+              );
+            }
           }
         }
       }
 
       extractedEntries++;
 
-      // Report progress
       if (onProgress) {
         onProgress({
           currentEntry: entry.path,
@@ -2642,6 +2855,59 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
           extractedEntries,
           bytesWritten
         });
+      }
+    }
+
+    // Process deferred symlinks
+    for (const { entry, targetPath, linkTarget } of deferredSymlinks) {
+      if (signal?.aborted) {
+        throw new Error("Extraction aborted");
+      }
+
+      let shouldWrite = false;
+      try {
+        shouldWrite = shouldExtractSync(targetPath, entry.lastModified, overwrite);
+      } catch (err) {
+        if (isIgnorableFsError(err)) {
+          emitExtractWarning(onWarning, entry.path, targetPath, err);
+          continue;
+        }
+        throw err;
+      }
+
+      if (!shouldWrite) {
+        continue;
+      }
+
+      if (
+        !tryFsOpWithWarningSync(
+          () => ensureDirSync(path.dirname(targetPath)),
+          onWarning,
+          entry.path,
+          targetPath
+        )
+      ) {
+        continue;
+      }
+
+      const symlinkCreated = tryFsOpWithWarningSync(
+        () => createSymlinkSync(linkTarget, targetPath),
+        onWarning,
+        entry.path,
+        targetPath
+      );
+
+      if (symlinkCreated) {
+        extractedEntries++;
+
+        if (onProgress) {
+          onProgress({
+            currentEntry: entry.path,
+            totalEntries,
+            extractedEntries,
+            bytesWritten
+          });
+        }
       }
     }
   }

@@ -1066,7 +1066,7 @@ describe("RemoteZipReader.open", () => {
 
       const dirEntry = reader.getEntry("folder/");
       expect(dirEntry).toBeDefined();
-      expect(dirEntry!.isDirectory).toBe(true);
+      expect(dirEntry!.type).toBe("directory");
 
       // Extract directory should return empty data
       const dirData = await reader.extract("folder/");

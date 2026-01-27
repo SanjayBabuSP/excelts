@@ -151,6 +151,24 @@ export function isZipDirectoryPath(path: string): boolean {
   return last === 47 || last === 92;
 }
 
+// Re-export from centralized location for backward compatibility
+export {
+  S_IFMT,
+  S_IFLNK,
+  S_IFDIR,
+  ZIP_OS_MSDOS,
+  getUnixModeFromExternalAttributes,
+  getOsFromVersionMadeBy,
+  isSymlinkMode,
+  isDirectoryMode
+} from "@archive/zip-spec/zip-records";
+
+/**
+ * Legacy entry type detection (without symlink support).
+ *
+ * Note: For full symlink detection, use buffer-based parsing via ZipParser
+ * which reads the Central Directory and has access to externalAttributes.
+ */
 export function getZipEntryType(path: string, uncompressedSize: number): "Directory" | "File" {
   return uncompressedSize === 0 && isZipDirectoryPath(path) ? "Directory" : "File";
 }

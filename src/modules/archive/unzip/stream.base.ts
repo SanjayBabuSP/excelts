@@ -664,7 +664,11 @@ export function streamUntilValidatedDataDescriptor(
 export interface ZipEntry extends PassThrough {
   path: string;
   props: EntryProps;
-  type: "Directory" | "File";
+  /**
+   * Entry type. Note: Streaming parser can only reliably detect "Directory" vs "File".
+   * "Symlink" detection requires Central Directory access (use buffer-based parsing).
+   */
+  type: "Directory" | "File" | "Symlink";
   vars: EntryVars;
   extraFields: ZipExtraFields;
   size?: number;

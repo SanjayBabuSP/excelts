@@ -484,14 +484,14 @@ export class RemoteZipReader {
    * Get the number of file entries (excluding directories).
    */
   getFileCount(): number {
-    return this.entries.filter(e => !e.isDirectory).length;
+    return this.entries.filter(e => e.type !== "directory").length;
   }
 
   /**
    * Get the number of directory entries.
    */
   getDirectoryCount(): number {
-    return this.entries.filter(e => e.isDirectory).length;
+    return this.entries.filter(e => e.type === "directory").length;
   }
 
   /**
@@ -570,7 +570,7 @@ export class RemoteZipReader {
     const password = opts.password ?? this.options.password;
     const shouldCheckCrc = opts.checkCrc32 ?? this.options.checkCrc32 ?? false;
 
-    if (entry.isDirectory) {
+    if (entry.type === "directory") {
       return new Uint8Array(0);
     }
 
@@ -620,7 +620,7 @@ export class RemoteZipReader {
   async extractAll(
     options?: ExtractOptions | string | Uint8Array
   ): Promise<Map<string, Uint8Array>> {
-    const filePaths = this.entries.filter(e => !e.isDirectory).map(e => e.path);
+    const filePaths = this.entries.filter(e => e.type !== "directory").map(e => e.path);
     return this.extractMultiple(filePaths, options);
   }
 
@@ -721,7 +721,7 @@ export class RemoteZipReader {
 
     for (let i = 0; i < entriesToExtract.length; ) {
       // Skip directories (no data to read)
-      if (entriesToExtract[i].entry.isDirectory) {
+      if (entriesToExtract[i].entry.type === "directory") {
         opts.onprogress?.(processedSize, totalSize);
         result.set(entriesToExtract[i].path, new Uint8Array(0));
         i++;
@@ -736,7 +736,7 @@ export class RemoteZipReader {
       let j = i + 1;
       for (; j < entriesToExtract.length; j++) {
         const nextEntry = entriesToExtract[j].entry;
-        if (nextEntry.isDirectory) {
+        if (nextEntry.type === "directory") {
           break;
         }
 
@@ -760,7 +760,7 @@ export class RemoteZipReader {
       for (let k = i; k < j; k++) {
         const { path, entry } = entriesToExtract[k];
 
-        if (entry.isDirectory) {
+        if (entry.type === "directory") {
           opts.onprogress?.(processedSize, totalSize);
           result.set(path, new Uint8Array(0));
           continue;

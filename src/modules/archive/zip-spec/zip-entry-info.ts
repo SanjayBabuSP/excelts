@@ -11,11 +11,28 @@ import type { AesKeyStrength } from "@archive/crypto/aes";
  */
 export type ZipEntryEncryptionMethod = "none" | "zipcrypto" | "aes";
 
+/**
+ * ZIP entry type.
+ */
+export type ZipEntryType = "file" | "directory" | "symlink";
+
+/**
+ * Check if entry type is a symbolic link.
+ */
+export function isSymlink(type: ZipEntryType): boolean {
+  return type === "symlink";
+}
+
 export interface ZipEntryInfo {
   /** File path within the ZIP */
   path: string;
-  /** Whether this is a directory */
-  isDirectory: boolean;
+  /** Entry type: file, directory, or symlink */
+  type: ZipEntryType;
+  /**
+   * Symlink target path (only set when type is 'symlink').
+   * Note: This is populated after extraction - the data content of a symlink entry is the target path.
+   */
+  linkTarget?: string;
   /** Compressed size */
   compressedSize: number;
   /** ZIP64 exact compressed size (when present in the ZIP64 extra field). */
@@ -38,6 +55,13 @@ export interface ZipEntryInfo {
   comment: string;
   /** External file attributes */
   externalAttributes: number;
+
+  /**
+   * Unix file mode/permissions extracted from externalAttributes.
+   * This is the high 16 bits of externalAttributes when created on Unix.
+   * Value is 0 if no Unix mode information is available.
+   */
+  mode: number;
 
   /** Central directory "version made by" field (when available). */
   versionMadeBy?: number;

@@ -196,7 +196,7 @@ const zipAdapter: ArchiveAdapter = {
   async extract(data) {
     const files = new Map<string, Uint8Array>();
     for await (const entry of unzip(data).entries()) {
-      if (entry.isDirectory) {
+      if (entry.type === "directory") {
         entry.discard();
       } else {
         files.set(entry.path, await entry.bytes());

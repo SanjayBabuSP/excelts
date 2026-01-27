@@ -29,6 +29,7 @@ import {
 import {
   Crc32MismatchError,
   DecryptionError,
+  EntrySizeMismatchError,
   PasswordRequiredError,
   UnsupportedCompressionError,
   throwIfAborted,
@@ -51,6 +52,13 @@ export interface ExtractCoreOptions {
   password?: string | Uint8Array;
   /** Whether to validate CRC32 checksum after extraction */
   checkCrc32?: boolean;
+  /**
+   * Whether to validate that the decompressed size matches the declared size.
+   * This is a security feature to detect ZIP bombs and corrupted archives.
+   * When enabled, extraction will abort early if too many bytes are produced.
+   * @default true
+   */
+  validateEntrySizes?: boolean;
 }
 
 /**
@@ -62,13 +70,15 @@ export interface ExtractCoreOptions {
  * @param compressedData - Raw compressed (and possibly encrypted) data from the ZIP
  * @param password - Optional password for decryption
  * @param checkCrc32 - Whether to validate CRC32 checksum (default: false)
+ * @param validateEntrySizes - Whether to validate decompressed size matches declared size (default: true)
  * @returns Decompressed entry content
  */
 export async function processEntryData(
   entry: ZipEntryInfo,
   compressedData: Uint8Array,
   password?: string | Uint8Array,
-  checkCrc32 = false
+  checkCrc32 = false,
+  validateEntrySizes = true
 ): Promise<Uint8Array> {
   let result: Uint8Array;
 
@@ -105,6 +115,12 @@ export async function processEntryData(
   } else {
     // Non-encrypted entry
     result = await decompressData(compressedData, entry.compressionMethod, entry.path);
+  }
+
+  // Validate entry size (ZIP bomb protection)
+  if (validateEntrySizes && result.length !== entry.uncompressedSize) {
+    const reason = result.length > entry.uncompressedSize ? "too-many-bytes" : "too-few-bytes";
+    throw new EntrySizeMismatchError(entry.path, entry.uncompressedSize, result.length, reason);
   }
 
   // Validate CRC32 if requested
@@ -321,6 +337,38 @@ async function* inflateRawStream(
   }
 }
 
+/**
+ * Validate that the decompressed data size matches the declared size.
+ * Throws early if too many bytes are produced (ZIP bomb protection).
+ * Throws at the end if too few bytes are produced (corruption detection).
+ */
+async function* validateSizeStream(
+  entry: ZipEntryInfo,
+  source: AsyncIterable<Uint8Array>,
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<Uint8Array> {
+  const { signal } = options;
+  const expectedSize = entry.uncompressedSize;
+  let totalBytes = 0;
+
+  for await (const chunk of source) {
+    throwIfAborted(signal);
+    if (chunk.length) {
+      totalBytes += chunk.length;
+      // Early abort if too many bytes (ZIP bomb protection)
+      if (totalBytes > expectedSize) {
+        throw new EntrySizeMismatchError(entry.path, expectedSize, totalBytes, "too-many-bytes");
+      }
+      yield chunk;
+    }
+  }
+
+  // Check if too few bytes at the end
+  if (totalBytes < expectedSize) {
+    throw new EntrySizeMismatchError(entry.path, expectedSize, totalBytes, "too-few-bytes");
+  }
+}
+
 async function* validateCrc32Stream(
   entry: ZipEntryInfo,
   source: AsyncIterable<Uint8Array>,
@@ -342,6 +390,35 @@ async function* validateCrc32Stream(
 }
 
 /**
+ * Apply validation streams (size and CRC32) to an output stream.
+ * This centralizes the common pattern of chaining validation streams.
+ */
+function applyValidationStreams(
+  entry: ZipEntryInfo,
+  source: AsyncIterable<Uint8Array>,
+  options: {
+    validateEntrySizes: boolean;
+    checkCrc32: boolean;
+    signal?: AbortSignal;
+  }
+): AsyncIterable<Uint8Array> {
+  const { validateEntrySizes, checkCrc32, signal } = options;
+  let stream = source;
+
+  // Size validation first (for early abort on ZIP bombs)
+  if (validateEntrySizes) {
+    stream = validateSizeStream(entry, stream, { signal });
+  }
+
+  // Then CRC32 validation
+  if (checkCrc32) {
+    stream = validateCrc32Stream(entry, stream, { signal });
+  }
+
+  return stream;
+}
+
+/**
  * Process entry data as an async iterable of output chunks.
  *
  * This avoids buffering the full output in memory for STORE/DEFLATE entries.
@@ -354,12 +431,12 @@ export function processEntryDataStream(
   compressedData: AsyncIterable<Uint8Array>,
   options: ExtractCoreOptions & { signal?: AbortSignal } = {}
 ): AsyncIterable<Uint8Array> {
-  const { password, checkCrc32 = false, signal } = options;
+  const { password, checkCrc32 = false, validateEntrySizes = true, signal } = options;
 
   const run = async function* (): AsyncIterable<Uint8Array> {
     throwIfAborted(signal);
 
-    if (entry.isDirectory) {
+    if (entry.type === "directory") {
       return;
     }
 
@@ -375,6 +452,12 @@ export function processEntryDataStream(
         const decrypted = await aesDecrypt(encrypted, password, entry.aesKeyStrength);
         const method = entry.originalCompressionMethod ?? COMPRESSION_STORE;
         const out = await decompressData(decrypted, method, entry.path);
+
+        // Validate size for AES entries (already fully buffered)
+        if (validateEntrySizes && out.length !== entry.uncompressedSize) {
+          const reason = out.length > entry.uncompressedSize ? "too-many-bytes" : "too-few-bytes";
+          throw new EntrySizeMismatchError(entry.path, entry.uncompressedSize, out.length, reason);
+        }
 
         if (out.length) {
           yield out;
@@ -394,9 +477,12 @@ export function processEntryDataStream(
           throw new UnsupportedCompressionError(entry.compressionMethod);
         }
 
-        if (checkCrc32) {
-          outStream = validateCrc32Stream(entry, outStream, { signal });
-        }
+        // Apply validation streams using centralized helper
+        outStream = applyValidationStreams(entry, outStream, {
+          validateEntrySizes,
+          checkCrc32,
+          signal
+        });
 
         for await (const chunk of outStream) {
           yield chunk;
@@ -406,7 +492,15 @@ export function processEntryDataStream(
 
       // Fallback for other encryption methods.
       const encrypted = await collect(compressedData);
-      const out = await processEntryData(entry, encrypted, password, checkCrc32);
+      // processEntryData already handles size validation internally
+      const out = await processEntryData(
+        entry,
+        encrypted,
+        password,
+        checkCrc32,
+        validateEntrySizes
+      );
+
       if (out.length) {
         yield out;
       }
@@ -423,9 +517,12 @@ export function processEntryDataStream(
       throw new UnsupportedCompressionError(entry.compressionMethod);
     }
 
-    if (checkCrc32) {
-      outStream = validateCrc32Stream(entry, outStream, { signal });
-    }
+    // Apply validation streams using centralized helper
+    outStream = applyValidationStreams(entry, outStream, {
+      validateEntrySizes,
+      checkCrc32,
+      signal
+    });
 
     for await (const chunk of outStream) {
       yield chunk;

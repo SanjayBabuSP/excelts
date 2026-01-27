@@ -40,7 +40,7 @@ async function unzipToMap(
   const out = new Map<string, Uint8Array>();
   const reader = imports.unzip(source, options);
   for await (const entry of reader.entries()) {
-    if (entry.isDirectory) {
+    if (entry.type === "directory") {
       entry.discard();
       continue;
     }

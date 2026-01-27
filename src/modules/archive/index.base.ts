@@ -47,7 +47,10 @@ export {
   DecryptionError,
   PasswordRequiredError,
   FileTooLargeError,
-  UnsupportedCompressionError
+  UnsupportedCompressionError,
+  EntrySizeMismatchError,
+  // Error types
+  type EntrySizeMismatchReason
 } from "@archive/shared/errors";
 
 // High-level APIs

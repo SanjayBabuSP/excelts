@@ -1,9 +1,15 @@
-import { VERSION_NEEDED } from "@archive/zip-spec/zip-records";
+import {
+  VERSION_NEEDED,
+  ZIP_OS_MSDOS,
+  ZIP_OS_UNIX,
+  S_IFMT,
+  S_IFLNK,
+  S_IFDIR,
+  S_IFREG,
+  isSymlinkMode
+} from "@archive/zip-spec/zip-records";
 
 type ZipEntryKind = "file" | "directory" | "symlink";
-
-const ZIP_OS_MSDOS = 0;
-const ZIP_OS_UNIX = 3;
 
 function zipVersionMadeBy(os: number, version: number = VERSION_NEEDED): number {
   return ((os & 0xff) << 8) | (version & 0xff);
@@ -12,11 +18,11 @@ function zipVersionMadeBy(os: number, version: number = VERSION_NEEDED): number 
 function resolveUnixTypeBits(kind: ZipEntryKind): number {
   switch (kind) {
     case "directory":
-      return 0o040000;
+      return S_IFDIR;
     case "symlink":
-      return 0o120000;
+      return S_IFLNK;
     default:
-      return 0o100000;
+      return S_IFREG;
   }
 }
 
@@ -39,7 +45,7 @@ interface ZipExternalAttributesResult {
 
 function resolveZipEntryKind(name: string, mode?: number): ZipEntryKind {
   const isDirectory = name.endsWith("/") || name.endsWith("\\");
-  const isSymlink = mode !== undefined && (mode & 0o170000) === 0o120000;
+  const isSymlink = mode !== undefined && isSymlinkMode(mode);
   return isSymlink ? "symlink" : isDirectory ? "directory" : "file";
 }
 
@@ -57,7 +63,7 @@ function buildZipExternalAttributes(
   let unixMode: number | undefined = input.mode;
   if (unixMode !== undefined) {
     // If the caller passed only permission bits (no type bits), add type bits.
-    if ((unixMode & 0o170000) === 0) {
+    if ((unixMode & S_IFMT) === 0) {
       unixMode = (unixMode & 0o7777) | resolveUnixTypeBits(kind);
     }
     unixMode = clampUint16(unixMode);

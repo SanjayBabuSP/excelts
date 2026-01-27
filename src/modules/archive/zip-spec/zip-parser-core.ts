@@ -23,7 +23,11 @@ import {
   UINT16_MAX,
   UINT32_MAX,
   ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
-  ZIP64_END_OF_CENTRAL_DIR_SIG
+  ZIP64_END_OF_CENTRAL_DIR_SIG,
+  ZIP_OS_MSDOS,
+  getUnixModeFromExternalAttributes,
+  isSymlinkMode,
+  isDirectoryMode
 } from "./zip-records";
 import type { AesKeyStrength } from "@archive/crypto/aes";
 // -----------------------------------------------------------------------------
@@ -337,8 +341,20 @@ export function parseCentralDirectoryEntry(
   const fileName = decodeStrings ? decodeZipPath(fileNameBytes, flags, extraFields, decoder) : "";
   const comment = decodeStrings ? decodeZipComment(commentBytes, flags, extraFields, decoder) : "";
 
-  const isDirectory = fileName.endsWith("/") || (externalAttributes & 0x10) !== 0;
+  // Extract Unix mode from external attributes
+  const mode = getUnixModeFromExternalAttributes(externalAttributes);
+  const madeByOs = (versionMadeBy >> 8) & 0xff;
+
+  // Determine entry type using helper functions
+  const isSymlink = isSymlinkMode(mode);
+  const isDirectory =
+    isDirectoryMode(mode) ||
+    (madeByOs === ZIP_OS_MSDOS && (externalAttributes & 0x10) !== 0) ||
+    fileName.endsWith("/");
   const isEncrypted = (flags & 0x01) !== 0;
+
+  // Map to ZipEntryType
+  const type = isSymlink ? "symlink" : isDirectory ? "directory" : "file";
 
   const unixSecondsMtime = extraFields.mtimeUnixSeconds;
   const lastModified = resolveZipLastModifiedDateFromUnixSeconds(
@@ -366,7 +382,7 @@ export function parseCentralDirectoryEntry(
 
   return {
     path: fileName,
-    isDirectory,
+    type,
     compressedSize,
     compressedSize64: extraFields.compressedSize64,
     uncompressedSize,
@@ -378,6 +394,7 @@ export function parseCentralDirectoryEntry(
     localHeaderOffset64: extraFields.offsetToLocalFileHeader64,
     comment,
     externalAttributes,
+    mode,
     versionMadeBy,
     extraField: rawExtraField,
     isEncrypted,

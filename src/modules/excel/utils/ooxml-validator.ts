@@ -241,7 +241,7 @@ export async function validateXlsxBuffer(
       if (maxProblems !== undefined && problems.length >= maxProblems) {
         break;
       }
-      if (entry.isDirectory || !isXmlLike(p)) {
+      if (entry.type === "directory" || !isXmlLike(p)) {
         continue;
       }
       const xml = new TextDecoder().decode(entry.data);
@@ -345,7 +345,7 @@ export async function validateXlsxBuffer(
       if (maxProblems !== undefined && problems.length >= maxProblems) {
         break;
       }
-      if (entry.isDirectory || !isPackagePart(p)) {
+      if (entry.type === "directory" || !isPackagePart(p)) {
         continue;
       }
 
@@ -406,7 +406,7 @@ export async function validateXlsxBuffer(
       if (maxProblems !== undefined && problems.length >= maxProblems) {
         break;
       }
-      if (entry.isDirectory || !p.endsWith(".rels")) {
+      if (entry.type === "directory" || !p.endsWith(".rels")) {
         continue;
       }
 
@@ -589,7 +589,11 @@ export async function validateXlsxBuffer(
       if (maxProblems !== undefined && problems.length >= maxProblems) {
         break;
       }
-      if (entry.isDirectory || !p.startsWith("xl/worksheets/sheet") || !p.endsWith(".xml")) {
+      if (
+        entry.type === "directory" ||
+        !p.startsWith("xl/worksheets/sheet") ||
+        !p.endsWith(".xml")
+      ) {
         continue;
       }
 
@@ -787,10 +791,10 @@ export async function validateXlsxBuffer(
   const stats = {
     entryCount: entries.size,
     xmlLikeCount: [...entries.values()].filter(
-      (f: ExtractedFile) => !f.isDirectory && isXmlLike(f.path)
+      (f: ExtractedFile) => f.type !== "directory" && isXmlLike(f.path)
     ).length,
     relsCount: [...entries.values()].filter(
-      (f: ExtractedFile) => !f.isDirectory && f.path.endsWith(".rels")
+      (f: ExtractedFile) => f.type !== "directory" && f.path.endsWith(".rels")
     ).length
   };
 

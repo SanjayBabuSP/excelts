@@ -109,6 +109,7 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "InvalidZipSignatureError",
   "EocdNotFoundError",
   "Crc32MismatchError",
+  "EntrySizeMismatchError",
   "DecryptionError",
   "PasswordRequiredError",
   "RangeNotSupportedError",

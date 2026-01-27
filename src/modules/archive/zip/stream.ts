@@ -37,7 +37,7 @@ import {
   type ZipStringEncoding
 } from "@archive/shared/text";
 import { isProbablyIncompressibleChunks } from "@archive/zip/compressibility";
-import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
+import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import { createAbortError, toError } from "@archive/shared/errors";
 import { buildCentralDirectoryAndEocd, centralDirEntryToInput } from "./writer-core";
 import type { ZipCentralDirEntry, ZipWritableFile } from "./writable-file";
@@ -54,6 +54,8 @@ import {
   FLAG_DATA_DESCRIPTOR,
   FLAG_UTF8,
   COMPRESSION_AES,
+  getUnixModeFromExternalAttributes,
+  isSymlinkMode,
   type Zip64Mode
 } from "@archive/zip-spec/zip-records";
 
@@ -829,17 +831,22 @@ export class ZipDeflateFile {
    * Get entry metadata in the same shape as unzip parser outputs.
    * This is best-effort: writer-only fields like encryption are always false.
    */
-  getEntryInfo(): UnzipZipEntryInfo | null {
+  getEntryInfo(): ZipEntryInfo | null {
     if (!this._centralDirEntryInfo) {
       return null;
     }
 
     const path = this.name;
-    const isDirectory = path.endsWith("/") || path.endsWith("\\");
+    const pathIsDir = path.endsWith("/") || path.endsWith("\\");
+
+    // Extract Unix mode from external attributes for symlink detection
+    const externalAttributes = this._centralDirEntryInfo.externalAttributes;
+    const mode = getUnixModeFromExternalAttributes(externalAttributes);
+    const type = isSymlinkMode(mode) ? "symlink" : pathIsDir ? "directory" : "file";
 
     return {
       path,
-      isDirectory,
+      type,
       compressedSize: this._centralDirEntryInfo.compressedSize,
       uncompressedSize: this._centralDirEntryInfo.uncompressedSize,
       compressionMethod: this._centralDirEntryInfo.compressionMethod,
@@ -847,7 +854,8 @@ export class ZipDeflateFile {
       lastModified: this._modTime,
       localHeaderOffset: this._centralDirEntryInfo.offset,
       comment: this._stringCodec.decode(this._centralDirEntryInfo.comment),
-      externalAttributes: this._centralDirEntryInfo.externalAttributes,
+      externalAttributes,
+      mode,
       versionMadeBy: this._centralDirEntryInfo.versionMadeBy,
       extraField: this._centralDirEntryInfo.extraField,
       isEncrypted: this._encryptionMethod !== "none",

@@ -251,7 +251,7 @@ describe("ZipParser", () => {
       const entry = parser.getEntry("file.txt");
       expect(entry).not.toBeUndefined();
       expect(entry!.path).toBe("file.txt");
-      expect(entry!.isDirectory).toBe(false);
+      expect(entry!.type).toBe("file");
     });
 
     it("should count children in a directory", async () => {

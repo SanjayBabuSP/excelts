@@ -108,11 +108,12 @@ export function runZip64WriteTests(): void {
         };
       }
 
-      expect(() => createZipSync(entries, { level: 0, reproducible: true, zip64: false })).toThrow(
-        /ZIP64 is required but zip64=false/
-      );
+      expect(() =>
+        createZipSync(entries, { level: 0, reproducible: true, noSort: true, zip64: false })
+      ).toThrow(/ZIP64 is required but zip64=false/);
 
-      const zipBytes = createZipSync(entries, { level: 0, reproducible: true });
+      // Use noSort to preserve input order, so we can validate specific paths
+      const zipBytes = createZipSync(entries, { level: 0, reproducible: true, noSort: true });
 
       // ZIP64 EOCD + locator should appear near the end.
       expect(

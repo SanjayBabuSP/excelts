@@ -315,6 +315,22 @@ export interface ExtractToOptions {
   /** Preserve file modification times (default: true) */
   preserveTimestamps?: boolean;
 
+  /**
+   * Preserve Unix file permissions (default: true on Unix, false on Windows).
+   * When true, extracts files with their original permissions from the archive.
+   * If the archive has no permission info (mode=0), uses defaults:
+   * - Directories: 0o755 (rwxr-xr-x)
+   * - Files: 0o644 (rw-r--r--)
+   */
+  preservePermissions?: boolean;
+
+  /**
+   * Create symbolic links when extracting symlink entries (default: true).
+   * When false, symlinks are skipped.
+   * Note: Creating symlinks may require elevated permissions on some systems.
+   */
+  createSymlinks?: boolean;
+
   /** Password for encrypted entries */
   password?: string | Uint8Array;
 

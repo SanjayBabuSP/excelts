@@ -1,4 +1,5 @@
 import type { UnzipEntry } from "./index";
+import type { ZipEntryType } from "@archive/zip-spec/zip-entry-info";
 import type {
   ArchiveProgressPhase,
   ArchiveStreamOptions,
@@ -28,7 +29,7 @@ export type UnzipProgress = {
 
   currentEntry?: {
     path: string;
-    isDirectory: boolean;
+    entryType: ZipEntryType;
     bytesOut: number;
   };
 };

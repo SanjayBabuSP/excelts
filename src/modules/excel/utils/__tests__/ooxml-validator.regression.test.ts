@@ -10,7 +10,13 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 function setFile(entries: Map<string, ExtractedFile>, path: string, data: Uint8Array): void {
-  entries.set(path, { path, data, isDirectory: false, size: data.length });
+  entries.set(path, {
+    path,
+    data,
+    type: "file",
+    size: data.length,
+    mode: 0
+  });
 }
 
 function rebuildZip(entries: Map<string, ExtractedFile>): Uint8Array {
@@ -22,7 +28,7 @@ function rebuildZip(entries: Map<string, ExtractedFile>): Uint8Array {
   });
 
   for (const [p, entry] of entries) {
-    if (entry.isDirectory) {
+    if (entry.type === "directory") {
       continue;
     }
     zip.add(p, entry.data);

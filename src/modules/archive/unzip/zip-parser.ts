@@ -92,7 +92,7 @@ async function extractEntryData(
   entry: ZipEntryInfo,
   options: ExtractOptions = {}
 ): Promise<Uint8Array> {
-  if (entry.isDirectory) {
+  if (entry.type === "directory") {
     return EMPTY_UINT8ARRAY;
   }
 
@@ -110,7 +110,7 @@ function extractEntryDataSync(
   entry: ZipEntryInfo,
   options: ExtractOptions = {}
 ): Uint8Array {
-  if (entry.isDirectory) {
+  if (entry.type === "directory") {
     return EMPTY_UINT8ARRAY;
   }
 
@@ -206,12 +206,12 @@ export class ZipParser {
    */
   childCount(path: string): number {
     const direct = this.entryMap.get(path);
-    if (direct && !direct.isDirectory) {
+    if (direct && direct.type !== "directory") {
       return 0;
     }
 
     const slashPath = path.endsWith("/") ? path : path + "/";
-    const dirEntry = direct?.isDirectory ? direct : this.entryMap.get(slashPath);
+    const dirEntry = direct?.type === "directory" ? direct : this.entryMap.get(slashPath);
 
     // If there is no explicit directory entry, still support implicit directories
     // as long as there are entries under the prefix.

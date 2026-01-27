@@ -5,6 +5,8 @@
  */
 
 import { ZipParser, type ZipEntryInfo } from "@archive/unzip/zip-parser";
+import { type ZipEntryType, isSymlink as isSymlinkType } from "@archive/zip-spec/zip-entry-info";
+import { getTextDecoder } from "@stream/shared";
 
 /**
  * Extracted file entry
@@ -14,10 +16,16 @@ export interface ExtractedFile {
   path: string;
   /** File content as Uint8Array */
   data: Uint8Array;
-  /** Whether this is a directory */
-  isDirectory: boolean;
+  /** Entry type: file, directory, or symlink */
+  type: ZipEntryType;
+  /** Symlink target path (only set for symlinks) */
+  linkTarget?: string;
   /** Uncompressed size */
   size: number;
+  /**
+   * Unix file mode/permissions (0 if unavailable).
+   */
+  mode: number;
 }
 
 /**
@@ -46,11 +54,21 @@ export async function extractAll(
 
   for (const entry of parser.getEntries()) {
     const data = await parser.extract(entry.path);
+    const extractedData = data || new Uint8Array(0);
+
+    // For symlinks, the data content is the target path
+    let linkTarget: string | undefined;
+    if (isSymlinkType(entry.type) && extractedData.length > 0) {
+      linkTarget = getTextDecoder().decode(extractedData);
+    }
+
     files.set(entry.path, {
       path: entry.path,
-      data: data || new Uint8Array(0),
-      isDirectory: entry.isDirectory,
-      size: entry.uncompressedSize
+      data: extractedData,
+      type: entry.type,
+      linkTarget,
+      size: entry.uncompressedSize,
+      mode: entry.mode
     });
   }
 

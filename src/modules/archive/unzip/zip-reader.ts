@@ -132,15 +132,27 @@ export interface UnzipOptions {
 
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progress";
 
+import { type ZipEntryType, isSymlink } from "@archive/zip-spec/zip-entry-info";
+
 export class UnzipEntry {
   readonly path: string;
-  readonly isDirectory: boolean;
+  /** Entry type: file, directory, or symlink */
+  readonly type: ZipEntryType;
+  /**
+   * For symlinks, returns the target path after calling bytes().
+   * Before extraction, this is undefined.
+   */
+  linkTarget?: string;
+  /**
+   * Unix file mode/permissions (0 if unavailable).
+   */
+  readonly mode: number;
 
   private readonly _data?: Uint8Array;
   private readonly _info?: ZipEntryInfo;
   private readonly _password?: string | Uint8Array;
   private readonly _parseEntry?: ParseZipEntry;
-  private readonly _onBytesOut?: (path: string, isDirectory: boolean, bytes: number) => void;
+  private readonly _onBytesOut?: (path: string, type: ZipEntryType, bytes: number) => void;
   private readonly _signal?: AbortSignal;
 
   constructor(
@@ -148,7 +160,7 @@ export class UnzipEntry {
       | { kind: "buffer"; data: Uint8Array; info: ZipEntryInfo; password?: string | Uint8Array }
       | { kind: "stream"; entry: ParseZipEntry },
     hooks: {
-      onBytesOut?: (path: string, isDirectory: boolean, bytes: number) => void;
+      onBytesOut?: (path: string, type: ZipEntryType, bytes: number) => void;
       signal?: AbortSignal;
     } = {}
   ) {
@@ -157,11 +169,14 @@ export class UnzipEntry {
       this._info = args.info;
       this._password = args.password;
       this.path = args.info.path;
-      this.isDirectory = args.info.isDirectory;
+      this.type = args.info.type;
+      this.mode = args.info.mode;
     } else {
       this._parseEntry = args.entry;
       this.path = args.entry.path;
-      this.isDirectory = args.entry.type === "Directory";
+      // Streaming parser cannot detect symlinks (requires Central Directory)
+      this.type = args.entry.type === "Directory" ? "directory" : "file";
+      this.mode = 0;
     }
 
     this._onBytesOut = hooks.onBytesOut;
@@ -174,27 +189,36 @@ export class UnzipEntry {
     }
   }
 
+  /**
+   * Process extracted bytes: populate linkTarget for symlinks and notify progress.
+   */
+  private _processExtractedBytes(bytes: Uint8Array): Uint8Array {
+    // For symlinks, the data content is the target path
+    if (isSymlink(this.type) && bytes.length > 0) {
+      this.linkTarget = getTextDecoder().decode(bytes);
+    }
+    if (this._onBytesOut && bytes.length) {
+      this._onBytesOut(this.path, this.type, bytes.length);
+    }
+    return bytes;
+  }
+
   async bytes(): Promise<Uint8Array> {
     if (this._data && this._info) {
       // Use shared extraction core for buffer mode
       const compressedData = readEntryCompressedData(this._data, this._info);
       const bytes = await processEntryData(this._info, compressedData, this._password);
-      if (this._onBytesOut && bytes.length) {
-        this._onBytesOut(this.path, this.isDirectory, bytes.length);
-      }
-      return bytes;
+      return this._processExtractedBytes(bytes);
     }
     if (this._parseEntry) {
       const data = await this._parseEntry.buffer();
       // In Node.js, `entry.buffer()` may return a Buffer, which causes
       // deep-equality mismatches against Uint8Array in tests.
-      if (typeof Buffer !== "undefined" && data instanceof Buffer) {
-        return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-      }
-      if (this._onBytesOut && (data as any).length) {
-        this._onBytesOut(this.path, this.isDirectory, (data as any).length);
-      }
-      return data;
+      const bytes =
+        typeof Buffer !== "undefined" && data instanceof Buffer
+          ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+          : data;
+      return this._processExtractedBytes(bytes);
     }
     return new Uint8Array(0);
   }
@@ -220,7 +244,7 @@ export class UnzipEntry {
       try {
         for await (const chunk of iterable) {
           if (this._onBytesOut && chunk.length) {
-            this._onBytesOut(this.path, this.isDirectory, chunk.length);
+            this._onBytesOut(this.path, this.type, chunk.length);
           }
           yield chunk;
         }
@@ -331,14 +355,14 @@ export class ZipReader {
       { intervalMs: options.progressIntervalMs ?? this._options.progressIntervalMs }
     );
 
-    const onBytesOut = (path: string, isDirectory: boolean, bytes: number): void => {
+    const onBytesOut = (path: string, entryType: ZipEntryType, bytes: number): void => {
       progress.mutate(s => {
         s.bytesOut += bytes;
         const prev = s.currentEntry;
         s.currentEntry =
           prev && prev.path === path
             ? { ...prev, bytesOut: prev.bytesOut + bytes }
-            : { path, isDirectory, bytesOut: bytes };
+            : { path, entryType, bytesOut: bytes };
       });
     };
 
@@ -361,7 +385,7 @@ export class ZipReader {
             throwIfAborted(signal);
             progress.mutate(s => {
               s.entriesEmitted += 1;
-              s.currentEntry = { path: info.path, isDirectory: info.isDirectory, bytesOut: 0 };
+              s.currentEntry = { path: info.path, entryType: info.type, bytesOut: 0 };
             });
             yield new UnzipEntry(
               { kind: "buffer", data: bytes, info, password },
@@ -444,7 +468,7 @@ export class ZipReader {
               s.entriesEmitted += 1;
               s.currentEntry = {
                 path: entry.path,
-                isDirectory: entry.type === "Directory",
+                entryType: entry.type === "Directory" ? "directory" : "file",
                 bytesOut: 0
               };
             });

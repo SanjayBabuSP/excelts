@@ -48,6 +48,58 @@ export const FLAG_ENCRYPTED = 0x0001;
 export const FLAG_UTF8 = 0x0800;
 export const FLAG_DATA_DESCRIPTOR = 0x0008;
 
+// =============================================================================
+// Unix file type constants (from stat.h)
+// =============================================================================
+
+/** Unix file type mask */
+export const S_IFMT = 0o170000;
+/** Unix symbolic link type */
+export const S_IFLNK = 0o120000;
+/** Unix directory type */
+export const S_IFDIR = 0o040000;
+/** Unix regular file type */
+export const S_IFREG = 0o100000;
+
+// ZIP "version made by" OS codes
+/** MS-DOS / Windows OS code */
+export const ZIP_OS_MSDOS = 0;
+/** Unix OS code */
+export const ZIP_OS_UNIX = 3;
+
+// =============================================================================
+// Unix mode helpers
+// =============================================================================
+
+/**
+ * Extract Unix mode from ZIP external attributes.
+ * Returns 0 if no Unix mode information is available.
+ */
+export function getUnixModeFromExternalAttributes(externalAttributes: number): number {
+  return (externalAttributes >> 16) & 0xffff;
+}
+
+/**
+ * Get the OS code from versionMadeBy field.
+ */
+export function getOsFromVersionMadeBy(versionMadeBy: number | undefined): number {
+  return versionMadeBy !== undefined ? (versionMadeBy >> 8) & 0xff : ZIP_OS_MSDOS;
+}
+
+/**
+ * Check if Unix mode indicates a symbolic link.
+ */
+export function isSymlinkMode(mode: number): boolean {
+  return (mode & S_IFMT) === S_IFLNK;
+}
+
+/**
+ * Check if Unix mode indicates a directory.
+ */
+export function isDirectoryMode(mode: number): boolean {
+  return (mode & S_IFMT) === S_IFDIR;
+}
+
 // ZIP64 / sentinel sizes
 export const UINT16_MAX = 0xffff;
 export const UINT32_MAX = 0xffffffff;

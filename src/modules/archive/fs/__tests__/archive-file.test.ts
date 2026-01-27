@@ -7,6 +7,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ArchiveFile } from "../archive-file.js";
+import type { ZipEntry } from "@archive/zip/zip-bytes";
+import { S_IFLNK, ZIP_OS_UNIX } from "@archive/zip-spec/zip-records";
 
 describe("ArchiveFile", () => {
   let testDir: string;
@@ -484,6 +486,183 @@ describe("ArchiveFile", () => {
 
       expect(warnings.length).toBeGreaterThan(0);
       expect(fs.existsSync(path.join(extractDir, "file.txt"))).toBe(false);
+    });
+
+    it("should preserve file permissions when extracting ZIP (Unix only)", async function () {
+      // Skip on Windows where chmod has no effect
+      if (process.platform === "win32") {
+        return;
+      }
+
+      const archive = new ArchiveFile({ writePermissions: true });
+      // Add file with executable permission
+      archive.addText("#!/bin/bash\necho hello", "script.sh", { mode: 0o100755 });
+      archive.addText("regular content", "file.txt", { mode: 0o100644 });
+
+      const zipPath = path.join(testDir, "perms.zip");
+      await archive.writeToFile(zipPath);
+
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const extractDir = path.join(testDir, "extracted-perms");
+      await reader.extractTo(extractDir, { preservePermissions: true });
+
+      const scriptStats = await fs.promises.stat(path.join(extractDir, "script.sh"));
+      const fileStats = await fs.promises.stat(path.join(extractDir, "file.txt"));
+
+      // Check executable bit is set on script
+      expect(scriptStats.mode & 0o111).toBeTruthy();
+      // Check file is readable
+      expect(fileStats.mode & 0o444).toBeTruthy();
+    });
+
+    it("should use default permissions when ZIP has no mode info", async function () {
+      // Skip on Windows
+      if (process.platform === "win32") {
+        return;
+      }
+
+      // Create a ZIP without permission info using low-level API
+      const { createZipSync } = await import("@archive/zip/zip-bytes");
+
+      // Windows-style ZIP (versionMadeBy = 0, externalAttributes = 0 for files)
+      const entries: ZipEntry[] = [
+        {
+          name: "file.txt",
+          data: new TextEncoder().encode("content"),
+          externalAttributes: 0, // No Unix mode info
+          versionMadeBy: 0x0014 // DOS (0) + version 20
+        },
+        {
+          name: "dir/",
+          data: new Uint8Array(0),
+          externalAttributes: 0x10, // DOS directory attribute
+          versionMadeBy: 0x0014 // DOS
+        }
+      ];
+
+      const zipBytes = createZipSync(entries);
+      const zipPath = path.join(testDir, "no-perms.zip");
+      await fs.promises.writeFile(zipPath, zipBytes);
+
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const extractDir = path.join(testDir, "extracted-defaults");
+      await reader.extractTo(extractDir, { preservePermissions: true });
+
+      const fileStats = await fs.promises.stat(path.join(extractDir, "file.txt"));
+      const dirStats = await fs.promises.stat(path.join(extractDir, "dir"));
+
+      // Default file: 0o644 (rw-r--r--)
+      expect(fileStats.mode & 0o777).toBe(0o644);
+      // Default dir: 0o755 (rwxr-xr-x)
+      expect(dirStats.mode & 0o777).toBe(0o755);
+    });
+
+    it("should skip symlinks when createSymlinks is false", async () => {
+      // Create ZIP with a symlink entry manually using ZipParser
+      const { createZipSync } = await import("@archive/zip/zip-bytes");
+
+      // Create a valid symlink entry (Unix mode with S_IFLNK)
+      const entries: ZipEntry[] = [
+        { name: "target.txt", data: new TextEncoder().encode("target content") },
+        {
+          name: "link.txt",
+          data: new TextEncoder().encode("target.txt"),
+          externalAttributes: (S_IFLNK | 0o777) << 16, // Unix symlink mode
+          versionMadeBy: (ZIP_OS_UNIX << 8) | 30 // Unix (3) + version 30
+        }
+      ];
+
+      const zipBytes = createZipSync(entries);
+      const zipPath = path.join(testDir, "symlink.zip");
+      await fs.promises.writeFile(zipPath, zipBytes);
+
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const extractDir = path.join(testDir, "extracted-no-symlinks");
+
+      await reader.extractTo(extractDir, { createSymlinks: false });
+
+      // Target file should exist
+      expect(fs.existsSync(path.join(extractDir, "target.txt"))).toBe(true);
+      // Symlink should NOT exist (was skipped)
+      expect(fs.existsSync(path.join(extractDir, "link.txt"))).toBe(false);
+    });
+
+    it("should create symlinks when extracting (Unix only)", async function () {
+      // Skip on Windows (symlinks require admin privileges)
+      if (process.platform === "win32") {
+        return;
+      }
+
+      const { createZipSync } = await import("@archive/zip/zip-bytes");
+
+      const entries: ZipEntry[] = [
+        { name: "target.txt", data: new TextEncoder().encode("target content") },
+        {
+          name: "link.txt",
+          data: new TextEncoder().encode("target.txt"),
+          externalAttributes: (S_IFLNK | 0o777) << 16,
+          versionMadeBy: (ZIP_OS_UNIX << 8) | 30
+        }
+      ];
+
+      const zipBytes = createZipSync(entries);
+      const zipPath = path.join(testDir, "symlink-create.zip");
+      await fs.promises.writeFile(zipPath, zipBytes);
+
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const extractDir = path.join(testDir, "extracted-symlinks");
+
+      await reader.extractTo(extractDir, { createSymlinks: true });
+
+      // Target file should exist
+      expect(fs.existsSync(path.join(extractDir, "target.txt"))).toBe(true);
+
+      // Symlink should exist and be a symlink
+      const linkPath = path.join(extractDir, "link.txt");
+      const stats = await fs.promises.lstat(linkPath);
+      expect(stats.isSymbolicLink()).toBe(true);
+
+      // Symlink should point to the correct target
+      const linkTarget = await fs.promises.readlink(linkPath);
+      expect(linkTarget).toBe("target.txt");
+    });
+
+    it("should warn and skip symlinks pointing outside extraction directory", async function () {
+      // Skip on Windows
+      if (process.platform === "win32") {
+        return;
+      }
+
+      const { createZipSync } = await import("@archive/zip/zip-bytes");
+
+      const entries: ZipEntry[] = [
+        {
+          name: "evil-link.txt",
+          data: new TextEncoder().encode("../../../etc/passwd"),
+          externalAttributes: (S_IFLNK | 0o777) << 16,
+          versionMadeBy: (ZIP_OS_UNIX << 8) | 30
+        }
+      ];
+
+      const zipBytes = createZipSync(entries);
+      const zipPath = path.join(testDir, "evil-symlink.zip");
+      await fs.promises.writeFile(zipPath, zipBytes);
+
+      const reader = await ArchiveFile.fromFile(zipPath);
+      const extractDir = path.join(testDir, "extracted-evil");
+
+      const warnings: any[] = [];
+      await reader.extractTo(extractDir, {
+        createSymlinks: true,
+        onWarning: w => warnings.push(w)
+      });
+
+      // Should have emitted a warning
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings[0].message).toContain("outside extraction directory");
+
+      // Evil symlink should NOT have been created
+      expect(fs.existsSync(path.join(extractDir, "evil-link.txt"))).toBe(false);
     });
   });
 

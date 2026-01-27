@@ -621,6 +621,60 @@ export function copyFileSync(src: string, dest: string): void {
 }
 
 // =============================================================================
+// Symlinks and Permissions
+// =============================================================================
+
+/**
+ * Create a symbolic link.
+ *
+ * @param target - The path the symlink points to
+ * @param linkPath - The path where the symlink will be created
+ */
+export async function createSymlink(target: string, linkPath: string): Promise<void> {
+  await ensureDir(path.dirname(linkPath));
+  await _fsp.symlink(target, linkPath);
+}
+
+/**
+ * Synchronously create a symbolic link.
+ *
+ * @param target - The path the symlink points to
+ * @param linkPath - The path where the symlink will be created
+ */
+export function createSymlinkSync(target: string, linkPath: string): void {
+  ensureDirSync(path.dirname(linkPath));
+  _fs.symlinkSync(target, linkPath);
+}
+
+/**
+ * Change file permissions (Unix mode).
+ *
+ * @param filePath - Path to the file
+ * @param mode - Unix permission mode (e.g., 0o755)
+ */
+export async function chmod(filePath: string, mode: number): Promise<void> {
+  await _fsp.chmod(filePath, mode);
+}
+
+/**
+ * Synchronously change file permissions (Unix mode).
+ *
+ * @param filePath - Path to the file
+ * @param mode - Unix permission mode (e.g., 0o755)
+ */
+export function chmodSync(filePath: string, mode: number): void {
+  _fs.chmodSync(filePath, mode);
+}
+
+/**
+ * Check if the current platform supports Unix permissions.
+ * Returns true on Unix-like systems (Linux, macOS), false on Windows.
+ */
+export function supportsUnixPermissions(): boolean {
+  return process.platform !== "win32";
+}
+
+// =============================================================================
 // File Streams
 // =============================================================================
 

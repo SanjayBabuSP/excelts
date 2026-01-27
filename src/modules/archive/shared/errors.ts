@@ -90,6 +90,52 @@ export class Crc32MismatchError extends ArchiveError {
 }
 
 // -----------------------------------------------------------------------------
+// Entry Size Validation Errors
+// -----------------------------------------------------------------------------
+
+/**
+ * Reason for entry size mismatch.
+ * - `too-many-bytes`: ZIP bomb detected - actual size exceeds declared size
+ * - `too-few-bytes`: Corruption detected - actual size is less than declared size
+ */
+export type EntrySizeMismatchReason = "too-many-bytes" | "too-few-bytes";
+
+/**
+ * Error thrown when the actual decompressed size doesn't match the declared size.
+ * This is a security feature to detect ZIP bombs and corrupted archives.
+ */
+export class EntrySizeMismatchError extends ArchiveError {
+  override name = "EntrySizeMismatchError";
+
+  constructor(
+    public readonly path: string,
+    public readonly expected: number,
+    public readonly actual: number,
+    public readonly reason: EntrySizeMismatchReason
+  ) {
+    const msg =
+      reason === "too-many-bytes"
+        ? `Entry "${path}" produced more bytes than declared: expected ${expected}, got at least ${actual}`
+        : `Entry "${path}" produced fewer bytes than declared: expected ${expected}, got ${actual}`;
+    super(msg);
+  }
+
+  /**
+   * Check if this error indicates a potential ZIP bomb (too many bytes).
+   */
+  isZipBomb(): boolean {
+    return this.reason === "too-many-bytes";
+  }
+
+  /**
+   * Check if this error indicates data corruption (too few bytes).
+   */
+  isCorruption(): boolean {
+    return this.reason === "too-few-bytes";
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Encryption Errors
 // -----------------------------------------------------------------------------
 
