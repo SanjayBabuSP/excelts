@@ -272,6 +272,7 @@ for await (const ws of reader) {
 
 ```javascript
 import { Workbook } from "@cj-tech-master/excelts";
+import fs from "fs";
 
 const workbook = new Workbook();
 
@@ -279,9 +280,11 @@ const workbook = new Workbook();
 await workbook.csv.readFile("data.csv");
 
 // Read CSV from stream
-import fs from "fs";
 const stream = fs.createReadStream("data.csv");
 await workbook.csv.read(stream, { sheetName: "Imported" });
+
+// Read CSV from URL (Node.js 20+)
+await workbook.csv.parse("https://example.com/data.csv", { sheetName: "Imported" });
 
 // Write CSV to file (streaming)
 await workbook.csv.writeFile("output.csv");
@@ -290,8 +293,9 @@ await workbook.csv.writeFile("output.csv");
 const writeStream = fs.createWriteStream("output.csv");
 await workbook.csv.write(writeStream);
 
-// Write CSV to buffer
-const buffer = await workbook.csv.writeBuffer();
+// Write CSV to string / bytes
+const csvText = workbook.csv.stringify();
+const bytes = await workbook.csv.toBuffer();
 ```
 
 ### Browser (In-Memory)
@@ -301,19 +305,25 @@ import { Workbook } from "@cj-tech-master/excelts";
 
 const workbook = new Workbook();
 
-// Load CSV from string
-workbook.csv.load(csvString);
+// Read CSV from string
+await workbook.csv.parse(csvString);
 
-// Load CSV from ArrayBuffer (e.g., from fetch or file input)
+// Read CSV from URL
+await workbook.csv.parse("https://example.com/data.csv");
+
+// Read CSV from ArrayBuffer (e.g., from fetch)
 const response = await fetch("data.csv");
 const arrayBuffer = await response.arrayBuffer();
-workbook.csv.load(arrayBuffer);
+await workbook.csv.parse(arrayBuffer);
 
-// Write CSV to string
-const csvOutput = workbook.csv.writeString();
+// Read CSV from File (e.g., <input type="file">)
+await workbook.csv.parse(file);
 
-// Write CSV to Uint8Array buffer
-const buffer = workbook.csv.writeBuffer();
+// Write CSV to string / bytes
+const csvOutput = workbook.csv.stringify();
+
+// Write CSV to Uint8Array bytes
+const bytes = await workbook.csv.toBuffer();
 ```
 
 ## Browser Support
@@ -369,8 +379,8 @@ Then open `http://localhost:3000/src/modules/excel/examples/browser-smoke.html`.
 ### Browser-Specific Notes
 
 - **CSV operations are supported** using native RFC 4180 implementation
-  - Use `csv.load(stringOrArrayBuffer)` to read CSV
-  - Use `csv.writeString()` or `csv.writeBuffer()` to write CSV
+  - Use `await csv.parse(input)` to read CSV
+  - Use `csv.stringify()` or `await csv.toBuffer()` to write CSV
 - Use `xlsx.load(arrayBuffer)` instead of `xlsx.readFile()`
 - Use `xlsx.writeBuffer()` instead of `xlsx.writeFile()`
 - Worksheet protection with passwords is fully supported (pure JS SHA-512)

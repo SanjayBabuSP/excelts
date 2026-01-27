@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "fs";
 import { testUtils } from "@excel/__tests__/shared";
-import { Workbook, type CsvStreamReadOptions } from "../../../index";
+import { Workbook, type CsvOptions } from "../../../index";
 import { ValueType } from "@excel/enums";
 import { makeTestDataPath, testFilePath } from "@test/utils";
 import { extractAll } from "@archive/unzip/extract";
@@ -931,7 +931,7 @@ describe("Workbook", () => {
           quote: false
         }
       };
-      const readOptions: CsvStreamReadOptions = {
+      const readOptions: CsvOptions = {
         dateFormats: ["DD/MM/YYYY HH:mm:ss"],
         sheetName: "sheet1",
         parserOptions: {

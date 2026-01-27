@@ -270,6 +270,7 @@ await workbook.commit();
 
 ```javascript
 import { Workbook } from "@cj-tech-master/excelts";
+import fs from "fs";
 
 const workbook = new Workbook();
 
@@ -277,9 +278,11 @@ const workbook = new Workbook();
 await workbook.csv.readFile("data.csv");
 
 // 从流读取 CSV
-import fs from "fs";
 const stream = fs.createReadStream("data.csv");
 await workbook.csv.read(stream, { sheetName: "Imported" });
+
+// 从 URL 读取 CSV（Node.js 20+）
+await workbook.csv.parse("https://example.com/data.csv", { sheetName: "Imported" });
 
 // 写入 CSV 到文件（流式）
 await workbook.csv.writeFile("output.csv");
@@ -288,8 +291,9 @@ await workbook.csv.writeFile("output.csv");
 const writeStream = fs.createWriteStream("output.csv");
 await workbook.csv.write(writeStream);
 
-// 写入 CSV 到 buffer
-const buffer = await workbook.csv.writeBuffer();
+// 写入 CSV 为字符串 / 字节
+const csvText = workbook.csv.stringify();
+const bytes = await workbook.csv.toBuffer();
 ```
 
 ### 浏览器（内存中）
@@ -299,19 +303,25 @@ import { Workbook } from "@cj-tech-master/excelts";
 
 const workbook = new Workbook();
 
-// 从字符串加载 CSV
-workbook.csv.load(csvString);
+// 从字符串读取 CSV
+await workbook.csv.parse(csvString);
 
-// 从 ArrayBuffer 加载 CSV（例如从 fetch 或文件输入）
+// 从 URL 读取 CSV
+await workbook.csv.parse("https://example.com/data.csv");
+
+// 从 ArrayBuffer 读取 CSV（例如从 fetch）
 const response = await fetch("data.csv");
 const arrayBuffer = await response.arrayBuffer();
-workbook.csv.load(arrayBuffer);
+await workbook.csv.parse(arrayBuffer);
 
-// 写入 CSV 为字符串
-const csvOutput = workbook.csv.writeString();
+// 从 File 读取 CSV（例如 <input type="file">）
+await workbook.csv.parse(file);
 
-// 写入 CSV 为 Uint8Array buffer
-const buffer = workbook.csv.writeBuffer();
+// 写入 CSV 为字符串 / 字节
+const csvOutput = workbook.csv.stringify();
+
+// 写入 CSV 为 Uint8Array 字节
+const bytes = await workbook.csv.toBuffer();
 ```
 
 ## 浏览器支持
@@ -367,8 +377,8 @@ npx serve .
 ### 浏览器版本注意事项
 
 - **支持 CSV 操作**（使用原生 RFC 4180 标准实现）
-  - 使用 `csv.load(stringOrArrayBuffer)` 读取 CSV
-  - 使用 `csv.writeString()` 或 `csv.writeBuffer()` 写入 CSV
+  - 使用 `await csv.parse(input)` 读取 CSV
+  - 使用 `csv.stringify()` 或 `await csv.toBuffer()` 写入 CSV
 - 使用 `xlsx.load(arrayBuffer)` 代替 `xlsx.readFile()`
 - 使用 `xlsx.writeBuffer()` 代替 `xlsx.writeFile()`
 - 完全支持带密码的工作表保护（纯 JS SHA-512 实现）

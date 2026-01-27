@@ -78,12 +78,7 @@ export type {
 export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "@excel/stream/workbook-writer";
 
 // Node.js CSV types and stream classes (native implementation)
-export type {
-  CsvReadOptions,
-  CsvWriteOptions,
-  CsvStreamReadOptions,
-  CsvStreamWriteOptions
-} from "@csv/csv";
+export type { CsvOptions } from "@csv/csv";
 export { CsvParserStream, CsvFormatterStream } from "@csv/csv";
 
 // =============================================================================

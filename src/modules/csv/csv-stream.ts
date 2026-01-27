@@ -22,7 +22,9 @@ import {
   isRowHashArray,
   rowHashArrayMapByHeaders,
   rowHashArrayToValues,
-  rowHashArrayToHeaders
+  rowHashArrayToHeaders,
+  detectDelimiter,
+  escapeRegex
 } from "@csv/csv-core";
 import { formatNumberForCsv } from "@csv/csv-number";
 
@@ -56,6 +58,8 @@ export class CsvParserStream extends Transform {
   private decoder: TextDecoder;
   private _rowTransform: ((row: Row, cb: RowTransformCallback<Row>) => void) | null = null;
   private _rowValidator: ((row: Row, cb: RowValidateCallback) => void) | null = null;
+  private autoDetectDelimiter: boolean = false;
+  private delimiterDetected: boolean = false;
 
   constructor(options: CsvParseOptions = {}) {
     super({ objectMode: options.objectMode !== false });
@@ -73,7 +77,14 @@ export class CsvParserStream extends Transform {
     this.escape =
       escapeOption !== null && escapeOption !== false ? String(escapeOption) : this.quote;
 
-    this.delimiter = options.delimiter ?? ",";
+    // Check if auto-detection is requested (delimiter === "")
+    const delimiterOption = options.delimiter ?? ",";
+    if (delimiterOption === "") {
+      this.autoDetectDelimiter = true;
+      this.delimiter = ","; // Default fallback, will be detected on first chunk
+    } else {
+      this.delimiter = delimiterOption;
+    }
 
     // Pre-compute trim function for performance
     const { trim = false, ltrim = false, rtrim = false } = options;
@@ -145,6 +156,15 @@ export class CsvParserStream extends Transform {
     try {
       const data = typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
       this.buffer += data;
+
+      // Auto-detect delimiter on first chunk if requested
+      if (this.autoDetectDelimiter && !this.delimiterDetected) {
+        this.delimiter = detectDelimiter(this.buffer, this.quote || '"');
+        this.delimiterDetected = true;
+        // Emit delimiter event so consumers can know which delimiter was detected
+        this.emit("delimiter", this.delimiter);
+      }
+
       this.processBuffer(callback);
     } catch (error) {
       callback(error as Error);
@@ -828,13 +848,6 @@ export class CsvFormatterStream extends Transform {
 
     return str;
   }
-}
-
-/**
- * Escape special regex characters
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

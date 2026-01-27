@@ -71,12 +71,7 @@ export { WorkbookWriter, WorkbookReader, WorksheetWriter, WorksheetReader };
 // =============================================================================
 // CSV support (using native RFC 4180 implementation)
 // =============================================================================
-export type {
-  CsvReadOptions,
-  CsvWriteOptions,
-  CsvStreamReadOptions,
-  CsvStreamWriteOptions
-} from "@csv/csv.browser";
+export type { CsvOptions } from "@csv/csv.browser";
 export { CsvParserStream, CsvFormatterStream } from "@csv/csv.browser";
 
 // =============================================================================

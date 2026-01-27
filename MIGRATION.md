@@ -53,6 +53,113 @@ await workbook.csv.read(readableStream, {
 - If you pass a custom `options.map`, the default mapper is not used, so `valueMapperOptions.decimalSeparator` will not affect your mapping.
 - `CsvFormatOptions.decimalSeparator` is still the correct way to control number formatting when writing CSV.
 
+## CSV: unified `parse` / `stringify` / `toBuffer`
+
+### What changed
+
+A unified, higher-level CSV API is available on `workbook.csv`:
+
+- `await workbook.csv.parse(input, options)` reads CSV into a worksheet
+- `workbook.csv.stringify(options)` converts a worksheet to a CSV string
+- `await workbook.csv.toBuffer(options)` converts a worksheet to a `Uint8Array`
+
+`parse` accepts multiple input types:
+
+- CSV string
+- URL string (`http://` / `https://`)
+- `File` / `Blob` (browser)
+- readable stream
+
+### How to migrate
+
+#### In-memory read (string/bytes)
+
+```ts
+// Before
+workbook.csv.load(csvText, { parserOptions: { delimiter: ";" } });
+
+// After
+await workbook.csv.parse(csvText, { delimiter: ";" });
+```
+
+#### Remote read (URL)
+
+```ts
+const ws = await workbook.csv.parse("https://example.com/data.csv");
+```
+
+#### Browser read (File)
+
+```ts
+const ws = await workbook.csv.parse(file);
+```
+
+#### Write to string / buffer
+
+```ts
+// Before
+const csvText = workbook.csv.writeString({ formatterOptions: { delimiter: ";" } });
+const bytes = await workbook.csv.writeBuffer();
+
+// After
+const csvText = workbook.csv.stringify({ delimiter: ";" });
+const bytes = await workbook.csv.toBuffer();
+```
+
+### Notes
+
+- Options are flattened: prefer `delimiter` / `header` over `parserOptions.delimiter` / `parserOptions.headers`.
+- If you rely on a fixed delimiter, always pass `delimiter` explicitly.
+
+## CSV: Legacy type aliases removed
+
+### What changed
+
+The following type aliases have been removed:
+
+- `CsvReadOptions`
+- `CsvWriteOptions`
+- `CsvStreamReadOptions`
+- `CsvStreamWriteOptions`
+
+### How to migrate
+
+Use `CsvOptions` instead — it's the unified options type for all CSV operations.
+
+```ts
+// Before
+import type { CsvReadOptions, CsvWriteOptions } from "@cj-tech-master/excelts";
+
+// After
+import type { CsvOptions } from "@cj-tech-master/excelts";
+```
+
+## CSV: Legacy methods removed
+
+### What changed
+
+The following methods have been removed from the CSV class:
+
+- `load()` → use `parse()` instead
+- `writeString()` → use `stringify()` instead
+- `writeBuffer()` → use `toBuffer()` instead
+
+### How to migrate
+
+```ts
+// Before
+const ws = workbook.csv.load(csvText);
+const csvOut = workbook.csv.writeString();
+const buffer = await workbook.csv.writeBuffer();
+
+// After
+const ws = await workbook.csv.parse(csvText);
+const csvOut = workbook.csv.stringify();
+const buffer = await workbook.csv.toBuffer();
+```
+
+Note: `parse()` is now async for consistency across all input types.
+
 ## XLSX: DataValidations no longer expands small ranges
 
 ### What changed

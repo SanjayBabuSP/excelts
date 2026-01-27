@@ -18,6 +18,7 @@ import {
   parseCsv,
   formatCsv,
   parseCsvStream,
+  detectDelimiter,
   isRowHashArray,
   rowHashArrayToMap,
   rowHashArrayToValues,
@@ -176,6 +177,162 @@ describe("RowHashArray Helper Functions", () => {
       // Should be reversed values
       expect(result[0]).toBe("value14");
       expect(result[14]).toBe("value0");
+    });
+  });
+});
+
+// ===========================================================================
+// Delimiter Auto-Detection Tests
+// ===========================================================================
+describe("Delimiter Auto-Detection", () => {
+  describe("detectDelimiter", () => {
+    it("should detect comma delimiter", () => {
+      const input = "a,b,c\n1,2,3\n4,5,6";
+      expect(detectDelimiter(input)).toBe(",");
+    });
+
+    it("should detect semicolon delimiter", () => {
+      const input = "a;b;c\n1;2;3\n4;5;6";
+      expect(detectDelimiter(input)).toBe(";");
+    });
+
+    it("should detect tab delimiter", () => {
+      const input = "a\tb\tc\n1\t2\t3\n4\t5\t6";
+      expect(detectDelimiter(input)).toBe("\t");
+    });
+
+    it("should detect pipe delimiter", () => {
+      const input = "a|b|c\n1|2|3\n4|5|6";
+      expect(detectDelimiter(input)).toBe("|");
+    });
+
+    it("should handle quoted fields with commas inside", () => {
+      const input = '"a,x","b,y","c,z"\n1,2,3\n4,5,6';
+      expect(detectDelimiter(input)).toBe(",");
+    });
+
+    it("should handle quoted fields with semicolons inside", () => {
+      const input = '"a;x";"b;y";"c;z"\n1;2;3\n4;5;6';
+      expect(detectDelimiter(input)).toBe(";");
+    });
+
+    it("should prefer comma when counts are equal", () => {
+      // Single column data - no delimiters
+      const input = "a\nb\nc";
+      expect(detectDelimiter(input)).toBe(",");
+    });
+
+    it("should detect based on consistency", () => {
+      // Semicolon is consistent, comma is not
+      const input = "a;b;c\n1;2;3\n4;5;6";
+      expect(detectDelimiter(input)).toBe(";");
+    });
+
+    it("should handle empty input", () => {
+      expect(detectDelimiter("")).toBe(",");
+    });
+
+    it("should handle single line", () => {
+      const input = "a;b;c";
+      expect(detectDelimiter(input)).toBe(";");
+    });
+
+    it("should handle European CSV (semicolon with comma decimals)", () => {
+      const input = 'name;price;quantity\n"Apple";1,50;10\n"Orange";2,00;5';
+      expect(detectDelimiter(input)).toBe(";");
+    });
+
+    it("should handle mixed newlines", () => {
+      const input = "a\tb\tc\r\n1\t2\t3\n4\t5\t6";
+      expect(detectDelimiter(input)).toBe("\t");
+    });
+
+    it("should handle inconsistent column counts", () => {
+      // This has inconsistent comma counts, semicolon is consistent
+      const input = "a;b;c\n1;2;3\n4;5;6";
+      expect(detectDelimiter(input)).toBe(";");
+    });
+  });
+
+  describe("parseCsv with auto-detect delimiter", () => {
+    it("should auto-detect comma delimiter when delimiter is empty string", () => {
+      const input = "a,b,c\n1,2,3";
+      const result = parseCsv(input, { delimiter: "" });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should auto-detect semicolon delimiter when delimiter is empty string", () => {
+      const input = "a;b;c\n1;2;3";
+      const result = parseCsv(input, { delimiter: "" });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should auto-detect tab delimiter when delimiter is empty string", () => {
+      const input = "a\tb\tc\n1\t2\t3";
+      const result = parseCsv(input, { delimiter: "" });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should auto-detect pipe delimiter when delimiter is empty string", () => {
+      const input = "a|b|c\n1|2|3";
+      const result = parseCsv(input, { delimiter: "" });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should work with headers and auto-detect", () => {
+      const input = "name;age;city\nAlice;30;NYC\nBob;25;LA";
+      const result = parseCsv(input, { delimiter: "", headers: true });
+      expect(result).toEqual({
+        headers: ["name", "age", "city"],
+        rows: [
+          { name: "Alice", age: "30", city: "NYC" },
+          { name: "Bob", age: "25", city: "LA" }
+        ]
+      });
+    });
+  });
+
+  describe("parseCsvStream with auto-detect delimiter", () => {
+    it("should auto-detect delimiter in streaming mode", async () => {
+      const input = "a;b;c\n1;2;3\n4;5;6";
+      const rows: any[] = [];
+      for await (const row of parseCsvStream(input, { delimiter: "" })) {
+        rows.push(row);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should auto-detect delimiter with async iterable input", async () => {
+      async function* generateChunks() {
+        yield "a;b;c\n";
+        yield "1;2;3\n";
+        yield "4;5;6";
+      }
+      const rows: any[] = [];
+      for await (const row of parseCsvStream(generateChunks(), { delimiter: "" })) {
+        rows.push(row);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
     });
   });
 });

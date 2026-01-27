@@ -52,7 +52,11 @@ export type RowValidateFunction<T = Row> =
  * CSV parsing options
  */
 export interface CsvParseOptions {
-  /** Field delimiter (default: ",") */
+  /**
+   * Field delimiter (default: ",")
+   * - Set to empty string "" to enable auto-detection
+   * - Auto-detection will try: comma, semicolon, tab, pipe
+   */
   delimiter?: string;
   /** Quote character (default: '"'), set to false or null to disable quoting */
   quote?: string | false | null;
@@ -212,8 +216,176 @@ export interface CsvParseResult<T = string[]> {
 /**
  * Escape special regex characters
  */
-function escapeRegex(str: string): string {
+export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// =============================================================================
+// Delimiter Auto-Detection
+// =============================================================================
+
+/**
+ * Common CSV delimiters to try during auto-detection
+ * Order matters - comma is most common, then semicolon (European), tab, pipe
+ */
+const AUTO_DETECT_DELIMITERS = [",", ";", "\t", "|"] as const;
+
+/**
+ * Default delimiter when auto-detection fails
+ */
+const DEFAULT_DELIMITER = ",";
+
+/**
+ * Auto-detect the delimiter used in a CSV string
+ *
+ * Algorithm:
+ * 1. Sample the first few lines (up to 10) for analysis
+ * 2. For each candidate delimiter:
+ *    - Count occurrences per line (respecting quotes)
+ *    - Check consistency: all lines should have the same count
+ *    - Higher count = more fields = better delimiter candidate
+ * 3. Choose the delimiter with highest consistent field count
+ *
+ * @param input - CSV string to analyze
+ * @param quote - Quote character (default: '"')
+ * @returns Detected delimiter or default ','
+ *
+ * @example
+ * detectDelimiter('a,b,c\n1,2,3') // ','
+ * detectDelimiter('a;b;c\n1;2;3') // ';'
+ * detectDelimiter('a\tb\tc\n1\t2\t3') // '\t'
+ */
+export function detectDelimiter(input: string, quote: string = '"'): string {
+  // Get sample lines (first 10 non-empty lines)
+  const lines = getSampleLines(input, 10);
+
+  if (lines.length === 0) {
+    return DEFAULT_DELIMITER;
+  }
+
+  let bestDelimiter = DEFAULT_DELIMITER;
+  let bestScore = 0;
+
+  for (const delimiter of AUTO_DETECT_DELIMITERS) {
+    const score = scoreDelimiter(lines, delimiter, quote);
+    if (score > bestScore) {
+      bestScore = score;
+      bestDelimiter = delimiter;
+    }
+  }
+
+  return bestDelimiter;
+}
+
+/**
+ * Get sample lines from input, skipping empty lines
+ */
+function getSampleLines(input: string, maxLines: number): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  let inQuotes = false;
+  const len = input.length;
+
+  for (let i = 0; i < len && lines.length < maxLines; i++) {
+    const char = input[i];
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (!inQuotes && (char === "\n" || char === "\r")) {
+      const line = input.slice(start, i);
+      if (line.trim()) {
+        lines.push(line);
+      }
+      // Skip \r\n
+      if (char === "\r" && input[i + 1] === "\n") {
+        i++;
+      }
+      start = i + 1;
+    }
+  }
+
+  // Add last line if exists
+  if (start < len && lines.length < maxLines) {
+    const line = input.slice(start);
+    if (line.trim()) {
+      lines.push(line);
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Score a delimiter candidate based on consistency and field count
+ *
+ * Returns 0 if:
+ * - Delimiter not found in any line
+ * - Field counts are inconsistent across lines
+ *
+ * Higher score = more fields per row with consistent counts
+ */
+function scoreDelimiter(lines: string[], delimiter: string, quote: string): number {
+  if (lines.length === 0) {
+    return 0;
+  }
+
+  const counts: number[] = [];
+
+  for (const line of lines) {
+    const count = countDelimiters(line, delimiter, quote);
+    counts.push(count);
+  }
+
+  // Check if delimiter exists
+  const firstCount = counts[0];
+  if (firstCount === 0) {
+    return 0;
+  }
+
+  // Check consistency - all lines should have same number of delimiters
+  // Allow some tolerance for the last line (might be incomplete)
+  const mainCounts = counts.slice(0, -1);
+  const isConsistent = mainCounts.length === 0 || mainCounts.every(count => count === firstCount);
+
+  if (!isConsistent) {
+    return 0;
+  }
+
+  // Score = number of fields (delimiters + 1) * number of consistent lines
+  return (firstCount + 1) * lines.length;
+}
+
+/**
+ * Count delimiters in a line, respecting quoted fields
+ */
+function countDelimiters(line: string, delimiter: string, quote: string): number {
+  let count = 0;
+  let inQuotes = false;
+  const len = line.length;
+  const delimLen = delimiter.length;
+
+  for (let i = 0; i < len; i++) {
+    if (quote && line[i] === quote) {
+      // Toggle quote state, but handle escaped quotes ("" inside quoted field)
+      if (inQuotes && line[i + 1] === quote) {
+        i++; // Skip escaped quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (!inQuotes) {
+      // Check for delimiter match (supports multi-char delimiters)
+      if (delimLen === 1) {
+        if (line[i] === delimiter) {
+          count++;
+        }
+      } else if (line.slice(i, i + delimLen) === delimiter) {
+        count++;
+        i += delimLen - 1;
+      }
+    }
+  }
+
+  return count;
 }
 
 /**
@@ -335,7 +507,7 @@ export function parseCsv(
   options: CsvParseOptions = {}
 ): string[][] | CsvParseResult<Record<string, string>> {
   const {
-    delimiter = ",",
+    delimiter: delimiterOption = ",",
     quote: quoteOption = '"',
     escape: escapeOption = '"',
     skipEmptyLines = false,
@@ -354,6 +526,15 @@ export function parseCsv(
     transform,
     validate
   } = options;
+
+  // Auto-detect delimiter if empty string is passed
+  const delimiter =
+    delimiterOption === ""
+      ? detectDelimiter(
+          input,
+          quoteOption !== false && quoteOption !== null ? String(quoteOption) : '"'
+        )
+      : delimiterOption;
 
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
 
@@ -906,13 +1087,16 @@ export function formatCsv(
 
 /**
  * Async CSV parser that yields rows one at a time
+ *
+ * Note: For streaming input, auto-detection buffers the first chunk to detect the delimiter.
+ * For string input with delimiter="", it will auto-detect before parsing.
  */
 export async function* parseCsvStream(
   input: string | AsyncIterable<string>,
   options: CsvParseOptions = {}
 ): AsyncGenerator<string[] | Record<string, string>, void, unknown> {
   const {
-    delimiter = ",",
+    delimiter: delimiterOption = ",",
     quote: quoteOption = '"',
     escape: escapeOption = '"',
     skipEmptyLines = false,
@@ -936,6 +1120,29 @@ export async function* parseCsvStream(
   const quoteEnabled = quoteOption !== null && quoteOption !== false;
   const quote = quoteEnabled ? String(quoteOption) : "";
   const escape = escapeOption !== null && escapeOption !== false ? String(escapeOption) : "";
+
+  // For string input, auto-detect delimiter upfront
+  // For async iterable, we need to buffer first chunk for detection
+  let delimiter = delimiterOption;
+  let asyncIterator: AsyncIterator<string> | null = null;
+  let firstChunk: string | null = null;
+
+  if (typeof input === "string") {
+    if (delimiterOption === "") {
+      delimiter = detectDelimiter(input, quote || '"');
+    }
+  } else if (delimiterOption === "") {
+    // For async iterable, get first chunk for detection
+    asyncIterator = input[Symbol.asyncIterator]();
+    const firstResult = await asyncIterator.next();
+    if (!firstResult.done) {
+      firstChunk = firstResult.value;
+      delimiter = detectDelimiter(firstChunk, quote || '"');
+    } else {
+      // Empty input
+      return;
+    }
+  }
 
   let headerRow: HeaderArray | null = null;
   let headersLength = 0;
@@ -1149,9 +1356,21 @@ export async function* parseCsvStream(
     return;
   }
 
-  // Handle async iterable
-  for await (const chunk of input) {
-    buffer += chunk;
+  // Handle async iterable (with possible buffered first chunk for auto-detection)
+  // Process first chunk if we buffered it for delimiter detection
+  if (firstChunk !== null) {
+    buffer = firstChunk;
+    yield* processBuffer();
+  }
+
+  // Continue with remaining chunks
+  const iterator = asyncIterator ?? input[Symbol.asyncIterator]();
+  while (true) {
+    const result = await iterator.next();
+    if (result.done) {
+      break;
+    }
+    buffer += result.value;
     yield* processBuffer();
   }
 

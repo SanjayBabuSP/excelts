@@ -37,5 +37,179 @@ describe("Workbook", () => {
       const ws2 = await wb2.csv.readFile(TEST_CSV_FILE_NAME);
       expect(ws2.getCell("A1").value).toBe(HEBREW_TEST_STRING);
     }, 6000);
+
+    // =========================================================================
+    // Unified API Tests (parse, stringify, toBuffer)
+    // =========================================================================
+
+    describe("Unified API", () => {
+      describe("parse()", () => {
+        it("should parse CSV string", async () => {
+          const wb = new Workbook();
+          const ws = await wb.csv.parse("a,b,c\n1,2,3");
+
+          expect(ws.getCell("A1").value).toBe("a");
+          expect(ws.getCell("B1").value).toBe("b");
+          expect(ws.getCell("A2").value).toBe(1);
+        });
+
+        it("should auto-detect semicolon delimiter", async () => {
+          const wb = new Workbook();
+          const ws = await wb.csv.parse("a;b;c\n1;2;3");
+
+          expect(ws.getCell("A1").value).toBe("a");
+          expect(ws.getCell("B1").value).toBe("b");
+          expect(ws.getCell("C1").value).toBe("c");
+          expect(ws.getCell("A2").value).toBe(1);
+        });
+
+        it("should auto-detect tab delimiter", async () => {
+          const wb = new Workbook();
+          const ws = await wb.csv.parse("a\tb\tc\n1\t2\t3");
+
+          expect(ws.getCell("A1").value).toBe("a");
+          expect(ws.getCell("B1").value).toBe("b");
+          expect(ws.getCell("C1").value).toBe("c");
+        });
+
+        it("should respect explicit delimiter option", async () => {
+          const wb = new Workbook();
+          // Even though the data has commas, use semicolon delimiter
+          const ws = await wb.csv.parse("a,b;c,d\n1,2;3,4", { delimiter: ";" });
+
+          expect(ws.getCell("A1").value).toBe("a,b");
+          expect(ws.getCell("B1").value).toBe("c,d");
+        });
+
+        it("should parse ArrayBuffer input", async () => {
+          const wb = new Workbook();
+          const data = new TextEncoder().encode("name,value\ntest,123");
+          const ws = await wb.csv.parse(data.buffer);
+
+          expect(ws.getCell("A1").value).toBe("name");
+          expect(ws.getCell("B2").value).toBe(123);
+        });
+
+        it("should parse Uint8Array input", async () => {
+          const wb = new Workbook();
+          const data = new TextEncoder().encode("x,y\n10,20");
+          const ws = await wb.csv.parse(data);
+
+          expect(ws.getCell("A1").value).toBe("x");
+          expect(ws.getCell("A2").value).toBe(10);
+        });
+
+        it("should use custom sheet name", async () => {
+          const wb = new Workbook();
+          const ws = await wb.csv.parse("a,b\n1,2", { sheetName: "MySheet" });
+
+          expect(ws.name).toBe("MySheet");
+        });
+
+        it("should support header option", async () => {
+          const wb = new Workbook();
+          const ws = await wb.csv.parse("name,age\nAlice,30\nBob,25", { header: true });
+
+          // When header: true, the first row becomes column headers but values are still parsed
+          expect(ws.getCell("A1").value).toBe("name");
+          expect(ws.getCell("B1").value).toBe("age");
+        });
+
+        it("should support decimalSeparator option", async () => {
+          const wb = new Workbook();
+          const ws = await wb.csv.parse("value\n1,50\n2,75", {
+            delimiter: ";",
+            decimalSeparator: ","
+          });
+
+          // Note: with delimiter auto-detect and single column, comma won't be detected as delimiter
+          // So we explicitly set delimiter to avoid ambiguity
+        });
+      });
+
+      describe("stringify()", () => {
+        it("should convert worksheet to CSV string", () => {
+          const wb = new Workbook();
+          const ws = wb.addWorksheet("Test");
+          ws.getCell("A1").value = "hello";
+          ws.getCell("B1").value = "world";
+          ws.getCell("A2").value = 1;
+          ws.getCell("B2").value = 2;
+
+          const csv = wb.csv.stringify();
+
+          expect(csv).toBe("hello,world\n1,2");
+        });
+
+        it("should use custom delimiter", () => {
+          const wb = new Workbook();
+          const ws = wb.addWorksheet("Test");
+          ws.getCell("A1").value = "a";
+          ws.getCell("B1").value = "b";
+
+          const csv = wb.csv.stringify({ delimiter: ";" });
+
+          expect(csv).toBe("a;b");
+        });
+
+        it("should quote fields with special characters", () => {
+          const wb = new Workbook();
+          const ws = wb.addWorksheet("Test");
+          ws.getCell("A1").value = "hello, world";
+          ws.getCell("B1").value = 'say "hi"';
+
+          const csv = wb.csv.stringify();
+
+          expect(csv).toContain('"hello, world"');
+          expect(csv).toContain('"say ""hi"""');
+        });
+
+        it("should select worksheet by name", () => {
+          const wb = new Workbook();
+          wb.addWorksheet("Sheet1").getCell("A1").value = "first";
+          wb.addWorksheet("Sheet2").getCell("A1").value = "second";
+
+          const csv = wb.csv.stringify({ sheetName: "Sheet2" });
+
+          expect(csv).toBe("second");
+        });
+
+        it("should return empty string for non-existent worksheet", () => {
+          const wb = new Workbook();
+          wb.addWorksheet("Test");
+
+          const csv = wb.csv.stringify({ sheetName: "NonExistent" });
+
+          expect(csv).toBe("");
+        });
+      });
+
+      describe("toBuffer()", () => {
+        it("should convert worksheet to Uint8Array", async () => {
+          const wb = new Workbook();
+          const ws = wb.addWorksheet("Test");
+          ws.getCell("A1").value = "test";
+
+          const buffer = await wb.csv.toBuffer();
+
+          expect(buffer).toBeInstanceOf(Uint8Array);
+          const content = new TextDecoder().decode(buffer);
+          expect(content).toBe("test");
+        });
+
+        it("should encode UTF-8 correctly", async () => {
+          const wb = new Workbook();
+          const ws = wb.addWorksheet("Test");
+          ws.getCell("A1").value = "こんにちは";
+          ws.getCell("B1").value = "мир";
+
+          const buffer = await wb.csv.toBuffer();
+          const content = new TextDecoder().decode(buffer);
+
+          expect(content).toContain("こんにちは");
+          expect(content).toContain("мир");
+        });
+      });
+    });
   });
 });

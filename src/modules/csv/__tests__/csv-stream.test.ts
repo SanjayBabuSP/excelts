@@ -306,6 +306,70 @@ describe("CSV Stream - CsvParserStream", () => {
       // becomes part of the field value if quote is disabled
       expect(rows).toEqual([["hello", "world"]]);
     });
+
+    it("should auto-detect delimiter when delimiter is empty string", async () => {
+      const input = "a;b;c\n1;2;3\n4;5;6";
+      const readable = Readable.from([input]);
+      const parser = new CsvParserStream({ delimiter: "" });
+
+      const rows: string[][] = [];
+      let detectedDelimiter: string | undefined;
+
+      parser.on("delimiter", (delimiter: string) => {
+        detectedDelimiter = delimiter;
+      });
+
+      for await (const row of readable.pipe(parser)) {
+        rows.push(row as string[]);
+      }
+
+      expect(detectedDelimiter).toBe(";");
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should auto-detect tab delimiter", async () => {
+      const input = "a\tb\tc\n1\t2\t3";
+      const readable = Readable.from([input]);
+      const parser = new CsvParserStream({ delimiter: "" });
+
+      const rows: string[][] = [];
+      let detectedDelimiter: string | undefined;
+
+      parser.on("delimiter", (delimiter: string) => {
+        detectedDelimiter = delimiter;
+      });
+
+      for await (const row of readable.pipe(parser)) {
+        rows.push(row as string[]);
+      }
+
+      expect(detectedDelimiter).toBe("\t");
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should auto-detect delimiter with chunked input", async () => {
+      const chunks = ["a;b", ";c\n1;", "2;3\n4;5", ";6"];
+      const readable = Readable.from(chunks);
+      const parser = new CsvParserStream({ delimiter: "" });
+
+      const rows: string[][] = [];
+      for await (const row of readable.pipe(parser)) {
+        rows.push(row as string[]);
+      }
+
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
   });
 
   // ===========================================================================

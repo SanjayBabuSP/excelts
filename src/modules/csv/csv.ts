@@ -5,15 +5,11 @@
  */
 
 import { fileExists, createReadStream, createWriteStream } from "@utils/fs";
-import {
-  CSV as CSVBrowser,
-  type CsvStreamReadOptions,
-  type CsvStreamWriteOptions
-} from "@csv/csv.browser";
+import { CSV as CSVBrowser, type CsvOptions } from "@csv/csv.browser";
 import type { Worksheet } from "@excel/worksheet";
 
 class CSV extends CSVBrowser {
-  override async readFile(filename: string, options?: CsvStreamReadOptions): Promise<Worksheet> {
+  override async readFile(filename: string, options?: CsvOptions): Promise<Worksheet> {
     if (!(await fileExists(filename))) {
       throw new Error(`File not found: ${filename}`);
     }
@@ -26,7 +22,7 @@ class CSV extends CSVBrowser {
     return this.read(readStream, options);
   }
 
-  override async writeFile(filename: string, options?: CsvStreamWriteOptions): Promise<void> {
+  override async writeFile(filename: string, options?: CsvOptions): Promise<void> {
     const writeStream = createWriteStream(filename, {
       encoding: (options?.encoding || "utf8") as BufferEncoding,
       highWaterMark: options?.highWaterMark ?? 64 * 1024
@@ -37,10 +33,6 @@ class CSV extends CSVBrowser {
 }
 
 export { CSV };
-export type {
-  CsvReadOptions,
-  CsvWriteOptions,
-  CsvStreamReadOptions,
-  CsvStreamWriteOptions
-} from "@csv/csv.browser";
+export type { CsvOptions, CsvInput } from "@csv/csv.browser";
 export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
+export { detectDelimiter } from "@csv/csv-core";

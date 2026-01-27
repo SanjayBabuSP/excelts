@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { Workbook } from "@excel/workbook";
 import type { Worksheet } from "@excel/worksheet";
-import type { CsvReadOptions, CsvWriteOptions } from "@csv/csv.browser";
+import type { CsvOptions } from "@csv/csv.browser";
 
 /**
  * CSV worksheet module interface - must be provided by platform-specific test
@@ -21,8 +21,8 @@ export interface CsvWorksheetModuleImports {
   Workbook: new () => Workbook;
 
   // Functions
-  parseCsvToWorksheet: (content: string, workbook: Workbook, options?: CsvReadOptions) => Worksheet;
-  formatWorksheetToCsv: (worksheet: Worksheet | undefined, options?: CsvWriteOptions) => string;
+  parseCsvToWorksheet: (content: string, workbook: Workbook, options?: CsvOptions) => Worksheet;
+  formatWorksheetToCsv: (worksheet: Worksheet | undefined, options?: CsvOptions) => string;
   createDefaultValueMapper: (
     dateFormats: readonly string[],
     options?: { decimalSeparator?: "," | "." }
@@ -33,12 +33,8 @@ export interface CsvWorksheetModuleImports {
 export interface CsvWorksheetModuleImportsGeneric<TWorkbook> {
   Workbook: new () => TWorkbook;
 
-  parseCsvToWorksheet: (
-    content: string,
-    workbook: TWorkbook,
-    options?: CsvReadOptions
-  ) => Worksheet;
-  formatWorksheetToCsv: (worksheet: Worksheet | undefined, options?: CsvWriteOptions) => string;
+  parseCsvToWorksheet: (content: string, workbook: TWorkbook, options?: CsvOptions) => Worksheet;
+  formatWorksheetToCsv: (worksheet: Worksheet | undefined, options?: CsvOptions) => string;
   createDefaultValueMapper: (
     dateFormats: readonly string[],
     options?: { decimalSeparator?: "," | "." }
