@@ -2261,6 +2261,39 @@ describe("CSV Core - Formatter Options", () => {
       expect(result).toBe("\t\tindented");
     });
 
+    it("should escape fields starting with carriage return", () => {
+      const result = formatCsv([["\rdata"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe('"\t\rdata"');
+    });
+
+    it("should escape fields starting with line feed", () => {
+      const result = formatCsv([["\ndata"]], {
+        escapeFormulae: true,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe('"\t\ndata"');
+    });
+
+    it("should escape full-width CJK formula characters", () => {
+      // Full-width equals (U+FF1D), plus (U+FF0B), minus (U+FF0D), at (U+FF20)
+      const result = formatCsv(
+        [
+          ["\uFF1D1+1"], // ＝1+1
+          ["\uFF0B100"], // ＋100
+          ["\uFF0D50"], // －50
+          ["\uFF20user"] // ＠user
+        ],
+        {
+          escapeFormulae: true,
+          includeEndRowDelimiter: false
+        }
+      );
+      expect(result).toBe("\t\uFF1D1+1\n\t\uFF0B100\n\t\uFF0D50\n\t\uFF20user");
+    });
+
     it("should not escape normal values", () => {
       const result = formatCsv([["hello", "world", "123"]], {
         escapeFormulae: true,

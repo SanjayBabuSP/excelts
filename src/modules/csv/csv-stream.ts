@@ -30,7 +30,8 @@ import {
   applyDynamicTypingToArrayRow,
   deduplicateHeaders,
   stripBom,
-  makeTrimField
+  makeTrimField,
+  startsWithFormulaChar
 } from "@csv/csv-core";
 import { formatNumberForCsv } from "@csv/csv-number";
 
@@ -1209,17 +1210,8 @@ export class CsvFormatterStream extends Transform {
       typeof value === "number" ? formatNumberForCsv(value, this.decimalSeparator) : String(value);
 
     // Escape formulae to prevent CSV injection (OWASP recommendation)
-    if (this.escapeFormulae && str.length > 0) {
-      const firstChar = str[0];
-      if (
-        firstChar === "=" ||
-        firstChar === "+" ||
-        firstChar === "-" ||
-        firstChar === "@" ||
-        firstChar === "\t"
-      ) {
-        str = "\t" + str;
-      }
+    if (this.escapeFormulae && startsWithFormulaChar(str)) {
+      str = "\t" + str;
     }
 
     if (!this.quoteEnabled) {

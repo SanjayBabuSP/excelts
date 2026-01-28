@@ -350,8 +350,20 @@ export interface CsvFormatOptions {
   includeEndRowDelimiter?: boolean;
   /**
    * Escape formulae to prevent CSV injection attacks.
-   * Fields starting with =, +, -, @, or tab are prefixed with a tab character.
-   * (default: false)
+   * Fields starting with dangerous characters are prefixed with a tab character
+   * to neutralize them in spreadsheet applications.
+   *
+   * Escaped characters (per OWASP recommendations):
+   * - `=` (equals) - formula prefix
+   * - `+` (plus) - formula prefix
+   * - `-` (minus) - formula prefix
+   * - `@` (at) - formula prefix
+   * - `\t` (tab, 0x09)
+   * - `\r` (carriage return, 0x0D)
+   * - `\n` (line feed, 0x0A)
+   * - Full-width variants: `＝` `＋` `－` `＠` (for Japanese/CJK locales)
+   *
+   * @default false
    * @see https://owasp.org/www-community/attacks/CSV_Injection
    */
   escapeFormulae?: boolean;
@@ -447,6 +459,35 @@ export function escapeRegex(str: string): string {
  * Order matters - comma is most common, then semicolon (European), tab, pipe
  */
 const AUTO_DETECT_DELIMITERS = [",", ";", "\t", "|"] as const;
+
+/**
+ * Characters that trigger formula escaping (CSV injection prevention).
+ * Per OWASP recommendations, these characters at the start of a field
+ * could be interpreted as formulas by spreadsheet applications.
+ *
+ * @see https://owasp.org/www-community/attacks/CSV_Injection
+ */
+const FORMULA_ESCAPE_CHARS = new Set([
+  "=", // Equals - formula prefix
+  "+", // Plus - formula prefix
+  "-", // Minus - formula prefix
+  "@", // At - formula prefix
+  "\t", // Tab (0x09)
+  "\r", // Carriage return (0x0D)
+  "\n", // Line feed (0x0A)
+  "\uFF1D", // ＝ (full-width equals)
+  "\uFF0B", // ＋ (full-width plus)
+  "\uFF0D", // － (full-width minus)
+  "\uFF20" // ＠ (full-width at)
+]);
+
+/**
+ * Check if a string starts with a formula escape character.
+ * Used for CSV injection prevention.
+ */
+export function startsWithFormulaChar(str: string): boolean {
+  return str.length > 0 && FORMULA_ESCAPE_CHARS.has(str[0]);
+}
 
 /**
  * Default delimiter when auto-detection fails
@@ -1677,17 +1718,8 @@ export function formatCsv(
 
     // Escape formulae to prevent CSV injection (OWASP recommendation)
     // Prefix dangerous characters with tab to neutralize them in spreadsheet apps
-    if (escapeFormulae && str.length > 0) {
-      const firstChar = str[0];
-      if (
-        firstChar === "=" ||
-        firstChar === "+" ||
-        firstChar === "-" ||
-        firstChar === "@" ||
-        firstChar === "\t"
-      ) {
-        str = "\t" + str;
-      }
+    if (escapeFormulae && startsWithFormulaChar(str)) {
+      str = "\t" + str;
     }
 
     // If quoting is disabled, return raw string
