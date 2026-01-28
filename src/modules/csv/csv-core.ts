@@ -49,6 +49,20 @@ export type RowValidateFunction<T = Row> =
   | ((row: T, callback: RowValidateCallback) => void);
 
 /**
+ * Metadata passed to chunk callback during streaming parse
+ */
+export interface ChunkMeta {
+  /** Total number of data rows processed so far (excluding header) */
+  cursor: number;
+  /** Number of rows in the current chunk */
+  rowCount: number;
+  /** Whether this is the first chunk */
+  isFirstChunk: boolean;
+  /** Whether this is the last chunk (only true when stream ends) */
+  isLastChunk: boolean;
+}
+
+/**
  * CSV parsing options
  */
 export interface CsvParseOptions {
@@ -155,6 +169,97 @@ export interface CsvParseOptions {
    * validate: (row) => ({ isValid: row.age >= 18, reason: 'Must be adult' })
    */
   validate?: (row: Row) => boolean | { isValid: boolean; reason?: string };
+  /**
+   * Automatically convert string values to appropriate JavaScript types.
+   *
+   * - `true`: Convert all columns (numbers, booleans, null/empty)
+   * - `false`: Keep all values as strings (default)
+   * - `Record<string, boolean>`: Enable/disable per column by header name
+   * - `Record<string, (value: string) => unknown>`: Custom converter per column
+   *
+   * Built-in conversions when enabled:
+   * - Numbers: "123" → 123, "3.14" → 3.14, "-5" → -5
+   * - Booleans: "true"/"TRUE" → true, "false"/"FALSE" → false
+   * - Empty/null: "" → null (only when dynamicTyping is enabled)
+   *
+   * @example
+   * // Enable for all columns
+   * dynamicTyping: true
+   *
+   * // Enable for specific columns only
+   * dynamicTyping: { age: true, score: true, name: false }
+   *
+   * // Custom converters
+   * dynamicTyping: {
+   *   date: (val) => new Date(val),
+   *   amount: (val) => parseFloat(val.replace('$', ''))
+   * }
+   */
+  dynamicTyping?: boolean | Record<string, boolean | ((value: string) => unknown)>;
+  /**
+   * Callback function invoked for each chunk of rows during parsing.
+   * Useful for processing large files without loading everything into memory.
+   *
+   * Only works with streaming parsers (CsvParserStream, parseCsvStream).
+   * For synchronous parseCsv(), use maxRows + pagination instead.
+   *
+   * @param rows - Array of parsed rows in the current chunk
+   * @param meta - Metadata about the chunk (cursor position, flags)
+   * @returns Return `false` to abort parsing early, anything else continues
+   *
+   * @example
+   * // Process in batches
+   * chunk: async (rows, meta) => {
+   *   await db.insertBatch(rows);
+   *   console.log(`Processed ${meta.cursor} rows`);
+   * }
+   *
+   * // Abort after certain condition
+   * chunk: (rows, meta) => {
+   *   if (meta.cursor > 1000000) return false; // Stop after 1M rows
+   * }
+   */
+  chunk?: (rows: Row[], meta: ChunkMeta) => boolean | void | Promise<boolean | void>;
+  /**
+   * Number of rows per chunk when using the chunk callback.
+   * Larger chunks = fewer callbacks but more memory usage.
+   * @default 1000
+   */
+  chunkSize?: number;
+  /**
+   * Callback invoked before parsing the first chunk of data.
+   * Allows preprocessing, validation, or modification of raw CSV text.
+   *
+   * Common use cases:
+   * - Skip metadata/comments at the start of file
+   * - Detect and remove BOM characters
+   * - Auto-detect delimiter by analyzing the content
+   * - Validate file format before parsing
+   *
+   * @param chunk - The first chunk of raw CSV text
+   * @returns Modified chunk to parse, or undefined to use original
+   * @throws Throw an error to abort parsing
+   *
+   * @example
+   * // Skip metadata lines starting with #
+   * beforeFirstChunk: (chunk) => {
+   *   const lines = chunk.split('\n');
+   *   const dataStart = lines.findIndex(l => !l.startsWith('#'));
+   *   return lines.slice(dataStart).join('\n');
+   * }
+   *
+   * // Remove BOM
+   * beforeFirstChunk: (chunk) => {
+   *   if (chunk.charCodeAt(0) === 0xFEFF) return chunk.slice(1);
+   * }
+   *
+   * // Validate required headers
+   * beforeFirstChunk: (chunk) => {
+   *   const headers = chunk.split('\n')[0].split(',');
+   *   if (!headers.includes('id')) throw new Error('Missing id column');
+   * }
+   */
+  beforeFirstChunk?: (chunk: string) => string | void;
 }
 
 /**
@@ -409,6 +514,188 @@ function countDelimiters(line: string, delimiter: string, quote: string): number
   return count;
 }
 
+// =============================================================================
+// Dynamic Typing - Automatic Type Conversion
+// =============================================================================
+
+/**
+ * Convert a string value to its appropriate JavaScript type.
+ * Used internally by dynamicTyping feature.
+ *
+ * Conversion rules:
+ * - Empty string → null
+ * - "true"/"TRUE"/"True" → true
+ * - "false"/"FALSE"/"False" → false
+ * - Numeric strings → number (int or float)
+ * - Everything else → original string
+ */
+export function convertValue(value: string): string | number | boolean | null {
+  // Empty string stays empty (not converted to null)
+  if (value === "") {
+    return "";
+  }
+
+  // Boolean detection (case-insensitive)
+  const lowerValue = value.toLowerCase();
+  if (lowerValue === "true") {
+    return true;
+  }
+  if (lowerValue === "false") {
+    return false;
+  }
+
+  // Null detection (case-insensitive)
+  if (lowerValue === "null") {
+    return null;
+  }
+
+  // Number detection
+  // Handle leading/trailing whitespace by trimming first
+  const trimmed = value.trim();
+  if (trimmed !== "" && trimmed === value) {
+    // Special numeric values
+    if (trimmed === "Infinity") {
+      return Infinity;
+    }
+    if (trimmed === "-Infinity") {
+      return -Infinity;
+    }
+    if (trimmed === "NaN") {
+      return NaN;
+    }
+
+    // Preserve leading zeros (important for zip codes, phone numbers, IDs)
+    // Only convert if the number doesn't have leading zeros (except for "0" itself or "0.xxx")
+    if (/^-?0[0-9]/.test(trimmed)) {
+      // Has leading zero followed by another digit - preserve as string
+      return value;
+    }
+
+    // Check for valid number format (avoid converting "123abc" or "1.2.3")
+    if (/^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
+      const num = Number(trimmed);
+      if (!isNaN(num)) {
+        return num;
+      }
+    }
+  }
+
+  // Default: keep as string
+  return value;
+}
+
+/**
+ * Type guard to check if dynamicTyping config has custom converter function
+ */
+function isCustomConverter(
+  config: boolean | ((value: string) => unknown)
+): config is (value: string) => unknown {
+  return typeof config === "function";
+}
+
+/**
+ * Apply dynamic typing to a single field value
+ *
+ * @param value - The string value to convert
+ * @param columnConfig - Column-specific config (true, false, or custom function)
+ * @returns Converted value
+ */
+export function applyDynamicTyping(
+  value: string,
+  columnConfig: boolean | ((value: string) => unknown)
+): unknown {
+  if (columnConfig === false) {
+    return value;
+  }
+
+  if (isCustomConverter(columnConfig)) {
+    return columnConfig(value);
+  }
+
+  // columnConfig === true → use default conversion
+  return convertValue(value);
+}
+
+/**
+ * Apply dynamic typing to an entire row (object form)
+ *
+ * @param row - Row object with string values
+ * @param dynamicTyping - DynamicTyping configuration
+ * @returns New row object with converted values
+ */
+export function applyDynamicTypingToRow(
+  row: Record<string, string>,
+  dynamicTyping: boolean | Record<string, boolean | ((value: string) => unknown)>
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  if (dynamicTyping === true) {
+    // Convert all columns
+    for (const key of Object.keys(row)) {
+      result[key] = convertValue(row[key]);
+    }
+  } else if (dynamicTyping === false) {
+    // No conversion
+    return row;
+  } else {
+    // Per-column configuration
+    for (const key of Object.keys(row)) {
+      const config = dynamicTyping[key];
+      if (config === undefined) {
+        // Column not in config → keep as string
+        result[key] = row[key];
+      } else {
+        result[key] = applyDynamicTyping(row[key], config);
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Apply dynamic typing to an array row
+ *
+ * @param row - Row array with string values
+ * @param headers - Header names (for per-column config lookup)
+ * @param dynamicTyping - DynamicTyping configuration
+ * @returns New row array with converted values
+ */
+export function applyDynamicTypingToArrayRow(
+  row: string[],
+  headers: string[] | null,
+  dynamicTyping: boolean | Record<string, boolean | ((value: string) => unknown)>
+): unknown[] {
+  if (dynamicTyping === true) {
+    // Convert all columns
+    return row.map(convertValue);
+  }
+
+  if (dynamicTyping === false) {
+    // No conversion
+    return row;
+  }
+
+  // Per-column configuration - need headers to look up column names
+  if (!headers) {
+    // No headers available, can't use per-column config → no conversion
+    return row;
+  }
+
+  return row.map((value, index) => {
+    const header = headers[index];
+    const config = header ? dynamicTyping[header] : undefined;
+    if (config === undefined) {
+      return value;
+    }
+    return applyDynamicTyping(value, config);
+  });
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
 /**
  * Check if a transform function is synchronous (1 argument) vs async (2 arguments)
  */
@@ -539,7 +826,7 @@ function processValidateResult(result: boolean | { isValid: boolean; reason?: st
 export function parseCsv(
   input: string,
   options: CsvParseOptions = {}
-): string[][] | CsvParseResult<Record<string, string>> {
+): string[][] | CsvParseResult<Record<string, string>> | CsvParseResult<Record<string, unknown>> {
   const {
     delimiter: delimiterOption = ",",
     quote: quoteOption = '"',
@@ -559,14 +846,25 @@ export function parseCsv(
     discardUnmappedColumns = false,
     fastMode = false,
     transform,
-    validate
+    validate,
+    dynamicTyping,
+    beforeFirstChunk
   } = options;
+
+  // Apply beforeFirstChunk if provided
+  let processedInput = input;
+  if (beforeFirstChunk) {
+    const result = beforeFirstChunk(input);
+    if (typeof result === "string") {
+      processedInput = result;
+    }
+  }
 
   // Auto-detect delimiter if empty string is passed
   const delimiter =
     delimiterOption === ""
       ? detectDelimiter(
-          input,
+          processedInput,
           quoteOption !== false && quoteOption !== null ? String(quoteOption) : '"'
         )
       : delimiterOption;
@@ -694,7 +992,7 @@ export function parseCsv(
   // ==========================================================================
   if (fastMode) {
     // Split by lines first, handling different line endings
-    const lines = input.split(/\r\n|\r|\n/);
+    const lines = processedInput.split(/\r\n|\r|\n/);
     let lineIdx = 0;
 
     for (const line of lines) {
@@ -734,10 +1032,13 @@ export function parseCsv(
   }
 
   // Helper function to build the final result
-  function buildResult(): string[][] | CsvParseResult<Record<string, string>> {
+  function buildResult():
+    | string[][]
+    | CsvParseResult<Record<string, string>>
+    | CsvParseResult<Record<string, unknown>> {
     // Convert to objects if headers enabled
     if (useHeaders && headerRow) {
-      let dataRows = rows.map(row => {
+      let dataRows: Record<string, unknown>[] = rows.map(row => {
         const obj: Record<string, string> = {};
         headerRow!.forEach((header, index) => {
           if (header !== null && header !== undefined) {
@@ -747,28 +1048,40 @@ export function parseCsv(
         return obj;
       });
 
+      // Apply dynamicTyping if provided (before transform)
+      if (dynamicTyping) {
+        dataRows = dataRows.map(row =>
+          applyDynamicTypingToRow(row as Record<string, string>, dynamicTyping)
+        ) as Record<string, unknown>[];
+      }
+
       // Apply transform if provided
       if (transform) {
         dataRows = dataRows
-          .map(row => transform(row))
-          .filter((row): row is Record<string, string> => row !== null && row !== undefined);
+          .map(row => transform(row as Record<string, string>))
+          .filter(row => row !== null && row !== undefined) as Record<string, unknown>[];
       }
 
       // Apply validate if provided
       if (validate) {
-        const validatedRows: Record<string, string>[] = [];
+        const validatedRows: Record<string, unknown>[] = [];
         for (const row of dataRows) {
-          const { isValid, reason } = processValidateResult(validate(row));
+          const { isValid, reason } = processValidateResult(
+            validate(row as Record<string, string>)
+          );
           if (isValid) {
             validatedRows.push(row);
           } else {
-            invalidRows.push({ row: Object.values(row), reason });
+            invalidRows.push({
+              row: Object.values(row).map(v => (v === null ? "" : String(v))),
+              reason
+            });
           }
         }
         dataRows = validatedRows;
       }
 
-      const result: CsvParseResult<Record<string, string>> = {
+      const result: CsvParseResult<Record<string, unknown>> = {
         headers: headerRow.filter((h): h is string => h !== null && h !== undefined),
         rows: dataRows
       };
@@ -778,24 +1091,34 @@ export function parseCsv(
       return result;
     }
 
-    // For array mode, apply transform and validate
-    let resultRows = rows;
+    // For array mode, apply dynamicTyping, transform and validate
+    let resultRows: (string[] | unknown[])[] = rows;
+
+    // Apply dynamicTyping if provided (before transform)
+    if (dynamicTyping) {
+      // For array mode without headers, we can only use dynamicTyping: true (all columns)
+      // Per-column config requires headers
+      const effectiveHeaders = headerRow?.filter((h): h is string => h != null) ?? null;
+      resultRows = resultRows.map(row =>
+        applyDynamicTypingToArrayRow(row as string[], effectiveHeaders, dynamicTyping)
+      );
+    }
 
     if (transform) {
       resultRows = resultRows
-        .map(row => transform(row))
+        .map(row => transform(row as string[]))
         .filter((row): row is string[] => row !== null && row !== undefined && Array.isArray(row));
     }
 
     if (validate) {
-      const validatedRows: string[][] = [];
+      const validatedRows: (string[] | unknown[])[] = [];
       const arrayInvalidRows: { row: string[]; reason: string }[] = [];
       for (const row of resultRows) {
-        const { isValid, reason } = processValidateResult(validate(row));
+        const { isValid, reason } = processValidateResult(validate(row as string[]));
         if (isValid) {
           validatedRows.push(row);
         } else {
-          arrayInvalidRows.push({ row, reason });
+          arrayInvalidRows.push({ row: row.map(v => (v === null ? "" : String(v))), reason });
         }
       }
       resultRows = validatedRows;
@@ -809,19 +1132,19 @@ export function parseCsv(
       }
     }
 
-    return resultRows;
+    return resultRows as string[][];
   }
 
   // ==========================================================================
   // Standard Mode: Full RFC 4180 compliant parsing with quote handling
   // ==========================================================================
-  const len = input.length;
+  const len = processedInput.length;
   while (i < len) {
-    const char = input[i];
+    const char = processedInput[i];
 
     if (inQuotes && quoteEnabled) {
       // Inside quoted field
-      if (escape && char === escape && input[i + 1] === quote) {
+      if (escape && char === escape && processedInput[i + 1] === quote) {
         // Escaped quote
         currentField += quote;
         i += 2;
@@ -831,7 +1154,7 @@ export function parseCsv(
         i++;
       } else if (char === "\r") {
         // Normalize CRLF to LF inside quoted fields
-        if (input[i + 1] === "\n") {
+        if (processedInput[i + 1] === "\n") {
           i++; // Skip \r, will add \n on next iteration
         } else {
           currentField += "\n"; // Convert standalone \r to \n
@@ -854,7 +1177,7 @@ export function parseCsv(
         i++;
       } else if (char === "\n" || char === "\r") {
         // End of row - handle \r\n, \r, and \n
-        if (char === "\r" && input[i + 1] === "\n") {
+        if (char === "\r" && processedInput[i + 1] === "\n") {
           i++; // Skip the \n in \r\n
         }
         currentRow.push(trimField(currentField));

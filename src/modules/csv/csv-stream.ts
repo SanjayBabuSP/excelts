@@ -14,7 +14,8 @@ import type {
   RowValidateFunction,
   Row,
   RowTransformCallback,
-  RowValidateCallback
+  RowValidateCallback,
+  ChunkMeta
 } from "@csv/csv-core";
 import {
   isSyncTransform,
@@ -24,7 +25,9 @@ import {
   rowHashArrayToValues,
   rowHashArrayToHeaders,
   detectDelimiter,
-  escapeRegex
+  escapeRegex,
+  applyDynamicTypingToRow,
+  applyDynamicTypingToArrayRow
 } from "@csv/csv-core";
 import { formatNumberForCsv } from "@csv/csv-number";
 
@@ -61,10 +64,19 @@ export class CsvParserStream extends Transform {
   private _rowValidator: ((row: Row, cb: RowValidateCallback) => void) | null = null;
   private autoDetectDelimiter: boolean = false;
   private delimiterDetected: boolean = false;
+  // Chunk callback support
+  private chunkBuffer: Row[] = [];
+  private chunkSize: number;
+  private totalRowsProcessed: number = 0;
+  private isFirstChunk: boolean = true;
+  private chunkAborted: boolean = false;
+  // beforeFirstChunk support
+  private beforeFirstChunkApplied: boolean = false;
 
   constructor(options: CsvParseOptions = {}) {
     super({ objectMode: options.objectMode !== false });
     this.options = options;
+    this.chunkSize = options.chunkSize ?? 1000;
 
     // Reuse a single decoder instance and enable streaming decode to correctly handle
     // multi-byte characters split across chunks.
@@ -157,9 +169,24 @@ export class CsvParserStream extends Transform {
     _encoding: string,
     callback: (error?: Error | null, data?: Row) => void
   ): void {
+    // If chunk callback aborted parsing, skip all further processing
+    if (this.chunkAborted) {
+      callback();
+      return;
+    }
+
     try {
       const data = typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
       this.buffer += data;
+
+      // Apply beforeFirstChunk on first chunk
+      if (!this.beforeFirstChunkApplied && this.options.beforeFirstChunk) {
+        this.beforeFirstChunkApplied = true;
+        const result = this.options.beforeFirstChunk(this.buffer);
+        if (typeof result === "string") {
+          this.buffer = result;
+        }
+      }
 
       // Auto-detect delimiter on first chunk if requested
       if (this.autoDetectDelimiter && !this.delimiterDetected) {
@@ -176,6 +203,12 @@ export class CsvParserStream extends Transform {
   }
 
   override _flush(callback: (error?: Error | null) => void): void {
+    // If chunk callback aborted parsing, skip flush
+    if (this.chunkAborted) {
+      callback();
+      return;
+    }
+
     try {
       const remainingDecoded = this.decoder.decode();
       if (remainingDecoded) {
@@ -188,12 +221,24 @@ export class CsvParserStream extends Transform {
             callback(err);
             return;
           }
-          this.flushCurrentRow(callback);
+          this.flushCurrentRow(err2 => {
+            if (err2) {
+              callback(err2);
+              return;
+            }
+            this.flushFinalChunk(callback);
+          });
         });
         return;
       }
 
-      this.flushCurrentRow(callback);
+      this.flushCurrentRow(err => {
+        if (err) {
+          callback(err);
+          return;
+        }
+        this.flushFinalChunk(callback);
+      });
     } catch (error) {
       callback(error as Error);
     }
@@ -203,10 +248,77 @@ export class CsvParserStream extends Transform {
     // Process any remaining data without a trailing newline.
     if (this.currentFieldLength !== 0 || this.currentRow.length > 0) {
       this.currentRow.push(this.trimField(this.takeCurrentField()));
-      this.emitRow(callback);
+      // Use the same row processing path as normal rows for chunk callback support
+      const row = this.buildRow(this.currentRow);
+      this.currentRow = [];
+      this.processPendingRows([row], callback);
       return;
     }
     callback();
+  }
+
+  /**
+   * Push buffered rows to stream
+   */
+  private pushBufferedRows(rows: Row[]): void {
+    const useJson = this.options.objectMode === false;
+    for (const row of rows) {
+      this.push(useJson ? JSON.stringify(row) : row);
+    }
+  }
+
+  /**
+   * Invoke chunk callback and handle result (sync or async)
+   */
+  private invokeChunkCallback(
+    rows: Row[],
+    meta: ChunkMeta,
+    callback: (error?: Error | null) => void
+  ): void {
+    const result = this.options.chunk!(rows, meta);
+
+    if (result instanceof Promise) {
+      result
+        .then(shouldContinue => {
+          if (shouldContinue === false) {
+            this.chunkAborted = true;
+          }
+          callback();
+        })
+        .catch(err => callback(err));
+    } else {
+      if (result === false) {
+        this.chunkAborted = true;
+      }
+      callback();
+    }
+  }
+
+  /**
+   * Flush any remaining rows in the chunk buffer at the end of the stream
+   */
+  private flushFinalChunk(callback: (error?: Error | null) => void): void {
+    if (this.chunkBuffer.length > 0 && this.options.chunk) {
+      const chunkRowCount = this.chunkBuffer.length;
+      const cursor = this.totalRowsProcessed - chunkRowCount;
+
+      const meta: ChunkMeta = {
+        cursor,
+        rowCount: chunkRowCount,
+        isFirstChunk: this.isFirstChunk,
+        isLastChunk: true
+      };
+
+      // Push remaining rows to stream
+      this.pushBufferedRows(this.chunkBuffer);
+
+      // Call chunk callback
+      const rows = this.chunkBuffer;
+      this.chunkBuffer = [];
+      this.invokeChunkCallback(rows, meta, callback);
+    } else {
+      callback();
+    }
   }
 
   private appendToField(text: string): void {
@@ -407,14 +519,30 @@ export class CsvParserStream extends Transform {
   }
 
   private buildRow(rawRow: string[]): Row {
+    const { dynamicTyping } = this.options;
+
     if (this.options.headers && this.headerRow) {
       const obj: Record<string, string> = {};
       for (let index = 0; index < this.headerRow.length; index++) {
         const header = this.headerRow[index];
         obj[header] = rawRow[index] ?? "";
       }
+
+      // Apply dynamicTyping if configured
+      if (dynamicTyping) {
+        return applyDynamicTypingToRow(obj, dynamicTyping) as Row;
+      }
+
       return obj;
     }
+
+    // Array mode
+    if (dynamicTyping) {
+      // For array mode, can only use dynamicTyping: true (all columns)
+      // or per-column config if we happen to have headers
+      return applyDynamicTypingToArrayRow(rawRow, this.headerRow, dynamicTyping) as Row;
+    }
+
     return rawRow;
   }
 
@@ -526,13 +654,51 @@ export class CsvParserStream extends Transform {
       return;
     }
 
+    // If chunk callback aborted, skip processing
+    if (this.chunkAborted) {
+      callback();
+      return;
+    }
+
     // Fast path: no transform or validate, push all rows directly
     if (!this._rowTransform && !this._rowValidator) {
-      const useJson = this.options.objectMode === false;
-      for (const row of rows) {
-        this.push(useJson ? JSON.stringify(row) : row);
-      }
-      callback();
+      let index = 0;
+
+      const processNextBatch = (): void => {
+        while (index < rows.length && !this.chunkAborted) {
+          const row = rows[index++];
+
+          if (this.options.chunk) {
+            // Collect rows for chunk callback
+            this.chunkBuffer.push(row);
+            this.totalRowsProcessed++;
+
+            // Check if chunk is full
+            if (this.chunkBuffer.length >= this.chunkSize) {
+              this.flushChunk(err => {
+                if (err) {
+                  callback(err);
+                  return;
+                }
+                // If chunk callback aborted, stop processing
+                if (this.chunkAborted) {
+                  callback();
+                  return;
+                }
+                // Continue processing remaining rows
+                processNextBatch();
+              });
+              return;
+            }
+          } else {
+            // No chunk callback, push directly
+            this.pushBufferedRows([row]);
+          }
+        }
+        callback();
+      };
+
+      processNextBatch();
       return;
     }
 
@@ -552,7 +718,31 @@ export class CsvParserStream extends Transform {
         }
 
         if (result && result.isValid && result.row !== null) {
-          this.push(this.options.objectMode === false ? JSON.stringify(result.row) : result.row);
+          if (this.options.chunk) {
+            // Collect rows for chunk callback
+            this.chunkBuffer.push(result.row);
+            this.totalRowsProcessed++;
+
+            // Check if chunk is full
+            if (this.chunkBuffer.length >= this.chunkSize) {
+              this.flushChunk(err2 => {
+                if (err2) {
+                  callback(err2);
+                  return;
+                }
+                // Continue processing after chunk flush
+                if (index % 1000 === 0) {
+                  setTimeout(processNext, 0);
+                } else {
+                  processNext();
+                }
+              });
+              return;
+            }
+          } else {
+            // No chunk callback, push directly
+            this.pushBufferedRows([result.row]);
+          }
         } else if (result && !result.isValid) {
           this.emit("data-invalid", result.row, result.reason);
         }
@@ -567,6 +757,36 @@ export class CsvParserStream extends Transform {
     };
 
     processNext();
+  }
+
+  /**
+   * Flush the current chunk buffer to the chunk callback
+   */
+  private flushChunk(callback: (error?: Error | null) => void): void {
+    if (this.chunkBuffer.length === 0 || !this.options.chunk) {
+      callback();
+      return;
+    }
+
+    const chunkRowCount = this.chunkBuffer.length;
+    const cursor = this.totalRowsProcessed - chunkRowCount;
+
+    const meta: ChunkMeta = {
+      cursor,
+      rowCount: chunkRowCount,
+      isFirstChunk: this.isFirstChunk,
+      isLastChunk: false
+    };
+
+    this.isFirstChunk = false;
+
+    // Take rows and clear buffer before callback
+    const rows = this.chunkBuffer;
+    this.chunkBuffer = [];
+
+    // Push rows to stream, then invoke callback
+    this.pushBufferedRows(rows);
+    this.invokeChunkCallback(rows, meta, callback);
   }
 
   private transformAndValidateRow(
