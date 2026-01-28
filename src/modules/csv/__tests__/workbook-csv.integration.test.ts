@@ -117,7 +117,7 @@ describe("Workbook", () => {
 
         it("should support decimalSeparator option", async () => {
           const wb = new Workbook();
-          const ws = await wb.csv.parse("value\n1,50\n2,75", {
+          await wb.csv.parse("value\n1,50\n2,75", {
             delimiter: ";",
             decimalSeparator: ","
           });
