@@ -83,6 +83,15 @@ export interface CsvOptions {
    */
   escapeFormulae?: boolean;
 
+  // === File write options ===
+  /**
+   * Append mode - when true, data is appended to existing file.
+   * Header row is automatically skipped in append mode.
+   * If file doesn't exist, it will be created (with headers if configured).
+   * @default false
+   */
+  append?: boolean;
+
   // === Value mapping ===
   dateFormats?: readonly DateFormat[];
   dateFormat?: string;
@@ -502,7 +511,8 @@ class CSV {
       quote: options?.quote ?? options?.formatterOptions?.quote,
       rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
       alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
-      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae
+      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae,
+      writeHeaders: options?.formatterOptions?.writeHeaders
     });
     const pipelinePromise = pipeline(formatter, stream);
 

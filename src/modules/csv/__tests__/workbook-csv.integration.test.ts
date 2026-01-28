@@ -38,6 +38,105 @@ describe("Workbook", () => {
       expect(ws2.getCell("A1").value).toBe(HEBREW_TEST_STRING);
     }, 6000);
 
+    describe("append mode", () => {
+      it("should create new file with headers on first write", async () => {
+        const TEST_FILE = testFilePath("csv-append-new-" + Date.now(), ".csv");
+
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Data");
+        ws.addRow(["Name", "Age"]);
+        ws.addRow(["Alice", 30]);
+
+        await wb.csv.writeFile(TEST_FILE, { append: true });
+
+        const wb2 = new Workbook();
+        const ws2 = await wb2.csv.readFile(TEST_FILE);
+        expect(ws2.rowCount).toBe(2);
+        expect(ws2.getCell("A1").value).toBe("Name");
+        expect(ws2.getCell("A2").value).toBe("Alice");
+      });
+
+      it("should append without headers to existing file", async () => {
+        const TEST_FILE = testFilePath("csv-append-existing-" + Date.now(), ".csv");
+
+        // First write - creates file with headers
+        const wb1 = new Workbook();
+        const ws1 = wb1.addWorksheet("Data");
+        ws1.addRow(["Name", "Age"]);
+        ws1.addRow(["Alice", 30]);
+        await wb1.csv.writeFile(TEST_FILE);
+
+        // Second write - append mode (only add data rows, no header)
+        const wb2 = new Workbook();
+        const ws2 = wb2.addWorksheet("Data");
+        ws2.addRow(["Bob", 25]); // Data only, no header row
+        await wb2.csv.writeFile(TEST_FILE, { append: true });
+
+        // Read and verify
+        const wb3 = new Workbook();
+        const ws3 = await wb3.csv.readFile(TEST_FILE);
+        expect(ws3.rowCount).toBe(3); // Header + Alice + Bob
+        expect(ws3.getCell("A1").value).toBe("Name");
+        expect(ws3.getCell("A2").value).toBe("Alice");
+        expect(ws3.getCell("A3").value).toBe("Bob");
+      });
+
+      it("should append multiple batches correctly", async () => {
+        const TEST_FILE = testFilePath("csv-append-batches-" + Date.now(), ".csv");
+
+        // Initial file with header
+        const wb1 = new Workbook();
+        const ws1 = wb1.addWorksheet("Log");
+        ws1.addRow(["Time", "Event"]);
+        ws1.addRow(["10:00", "start"]);
+        await wb1.csv.writeFile(TEST_FILE);
+
+        // Append batch 1 (data only)
+        const wb2 = new Workbook();
+        const ws2 = wb2.addWorksheet("Log");
+        ws2.addRow(["10:05", "process"]);
+        await wb2.csv.writeFile(TEST_FILE, { append: true });
+
+        // Append batch 2 (data only)
+        const wb3 = new Workbook();
+        const ws3 = wb3.addWorksheet("Log");
+        ws3.addRow(["10:10", "end"]);
+        await wb3.csv.writeFile(TEST_FILE, { append: true });
+
+        // Verify
+        const wb4 = new Workbook();
+        const ws4 = await wb4.csv.readFile(TEST_FILE);
+        expect(ws4.rowCount).toBe(4); // Header + 3 data rows
+        expect(ws4.getCell("A1").value).toBe("Time");
+        expect(ws4.getCell("B2").value).toBe("start");
+        expect(ws4.getCell("B3").value).toBe("process");
+        expect(ws4.getCell("B4").value).toBe("end");
+      });
+
+      it("should respect custom rowDelimiter in append mode", async () => {
+        const TEST_FILE = testFilePath("csv-append-crlf-" + Date.now(), ".csv");
+
+        // Create file with CRLF line endings
+        const wb1 = new Workbook();
+        const ws1 = wb1.addWorksheet("Data");
+        ws1.addRow(["A", "B"]);
+        ws1.addRow([1, 2]);
+        await wb1.csv.writeFile(TEST_FILE, { rowDelimiter: "\r\n" });
+
+        // Append with same line ending
+        const wb2 = new Workbook();
+        const ws2 = wb2.addWorksheet("Data");
+        ws2.addRow([3, 4]);
+        await wb2.csv.writeFile(TEST_FILE, { append: true, rowDelimiter: "\r\n" });
+
+        // Read and verify
+        const wb3 = new Workbook();
+        const ws3 = await wb3.csv.readFile(TEST_FILE);
+        expect(ws3.rowCount).toBe(3);
+        expect(ws3.getCell("A3").value).toBe(3);
+      });
+    });
+
     // =========================================================================
     // Unified API Tests (parse, stringify, toBuffer)
     // =========================================================================

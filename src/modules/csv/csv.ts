@@ -24,10 +24,23 @@ class CSV extends CSVBrowser {
   }
 
   override async writeFile(filename: string, options?: CsvOptions): Promise<void> {
+    const isAppend = options?.append && (await fileExists(filename));
+
     const writeStream = createWriteStream(filename, {
       encoding: (options?.encoding || "utf8") as BufferEncoding,
-      highWaterMark: options?.highWaterMark ?? 64 * 1024
+      highWaterMark: options?.highWaterMark ?? 64 * 1024,
+      flags: options?.append ? "a" : "w"
     });
+
+    // Append mode to existing file: write leading newline and skip headers
+    if (isAppend) {
+      const rowDelimiter = options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter ?? "\n";
+      writeStream.write(rowDelimiter);
+      return this.write(writeStream, {
+        ...options,
+        formatterOptions: { ...options?.formatterOptions, writeHeaders: false }
+      });
+    }
 
     return this.write(writeStream, options);
   }
