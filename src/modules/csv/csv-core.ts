@@ -110,7 +110,7 @@ export interface CsvParseOptions {
   quote?: string | false | null;
   /** Escape character for quotes (default: '"'), set to false or null to disable */
   escape?: string | false | null;
-  /** Skip empty lines (default: false). Uses greedy mode: also skips lines with only whitespace. */
+  /** Skip empty lines (default: false). Uses greedy mode: also skips whitespace-only lines. */
   skipEmptyLines?: boolean;
   /** Alias for skipEmptyLines */
   ignoreEmpty?: boolean;
@@ -296,6 +296,8 @@ export interface CsvParseOptions {
   beforeFirstChunk?: (chunk: string) => string | void;
 }
 
+export type SkipEmptyLines = boolean;
+
 /**
  * CSV formatting options
  */
@@ -373,6 +375,8 @@ export interface CsvParseMeta {
   cursor: number;
   /** Field names (headers) if header parsing was enabled */
   fields?: string[];
+  /** Map of renamed headers when duplicates were found, otherwise null */
+  renamedHeaders?: Record<string, string> | null;
 }
 
 /**
@@ -490,25 +494,40 @@ export function detectLinebreak(input: string): string {
 export function detectDelimiter(
   input: string,
   quote: string = '"',
-  delimitersToGuess?: string[]
+  delimitersToGuess?: string[],
+  comment?: string,
+  skipEmptyLines?: boolean
 ): string {
   const delimiters = delimitersToGuess ?? AUTO_DETECT_DELIMITERS;
   const defaultDelimiter = delimiters[0] ?? DEFAULT_DELIMITER;
 
-  // Get sample lines (first 10 non-empty lines)
-  const lines = getSampleLines(input, 10);
+  // Get sample lines (first 10 meaningful lines)
+  const lines = getSampleLines(input, 10, quote, comment, skipEmptyLines);
 
   if (lines.length === 0) {
     return defaultDelimiter;
   }
 
   let bestDelimiter = defaultDelimiter;
-  let bestScore = 0;
+  let bestDelta: number | undefined;
+  let bestAvgFieldCount: number | undefined;
 
   for (const delimiter of delimiters) {
-    const score = scoreDelimiter(lines, delimiter, quote);
-    if (score > bestScore) {
-      bestScore = score;
+    const { avgFieldCount, delta } = scoreDelimiter(lines, delimiter, quote);
+
+    // Require at least ~2 fields on average, similar to PapaParse
+    if (avgFieldCount <= 1.99) {
+      continue;
+    }
+
+    if (
+      bestDelta === undefined ||
+      delta < bestDelta ||
+      (delta === bestDelta &&
+        (bestAvgFieldCount === undefined || avgFieldCount > bestAvgFieldCount))
+    ) {
+      bestDelta = delta;
+      bestAvgFieldCount = avgFieldCount;
       bestDelimiter = delimiter;
     }
   }
@@ -519,7 +538,13 @@ export function detectDelimiter(
 /**
  * Get sample lines from input, skipping empty lines
  */
-function getSampleLines(input: string, maxLines: number): string[] {
+function getSampleLines(
+  input: string,
+  maxLines: number,
+  quote: string,
+  comment?: string,
+  skipEmptyLines?: boolean
+): string[] {
   const lines: string[] = [];
   let start = 0;
   let inQuotes = false;
@@ -528,13 +553,28 @@ function getSampleLines(input: string, maxLines: number): string[] {
   for (let i = 0; i < len && lines.length < maxLines; i++) {
     const char = input[i];
 
-    if (char === '"') {
-      inQuotes = !inQuotes;
+    if (quote && char === quote) {
+      // Toggle quote state, but handle escaped quotes ("" inside quoted field)
+      if (inQuotes && input[i + 1] === quote) {
+        i++; // Skip escaped quote
+      } else {
+        inQuotes = !inQuotes;
+      }
     } else if (!inQuotes && (char === "\n" || char === "\r")) {
       const line = input.slice(start, i);
-      if (line.trim()) {
-        lines.push(line);
+
+      // Skip comment lines
+      if (comment && line.startsWith(comment)) {
+        // skip
+      } else {
+        // For delimiter detection, whitespace-only lines are never useful.
+        const trimmed = line.trim();
+        const shouldDrop = line.length === 0 || (skipEmptyLines && trimmed === "");
+        if (!shouldDrop && trimmed !== "") {
+          lines.push(line);
+        }
       }
+
       // Skip \r\n
       if (char === "\r" && input[i + 1] === "\n") {
         i++;
@@ -546,8 +586,12 @@ function getSampleLines(input: string, maxLines: number): string[] {
   // Add last line if exists
   if (start < len && lines.length < maxLines) {
     const line = input.slice(start);
-    if (line.trim()) {
-      lines.push(line);
+    if (!comment || !line.startsWith(comment)) {
+      const trimmed = line.trim();
+      const shouldDrop = line.length === 0 || (skipEmptyLines && trimmed === "");
+      if (!shouldDrop && trimmed !== "") {
+        lines.push(line);
+      }
     }
   }
 
@@ -563,35 +607,71 @@ function getSampleLines(input: string, maxLines: number): string[] {
  *
  * Higher score = more fields per row with consistent counts
  */
-function scoreDelimiter(lines: string[], delimiter: string, quote: string): number {
+function scoreDelimiter(
+  lines: string[],
+  delimiter: string,
+  quote: string
+): { avgFieldCount: number; delta: number } {
   if (lines.length === 0) {
-    return 0;
+    return { avgFieldCount: 0, delta: Number.POSITIVE_INFINITY };
   }
 
-  const counts: number[] = [];
+  let delta = 0;
+  let avgFieldCount = 0;
+  let prevFieldCount: number | undefined;
 
   for (const line of lines) {
-    const count = countDelimiters(line, delimiter, quote);
-    counts.push(count);
+    const fieldCount = countDelimiters(line, delimiter, quote) + 1;
+    avgFieldCount += fieldCount;
+
+    if (prevFieldCount === undefined) {
+      prevFieldCount = fieldCount;
+      continue;
+    }
+
+    // Like PapaParse, allow variability but prefer consistent counts
+    delta += Math.abs(fieldCount - prevFieldCount);
+    prevFieldCount = fieldCount;
   }
 
-  // Check if delimiter exists
-  const firstCount = counts[0];
-  if (firstCount === 0) {
-    return 0;
+  avgFieldCount /= lines.length;
+
+  return { avgFieldCount, delta };
+}
+
+const NON_WHITESPACE_RE = /\S/;
+
+function isEmptyRowGreedy(row: string[], shouldSkipEmpty: boolean): boolean {
+  if (!shouldSkipEmpty) {
+    return false;
   }
-
-  // Check consistency - all lines should have same number of delimiters
-  // Allow some tolerance for the last line (might be incomplete)
-  const mainCounts = counts.slice(0, -1);
-  const isConsistent = mainCounts.length === 0 || mainCounts.every(count => count === firstCount);
-
-  if (!isConsistent) {
-    return 0;
+  for (const field of row) {
+    if (NON_WHITESPACE_RE.test(field)) {
+      return false;
+    }
   }
+  return true;
+}
 
-  // Score = number of fields (delimiters + 1) * number of consistent lines
-  return (firstCount + 1) * lines.length;
+/**
+ * Create a trim function based on options.
+ * Pre-computes the function to avoid repeated condition checks.
+ */
+export function makeTrimField(
+  trim: boolean,
+  ltrim: boolean,
+  rtrim: boolean
+): (s: string) => string {
+  if (trim || (ltrim && rtrim)) {
+    return (s: string) => s.trim();
+  }
+  if (ltrim) {
+    return (s: string) => s.trimStart();
+  }
+  if (rtrim) {
+    return (s: string) => s.trimEnd();
+  }
+  return (s: string) => s;
 }
 
 /**
@@ -903,8 +983,28 @@ export function rowHashArrayMapByHeaders<V = any>(
  * @returns New array with unique header names
  */
 export function deduplicateHeaders(headers: HeaderArray): HeaderArray {
-  const counts = new Map<string, number>();
+  return deduplicateHeadersWithRenames(headers).headers;
+}
+
+export function deduplicateHeadersWithRenames(headers: HeaderArray): {
+  headers: HeaderArray;
+  renamedHeaders: Record<string, string> | null;
+} {
+  const headerCount = new Map<string, number>();
+  const usedHeaders = new Set<string>();
+  // Reserve all original header names so we don't generate a rename that
+  // collides with a header that appears later in the row.
+  const reservedHeaders = new Set<string>();
   const result: HeaderArray = [];
+  const renamedHeaders: Record<string, string> = {};
+
+  let hasRenames = false;
+
+  for (const header of headers) {
+    if (header !== null && header !== undefined) {
+      reservedHeaders.add(header);
+    }
+  }
 
   for (const header of headers) {
     if (header === null || header === undefined) {
@@ -912,18 +1012,29 @@ export function deduplicateHeaders(headers: HeaderArray): HeaderArray {
       continue;
     }
 
-    const count = counts.get(header) ?? 0;
-    if (count === 0) {
-      // First occurrence, use as-is
+    if (!usedHeaders.has(header)) {
+      usedHeaders.add(header);
+      headerCount.set(header, 1);
       result.push(header);
-    } else {
-      // Duplicate, append suffix
-      result.push(`${header}_${count}`);
+      continue;
     }
-    counts.set(header, count + 1);
+
+    // Duplicate: find a unique suffix, avoiding collisions with already-present headers
+    let suffix = headerCount.get(header) ?? 1;
+    let candidate = `${header}_${suffix}`;
+    while (usedHeaders.has(candidate) || reservedHeaders.has(candidate)) {
+      suffix++;
+      candidate = `${header}_${suffix}`;
+    }
+
+    headerCount.set(header, suffix + 1);
+    usedHeaders.add(candidate);
+    result.push(candidate);
+    renamedHeaders[candidate] = header;
+    hasRenames = true;
   }
 
-  return result;
+  return { headers: result, renamedHeaders: hasRenames ? renamedHeaders : null };
 }
 
 /**
@@ -988,21 +1099,23 @@ export function parseCsv(
   // Strip BOM (Byte Order Mark) if present
   processedInput = stripBom(processedInput);
 
+  const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
+
   // Auto-detect delimiter if empty string is passed
   const delimiter =
     delimiterOption === ""
       ? detectDelimiter(
           processedInput,
           quoteOption !== false && quoteOption !== null ? String(quoteOption) : '"',
-          delimitersToGuess
+          delimitersToGuess,
+          comment,
+          shouldSkipEmpty
         )
       : delimiterOption;
 
   // Detect or use provided line terminator for meta info
   // Note: The parser always handles all line ending types, this is mainly for meta info
   const linebreak = newlineOption || detectLinebreak(processedInput);
-
-  const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
 
   // Handle quote: null/false to disable quoting
   const quoteEnabled = quoteOption !== null && quoteOption !== false;
@@ -1026,11 +1139,17 @@ export function parseCsv(
   let useHeaders = false;
   let headerRowProcessed = false;
 
+  // Track renamed headers for meta (PapaParse-compatible)
+  let renamedHeadersForMeta: Record<string, string> | null = null;
+
   // Determine header mode
   if (headers === true) {
     useHeaders = true;
   } else if (Array.isArray(headers)) {
-    headerRow = deduplicateHeaders(headers);
+    const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(headers);
+    headerRow = dedupedHeaders;
+    // For explicit headers, track renames for meta
+    renamedHeadersForMeta = renamedHeaders;
     headersLength = headerRow.filter(h => h !== null && h !== undefined).length;
     useHeaders = true;
     if (!renameHeaders) {
@@ -1041,22 +1160,21 @@ export function parseCsv(
   }
 
   // Pre-compute trim function to avoid repeated condition checks
-  const trimField =
-    trim || (ltrim && rtrim)
-      ? (s: string) => s.trim()
-      : ltrim
-        ? (s: string) => s.trimStart()
-        : rtrim
-          ? (s: string) => s.trimEnd()
-          : (s: string) => s;
+  const trimField = makeTrimField(trim, ltrim, rtrim);
 
   const processRow = (row: string[]): boolean => {
     // Handle first row as headers when needed
     if (useHeaders && !headerRowProcessed) {
       if (typeof headers === "function") {
-        headerRow = deduplicateHeaders(headers(row));
+        const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(
+          headers(row)
+        );
+        headerRow = dedupedHeaders;
+        renamedHeadersForMeta = renamedHeaders;
       } else if (!Array.isArray(headers)) {
-        headerRow = deduplicateHeaders(row);
+        const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(row);
+        headerRow = dedupedHeaders;
+        renamedHeadersForMeta = renamedHeaders;
       }
       headersLength = headerRow!.filter(h => h !== null && h !== undefined).length;
       headerRowProcessed = true;
@@ -1128,13 +1246,18 @@ export function parseCsv(
         continue;
       }
 
-      // Skip empty lines (greedy: also skips whitespace-only lines)
-      if (shouldSkipEmpty && line.trim() === "") {
+      // Skip empty lines (fastMode always skips empty lines)
+      if (line === "") {
         continue;
       }
 
       // Split by delimiter (fast path - no quote detection)
       const row = line.split(delimiter).map(trimField);
+
+      // Greedy skipEmptyLines: also skips whitespace-only and delimiter-only rows
+      if (isEmptyRowGreedy(row, shouldSkipEmpty)) {
+        continue;
+      }
 
       if (processRow(row)) {
         rows.push(row);
@@ -1163,7 +1286,8 @@ export function parseCsv(
       linebreak,
       aborted: false, // parseCsv is synchronous, no abort mechanism
       truncated,
-      cursor: dataRowCount
+      cursor: dataRowCount,
+      renamedHeaders: renamedHeadersForMeta
     };
 
     // Helper to apply validation and collect invalid rows
@@ -1339,8 +1463,7 @@ export function parseCsv(
         }
 
         // Skip empty lines (greedy: also skips whitespace-only lines)
-        const isEmpty = currentRow.length === 1 && currentRow[0].trim() === "";
-        if (shouldSkipEmpty && isEmpty) {
+        if (isEmptyRowGreedy(currentRow, shouldSkipEmpty)) {
           currentRow = [];
           i++;
           continue;
@@ -1375,7 +1498,7 @@ export function parseCsv(
     const shouldProcessLastRow =
       lineNumber >= skipLines &&
       !(comment && currentRow[0]?.startsWith(comment)) &&
-      !(shouldSkipEmpty && currentRow.length === 1 && currentRow[0].trim() === "") &&
+      !isEmptyRowGreedy(currentRow, shouldSkipEmpty) &&
       !(maxRows !== undefined && dataRowCount >= maxRows);
 
     if (shouldProcessLastRow && processRow(currentRow)) {
@@ -1637,6 +1760,7 @@ export async function* parseCsvStream(
 ): AsyncGenerator<string[] | Record<string, string>, void, unknown> {
   const {
     delimiter: delimiterOption = ",",
+    delimitersToGuess,
     quote: quoteOption = '"',
     escape: escapeOption = '"',
     skipEmptyLines = false,
@@ -1669,19 +1793,80 @@ export async function* parseCsvStream(
 
   if (typeof input === "string") {
     if (delimiterOption === "") {
-      delimiter = detectDelimiter(input, quote || '"');
+      delimiter = detectDelimiter(input, quote || '"', delimitersToGuess, comment, shouldSkipEmpty);
     }
   } else if (delimiterOption === "") {
-    // For async iterable, get first chunk for detection
+    // For async iterable, buffer enough data for detection.
+    // Leading chunks may contain only comments/empty lines; avoid locking onto the default delimiter.
     asyncIterator = input[Symbol.asyncIterator]();
-    const firstResult = await asyncIterator.next();
-    if (!firstResult.done) {
-      firstChunk = firstResult.value;
-      delimiter = detectDelimiter(firstChunk, quote || '"');
-    } else {
-      // Empty input
-      return;
+
+    const MAX_DETECT_BUFFER = 1024 * 1024; // 1MB
+    const MAX_DETECT_CHUNKS = 20;
+
+    let detectBuffer = "";
+    let chunksRead = 0;
+    let hasMeaningfulLine = false;
+
+    const maybeMarkMeaningfulLines = (): void => {
+      // Only consider complete lines for detection readiness
+      let start = 0;
+      for (let i = 0; i < detectBuffer.length; i++) {
+        const ch = detectBuffer[i];
+        if (ch !== "\n" && ch !== "\r") {
+          continue;
+        }
+
+        const line = detectBuffer.slice(start, i);
+        // Skip \r\n
+        if (ch === "\r" && detectBuffer[i + 1] === "\n") {
+          i++;
+        }
+        start = i + 1;
+
+        if (comment && line.startsWith(comment)) {
+          continue;
+        }
+
+        if (line.trim() === "") {
+          continue;
+        }
+
+        hasMeaningfulLine = true;
+        return;
+      }
+    };
+
+    while (true) {
+      const firstResult = await asyncIterator.next();
+      if (firstResult.done) {
+        // Empty input
+        if (detectBuffer.length === 0) {
+          return;
+        }
+        break;
+      }
+
+      detectBuffer += firstResult.value;
+      chunksRead++;
+      maybeMarkMeaningfulLines();
+
+      if (hasMeaningfulLine) {
+        break;
+      }
+
+      if (detectBuffer.length >= MAX_DETECT_BUFFER || chunksRead >= MAX_DETECT_CHUNKS) {
+        break;
+      }
     }
+
+    firstChunk = detectBuffer;
+    delimiter = detectDelimiter(
+      firstChunk,
+      quote || '"',
+      delimitersToGuess,
+      comment,
+      shouldSkipEmpty
+    );
   }
 
   let headerRow: HeaderArray | null = null;
@@ -1711,14 +1896,7 @@ export async function* parseCsvStream(
   }
 
   // Pre-compute trim function to avoid repeated condition checks
-  const trimField =
-    trim || (ltrim && rtrim)
-      ? (s: string) => s.trim()
-      : ltrim
-        ? (s: string) => s.trimStart()
-        : rtrim
-          ? (s: string) => s.trimEnd()
-          : (s: string) => s;
+  const trimField = makeTrimField(trim, ltrim, rtrim);
 
   const processRow = (
     row: string[]

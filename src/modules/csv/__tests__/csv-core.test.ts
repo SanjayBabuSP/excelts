@@ -22,6 +22,7 @@ import {
   detectLinebreak,
   stripBom,
   deduplicateHeaders,
+  deduplicateHeadersWithRenames,
   isRowHashArray,
   rowHashArrayToMap,
   rowHashArrayToValues,
@@ -272,6 +273,75 @@ describe("BOM and Linebreak Detection", () => {
       expect(deduplicateHeaders(["X", "X", "X"])).toEqual(["X", "X_1", "X_2"]);
     });
   });
+
+  describe("deduplicateHeadersWithRenames", () => {
+    it("should return null renamedHeaders when no renames occur", () => {
+      const { headers, renamedHeaders } = deduplicateHeadersWithRenames(["A", "B", "C"]);
+      expect(headers).toEqual(["A", "B", "C"]);
+      expect(renamedHeaders).toBeNull();
+    });
+
+    it("should return renamedHeaders mapping candidate -> original", () => {
+      const { headers, renamedHeaders } = deduplicateHeadersWithRenames(["A", "A"]);
+      expect(headers).toEqual(["A", "A_1"]);
+      expect(renamedHeaders).toEqual({ A_1: "A" });
+    });
+
+    it("should avoid collisions with headers that already exist in the input", () => {
+      const { headers, renamedHeaders } = deduplicateHeadersWithRenames(["A", "A", "A_1"]);
+      expect(headers).toEqual(["A", "A_2", "A_1"]);
+      expect(renamedHeaders).toEqual({ A_2: "A" });
+    });
+
+    it("should preserve null/undefined and only rename duplicates", () => {
+      const { headers, renamedHeaders } = deduplicateHeadersWithRenames([
+        "A",
+        null,
+        "A",
+        undefined
+      ]);
+      expect(headers).toEqual(["A", null, "A_1", undefined]);
+      expect(renamedHeaders).toEqual({ A_1: "A" });
+    });
+  });
+});
+
+// ===========================================================================
+// Header Rename Meta Tests
+// ===========================================================================
+describe("Header rename meta (renamedHeaders)", () => {
+  it("should expose renamedHeaders for header row duplicates", () => {
+    const input = "A,A,A_1\n1,2,3";
+    const result = parseCsv(input, { headers: true }) as any;
+
+    expect(result.headers).toEqual(["A", "A_2", "A_1"]);
+    expect(result.rows).toEqual([{ A: "1", A_2: "2", A_1: "3" }]);
+    expect(result.meta?.renamedHeaders).toEqual({ A_2: "A" });
+  });
+
+  it("should expose renamedHeaders for explicit headers array", () => {
+    const input = "1,2\n3,4";
+    const result = parseCsv(input, { headers: ["A", "A"], delimiter: "," }) as any;
+
+    expect(result.headers).toEqual(["A", "A_1"]);
+    expect(result.rows).toEqual([
+      { A: "1", A_1: "2" },
+      { A: "3", A_1: "4" }
+    ]);
+    expect(result.meta?.renamedHeaders).toEqual({ A_1: "A" });
+  });
+
+  it("should expose renamedHeaders for header transform function", () => {
+    const input = "a,b\n1,2";
+    const result = parseCsv(input, {
+      delimiter: ",",
+      headers: () => ["X", "X"]
+    }) as any;
+
+    expect(result.headers).toEqual(["X", "X_1"]);
+    expect(result.rows).toEqual([{ X: "1", X_1: "2" }]);
+    expect(result.meta?.renamedHeaders).toEqual({ X_1: "X" });
+  });
 });
 
 // ===========================================================================
@@ -345,6 +415,11 @@ describe("Delimiter Auto-Detection", () => {
       const input = "a;b;c\n1;2;3\n4;5;6";
       expect(detectDelimiter(input)).toBe(";");
     });
+
+    it("should ignore comment lines when detecting delimiter", () => {
+      const input = "# comment\na;b;c\n1;2;3\n4;5;6";
+      expect(detectDelimiter(input, '"', undefined, "#")).toBe(";");
+    });
   });
 
   describe("parseCsv with auto-detect delimiter", () => {
@@ -397,6 +472,16 @@ describe("Delimiter Auto-Detection", () => {
       // Verify meta contains detected delimiter
       expect((result as any).meta?.delimiter).toBe(";");
     });
+
+    it("should ignore comment lines when auto-detecting delimiter", () => {
+      const input = "# exported by system\nname;age\nAlice;30\nBob;25\n";
+      const result = parseCsv(input, { delimiter: "", comment: "#" });
+      expect(result).toEqual([
+        ["name", "age"],
+        ["Alice", "30"],
+        ["Bob", "25"]
+      ]);
+    });
   });
 
   describe("parseCsvStream with auto-detect delimiter", () => {
@@ -404,6 +489,19 @@ describe("Delimiter Auto-Detection", () => {
       const input = "a;b;c\n1;2;3\n4;5;6";
       const rows: any[] = [];
       for await (const row of parseCsvStream(input, { delimiter: "" })) {
+        rows.push(row);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should ignore comment lines when auto-detecting delimiter in streaming mode", async () => {
+      const input = "# comment\na;b;c\n1;2;3\n4;5;6";
+      const rows: any[] = [];
+      for await (const row of parseCsvStream(input, { delimiter: "", comment: "#" })) {
         rows.push(row);
       }
       expect(rows).toEqual([
@@ -421,6 +519,25 @@ describe("Delimiter Auto-Detection", () => {
       }
       const rows: any[] = [];
       for await (const row of parseCsvStream(generateChunks(), { delimiter: "" })) {
+        rows.push(row);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should ignore comment lines when auto-detecting delimiter with async iterable input", async () => {
+      async function* generateChunks() {
+        yield "# comment\n";
+        yield "a;b;c\n";
+        yield "1;2;3\n";
+        yield "4;5;6";
+      }
+
+      const rows: any[] = [];
+      for await (const row of parseCsvStream(generateChunks(), { delimiter: "", comment: "#" })) {
         rows.push(row);
       }
       expect(rows).toEqual([
@@ -2166,6 +2283,26 @@ describe("CSV Core - Formatter Options", () => {
     it("should skip empty lines when configured", () => {
       const csv = "a,b\n\n1,2\n\n3,4";
       const result = parseCsv(csv, { fastMode: true, skipEmptyLines: true });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should skip delimiter-only rows when configured", () => {
+      const csv = "a,b\n,\n1,2\n,,\n3,4";
+      const result = parseCsv(csv, { fastMode: true, skipEmptyLines: true });
+      expect(result).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should always skip truly empty lines in fastMode", () => {
+      const csv = "a,b\n\n1,2\n\n3,4";
+      const result = parseCsv(csv, { fastMode: true, skipEmptyLines: false });
       expect(result).toEqual([
         ["a", "b"],
         ["1", "2"],

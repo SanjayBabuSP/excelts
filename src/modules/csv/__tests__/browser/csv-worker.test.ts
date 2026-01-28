@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { parseCsv } from "@csv/csv-core";
 import {
   CsvWorkerPool,
   CsvWorkerSession,
@@ -63,13 +64,12 @@ describe("CSV Worker Pool - Browser", () => {
 
       it("should parse with headers option", async () => {
         const result = await pool.parse("name,age\nAlice,30\nBob,25", { headers: true });
-        expect(result.data).toEqual({
-          headers: ["name", "age"],
-          rows: [
-            { name: "Alice", age: "30" },
-            { name: "Bob", age: "25" }
-          ]
-        });
+        expect(result.data).toEqual(parseCsv("name,age\nAlice,30\nBob,25", { headers: true }));
+      });
+
+      it("should expose renamedHeaders meta and avoid header collisions", async () => {
+        const result = await pool.parse("A,A,A_1\n1,2,3", { headers: true });
+        expect(result.data).toEqual(parseCsv("A,A,A_1\n1,2,3", { headers: true }));
       });
 
       it("should parse with custom delimiter", async () => {
@@ -122,6 +122,18 @@ describe("CSV Worker Pool - Browser", () => {
           ["a", "b", "c"],
           ["1", "2", "3"],
           ["4", "5", "6"]
+        ]);
+      });
+
+      it("should skip delimiter-only rows in fastMode when configured", async () => {
+        const result = await pool.parse("a,b\n,\n1,2\n,,\n3,4", {
+          fastMode: true,
+          skipEmptyLines: true
+        });
+        expect(result.data).toEqual([
+          ["a", "b"],
+          ["1", "2"],
+          ["3", "4"]
         ]);
       });
     });
@@ -755,10 +767,7 @@ describe("CSV Worker Pool - Browser", () => {
 
       it("should support options", async () => {
         const result = await parseWithPool("name,age\nAlice,30", { headers: true });
-        expect(result.data).toEqual({
-          headers: ["name", "age"],
-          rows: [{ name: "Alice", age: "30" }]
-        });
+        expect(result.data).toEqual(parseCsv("name,age\nAlice,30", { headers: true }));
       });
     });
 

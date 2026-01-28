@@ -29,9 +29,12 @@ import {
   applyDynamicTypingToRow,
   applyDynamicTypingToArrayRow,
   deduplicateHeaders,
-  stripBom
+  stripBom,
+  makeTrimField
 } from "@csv/csv-core";
 import { formatNumberForCsv } from "@csv/csv-number";
+
+const NON_WHITESPACE_RE = /\S/;
 
 /**
  * Transform stream that parses CSV data row by row
@@ -74,6 +77,7 @@ export class CsvParserStream extends Transform {
   private chunkAborted: boolean = false;
   // beforeFirstChunk support
   private beforeFirstChunkApplied: boolean = false;
+  private bomStripped: boolean = false;
 
   constructor(options: CsvParseOptions = {}) {
     super({ objectMode: options.objectMode !== false });
@@ -106,14 +110,7 @@ export class CsvParserStream extends Transform {
 
     // Pre-compute trim function for performance
     const { trim = false, ltrim = false, rtrim = false } = options;
-    this.trimField =
-      trim || (ltrim && rtrim)
-        ? (s: string) => s.trim()
-        : ltrim
-          ? (s: string) => s.trimStart()
-          : rtrim
-            ? (s: string) => s.trimEnd()
-            : (s: string) => s;
+    this.trimField = makeTrimField(trim, ltrim, rtrim);
   }
 
   /**
@@ -181,12 +178,7 @@ export class CsvParserStream extends Transform {
       const data = typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
       this.buffer += data;
 
-      // Strip BOM on first chunk if present
-      if (!this.beforeFirstChunkApplied) {
-        this.buffer = stripBom(this.buffer);
-      }
-
-      // Apply beforeFirstChunk on first chunk
+      // Apply beforeFirstChunk on first chunk (PapaParse order: beforeFirstChunk runs before BOM stripping)
       if (!this.beforeFirstChunkApplied && this.options.beforeFirstChunk) {
         this.beforeFirstChunkApplied = true;
         const result = this.options.beforeFirstChunk(this.buffer);
@@ -195,9 +187,21 @@ export class CsvParserStream extends Transform {
         }
       }
 
+      // Strip BOM once, after beforeFirstChunk
+      if (!this.bomStripped) {
+        this.buffer = stripBom(this.buffer);
+        this.bomStripped = true;
+      }
+
       // Auto-detect delimiter on first chunk if requested
       if (this.autoDetectDelimiter && !this.delimiterDetected) {
-        this.delimiter = detectDelimiter(this.buffer, this.quote || '"');
+        this.delimiter = detectDelimiter(
+          this.buffer,
+          this.quote || '"',
+          this.options.delimitersToGuess,
+          this.options.comment,
+          this.options.skipEmptyLines
+        );
         this.delimiterDetected = true;
         // Emit delimiter event so consumers can know which delimiter was detected
         this.emit("delimiter", this.delimiter);
@@ -252,6 +256,13 @@ export class CsvParserStream extends Transform {
   }
 
   private flushCurrentRow(callback: (error?: Error | null) => void): void {
+    // In fastMode, parsing is line-based and does not use currentField/currentRow.
+    // Flush any remaining buffer as a final line when there's no trailing newline.
+    if (this.fastMode) {
+      this.flushFastModeRemainder(callback);
+      return;
+    }
+
     // Process any remaining data without a trailing newline.
     if (this.currentFieldLength !== 0 || this.currentRow.length > 0) {
       this.currentRow.push(this.trimField(this.takeCurrentField()));
@@ -262,6 +273,41 @@ export class CsvParserStream extends Transform {
       return;
     }
     callback();
+  }
+
+  private flushFastModeRemainder(callback: (error?: Error | null) => void): void {
+    const line = this.buffer;
+    this.buffer = "";
+
+    if (line === "") {
+      callback();
+      return;
+    }
+
+    const { skipLines = 0, skipEmptyLines = false, ignoreEmpty = false } = this.options;
+    const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
+
+    this.lineNumber++;
+
+    if (this.lineNumber <= skipLines) {
+      callback();
+      return;
+    }
+
+    const pendingRows: Row[] = [];
+    const row = line.split(this.delimiter).map(this.trimField);
+
+    if (this.shouldSkipRow(row, shouldSkipEmpty)) {
+      callback();
+      return;
+    }
+
+    if (!this.processCompletedRow(row, pendingRows)) {
+      this.processPendingRows(pendingRows, callback);
+      return;
+    }
+
+    this.processPendingRows(pendingRows, callback);
   }
 
   /**
@@ -436,9 +482,8 @@ export class CsvParserStream extends Transform {
             continue;
           }
 
-          // Skip comment/empty lines (greedy: also skips whitespace-only lines)
-          const isEmpty = this.currentRow.length === 1 && this.currentRow[0].trim() === "";
-          if (this.shouldSkipLine(this.currentRow[0] ?? "", isEmpty, shouldSkipEmpty)) {
+          // Skip comment/empty lines, also skips delimiter-only rows
+          if (this.shouldSkipRow(this.currentRow, shouldSkipEmpty)) {
             this.currentRow = [];
             i++;
             continue;
@@ -494,11 +539,6 @@ export class CsvParserStream extends Transform {
     const lines = completeData.split(/\r\n|\r|\n/);
 
     for (const line of lines) {
-      // Skip empty entries from split
-      if (line === "") {
-        continue;
-      }
-
       this.lineNumber++;
 
       // Skip lines at beginning
@@ -506,14 +546,17 @@ export class CsvParserStream extends Transform {
         continue;
       }
 
-      // Skip comment/empty lines
-      const isEmpty = line.trim() === "";
-      if (this.shouldSkipLine(line, isEmpty, shouldSkipEmpty)) {
+      // FastMode: always auto-skip truly empty lines
+      if (line === "") {
         continue;
       }
 
       // Split by delimiter (fast path - no quote detection)
       const row = line.split(this.delimiter).map(this.trimField);
+
+      if (this.shouldSkipRow(row, shouldSkipEmpty)) {
+        continue;
+      }
 
       // Process completed row (handles headers, skipRows, column validation, maxRows)
       if (!this.processCompletedRow(row, pendingRows)) {
@@ -653,12 +696,23 @@ export class CsvParserStream extends Transform {
   /**
    * Check if a line should be skipped (comment or empty)
    */
-  private shouldSkipLine(line: string, isEmpty: boolean, shouldSkipEmpty: boolean): boolean {
+  private shouldSkipRow(row: string[], shouldSkipEmpty: boolean): boolean {
     const { comment } = this.options;
-    if (comment && line.startsWith(comment)) {
+    const firstField = row[0] ?? "";
+    if (comment && firstField.startsWith(comment)) {
       return true;
     }
-    return shouldSkipEmpty && isEmpty;
+
+    if (!shouldSkipEmpty) {
+      return false;
+    }
+
+    for (const field of row) {
+      if (NON_WHITESPACE_RE.test(field)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private processPendingRows(rows: Row[], callback: (error?: Error | null) => void): void {

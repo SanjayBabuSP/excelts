@@ -331,6 +331,40 @@ describe("CSV Stream - CsvParserStream", () => {
       ]);
     });
 
+    it("should always skip truly empty lines in fastMode", async () => {
+      const input = "a,b\n\n1,2\n\n3,4";
+      const readable = Readable.from([input]);
+      const parser = new CsvParserStream({ fastMode: true, skipEmptyLines: false });
+
+      const rows: string[][] = [];
+      for await (const row of readable.pipe(parser)) {
+        rows.push(row as string[]);
+      }
+
+      expect(rows).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should skip delimiter-only rows when configured in fastMode", async () => {
+      const input = "a,b\n,\n1,2\n,,\n3,4";
+      const readable = Readable.from([input]);
+      const parser = new CsvParserStream({ fastMode: true, skipEmptyLines: true });
+
+      const rows: string[][] = [];
+      for await (const row of readable.pipe(parser)) {
+        rows.push(row as string[]);
+      }
+
+      expect(rows).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
     it("should auto-detect tab delimiter", async () => {
       const input = "a\tb\tc\n1\t2\t3";
       const readable = Readable.from([input]);
