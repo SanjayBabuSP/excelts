@@ -380,6 +380,24 @@ export interface CsvParseMeta {
 }
 
 /**
+ * Error codes for CSV parsing errors
+ */
+export type CsvParseErrorCode = "MissingQuotes" | "TooManyFields" | "TooFewFields";
+
+/**
+ * Represents a parsing error encountered during CSV parsing.
+ * Errors are non-fatal - parsing continues and collects all errors.
+ */
+export interface CsvParseError {
+  /** Error code */
+  code: CsvParseErrorCode;
+  /** Human-readable error message */
+  message: string;
+  /** Row number where error occurred (0-based, excluding header) */
+  row: number;
+}
+
+/**
  * Parsed CSV result with headers
  */
 export interface CsvParseResult<T = string[]> {
@@ -389,6 +407,11 @@ export interface CsvParseResult<T = string[]> {
   rows: T[];
   /** Invalid rows (when strictColumnHandling is true) */
   invalidRows?: { row: string[]; reason: string }[];
+  /**
+   * Parsing errors encountered (non-fatal).
+   * Includes: MissingQuotes, TooManyFields, TooFewFields
+   */
+  errors?: CsvParseError[];
   /** Parsing metadata (delimiter used, linebreak detected, etc.) */
   meta: CsvParseMeta;
 }
@@ -1124,6 +1147,7 @@ export function parseCsv(
 
   const rows: string[][] = [];
   const invalidRows: { row: string[]; reason: string }[] = [];
+  const errors: CsvParseError[] = [];
   let currentRow: string[] = [];
   let currentField = "";
   let inQuotes = false;
@@ -1194,6 +1218,12 @@ export function parseCsv(
       const actualCols = row.length;
 
       if (actualCols > expectedCols) {
+        errors.push({
+          code: "TooManyFields",
+          message: `Too many fields: expected ${expectedCols}, found ${actualCols}`,
+          row: dataRowCount
+        });
+
         if (strictColumnHandling && !discardUnmappedColumns) {
           // Mark as invalid but continue
           invalidRows.push({
@@ -1206,6 +1236,12 @@ export function parseCsv(
           row.length = headerRow.length;
         }
       } else if (actualCols < expectedCols) {
+        errors.push({
+          code: "TooFewFields",
+          message: `Too few fields: expected ${expectedCols}, found ${actualCols}`,
+          row: dataRowCount
+        });
+
         if (strictColumnHandling) {
           invalidRows.push({
             row,
@@ -1358,6 +1394,9 @@ export function parseCsv(
       if (invalidRows.length > 0) {
         result.invalidRows = invalidRows;
       }
+      if (errors.length > 0) {
+        result.errors = errors;
+      }
       return result;
     }
 
@@ -1492,6 +1531,14 @@ export function parseCsv(
 
   // Handle last field/row
   if (currentField !== "" || currentRow.length > 0) {
+    if (inQuotes && quoteEnabled) {
+      errors.push({
+        code: "MissingQuotes",
+        message: "Quoted field unterminated",
+        row: dataRowCount
+      });
+    }
+
     currentRow.push(trimField(currentField));
 
     // Use early-return style for cleaner logic

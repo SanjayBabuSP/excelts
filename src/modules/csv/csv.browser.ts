@@ -626,6 +626,8 @@ export type {
   CsvFormatOptions,
   CsvParseMeta,
   CsvParseResult,
+  CsvParseError,
+  CsvParseErrorCode,
   DynamicTypingConfig,
   ChunkMeta
 } from "@csv/csv-core";

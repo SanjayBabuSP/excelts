@@ -44,6 +44,26 @@ function getRandomBytes(length: number): Uint8Array {
   return result;
 }
 
+/**
+ * Create a deterministic PRNG for reproducible tests.
+ * Uses a simple LCG (Linear Congruential Generator) algorithm.
+ *
+ * This is useful for ZipCrypto tests where header verification only checks
+ * 1 byte (1/256 false positive rate), so we need deterministic bytes
+ * that won't accidentally pass with the wrong password.
+ */
+function createDeterministicRandom(initialSeed: number = 12345): (length: number) => Uint8Array {
+  let seed = initialSeed;
+  return (length: number): Uint8Array => {
+    const result = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      result[i] = seed & 0xff;
+    }
+    return result;
+  };
+}
+
 describe("ZipCrypto", () => {
   describe("key initialization", () => {
     it("should initialize keys with known password", () => {
@@ -155,7 +175,12 @@ describe("ZipCrypto", () => {
       const plaintext = new TextEncoder().encode("Secret data");
       const crcValue = crc32(plaintext);
 
-      const encrypted = zipCryptoEncrypt(plaintext, password, crcValue, getRandomBytes);
+      const encrypted = zipCryptoEncrypt(
+        plaintext,
+        password,
+        crcValue,
+        createDeterministicRandom()
+      );
       const decrypted = zipCryptoDecrypt(encrypted, wrongPassword, crcValue);
 
       // Should return null because header verification fails
@@ -610,18 +635,7 @@ describe("ZipCrypto Password Check", () => {
     const plaintext = new TextEncoder().encode("Test data for verification");
     const crcValue = crc32(plaintext);
 
-    // Use deterministic random bytes for reproducible test
-    let seed = 12345;
-    const deterministicRandom = (length: number): Uint8Array => {
-      const result = new Uint8Array(length);
-      for (let i = 0; i < length; i++) {
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-        result[i] = seed & 0xff;
-      }
-      return result;
-    };
-
-    const encrypted = zipCryptoEncrypt(plaintext, password, crcValue, deterministicRandom);
+    const encrypted = zipCryptoEncrypt(plaintext, password, crcValue, createDeterministicRandom());
     const result = zipCryptoCheckPassword(encrypted, wrongPassword, crcValue);
 
     // With deterministic random and these specific passwords, this should be false

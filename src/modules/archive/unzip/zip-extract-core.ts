@@ -123,9 +123,13 @@ export async function processEntryData(
     throw new EntrySizeMismatchError(entry.path, entry.uncompressedSize, result.length, reason);
   }
 
-  // Validate CRC32 if requested
+  // Validate CRC32
   // Note: AES-encrypted entries don't use CRC32 (they use HMAC instead)
-  if (checkCrc32 && entry.encryptionMethod !== "aes") {
+  // ZipCrypto: Always verify CRC32 because header verification only checks 1 byte
+  // (1/256 false positive rate with wrong password per ZIP spec)
+  const shouldCheckCrc =
+    entry.encryptionMethod === "zipcrypto" || (checkCrc32 && entry.encryptionMethod !== "aes");
+  if (shouldCheckCrc) {
     const actualCrc = crc32(result);
     if (actualCrc !== entry.crc32) {
       throw new Crc32MismatchError(entry.path, entry.crc32, actualCrc);
@@ -144,14 +148,18 @@ export async function processEntryData(
  * @param entry - Entry metadata
  * @param compressedData - Raw compressed (and possibly encrypted) data from the ZIP
  * @param password - Optional password for decryption
+ * @param validateEntrySizes - Whether to validate decompressed size matches declared size (default: true)
  * @returns Decompressed entry content
  * @throws Error if the entry uses AES encryption
  */
 export function processEntryDataSync(
   entry: ZipEntryInfo,
   compressedData: Uint8Array,
-  password?: string | Uint8Array
+  password?: string | Uint8Array,
+  validateEntrySizes = true
 ): Uint8Array {
+  let result: Uint8Array;
+
   // Handle encrypted entries
   if (entry.isEncrypted) {
     if (!password) {
@@ -170,14 +178,29 @@ export function processEntryDataSync(
         throw new DecryptionError(entry.path);
       }
 
-      return decompressDataSync(decrypted, entry.compressionMethod, entry.path);
+      result = decompressDataSync(decrypted, entry.compressionMethod, entry.path);
+
+      // Always verify CRC32 for ZipCrypto because header verification only checks 1 byte
+      // (1/256 false positive rate with wrong password per ZIP spec)
+      const actualCrc = crc32(result);
+      if (actualCrc !== entry.crc32) {
+        throw new Crc32MismatchError(entry.path, entry.crc32, actualCrc);
+      }
     } else {
       throw new DecryptionError(entry.path, "Unsupported encryption method");
     }
+  } else {
+    // Non-encrypted entry
+    result = decompressDataSync(compressedData, entry.compressionMethod, entry.path);
   }
 
-  // Non-encrypted entry
-  return decompressDataSync(compressedData, entry.compressionMethod, entry.path);
+  // Validate entry size (ZIP bomb protection)
+  if (validateEntrySizes && result.length !== entry.uncompressedSize) {
+    const reason = result.length > entry.uncompressedSize ? "too-many-bytes" : "too-few-bytes";
+    throw new EntrySizeMismatchError(entry.path, entry.uncompressedSize, result.length, reason);
+  }
+
+  return result;
 }
 
 /**
@@ -477,10 +500,11 @@ export function processEntryDataStream(
           throw new UnsupportedCompressionError(entry.compressionMethod);
         }
 
-        // Apply validation streams using centralized helper
+        // Apply validation streams - always check CRC32 for ZipCrypto
+        // (header verification only checks 1 byte, 1/256 false positive rate)
         outStream = applyValidationStreams(entry, outStream, {
           validateEntrySizes,
-          checkCrc32,
+          checkCrc32: true,
           signal
         });
 

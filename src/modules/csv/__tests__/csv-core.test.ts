@@ -2782,3 +2782,173 @@ describe("CSV Core - Formatter Options", () => {
     });
   });
 });
+
+// ===========================================================================
+// Parsing Errors Collection Tests
+// ===========================================================================
+describe("CSV Parsing Errors Collection", () => {
+  describe("MissingQuotes detection", () => {
+    it("should detect unterminated quoted field at EOF", () => {
+      const input = 'name,desc\nAlice,"hello world';
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0]).toEqual({
+        code: "MissingQuotes",
+        message: "Quoted field unterminated",
+        row: 0
+      });
+    });
+
+    it("should detect unterminated quote spanning multiple lines", () => {
+      const input = 'a,b\n"start\nmore\ndata';
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors).toBeDefined();
+      expect(result.errors.some((e: any) => e.code === "MissingQuotes")).toBe(true);
+    });
+
+    it("should not report error for properly closed quotes", () => {
+      const input = 'name,desc\nAlice,"hello world"';
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors).toBeUndefined();
+    });
+
+    it("should still parse data when quotes are missing", () => {
+      const input = 'name,desc\nAlice,"hello';
+      const result = parseCsv(input, { headers: true }) as any;
+
+      // Data should still be parsed (error is non-fatal)
+      expect(result.rows.length).toBe(1);
+      expect(result.rows[0].name).toBe("Alice");
+      expect(result.rows[0].desc).toBe("hello");
+    });
+  });
+
+  describe("TooManyFields detection", () => {
+    it("should detect row with too many fields", () => {
+      const input = "a,b,c\n1,2,3,4";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0]).toEqual({
+        code: "TooManyFields",
+        message: "Too many fields: expected 3, found 4",
+        row: 0
+      });
+    });
+
+    it("should trim extra fields by default", () => {
+      const input = "a,b\n1,2,3";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      // Extra field should be trimmed
+      expect(result.rows[0]).toEqual({ a: "1", b: "2" });
+      // But error should still be recorded
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0].code).toBe("TooManyFields");
+    });
+
+    it("should detect multiple rows with too many fields", () => {
+      const input = "a,b\n1,2,3\n4,5,6";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors.length).toBe(2);
+      expect(result.errors[0].row).toBe(0);
+      expect(result.errors[1].row).toBe(1);
+    });
+  });
+
+  describe("TooFewFields detection", () => {
+    it("should detect row with too few fields", () => {
+      const input = "a,b,c\n1,2";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0]).toEqual({
+        code: "TooFewFields",
+        message: "Too few fields: expected 3, found 2",
+        row: 0
+      });
+    });
+
+    it("should pad missing fields with empty strings by default", () => {
+      const input = "a,b,c\n1";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      // Missing fields should be padded
+      expect(result.rows[0]).toEqual({ a: "1", b: "", c: "" });
+      // But error should still be recorded
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0].code).toBe("TooFewFields");
+    });
+
+    it("should detect multiple rows with too few fields", () => {
+      const input = "a,b,c\n1\n2";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors.length).toBe(2);
+      expect(result.errors[0].row).toBe(0);
+      expect(result.errors[1].row).toBe(1);
+    });
+  });
+
+  describe("Mixed errors", () => {
+    it("should collect multiple error types", () => {
+      const input = 'a,b\n1,2,3\n4\n5,"unterminated';
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors.length).toBe(3);
+
+      // First row: TooManyFields
+      expect(result.errors[0].code).toBe("TooManyFields");
+      expect(result.errors[0].row).toBe(0);
+
+      // Second row: TooFewFields
+      expect(result.errors[1].code).toBe("TooFewFields");
+      expect(result.errors[1].row).toBe(1);
+
+      // Third row: MissingQuotes
+      expect(result.errors[2].code).toBe("MissingQuotes");
+    });
+
+    it("should not include errors field when no errors", () => {
+      const input = "a,b\n1,2\n3,4";
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.errors).toBeUndefined();
+    });
+  });
+
+  describe("errors with strictColumnHandling", () => {
+    it("should still record errors when strictColumnHandling is true", () => {
+      const input = "a,b\n1,2,3";
+      const result = parseCsv(input, { headers: true, strictColumnHandling: true }) as any;
+
+      // Row should be in invalidRows
+      expect(result.invalidRows).toBeDefined();
+      expect(result.invalidRows.length).toBe(1);
+
+      // Error should also be recorded
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0].code).toBe("TooManyFields");
+    });
+  });
+
+  describe("errors in array mode (no headers)", () => {
+    it("should not collect FieldMismatch errors in array mode without headers", () => {
+      // Without headers option, there's no expected column count
+      const input = "1,2,3\n4,5";
+      const result = parseCsv(input) as string[][];
+
+      // Should return as plain array without errors
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBe(2);
+    });
+  });
+});
