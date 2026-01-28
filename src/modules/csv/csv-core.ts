@@ -141,6 +141,17 @@ export interface CsvParseOptions {
   /** Number of data rows to skip (after header detection) */
   skipRows?: number;
   /**
+   * Maximum number of bytes allowed per row (default: unlimited).
+   * An error is thrown if a row exceeds this limit.
+   * This is a safety feature to prevent memory exhaustion from malformed CSV files
+   * with unclosed quotes or malicious input.
+   *
+   * @example
+   * // Limit rows to 1MB
+   * { maxRowBytes: 1024 * 1024 }
+   */
+  maxRowBytes?: number;
+  /**
    * Strict column handling:
    * - If true, rows with column count mismatch emit 'data-invalid' event
    * - If false (default), throws error on mismatch (unless discardUnmappedColumns)
@@ -1153,6 +1164,19 @@ export function parseCsv(
   let inQuotes = false;
   let i = 0;
   let lineNumber = 0;
+  let currentRowBytes = 0; // Track row size for maxRowBytes check
+  const maxRowBytes = options.maxRowBytes;
+
+  // Helper to check row size limit (inlined for performance in hot path)
+  const checkRowBytes =
+    maxRowBytes !== undefined
+      ? () => {
+          if (currentRowBytes > maxRowBytes) {
+            throw new Error(`Row exceeds the maximum size of ${maxRowBytes} bytes`);
+          }
+        }
+      : null;
+
   let dataRowCount = 0;
   let skippedDataRows = 0;
   let truncated = false; // Track if parsing was stopped due to maxRows
@@ -1447,9 +1471,11 @@ export function parseCsv(
     if (inQuotes && quoteEnabled) {
       // Inside quoted field
       if (escape && char === escape && processedInput[i + 1] === quote) {
-        // Escaped quote
+        // Escaped quote ("" becomes single ")
         currentField += quote;
+        currentRowBytes++;
         i += 2;
+        checkRowBytes?.();
       } else if (char === quote) {
         // End of quoted field
         inQuotes = false;
@@ -1460,11 +1486,15 @@ export function parseCsv(
           i++; // Skip \r, will add \n on next iteration
         } else {
           currentField += "\n"; // Convert standalone \r to \n
+          currentRowBytes++;
           i++;
+          checkRowBytes?.();
         }
       } else {
         currentField += char;
+        currentRowBytes++;
         i++;
+        checkRowBytes?.();
       }
     } else {
       // Outside quoted field
@@ -1476,7 +1506,9 @@ export function parseCsv(
         // Field separator
         currentRow.push(trimField(currentField));
         currentField = "";
+        currentRowBytes++; // Count delimiter
         i++;
+        checkRowBytes?.();
       } else if (char === "\n" || char === "\r") {
         // End of row - handle \r\n, \r, and \n
         if (char === "\r" && processedInput[i + 1] === "\n") {
@@ -1515,6 +1547,7 @@ export function parseCsv(
         }
 
         currentRow = [];
+        currentRowBytes = 0; // Reset row bytes counter
         i++;
 
         // Check max rows - after resetting currentRow
@@ -1524,7 +1557,9 @@ export function parseCsv(
         }
       } else {
         currentField += char;
+        currentRowBytes++;
         i++;
+        checkRowBytes?.();
       }
     }
   }
@@ -1927,6 +1962,18 @@ export async function* parseCsvStream(
   let lineNumber = 0;
   let dataRowCount = 0;
   let skippedDataRows = 0;
+  let currentRowBytes = 0; // Track row size for maxRowBytes check
+  const maxRowBytes = options.maxRowBytes;
+
+  // Helper to check row size limit (inlined for performance in hot path)
+  const checkRowBytes =
+    maxRowBytes !== undefined
+      ? () => {
+          if (currentRowBytes > maxRowBytes) {
+            throw new Error(`Row exceeds the maximum size of ${maxRowBytes} bytes`);
+          }
+        }
+      : null;
 
   // Determine header mode
   if (headers === true) {
@@ -2019,8 +2066,11 @@ export async function* parseCsvStream(
 
       if (inQuotes && quoteEnabled) {
         if (escape && char === escape && buffer[i + 1] === quote) {
+          // Escaped quote ("" becomes single ")
           currentField += quote;
+          currentRowBytes++;
           i += 2;
+          checkRowBytes?.();
         } else if (char === quote) {
           inQuotes = false;
           i++;
@@ -2034,11 +2084,15 @@ export async function* parseCsvStream(
             i++; // Skip \r, will add \n on next iteration
           } else {
             currentField += "\n"; // Convert standalone \r to \n
+            currentRowBytes++;
             i++;
+            checkRowBytes?.();
           }
         } else {
           currentField += char;
+          currentRowBytes++;
           i++;
+          checkRowBytes?.();
         }
       } else {
         if (quoteEnabled && char === quote && currentField === "") {
@@ -2047,7 +2101,9 @@ export async function* parseCsvStream(
         } else if (char === delimiter) {
           currentRow.push(trimField(currentField));
           currentField = "";
+          currentRowBytes++; // Count delimiter
           i++;
+          checkRowBytes?.();
         } else if (char === "\n" || char === "\r") {
           if (char === "\r" && buffer[i + 1] === "\n") {
             i++;
@@ -2088,10 +2144,13 @@ export async function* parseCsvStream(
           }
 
           currentRow = [];
+          currentRowBytes = 0; // Reset row bytes counter
           i++;
         } else {
           currentField += char;
+          currentRowBytes++;
           i++;
+          checkRowBytes?.();
         }
       }
     }

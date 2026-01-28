@@ -52,6 +52,8 @@ export class CsvParserStream extends Transform {
   private currentField: string = "";
   private currentFieldParts: string[] | null = null;
   private currentFieldLength: number = 0;
+  private currentRowBytes: number = 0; // Track row size for maxRowBytes check
+  private maxRowBytes: number | undefined; // Cached for hot path performance
   private inQuotes: boolean = false;
   private lineNumber: number = 0;
   private rowCount: number = 0;
@@ -111,6 +113,9 @@ export class CsvParserStream extends Transform {
     // Pre-compute trim function for performance
     const { trim = false, ltrim = false, rtrim = false } = options;
     this.trimField = makeTrimField(trim, ltrim, rtrim);
+
+    // Cache maxRowBytes for hot path performance
+    this.maxRowBytes = options.maxRowBytes;
   }
 
   /**
@@ -269,6 +274,7 @@ export class CsvParserStream extends Transform {
       // Use the same row processing path as normal rows for chunk callback support
       const row = this.buildRow(this.currentRow);
       this.currentRow = [];
+      this.currentRowBytes = 0; // Reset row bytes counter
       this.processPendingRows([row], callback);
       return;
     }
@@ -381,6 +387,12 @@ export class CsvParserStream extends Transform {
 
     const nextLength = this.currentFieldLength + text.length;
 
+    // Track row bytes for maxRowBytes limit
+    this.currentRowBytes += text.length;
+    if (this.maxRowBytes !== undefined && this.currentRowBytes > this.maxRowBytes) {
+      throw new Error(`Row exceeds the maximum size of ${this.maxRowBytes} bytes`);
+    }
+
     // For small fields, string concatenation is fast enough.
     // For very large fields, switch to chunk accumulation to avoid pathological O(n^2) behavior.
     const LARGE_FIELD_THRESHOLD = 1024;
@@ -478,6 +490,7 @@ export class CsvParserStream extends Transform {
           // Skip lines at beginning
           if (this.lineNumber <= skipLines) {
             this.currentRow = [];
+            this.currentRowBytes = 0; // Reset row bytes counter
             i++;
             continue;
           }
@@ -485,6 +498,7 @@ export class CsvParserStream extends Transform {
           // Skip comment/empty lines, also skips delimiter-only rows
           if (this.shouldSkipRow(this.currentRow, shouldSkipEmpty)) {
             this.currentRow = [];
+            this.currentRowBytes = 0; // Reset row bytes counter
             i++;
             continue;
           }
@@ -492,6 +506,7 @@ export class CsvParserStream extends Transform {
           // Process completed row (handles headers, skipRows, column validation, maxRows)
           const rowToProcess = this.currentRow;
           this.currentRow = [];
+          this.currentRowBytes = 0; // Reset row bytes counter
           if (!this.processCompletedRow(rowToProcess, pendingRows)) {
             this.buffer = "";
             this.processPendingRows(pendingRows, callback);

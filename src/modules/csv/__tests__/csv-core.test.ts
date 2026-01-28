@@ -907,6 +907,57 @@ describe("CSV Core - RFC 4180 Compliance", () => {
   });
 
   // ===========================================================================
+  // Section 9.1: Max Row Bytes (Security Feature)
+  // ===========================================================================
+  describe("parseCsv - Max Row Bytes", () => {
+    it("should throw error when row exceeds maxRowBytes in standard mode", () => {
+      const input = "a,b,c\n123456789,data,more";
+      expect(() => parseCsv(input, { maxRowBytes: 10 })).toThrow(
+        "Row exceeds the maximum size of 10 bytes"
+      );
+    });
+
+    it("should allow rows under maxRowBytes limit", () => {
+      const input = "a,b,c\n1,2,3";
+      const result = parseCsv(input, { maxRowBytes: 100 });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should throw error for unclosed quotes that exceed limit", () => {
+      // This simulates a malicious/malformed CSV with unclosed quote
+      const input = 'a,b\n"very long content that never closes';
+      expect(() => parseCsv(input, { maxRowBytes: 20 })).toThrow(
+        "Row exceeds the maximum size of 20 bytes"
+      );
+    });
+
+    it("should count bytes correctly across multiple fields", () => {
+      // "abc,def,ghi" = 11 bytes (3 + 1 + 3 + 1 + 3)
+      const input = "abc,def,ghi";
+      expect(() => parseCsv(input, { maxRowBytes: 10 })).toThrow(
+        "Row exceeds the maximum size of 10 bytes"
+      );
+    });
+
+    it("should reset byte counter for each row", () => {
+      const input = "12345\nabcde\nfghij";
+      // Each row is 5 bytes, which is under the 10 byte limit
+      const result = parseCsv(input, { maxRowBytes: 10 });
+      expect(result).toEqual([["12345"], ["abcde"], ["fghij"]]);
+    });
+
+    it("should not apply limit when maxRowBytes is undefined", () => {
+      const input = "a".repeat(10000);
+      // Should not throw
+      const result = parseCsv(input);
+      expect((result as string[][])[0][0]).toHaveLength(10000);
+    });
+  });
+
+  // ===========================================================================
   // Section 10: Unicode Support
   // ===========================================================================
   describe("parseCsv - Unicode Support", () => {
@@ -1336,6 +1387,29 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       expect(rows).toEqual([
         ["a", "b"],
         ["1", "2"]
+      ]);
+    });
+
+    it("should stream parse with maxRowBytes limit - throws on exceed", async () => {
+      const input = "short\nthis_is_a_very_long_row_that_exceeds_limit";
+
+      await expect(async () => {
+        for await (const _ of parseCsvStream(input, { maxRowBytes: 20 })) {
+          // Consume the stream
+        }
+      }).rejects.toThrow("Row exceeds the maximum size of 20 bytes");
+    });
+
+    it("should stream parse with maxRowBytes limit - allows under limit", async () => {
+      const input = "a,b,c\n1,2,3\n4,5,6";
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(input, { maxRowBytes: 100 })) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
       ]);
     });
 
