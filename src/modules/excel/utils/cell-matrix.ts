@@ -1,4 +1,5 @@
 import { colCache } from "@excel/utils/col-cache";
+import { WorksheetNameError, RowOutOfBoundsError, ColumnOutOfBoundsError } from "@excel/errors";
 
 // Helper to check for prototype pollution
 function isSafeKey(key: string | number): boolean {
@@ -92,7 +93,7 @@ class CellMatrix {
 
   getCellAt(sheetName: string, rowNumber: number, colNumber: number): Cell {
     if (!isSafeKey(sheetName)) {
-      throw new Error(`Invalid sheet name: ${sheetName}`);
+      throw new WorksheetNameError(`Invalid sheet name: ${sheetName}`);
     }
     const sheet = this.sheets[sheetName] || (this.sheets[sheetName] = []);
     const row = sheet[rowNumber] || (sheet[rowNumber] = []);
@@ -154,7 +155,7 @@ class CellMatrix {
   findSheet(address: CellAddress, create: boolean): Sheet | undefined {
     const name = address.sheetName!;
     if (!isSafeKey(name)) {
-      throw new Error(`Invalid sheet name: ${name}`);
+      throw new WorksheetNameError(`Invalid sheet name: ${name}`);
     }
     if (Object.prototype.hasOwnProperty.call(this.sheets, name)) {
       return this.sheets[name];
@@ -168,7 +169,7 @@ class CellMatrix {
   findSheetRow(sheet: Sheet | undefined, address: CellAddress, create: boolean): Row | undefined {
     const { row } = address;
     if (!isSafeKey(row)) {
-      throw new Error(`Invalid row: ${row}`);
+      throw new RowOutOfBoundsError(row as number, `Invalid row: ${row}`);
     }
     if (sheet && sheet[row]) {
       return sheet[row];
@@ -182,7 +183,7 @@ class CellMatrix {
   findRowCell(row: Row | undefined, address: CellAddress, create: boolean): Cell | undefined {
     const { col } = address;
     if (!isSafeKey(col)) {
-      throw new Error(`Invalid column: ${col}`);
+      throw new ColumnOutOfBoundsError(col, `Invalid column: ${col}`);
     }
     if (row && row[col]) {
       return row[col];

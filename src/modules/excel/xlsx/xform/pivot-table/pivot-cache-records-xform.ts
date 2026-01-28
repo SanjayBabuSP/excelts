@@ -1,6 +1,7 @@
 import { XmlStream } from "@excel/utils/xml-stream";
 import { xmlEncode, xmlDecode } from "@utils/utils";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { PivotTableError } from "@excel/errors";
 import type { PivotTableSource } from "@excel/pivot-table";
 
 /**
@@ -177,7 +178,9 @@ class PivotCacheRecordsXform extends BaseXform {
     // shared items - use indexOf for value lookup (works for both string and numeric)
     const sharedItemsIndex = sharedItems.indexOf(value);
     if (sharedItemsIndex < 0) {
-      throw new Error(`${JSON.stringify(value)} not in sharedItems ${JSON.stringify(sharedItems)}`);
+      throw new PivotTableError(
+        `${JSON.stringify(value)} not in sharedItems ${JSON.stringify(sharedItems)}`
+      );
     }
     return `<x v="${sharedItemsIndex}" />`;
   }

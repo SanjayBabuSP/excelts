@@ -9,6 +9,7 @@ import { DateParser, DateFormatter, type DateFormat } from "@utils/datetime";
 import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "@csv/csv-core";
 import { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "@csv/csv-number";
+import { CsvDownloadError, CsvNotSupportedError, CsvFileError } from "@csv/errors";
 import { pipeline } from "@stream";
 import type { IReadable, IWritable } from "@stream/types";
 import type { Workbook } from "@excel/workbook";
@@ -401,7 +402,7 @@ class CSV {
 
     const response = await fetch(url, fetchOptions);
     if (!response.ok) {
-      throw new Error(`Failed to download CSV: ${response.status} ${response.statusText}`);
+      throw new CsvDownloadError(url, response.status, response.statusText);
     }
 
     if (options?.stream && response.body) {
@@ -469,7 +470,7 @@ class CSV {
         }
       };
 
-      reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`));
+      reader.onerror = () => reject(new CsvFileError(file.name, "read"));
       reader.readAsText(file, encoding);
     });
   }
@@ -573,16 +574,16 @@ class CSV {
   // ---------------------------------------------------------------------------
 
   async readFile(_filename: string, _options?: CsvOptions): Promise<Worksheet> {
-    throw new Error(
-      "csv.readFile() is not available in browser.\n" +
-        "Use csv.parse(url) or csv.parse(file) instead."
+    throw new CsvNotSupportedError(
+      "csv.readFile()",
+      "not available in browser. Use csv.parse(url) or csv.parse(file) instead."
     );
   }
 
   async writeFile(_filename: string, _options?: CsvOptions): Promise<void> {
-    throw new Error(
-      "csv.writeFile() is not available in browser.\n" +
-        "Use csv.toBuffer() and trigger a download instead."
+    throw new CsvNotSupportedError(
+      "csv.writeFile()",
+      "not available in browser. Use csv.toBuffer() and trigger a download instead."
     );
   }
 }

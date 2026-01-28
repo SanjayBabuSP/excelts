@@ -6,6 +6,7 @@
 
 import { readFileBytes, createWriteStream } from "@utils/fs";
 import { WorksheetWriter } from "@excel/stream/worksheet-writer";
+import { ImageError } from "@excel/errors";
 import {
   WorkbookWriterBase,
   type WorkbookWriterOptions as BaseOptions,
@@ -70,7 +71,7 @@ class WorkbookWriter extends WorkbookWriterBase<WorksheetWriter> {
             return;
           }
         }
-        throw new Error("Unsupported media");
+        throw new ImageError("Unsupported media");
       })
     );
   }

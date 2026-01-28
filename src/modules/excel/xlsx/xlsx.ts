@@ -16,6 +16,7 @@
 
 import { fileExists, readFileBytes, createReadStream, createWriteStream } from "@utils/fs";
 import { XLSX as XLSXBase } from "@excel/xlsx/xlsx.browser";
+import { ExcelFileError } from "@excel/errors";
 import { Parse, type ZipEntry } from "@archive/unzip/stream";
 import { Writable, pipeline } from "@stream";
 
@@ -196,7 +197,7 @@ class XLSX extends XLSXBase {
 
   async readFile(filename: string, options?: any): Promise<any> {
     if (!(await fileExists(filename))) {
-      throw new Error(`File not found: ${filename}`);
+      throw new ExcelFileError(filename, "read", "File not found");
     }
     const stream = createReadStream(filename);
     return this.read(stream, options);

@@ -1,5 +1,6 @@
 import { range, toSortedArray } from "@utils/utils";
 import { colCache } from "@excel/utils/col-cache";
+import { PivotTableError } from "@excel/errors";
 import type { Table } from "@excel/table";
 
 /**
@@ -172,14 +173,16 @@ function createTableSourceAdapter(table: Table): PivotTableSource {
 
   // Validate that table has headerRow enabled (required for pivot table column names)
   if (tableModel.headerRow === false) {
-    throw new Error(
+    throw new PivotTableError(
       "Cannot create pivot table from a table without headers. Set headerRow: true on the table."
     );
   }
 
   // Validate table has data rows
   if (!tableModel.rows || tableModel.rows.length === 0) {
-    throw new Error("Cannot create pivot table from an empty table. Add data rows to the table.");
+    throw new PivotTableError(
+      "Cannot create pivot table from an empty table. Add data rows to the table."
+    );
   }
 
   const columnNames = tableModel.columns.map(col => col.name);
@@ -188,7 +191,7 @@ function createTableSourceAdapter(table: Table): PivotTableSource {
   const nameSet = new Set<string>();
   for (const name of columnNames) {
     if (nameSet.has(name)) {
-      throw new Error(
+      throw new PivotTableError(
         `Duplicate column name "${name}" found in table. Pivot tables require unique column names.`
       );
     }
@@ -279,10 +282,10 @@ function makePivotTable(worksheet: any, model: PivotTableModel): PivotTable {
 
   // Validate source exists before trying to resolve it
   if (!model.sourceSheet && !model.sourceTable) {
-    throw new Error("Either sourceSheet or sourceTable must be provided.");
+    throw new PivotTableError("Either sourceSheet or sourceTable must be provided.");
   }
   if (model.sourceSheet && model.sourceTable) {
-    throw new Error("Cannot specify both sourceSheet and sourceTable. Choose one.");
+    throw new PivotTableError("Cannot specify both sourceSheet and sourceTable. Choose one.");
   }
 
   // Resolve source first to avoid creating adapter multiple times
@@ -334,7 +337,7 @@ function makePivotTable(worksheet: any, model: PivotTableModel): PivotTable {
 
 function validate(_worksheet: any, model: PivotTableModel, source: PivotTableSource): void {
   if (model.metric && model.metric !== "sum" && model.metric !== "count") {
-    throw new Error('Only the "sum" and "count" metrics are supported at this time.');
+    throw new PivotTableError('Only the "sum" and "count" metrics are supported at this time.');
   }
 
   const columns = model.columns ?? [];
@@ -345,22 +348,22 @@ function validate(_worksheet: any, model: PivotTableModel, source: PivotTableSou
   const headerNameSet = new Set(headerNames);
   for (const name of [...model.rows, ...columns, ...model.values]) {
     if (!headerNameSet.has(name)) {
-      throw new Error(`The header name "${name}" was not found in ${source.name}.`);
+      throw new PivotTableError(`The header name "${name}" was not found in ${source.name}.`);
     }
   }
 
   if (!model.rows.length) {
-    throw new Error("No pivot table rows specified.");
+    throw new PivotTableError("No pivot table rows specified.");
   }
 
   // Allow empty columns - Excel will use "Values" as column field
   // But can't have multiple values with columns specified
   if (model.values.length < 1) {
-    throw new Error("Must have at least one value.");
+    throw new PivotTableError("Must have at least one value.");
   }
 
   if (model.values.length > 1 && columns.length > 0) {
-    throw new Error(
+    throw new PivotTableError(
       "It is currently not possible to have multiple values when columns are specified. Please either supply an empty array for columns or a single value."
     );
   }

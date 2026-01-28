@@ -15,6 +15,7 @@ import {
   finished as nodeFinished
 } from "stream";
 import type { TransformCallback as NodeTransformCallback, DuplexOptions } from "stream";
+import { StreamTypeError, UnsupportedStreamTypeError } from "@stream/errors";
 import type {
   TransformStreamOptions,
   ReadableStreamOptions,
@@ -548,7 +549,7 @@ export class Collector<T = Uint8Array> extends Writable {
       return result;
     }
 
-    throw new Error("Collector contains non-binary data");
+    throw new StreamTypeError("Uint8Array", "non-binary data");
   }
 
   /**
@@ -628,7 +629,7 @@ export async function streamToBuffer(
   } else if (isAsyncIterable(stream)) {
     iterable = stream;
   } else {
-    throw new Error("streamToBuffer: unsupported stream type");
+    throw new UnsupportedStreamTypeError("streamToBuffer", typeof stream);
   }
   const chunks: Buffer[] = [];
   let totalLength = 0;
@@ -683,7 +684,7 @@ export async function drainStream(
   } else if (isAsyncIterable(stream)) {
     iterable = stream;
   } else {
-    throw new Error("drainStream: unsupported stream type");
+    throw new UnsupportedStreamTypeError("drainStream", typeof stream);
   }
 
   for await (const _chunk of iterable) {

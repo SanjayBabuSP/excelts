@@ -6,6 +6,8 @@
  * and core binary operations.
  */
 
+import { StreamTypeError } from "@stream/errors";
+
 // =============================================================================
 // Cached TextEncoder/TextDecoder instances
 // =============================================================================
@@ -165,7 +167,7 @@ export function toUint8Array(input: string | Uint8Array | ArrayBuffer | number[]
   if (Array.isArray(input)) {
     return new Uint8Array(input);
   }
-  throw new Error("Cannot convert to Uint8Array: unsupported input type");
+  throw new StreamTypeError("Uint8Array", typeof input);
 }
 
 /**

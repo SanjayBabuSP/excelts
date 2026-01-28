@@ -1,36 +1,48 @@
 /**
- * Unified error types for the archive module.
+ * Archive module error types.
  *
  * All archive-related errors extend ArchiveError.
  */
 
+import { BaseError, type BaseErrorOptions } from "@utils/errors";
+
+// Re-export common utilities from base
+export {
+  AbortError,
+  createAbortError,
+  isAbortError,
+  throwIfAborted,
+  createLinkedAbortController,
+  toError,
+  asError,
+  suppressUnhandledRejection,
+  errorToJSON,
+  getErrorChain,
+  getRootCause,
+  type BaseErrorOptions
+} from "@utils/errors";
+
 /**
  * Base class for all archive-related errors.
  */
-export class ArchiveError extends Error {
-  constructor(message: string) {
-    super(message);
+export class ArchiveError extends BaseError {
+  constructor(message: string, options?: BaseErrorOptions) {
+    super(message, options);
     this.name = "ArchiveError";
   }
 }
 
-// -----------------------------------------------------------------------------
-// Abort / Cancellation
-// -----------------------------------------------------------------------------
+/**
+ * Check if an error is an archive error.
+ */
+export function isArchiveError(err: unknown): err is ArchiveError {
+  return err instanceof ArchiveError;
+}
 
 /**
- * Error thrown when an operation is aborted.
+ * @deprecated Use `AbortError` from `@utils/errors` instead.
  */
-export class ArchiveAbortError extends ArchiveError {
-  override name = "AbortError";
-  readonly reason: unknown;
-
-  constructor(reason?: unknown) {
-    const msg = reason instanceof Error ? reason.message : reason ? String(reason) : "Aborted";
-    super(msg);
-    this.reason = reason;
-  }
-}
+export { AbortError as ArchiveAbortError } from "@utils/errors";
 
 // -----------------------------------------------------------------------------
 // ZIP Parsing Errors
@@ -223,113 +235,4 @@ export class UnsupportedCompressionError extends ArchiveError {
   constructor(method: number) {
     super(`Unsupported compression method: ${method}`);
   }
-}
-
-// -----------------------------------------------------------------------------
-// Helper Functions
-// -----------------------------------------------------------------------------
-
-/**
- * Create an abort error from a reason.
- */
-export function createAbortError(reason?: unknown): ArchiveAbortError {
-  return reason instanceof ArchiveAbortError ? reason : new ArchiveAbortError(reason);
-}
-
-/**
- * Check if an error is an abort error.
- */
-export function isAbortError(err: unknown): err is { name: string } {
-  return !!err && typeof err === "object" && (err as any).name === "AbortError";
-}
-
-/**
- * Throw if the signal is aborted.
- */
-export function throwIfAborted(signal?: AbortSignal, reason?: unknown): void {
-  if (!signal) {
-    return;
-  }
-  if (!signal.aborted) {
-    return;
-  }
-  const r = reason ?? (signal as any).reason;
-  throw createAbortError(r);
-}
-
-/**
- * Create a linked AbortController that aborts when the parent signal aborts.
- *
- * @param parentSignal - Optional parent signal to link to
- * @returns Controller and cleanup function
- */
-export function createLinkedAbortController(parentSignal?: AbortSignal): {
-  controller: AbortController;
-  cleanup: () => void;
-} {
-  const controller = new AbortController();
-
-  if (!parentSignal) {
-    return { controller, cleanup: () => {} };
-  }
-
-  if (parentSignal.aborted) {
-    controller.abort((parentSignal as any).reason);
-    return { controller, cleanup: () => {} };
-  }
-
-  const onAbort = (): void => {
-    try {
-      controller.abort((parentSignal as any).reason);
-    } catch {
-      controller.abort();
-    }
-  };
-
-  parentSignal.addEventListener("abort", onAbort, { once: true });
-
-  const cleanup = (): void => {
-    try {
-      parentSignal.removeEventListener("abort", onAbort);
-    } catch {
-      // ignore
-    }
-  };
-
-  return { controller, cleanup };
-}
-
-// -----------------------------------------------------------------------------
-// Error Normalization
-// -----------------------------------------------------------------------------
-
-/**
- * Convert an unknown value to an Error.
- *
- * If the value is already an Error, it's returned as-is.
- * Otherwise, it's converted to a string and wrapped in an Error.
- *
- * Also exported as `asError` for semantic clarity.
- */
-export function toError(err: unknown): Error {
-  return err instanceof Error ? err : new Error(String(err));
-}
-
-/**
- * Alias for `toError` - used when the semantic intent is converting a catch value to Error.
- */
-export const asError = toError;
-
-// -----------------------------------------------------------------------------
-// Promise Utilities
-// -----------------------------------------------------------------------------
-
-/**
- * Suppress unhandled rejection warnings for a promise.
- *
- * Use this when you intentionally want to ignore a promise's rejection,
- * typically for fire-and-forget cleanup operations.
- */
-export function suppressUnhandledRejection(promise: Promise<unknown>): void {
-  promise.catch(() => {});
 }

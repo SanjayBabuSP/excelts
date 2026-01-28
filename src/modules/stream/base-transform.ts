@@ -6,6 +6,7 @@
  */
 
 import { EventEmitter } from "@stream/event-emitter";
+import { StreamStateError } from "@stream/errors";
 
 export interface BaseTransformOptions {
   /** High water mark for backpressure */
@@ -57,7 +58,7 @@ export abstract class BaseTransform<
    */
   write(chunk: TInput): boolean {
     if (this._isDestroyed) {
-      this.emit("error", new Error("Cannot write to destroyed stream"));
+      this.emit("error", new StreamStateError("write", "stream is destroyed"));
       return false;
     }
 

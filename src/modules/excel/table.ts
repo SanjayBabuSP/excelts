@@ -1,4 +1,5 @@
 import { colCache } from "@excel/utils/col-cache";
+import { TableError } from "@excel/errors";
 import type {
   Address,
   CellFormulaValue,
@@ -163,7 +164,7 @@ class Table {
       case "custom":
         return column.totalsRowFormula || null;
       default:
-        throw new Error(`Invalid Totals Row Function: ${column.totalsRowFunction}`);
+        throw new TableError(`Invalid Totals Row Function: ${column.totalsRowFunction}`);
     }
   }
 
@@ -207,7 +208,7 @@ class Table {
 
     const assert = (test: boolean, message: string) => {
       if (!test) {
-        throw new Error(message);
+        throw new TableError(message);
       }
     };
     assert(!!table.ref, "Table must have ref");

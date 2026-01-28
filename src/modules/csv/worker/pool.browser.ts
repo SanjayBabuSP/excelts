@@ -32,6 +32,7 @@
  * ```
  */
 
+import { CsvWorkerError } from "@csv/errors";
 import type {
   CsvWorkerPoolOptions,
   CsvWorkerPoolStats,
@@ -614,7 +615,7 @@ export class CsvWorkerSession {
     options?: CsvParseOptions & { headers?: string[] | boolean }
   ): Promise<{ rowCount: number; headers: string[] }> {
     if (this._disposed) {
-      throw new Error("Session has been disposed");
+      throw new CsvWorkerError("Session has been disposed");
     }
 
     if (typeof csvOrData === "string") {

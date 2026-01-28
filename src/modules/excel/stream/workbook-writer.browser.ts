@@ -11,6 +11,7 @@
 import { Zip, ZipDeflate } from "@archive/zip/stream";
 import { StreamBuf } from "@excel/utils/stream-buf";
 import { base64ToUint8Array } from "@utils/utils";
+import { ExcelNotSupportedError, ImageError } from "@excel/errors";
 import { RelType } from "@excel/xlsx/rel-type";
 import { StylesXform } from "@excel/xlsx/xform/style/styles-xform";
 import { SharedStrings } from "@excel/utils/shared-strings";
@@ -413,12 +414,13 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
             return;
           }
           if (medium.filename) {
-            throw new Error(
-              "Loading images from filename is not supported in browser. Use buffer or base64."
+            throw new ExcelNotSupportedError(
+              "Loading images from filename",
+              "not supported in browser. Use buffer or base64."
             );
           }
         }
-        throw new Error("Unsupported media");
+        throw new ImageError("Unsupported media");
       })
     );
   }

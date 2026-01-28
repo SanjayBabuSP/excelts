@@ -6,6 +6,7 @@
  */
 
 import { EventEmitter } from "@stream/event-emitter";
+import { StreamStateError } from "@stream/errors";
 import { textEncoder } from "@stream/shared";
 import type { BufferedStreamOptions, DataChunk } from "@stream/types";
 
@@ -149,7 +150,7 @@ export class BufferedStream extends EventEmitter {
    */
   write(chunk: Uint8Array | string): boolean {
     if (this._destroyed) {
-      this.emit("error", new Error("Cannot write to destroyed stream"));
+      this.emit("error", new StreamStateError("write", "stream is destroyed"));
       return false;
     }
 

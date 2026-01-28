@@ -1,4 +1,5 @@
 import { colCache } from "@excel/utils/col-cache";
+import { ExcelError } from "@excel/errors";
 import type { Address } from "@excel/types";
 
 interface RangeModel {
@@ -187,7 +188,7 @@ class Range {
         break;
 
       default:
-        throw new Error(`Invalid number of arguments to _getDimensions() - ${argv.length}`);
+        throw new ExcelError(`Invalid number of arguments to _getDimensions() - ${argv.length}`);
     }
   }
 

@@ -1337,7 +1337,7 @@ describe("Workbook", () => {
       await wb.xlsx.load({});
       expect.fail("should fail for given argument");
     } catch (e) {
-      expect((e as Error).message).toBe(
+      expect((e as Error).message).toContain(
         "Can't read the data of 'the loaded zip file'. Is it in a supported JavaScript type (String, Blob, ArrayBuffer, etc) ?"
       );
     }

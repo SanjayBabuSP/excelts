@@ -1,6 +1,7 @@
 import { Enums } from "@excel/enums";
 import { colCache } from "@excel/utils/col-cache";
 import { Cell, type CellModel, type CellAddress } from "@excel/cell";
+import { ExcelError } from "@excel/errors";
 import type { Worksheet } from "@excel/worksheet";
 import type { Column } from "@excel/column";
 import type {
@@ -491,7 +492,7 @@ class Row {
 
   set model(value: RowModel) {
     if (value.number !== this._number) {
-      throw new Error("Invalid row number in model");
+      throw new ExcelError("Invalid row number in model");
     }
     this._cells = [];
     let previousAddress: CellAddress | undefined;

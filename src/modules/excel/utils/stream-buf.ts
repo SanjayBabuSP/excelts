@@ -12,6 +12,7 @@
 
 import { EventEmitter } from "@stream";
 import { StringBuf } from "@excel/utils/string-buf";
+import { ExcelNotSupportedError, InvalidValueTypeError } from "@excel/errors";
 
 // =============================================================================
 // Data Chunks - encapsulating incoming data
@@ -293,7 +294,10 @@ class StreamBuf extends EventEmitter {
     } else if (typeof data === "string") {
       chunk = new StringChunk(data);
     } else {
-      throw new Error("Chunk must be one of type String, Uint8Array, ArrayBuffer or StringBuf.");
+      throw new InvalidValueTypeError(
+        typeof data,
+        "Chunk must be one of type String, Uint8Array, ArrayBuffer or StringBuf."
+      );
     }
 
     // Handle piping and buffering
@@ -497,14 +501,14 @@ class StreamBuf extends EventEmitter {
    * Put data back at the front (not implemented)
    */
   unshift(): void {
-    throw new Error("Not Implemented");
+    throw new ExcelNotSupportedError("unshift", "Not implemented");
   }
 
   /**
    * Wrap a stream (not implemented)
    */
   wrap(): void {
-    throw new Error("Not Implemented");
+    throw new ExcelNotSupportedError("wrap", "Not implemented");
   }
 
   /**

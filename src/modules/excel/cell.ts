@@ -3,6 +3,7 @@ import { Enums } from "@excel/enums";
 import { Note } from "@excel/note";
 import { escapeHtml } from "@excel/utils/under-dash";
 import { slideFormula } from "@excel/utils/shared-formula";
+import { ExcelError, InvalidValueTypeError } from "@excel/errors";
 import type { Row } from "@excel/row";
 import type { Column } from "@excel/column";
 import type { Worksheet } from "@excel/worksheet";
@@ -140,7 +141,7 @@ class Cell {
 
   constructor(row: Row, column: Column, address: string) {
     if (!row || !column) {
-      throw new Error("A Cell needs a Row");
+      throw new ExcelError("A Cell needs a Row");
     }
 
     this._row = row;
@@ -1050,7 +1051,10 @@ class FormulaValue {
       case Cell.Types.Hyperlink:
       case Cell.Types.Formula:
       default:
-        throw new Error("Cannot process that type of result value");
+        throw new InvalidValueTypeError(
+          String(Value.getType(value)),
+          "Cannot process that type of result value"
+        );
     }
   }
 
@@ -1470,7 +1474,7 @@ const Value = {
   create(type: number, cell: Cell, value?: CellValueType): ICellValue {
     const T = this.types[type];
     if (!T) {
-      throw new Error(`Could not create Value of type ${type}`);
+      throw new InvalidValueTypeError(String(type), "Could not create Value");
     }
     return new T(cell, value);
   }

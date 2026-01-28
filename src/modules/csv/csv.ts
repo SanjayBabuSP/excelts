@@ -6,12 +6,13 @@
 
 import { fileExists, createReadStream, createWriteStream } from "@utils/fs";
 import { CSV as CSVBrowser, type CsvOptions } from "@csv/csv.browser";
+import { CsvFileError } from "@csv/errors";
 import type { Worksheet } from "@excel/worksheet";
 
 class CSV extends CSVBrowser {
   override async readFile(filename: string, options?: CsvOptions): Promise<Worksheet> {
     if (!(await fileExists(filename))) {
-      throw new Error(`File not found: ${filename}`);
+      throw new CsvFileError(filename, "read", "file not found");
     }
 
     const readStream = createReadStream(filename, {

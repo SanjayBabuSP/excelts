@@ -6,6 +6,7 @@
 
 import { EventEmitter } from "@stream";
 import { parseSax } from "@excel/utils/parse-sax";
+import { ExcelStreamStateError } from "@excel/errors";
 import { xmlDecode, isDateFmt, excelToDate } from "@utils/utils";
 import { colCache } from "@excel/utils/col-cache";
 import { Dimensions } from "@excel/range";
@@ -105,7 +106,7 @@ class WorksheetReader extends EventEmitter {
   // destroy - not a valid operation for a streaming writer
   // even though some streamers might be able to, it's a bad idea.
   destroy(): void {
-    throw new Error("Invalid Operation: destroy");
+    throw new ExcelStreamStateError("destroy", "Invalid operation for a streaming reader");
   }
 
   // return the current dimensions of the reader

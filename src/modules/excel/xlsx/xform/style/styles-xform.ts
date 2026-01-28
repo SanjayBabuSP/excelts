@@ -1,5 +1,6 @@
 import { Enums } from "@excel/enums";
 import { XmlStream } from "@excel/utils/xml-stream";
+import { ExcelNotSupportedError } from "@excel/errors";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { StaticXform } from "@excel/xlsx/xform/static-xform";
 import { ListXform } from "@excel/xlsx/xform/list-xform";
@@ -630,7 +631,10 @@ class StylesXformMock extends StylesXform {
       case Enums.ValueType.Checkbox:
         // Checkbox rendering relies on style extensions (extLst) and workbook-level parts.
         // The mock style manager intentionally does not build those structures.
-        throw new Error("Checkbox cells require styles to be enabled (useStyles: true)");
+        throw new ExcelNotSupportedError(
+          "Checkbox cells",
+          "require styles to be enabled (useStyles: true)"
+        );
       case Enums.ValueType.Date:
         return this.dateStyleId;
       default:

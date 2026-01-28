@@ -86,12 +86,8 @@ describe("XmlStream", () => {
   it("throws when adding attributes without an open node", () => {
     const xmlStream = new XmlStream();
 
-    expect(() => xmlStream.addAttribute("a", "1")).toThrow(
-      "Cannot write attributes to node if it is not open"
-    );
-    expect(() => xmlStream.addAttributes({ a: "1" })).toThrow(
-      "Cannot write attributes to node if it is not open"
-    );
+    expect(() => xmlStream.addAttribute("a", "1")).toThrow("node is not open");
+    expect(() => xmlStream.addAttributes({ a: "1" })).toThrow("node is not open");
   });
 
   it("throws when adding attributes after closing a node", () => {
@@ -100,8 +96,6 @@ describe("XmlStream", () => {
     xmlStream.openNode("root");
     xmlStream.closeNode();
 
-    expect(() => xmlStream.addAttribute("a", "1")).toThrow(
-      "Cannot write attributes to node if it is not open"
-    );
+    expect(() => xmlStream.addAttribute("a", "1")).toThrow("node is not open");
   });
 });

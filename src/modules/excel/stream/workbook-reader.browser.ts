@@ -11,6 +11,7 @@
 
 import { EventEmitter, Readable } from "@stream";
 import { createParse } from "@archive/unzip/stream";
+import { ExcelFileError } from "@excel/errors";
 import { iterateStream } from "@excel/utils/iterate-stream";
 import {
   getWorksheetNoFromWorksheetPath,
@@ -223,7 +224,7 @@ export abstract class WorkbookReaderBase<
           stream: input as unknown as ReadableStream<Uint8Array>
         });
       } catch {
-        throw new Error("Could not recognise input: ReadableStream");
+        throw new ExcelFileError("<ReadableStream>", "read", "Could not recognise input");
       }
     }
 
@@ -235,7 +236,7 @@ export abstract class WorkbookReaderBase<
       // Cross-platform: both Node's Readable and our browser Readable implement `.from()`.
       return (Readable as any).from([data]) as Readable;
     }
-    throw new Error(`Could not recognise input: ${input}`);
+    throw new ExcelFileError(String(input), "read", "Could not recognise input");
   }
 
   // Subclass implements storage strategy

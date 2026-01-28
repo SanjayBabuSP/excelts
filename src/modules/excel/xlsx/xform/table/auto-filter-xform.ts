@@ -1,5 +1,6 @@
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { FilterColumnXform } from "@excel/xlsx/xform/table/filter-column-xform";
+import { XmlParseError } from "@excel/errors";
 
 interface AutoFilterModel {
   autoFilterRef: string;
@@ -61,7 +62,10 @@ class AutoFilterXform extends BaseXform {
           this.parseOpen(node);
           return true;
         }
-        throw new Error(`Unexpected xml node in parseOpen: ${JSON.stringify(node)}`);
+        throw new XmlParseError(
+          "autoFilter",
+          `Unexpected xml node in parseOpen: ${JSON.stringify(node)}`
+        );
     }
   }
 
@@ -83,7 +87,7 @@ class AutoFilterXform extends BaseXform {
       case this.tag:
         return false;
       default:
-        throw new Error(`Unexpected xml node in parseClose: ${name}`);
+        throw new XmlParseError("autoFilter", `Unexpected xml node in parseClose: ${name}`);
     }
   }
 }

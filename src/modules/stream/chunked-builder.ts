@@ -6,6 +6,7 @@
  */
 
 import { textEncoder } from "@stream/shared";
+import { StreamStateError } from "@stream/errors";
 
 /**
  * Options for ChunkedBuilder
@@ -184,7 +185,7 @@ export class TransactionalChunkedBuilder extends ChunkedBuilder {
   rollback(): void {
     const snap = this._snapshots.pop();
     if (!snap) {
-      throw new Error("No snapshot to rollback to");
+      throw new StreamStateError("rollback", "no snapshot available");
     }
 
     if (this._pieces.length > snap.piecesLength) {

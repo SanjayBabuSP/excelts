@@ -29,6 +29,12 @@ import type {
   ReadableLike,
   WritableLike
 } from "@stream/types";
+import {
+  StreamTypeError,
+  StreamStateError,
+  UnsupportedStreamTypeError,
+  createAbortError
+} from "@stream/errors";
 
 import type { Writable as NodeWritable } from "stream";
 
@@ -567,7 +573,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const hasOff = typeof eventTarget?.off === "function";
 
     if (!hasWrite || !hasEnd || (!hasOnce && !hasOn) || (!hasOff && !eventTarget?.removeListener)) {
-      throw new Error("Readable.pipe: invalid destination");
+      throw new StreamTypeError("Writable", typeof dest);
     }
 
     this._pipeTo.push(dest);
@@ -1069,7 +1075,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       yield await fn(chunk, { signal });
     }
@@ -1085,7 +1091,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (await fn(chunk, { signal })) {
         yield chunk;
@@ -1103,7 +1109,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       const result = await fn(chunk, { signal });
       for await (const item of result) {
@@ -1120,7 +1126,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     let count = 0;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (count >= limit) {
         break;
@@ -1138,7 +1144,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     let count = 0;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (count >= limit) {
         yield chunk;
@@ -1171,7 +1177,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (first && accumulator === undefined) {
         accumulator = chunk as any as R;
@@ -1198,7 +1204,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (!(await fn(chunk, { signal }))) {
         return false;
@@ -1217,7 +1223,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (await fn(chunk, { signal })) {
         return true;
@@ -1236,7 +1242,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       if (await fn(chunk, { signal })) {
         return chunk;
@@ -1255,7 +1261,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const signal = options?.signal;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       await fn(chunk, { signal });
     }
@@ -1269,7 +1275,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const result: T[] = [];
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       result.push(chunk);
     }
@@ -1286,7 +1292,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     let index = 0;
     for await (const chunk of this) {
       if (signal?.aborted) {
-        throw new Error("AbortError");
+        throw createAbortError();
       }
       yield [index++, chunk];
     }
@@ -2026,9 +2032,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   private async _runTransform(chunk: TInput): Promise<void> {
     if (this._destroyed || this._errored) {
-      throw new Error(
-        this._errored ? "Cannot write after stream errored" : "Cannot write after stream destroyed"
-      );
+      throw new StreamStateError("write", this._errored ? "stream errored" : "stream destroyed");
     }
 
     try {
@@ -2620,7 +2624,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       });
     }
 
-    throw new Error("Duplex.from: unsupported source type");
+    throw new StreamTypeError("Duplex-compatible source", typeof source);
   }
 
   /**
@@ -3043,7 +3047,7 @@ export class Collector<T = Uint8Array> extends Writable<T> {
       return concatUint8Arrays(chunks as Uint8Array[]);
     }
 
-    throw new Error("Collector contains non-binary data");
+    throw new StreamTypeError("Uint8Array", typeof chunks[0]);
   }
 
   /**
@@ -4312,7 +4316,7 @@ function toReadableAsyncIterable<T>(
   if (isAsyncIterable(stream)) {
     return stream;
   }
-  throw new Error(`${name}: unsupported stream type`);
+  throw new UnsupportedStreamTypeError(name, typeof stream);
 }
 
 export const consumers = {
