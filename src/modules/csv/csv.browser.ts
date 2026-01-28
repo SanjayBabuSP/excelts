@@ -613,5 +613,19 @@ export function formatWorksheetToCsv(
 
 export { CSV };
 export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
-export { parseCsv, formatCsv, detectDelimiter } from "@csv/csv-core";
-export type { CsvParseOptions, CsvFormatOptions } from "@csv/csv-core";
+export {
+  parseCsv,
+  formatCsv,
+  detectDelimiter,
+  detectLinebreak,
+  stripBom,
+  deduplicateHeaders
+} from "@csv/csv-core";
+export type {
+  CsvParseOptions,
+  CsvFormatOptions,
+  CsvParseMeta,
+  CsvParseResult,
+  DynamicTypingConfig,
+  ChunkMeta
+} from "@csv/csv-core";

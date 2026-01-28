@@ -19,6 +19,9 @@ import {
   formatCsv,
   parseCsvStream,
   detectDelimiter,
+  detectLinebreak,
+  stripBom,
+  deduplicateHeaders,
   isRowHashArray,
   rowHashArrayToMap,
   rowHashArrayToValues,
@@ -182,6 +185,96 @@ describe("RowHashArray Helper Functions", () => {
 });
 
 // ===========================================================================
+// BOM and Linebreak Detection Tests
+// ===========================================================================
+describe("BOM and Linebreak Detection", () => {
+  describe("stripBom", () => {
+    it("should strip UTF-8 BOM from start of string", () => {
+      const withBom = "\ufeffHello, World";
+      expect(stripBom(withBom)).toBe("Hello, World");
+    });
+
+    it("should return string unchanged when no BOM present", () => {
+      const noBom = "Hello, World";
+      expect(stripBom(noBom)).toBe("Hello, World");
+    });
+
+    it("should handle empty string", () => {
+      expect(stripBom("")).toBe("");
+    });
+
+    it("should only strip BOM at start, not in middle", () => {
+      const bomInMiddle = "Hello\ufeffWorld";
+      expect(stripBom(bomInMiddle)).toBe("Hello\ufeffWorld");
+    });
+
+    it("should handle string that is just BOM", () => {
+      expect(stripBom("\ufeff")).toBe("");
+    });
+  });
+
+  describe("detectLinebreak", () => {
+    it("should detect LF (Unix) line ending", () => {
+      expect(detectLinebreak("a,b\nc,d\ne,f")).toBe("\n");
+    });
+
+    it("should detect CRLF (Windows) line ending", () => {
+      expect(detectLinebreak("a,b\r\nc,d\r\ne,f")).toBe("\r\n");
+    });
+
+    it("should detect CR (old Mac) line ending", () => {
+      expect(detectLinebreak("a,b\rc,d\re,f")).toBe("\r");
+    });
+
+    it("should default to LF when no newline found", () => {
+      expect(detectLinebreak("a,b,c")).toBe("\n");
+    });
+
+    it("should handle empty string", () => {
+      expect(detectLinebreak("")).toBe("\n");
+    });
+
+    it("should detect first newline type when mixed", () => {
+      // LF comes first
+      expect(detectLinebreak("a\nb\r\nc")).toBe("\n");
+      // CRLF comes first
+      expect(detectLinebreak("a\r\nb\nc")).toBe("\r\n");
+    });
+  });
+
+  describe("deduplicateHeaders", () => {
+    it("should rename duplicate headers with suffix", () => {
+      expect(deduplicateHeaders(["A", "B", "A", "A"])).toEqual(["A", "B", "A_1", "A_2"]);
+    });
+
+    it("should handle no duplicates", () => {
+      expect(deduplicateHeaders(["A", "B", "C"])).toEqual(["A", "B", "C"]);
+    });
+
+    it("should handle multiple different duplicates", () => {
+      expect(deduplicateHeaders(["A", "B", "A", "B", "C"])).toEqual(["A", "B", "A_1", "B_1", "C"]);
+    });
+
+    it("should preserve null/undefined", () => {
+      expect(deduplicateHeaders(["A", null, "A", undefined])).toEqual([
+        "A",
+        null,
+        "A_1",
+        undefined
+      ]);
+    });
+
+    it("should handle empty array", () => {
+      expect(deduplicateHeaders([])).toEqual([]);
+    });
+
+    it("should handle all same headers", () => {
+      expect(deduplicateHeaders(["X", "X", "X"])).toEqual(["X", "X_1", "X_2"]);
+    });
+  });
+});
+
+// ===========================================================================
 // Delimiter Auto-Detection Tests
 // ===========================================================================
 describe("Delimiter Auto-Detection", () => {
@@ -294,13 +387,15 @@ describe("Delimiter Auto-Detection", () => {
     it("should work with headers and auto-detect", () => {
       const input = "name;age;city\nAlice;30;NYC\nBob;25;LA";
       const result = parseCsv(input, { delimiter: "", headers: true });
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         headers: ["name", "age", "city"],
         rows: [
           { name: "Alice", age: "30", city: "NYC" },
           { name: "Bob", age: "25", city: "LA" }
         ]
       });
+      // Verify meta contains detected delimiter
+      expect((result as any).meta?.delimiter).toBe(";");
     });
   });
 
@@ -1605,31 +1700,36 @@ describe("CSV Core - Parser Options", () => {
       expect(result.rows[0]).toEqual({ a: "1", b: "3" });
     });
 
-    it("should throw on duplicate headers after transform", () => {
+    it("should auto-rename duplicate headers after transform", () => {
       const input = "a,b,c\n1,2,3";
-      expect(() =>
-        parseCsv(input, {
-          headers: () => ["same", "same", "other"]
-        })
-      ).toThrow(/duplicate/i);
+      const result = parseCsv(input, {
+        headers: () => ["same", "same", "other"]
+      }) as any;
+
+      expect(result.headers).toEqual(["same", "same_1", "other"]);
+      expect(result.rows[0]).toEqual({ same: "1", same_1: "2", other: "3" });
     });
   });
 
   // ===========================================================================
-  // Duplicate header detection
+  // Duplicate header auto-rename
   // ===========================================================================
   describe("duplicate headers", () => {
-    it("should throw error on duplicate headers", () => {
+    it("should auto-rename duplicate headers from CSV", () => {
       const input = "a,b,a\n1,2,3";
-      expect(() => parseCsv(input, { headers: true })).toThrow(/duplicate/i);
+      const result = parseCsv(input, { headers: true }) as any;
+
+      expect(result.headers).toEqual(["a", "b", "a_1"]);
+      expect(result.rows[0]).toEqual({ a: "1", b: "2", a_1: "3" });
     });
 
-    it("should throw error when custom headers have duplicates", () => {
-      expect(() =>
-        parseCsv("a,b,c\n1,2,3", {
-          headers: ["x", "y", "x"]
-        })
-      ).toThrow(/duplicate/i);
+    it("should auto-rename custom headers with duplicates", () => {
+      const result = parseCsv("a,b,c\n1,2,3", {
+        headers: ["x", "y", "x"]
+      }) as any;
+
+      expect(result.headers).toEqual(["x", "y", "x_1"]);
+      expect(result.rows[0]).toEqual({ x: "a", y: "b", x_1: "c" });
     });
 
     it("should allow duplicate headers with null placeholders", () => {

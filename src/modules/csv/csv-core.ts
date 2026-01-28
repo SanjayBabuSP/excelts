@@ -49,6 +49,16 @@ export type RowValidateFunction<T = Row> =
   | ((row: T, callback: RowValidateCallback) => void);
 
 /**
+ * Dynamic typing configuration for automatic type conversion.
+ *
+ * - `true`: Convert all columns using built-in rules
+ * - `false`: Keep all values as strings
+ * - `Record<string, boolean>`: Enable/disable per column
+ * - `Record<string, (value: string) => unknown>`: Custom converter per column
+ */
+export type DynamicTypingConfig = boolean | Record<string, boolean | ((value: string) => unknown)>;
+
+/**
  * Metadata passed to chunk callback during streaming parse
  */
 export interface ChunkMeta {
@@ -72,11 +82,35 @@ export interface CsvParseOptions {
    * - Auto-detection will try: comma, semicolon, tab, pipe
    */
   delimiter?: string;
+  /**
+   * Delimiters to try during auto-detection (only used when delimiter is "")
+   * Default: [",", ";", "\t", "|"]
+   *
+   * Order matters - earlier delimiters are preferred when scores are equal.
+   *
+   * @example
+   * // Only try comma and semicolon
+   * delimitersToGuess: [",", ";"]
+   *
+   * // European-style (semicolon first)
+   * delimitersToGuess: [";", ",", "\t"]
+   */
+  delimitersToGuess?: string[];
+  /**
+   * Line terminator for parsing (default: auto-detect)
+   * - Set to "" (empty string) for auto-detection (default behavior)
+   * - Common values: "\n" (LF), "\r\n" (CRLF), "\r" (CR)
+   *
+   * When auto-detecting, the parser handles all line ending types.
+   * Explicitly setting this can provide a small performance benefit
+   * if you know the exact format.
+   */
+  newline?: string;
   /** Quote character (default: '"'), set to false or null to disable quoting */
   quote?: string | false | null;
   /** Escape character for quotes (default: '"'), set to false or null to disable */
   escape?: string | false | null;
-  /** Skip empty lines (default: false) */
+  /** Skip empty lines (default: false). Uses greedy mode: also skips lines with only whitespace. */
   skipEmptyLines?: boolean;
   /** Alias for skipEmptyLines */
   ignoreEmpty?: boolean;
@@ -195,7 +229,7 @@ export interface CsvParseOptions {
    *   amount: (val) => parseFloat(val.replace('$', ''))
    * }
    */
-  dynamicTyping?: boolean | Record<string, boolean | ((value: string) => unknown)>;
+  dynamicTyping?: DynamicTypingConfig;
   /**
    * Callback function invoked for each chunk of rows during parsing.
    * Useful for processing large files without loading everything into memory.
@@ -324,6 +358,24 @@ export interface CsvFormatOptions {
 }
 
 /**
+ * Parsing metadata returned alongside results
+ */
+export interface CsvParseMeta {
+  /** The delimiter that was used to parse the data */
+  delimiter: string;
+  /** The line terminator detected in the input (CRLF, LF, or CR) */
+  linebreak: string;
+  /** Whether parsing was aborted early (via chunk callback returning false) */
+  aborted: boolean;
+  /** Whether the result was truncated due to maxRows limit */
+  truncated: boolean;
+  /** Total number of data rows processed (excluding header) */
+  cursor: number;
+  /** Field names (headers) if header parsing was enabled */
+  fields?: string[];
+}
+
+/**
  * Parsed CSV result with headers
  */
 export interface CsvParseResult<T = string[]> {
@@ -333,6 +385,8 @@ export interface CsvParseResult<T = string[]> {
   rows: T[];
   /** Invalid rows (when strictColumnHandling is true) */
   invalidRows?: { row: string[]; reason: string }[];
+  /** Parsing metadata (delimiter used, linebreak detected, etc.) */
+  meta: CsvParseMeta;
 }
 
 // =============================================================================
@@ -347,7 +401,7 @@ export function escapeRegex(str: string): string {
 }
 
 // =============================================================================
-// Delimiter Auto-Detection
+// Delimiter and Linebreak Detection
 // =============================================================================
 
 /**
@@ -362,6 +416,56 @@ const AUTO_DETECT_DELIMITERS = [",", ";", "\t", "|"] as const;
 const DEFAULT_DELIMITER = ",";
 
 /**
+ * Strip UTF-8 BOM (Byte Order Mark) from start of string if present.
+ * Excel exports UTF-8 CSV files with BOM (\ufeff).
+ *
+ * @param input - String to process
+ * @returns String without BOM
+ */
+export function stripBom(input: string): string {
+  return input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+}
+
+/**
+ * Detect the line terminator used in a string.
+ * Uses fast detection without quote handling since the result is only
+ * informational for meta - the parser handles all line ending types.
+ *
+ * @param input - String to analyze
+ * @returns Detected line terminator or '\n' as default
+ *
+ * @example
+ * detectLinebreak('a,b\r\nc,d') // '\r\n'
+ * detectLinebreak('a,b\nc,d') // '\n'
+ * detectLinebreak('a,b\rc,d') // '\r'
+ * detectLinebreak('a,b,c') // '\n' (default)
+ */
+export function detectLinebreak(input: string): string {
+  // Fast path: find first newline character
+  const crIndex = input.indexOf("\r");
+  const lfIndex = input.indexOf("\n");
+
+  // No newline found
+  if (crIndex === -1 && lfIndex === -1) {
+    return "\n";
+  }
+
+  // Only LF found
+  if (crIndex === -1) {
+    return "\n";
+  }
+
+  // Only CR found, or CR comes before LF (could be CRLF or standalone CR)
+  if (lfIndex === -1 || crIndex < lfIndex) {
+    // Check if CRLF
+    return input[crIndex + 1] === "\n" ? "\r\n" : "\r";
+  }
+
+  // LF comes before CR
+  return "\n";
+}
+
+/**
  * Auto-detect the delimiter used in a CSV string
  *
  * Algorithm:
@@ -374,25 +478,34 @@ const DEFAULT_DELIMITER = ",";
  *
  * @param input - CSV string to analyze
  * @param quote - Quote character (default: '"')
- * @returns Detected delimiter or default ','
+ * @param delimitersToGuess - Custom list of delimiters to try (default: [",", ";", "\t", "|"])
+ * @returns Detected delimiter or first delimiter in list
  *
  * @example
  * detectDelimiter('a,b,c\n1,2,3') // ','
  * detectDelimiter('a;b;c\n1;2;3') // ';'
  * detectDelimiter('a\tb\tc\n1\t2\t3') // '\t'
+ * detectDelimiter('a:b:c\n1:2:3', '"', [':']) // ':'
  */
-export function detectDelimiter(input: string, quote: string = '"'): string {
+export function detectDelimiter(
+  input: string,
+  quote: string = '"',
+  delimitersToGuess?: string[]
+): string {
+  const delimiters = delimitersToGuess ?? AUTO_DETECT_DELIMITERS;
+  const defaultDelimiter = delimiters[0] ?? DEFAULT_DELIMITER;
+
   // Get sample lines (first 10 non-empty lines)
   const lines = getSampleLines(input, 10);
 
   if (lines.length === 0) {
-    return DEFAULT_DELIMITER;
+    return defaultDelimiter;
   }
 
-  let bestDelimiter = DEFAULT_DELIMITER;
+  let bestDelimiter = defaultDelimiter;
   let bestScore = 0;
 
-  for (const delimiter of AUTO_DETECT_DELIMITERS) {
+  for (const delimiter of delimiters) {
     const score = scoreDelimiter(lines, delimiter, quote);
     if (score > bestScore) {
       bestScore = score;
@@ -625,7 +738,7 @@ export function applyDynamicTyping(
  */
 export function applyDynamicTypingToRow(
   row: Record<string, string>,
-  dynamicTyping: boolean | Record<string, boolean | ((value: string) => unknown)>
+  dynamicTyping: DynamicTypingConfig
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
@@ -664,7 +777,7 @@ export function applyDynamicTypingToRow(
 export function applyDynamicTypingToArrayRow(
   row: string[],
   headers: string[] | null,
-  dynamicTyping: boolean | Record<string, boolean | ((value: string) => unknown)>
+  dynamicTyping: DynamicTypingConfig
 ): unknown[] {
   if (dynamicTyping === true) {
     // Convert all columns
@@ -783,24 +896,34 @@ export function rowHashArrayMapByHeaders<V = any>(
 }
 
 /**
- * Check if headers are unique
+ * Deduplicate headers by appending suffix to duplicates.
+ * Example: ["A", "B", "A", "A"] → ["A", "B", "A_1", "A_2"]
+ *
+ * @param headers - Original header array
+ * @returns New array with unique header names
  */
-function validateUniqueHeaders(headers: HeaderArray): void {
-  const seen = new Set<string>();
-  const duplicates: string[] = [];
+export function deduplicateHeaders(headers: HeaderArray): HeaderArray {
+  const counts = new Map<string, number>();
+  const result: HeaderArray = [];
 
   for (const header of headers) {
-    if (header !== null && header !== undefined) {
-      if (seen.has(header)) {
-        duplicates.push(header);
-      }
-      seen.add(header);
+    if (header === null || header === undefined) {
+      result.push(header);
+      continue;
     }
+
+    const count = counts.get(header) ?? 0;
+    if (count === 0) {
+      // First occurrence, use as-is
+      result.push(header);
+    } else {
+      // Duplicate, append suffix
+      result.push(`${header}_${count}`);
+    }
+    counts.set(header, count + 1);
   }
 
-  if (duplicates.length > 0) {
-    throw new Error(`Duplicate headers found ${JSON.stringify(duplicates)}`);
-  }
+  return result;
 }
 
 /**
@@ -829,6 +952,8 @@ export function parseCsv(
 ): string[][] | CsvParseResult<Record<string, string>> | CsvParseResult<Record<string, unknown>> {
   const {
     delimiter: delimiterOption = ",",
+    delimitersToGuess,
+    newline: newlineOption = "",
     quote: quoteOption = '"',
     escape: escapeOption = '"',
     skipEmptyLines = false,
@@ -860,14 +985,22 @@ export function parseCsv(
     }
   }
 
+  // Strip BOM (Byte Order Mark) if present
+  processedInput = stripBom(processedInput);
+
   // Auto-detect delimiter if empty string is passed
   const delimiter =
     delimiterOption === ""
       ? detectDelimiter(
           processedInput,
-          quoteOption !== false && quoteOption !== null ? String(quoteOption) : '"'
+          quoteOption !== false && quoteOption !== null ? String(quoteOption) : '"',
+          delimitersToGuess
         )
       : delimiterOption;
+
+  // Detect or use provided line terminator for meta info
+  // Note: The parser always handles all line ending types, this is mainly for meta info
+  const linebreak = newlineOption || detectLinebreak(processedInput);
 
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
 
@@ -885,6 +1018,7 @@ export function parseCsv(
   let lineNumber = 0;
   let dataRowCount = 0;
   let skippedDataRows = 0;
+  let truncated = false; // Track if parsing was stopped due to maxRows
 
   // Header handling
   let headerRow: HeaderArray | null = null;
@@ -896,9 +1030,8 @@ export function parseCsv(
   if (headers === true) {
     useHeaders = true;
   } else if (Array.isArray(headers)) {
-    headerRow = headers;
-    headersLength = headers.filter(h => h !== null && h !== undefined).length;
-    validateUniqueHeaders(headers);
+    headerRow = deduplicateHeaders(headers);
+    headersLength = headerRow.filter(h => h !== null && h !== undefined).length;
     useHeaders = true;
     if (!renameHeaders) {
       headerRowProcessed = true; // We already have headers, don't wait for first row
@@ -918,31 +1051,16 @@ export function parseCsv(
           : (s: string) => s;
 
   const processRow = (row: string[]): boolean => {
-    // If we have headers defined and this is the first data row (for headers: true)
-    // or we need to validate headers from a function
+    // Handle first row as headers when needed
     if (useHeaders && !headerRowProcessed) {
-      // First row is headers
       if (typeof headers === "function") {
-        const transformed = headers(row);
-        validateUniqueHeaders(transformed);
-        headerRow = transformed;
+        headerRow = deduplicateHeaders(headers(row));
       } else if (!Array.isArray(headers)) {
-        validateUniqueHeaders(row);
-        headerRow = row;
+        headerRow = deduplicateHeaders(row);
       }
       headersLength = headerRow!.filter(h => h !== null && h !== undefined).length;
       headerRowProcessed = true;
-
-      // If renameHeaders and custom headers provided, discard this row
-      if (renameHeaders) {
-        return false;
-      }
-
-      // For headers: true, don't add header row to data
-      if (headers === true || typeof headers === "function") {
-        return false;
-      }
-
+      // Header row is never added to data rows
       return false;
     }
 
@@ -991,8 +1109,10 @@ export function parseCsv(
   // Fast Mode: Skip quote detection, split directly by delimiter
   // ==========================================================================
   if (fastMode) {
-    // Split by lines first, handling different line endings
-    const lines = processedInput.split(/\r\n|\r|\n/);
+    // Split by lines - use specified newline or handle all line endings
+    const lines = newlineOption
+      ? processedInput.split(newlineOption)
+      : processedInput.split(/\r\n|\r|\n/);
     let lineIdx = 0;
 
     for (const line of lines) {
@@ -1008,8 +1128,8 @@ export function parseCsv(
         continue;
       }
 
-      // Skip empty lines
-      if (shouldSkipEmpty && line === "") {
+      // Skip empty lines (greedy: also skips whitespace-only lines)
+      if (shouldSkipEmpty && line.trim() === "") {
         continue;
       }
 
@@ -1023,6 +1143,7 @@ export function parseCsv(
 
       // Check max rows
       if (maxRows !== undefined && dataRowCount >= maxRows) {
+        truncated = true;
         break;
       }
     }
@@ -1036,17 +1157,51 @@ export function parseCsv(
     | string[][]
     | CsvParseResult<Record<string, string>>
     | CsvParseResult<Record<string, unknown>> {
+    // Build meta object
+    const meta: CsvParseMeta = {
+      delimiter,
+      linebreak,
+      aborted: false, // parseCsv is synchronous, no abort mechanism
+      truncated,
+      cursor: dataRowCount
+    };
+
+    // Helper to apply validation and collect invalid rows
+    function applyValidation<T>(
+      dataRows: T[],
+      toStringArray: (row: T) => string[]
+    ): { validRows: T[]; newInvalidRows: { row: string[]; reason: string }[] } {
+      const validRows: T[] = [];
+      const newInvalidRows: { row: string[]; reason: string }[] = [];
+      for (const row of dataRows) {
+        const { isValid, reason } = processValidateResult(validate!(row as Row));
+        if (isValid) {
+          validRows.push(row);
+        } else {
+          newInvalidRows.push({ row: toStringArray(row), reason });
+        }
+      }
+      return { validRows, newInvalidRows };
+    }
+
     // Convert to objects if headers enabled
     if (useHeaders && headerRow) {
-      let dataRows: Record<string, unknown>[] = rows.map(row => {
+      const headers = headerRow.filter((h): h is string => h !== null && h !== undefined);
+      meta.fields = headers;
+
+      // Convert rows to objects using headers
+      const rowToObject = (row: string[]): Record<string, string> => {
         const obj: Record<string, string> = {};
-        headerRow!.forEach((header, index) => {
+        for (let i = 0; i < headerRow!.length; i++) {
+          const header = headerRow![i];
           if (header !== null && header !== undefined) {
-            obj[header] = row[index] ?? "";
+            obj[header] = row[i] ?? "";
           }
-        });
+        }
         return obj;
-      });
+      };
+
+      let dataRows: Record<string, unknown>[] = rows.map(rowToObject);
 
       // Apply dynamicTyping if provided (before transform)
       if (dynamicTyping) {
@@ -1064,26 +1219,17 @@ export function parseCsv(
 
       // Apply validate if provided
       if (validate) {
-        const validatedRows: Record<string, unknown>[] = [];
-        for (const row of dataRows) {
-          const { isValid, reason } = processValidateResult(
-            validate(row as Record<string, string>)
-          );
-          if (isValid) {
-            validatedRows.push(row);
-          } else {
-            invalidRows.push({
-              row: Object.values(row).map(v => (v === null ? "" : String(v))),
-              reason
-            });
-          }
-        }
-        dataRows = validatedRows;
+        const { validRows, newInvalidRows } = applyValidation(dataRows, row =>
+          Object.values(row).map(v => (v === null ? "" : String(v)))
+        );
+        dataRows = validRows;
+        invalidRows.push(...newInvalidRows);
       }
 
       const result: CsvParseResult<Record<string, unknown>> = {
-        headers: headerRow.filter((h): h is string => h !== null && h !== undefined),
-        rows: dataRows
+        headers,
+        rows: dataRows,
+        meta
       };
       if (invalidRows.length > 0) {
         result.invalidRows = invalidRows;
@@ -1111,23 +1257,16 @@ export function parseCsv(
     }
 
     if (validate) {
-      const validatedRows: (string[] | unknown[])[] = [];
-      const arrayInvalidRows: { row: string[]; reason: string }[] = [];
-      for (const row of resultRows) {
-        const { isValid, reason } = processValidateResult(validate(row as string[]));
-        if (isValid) {
-          validatedRows.push(row);
-        } else {
-          arrayInvalidRows.push({ row: row.map(v => (v === null ? "" : String(v))), reason });
-        }
-      }
-      resultRows = validatedRows;
+      const { validRows, newInvalidRows } = applyValidation(resultRows, row =>
+        row.map(v => (v === null ? "" : String(v)))
+      );
+      resultRows = validRows;
 
       // Return with invalidRows for array mode when validate is used
-      if (arrayInvalidRows.length > 0) {
+      if (newInvalidRows.length > 0) {
         return {
           rows: resultRows,
-          invalidRows: arrayInvalidRows
+          invalidRows: newInvalidRows
         } as any;
       }
     }
@@ -1199,8 +1338,8 @@ export function parseCsv(
           continue;
         }
 
-        // Skip empty lines
-        const isEmpty = currentRow.length === 1 && currentRow[0] === "";
+        // Skip empty lines (greedy: also skips whitespace-only lines)
+        const isEmpty = currentRow.length === 1 && currentRow[0].trim() === "";
         if (shouldSkipEmpty && isEmpty) {
           currentRow = [];
           i++;
@@ -1218,6 +1357,7 @@ export function parseCsv(
 
         // Check max rows - after resetting currentRow
         if (maxRows !== undefined && dataRowCount >= maxRows) {
+          truncated = true;
           break;
         }
       } else {
@@ -1231,20 +1371,16 @@ export function parseCsv(
   if (currentField !== "" || currentRow.length > 0) {
     currentRow.push(trimField(currentField));
 
-    // Skip lines at beginning
-    if (lineNumber >= skipLines) {
-      // Skip comment lines
-      if (!(comment && currentRow[0]?.startsWith(comment))) {
-        // Skip empty lines
-        const isEmpty = currentRow.length === 1 && currentRow[0] === "";
-        if (!(shouldSkipEmpty && isEmpty)) {
-          if (!(maxRows !== undefined && dataRowCount >= maxRows)) {
-            if (processRow(currentRow)) {
-              rows.push(currentRow);
-            }
-          }
-        }
-      }
+    // Use early-return style for cleaner logic
+    const shouldProcessLastRow =
+      lineNumber >= skipLines &&
+      !(comment && currentRow[0]?.startsWith(comment)) &&
+      !(shouldSkipEmpty && currentRow.length === 1 && currentRow[0].trim() === "") &&
+      !(maxRows !== undefined && dataRowCount >= maxRows);
+
+    if (shouldProcessLastRow && processRow(currentRow)) {
+      rows.push(currentRow);
+      dataRowCount++;
     }
   }
 
@@ -1564,9 +1700,8 @@ export async function* parseCsvStream(
   if (headers === true) {
     useHeaders = true;
   } else if (Array.isArray(headers)) {
-    headerRow = headers;
-    headersLength = headers.filter(h => h !== null && h !== undefined).length;
-    validateUniqueHeaders(headers);
+    headerRow = deduplicateHeaders(headers);
+    headersLength = headerRow.filter(h => h !== null && h !== undefined).length;
     useHeaders = true;
     if (!renameHeaders) {
       headerRowProcessed = true;
@@ -1592,11 +1727,9 @@ export async function* parseCsvStream(
     if (useHeaders && !headerRowProcessed) {
       if (typeof headers === "function") {
         const transformed = headers(row);
-        validateUniqueHeaders(transformed);
-        headerRow = transformed;
+        headerRow = deduplicateHeaders(transformed);
       } else if (!Array.isArray(headers)) {
-        validateUniqueHeaders(row);
-        headerRow = row;
+        headerRow = deduplicateHeaders(row);
       }
       headersLength = headerRow!.filter(h => h !== null && h !== undefined).length;
       headerRowProcessed = true;

@@ -60,6 +60,12 @@ function getSession(sessionId) {
 
 function parseCsv(input, options) {
   options = options || {};
+
+  // Strip BOM (Byte Order Mark) if present at the start
+  if (input.charCodeAt(0) === 0xFEFF) {
+    input = input.slice(1);
+  }
+
   const {
     delimiter = ',',
     quote: quoteOption = '"',
@@ -84,7 +90,7 @@ function parseCsv(input, options) {
     let dataRowCount = 0;
     for (const line of lines) {
       if (comment && line.startsWith(comment)) continue;
-      if (skipEmptyLines && line === '') continue;
+      if (skipEmptyLines && line.trim() === '') continue;
       
       const row = line.split(delimiter).map(trimField);
       
@@ -139,7 +145,7 @@ function parseCsv(input, options) {
         currentField = '';
         
         const isCommentLine = comment && currentRow.length === 1 && currentRow[0].startsWith(comment);
-        const isEmpty = currentRow.length === 1 && currentRow[0] === '';
+        const isEmpty = currentRow.length === 1 && currentRow[0].trim() === '';
         
         if (!isCommentLine && !(skipEmptyLines && isEmpty)) {
           if (useHeaders && !headerRow) {
@@ -165,7 +171,7 @@ function parseCsv(input, options) {
   if (currentField || currentRow.length > 0) {
     currentRow.push(trimField(currentField));
     const isCommentLine = comment && currentRow.length === 1 && currentRow[0].startsWith(comment);
-    const isEmpty = currentRow.length === 1 && currentRow[0] === '';
+    const isEmpty = currentRow.length === 1 && currentRow[0].trim() === '';
     
     if (!isCommentLine && !(skipEmptyLines && isEmpty)) {
       if (useHeaders && !headerRow) {
@@ -181,18 +187,46 @@ function parseCsv(input, options) {
 
 function buildResult(rows, headerRow, useHeaders) {
   if (useHeaders && headerRow) {
+    // Deduplicate headers to ensure unique keys
+    const dedupedHeaders = deduplicateHeaders(headerRow);
     const dataRows = rows.map(row => {
       const obj = {};
-      headerRow.forEach((header, idx) => {
+      dedupedHeaders.forEach((header, idx) => {
         if (header !== null && header !== undefined) {
           obj[header] = row[idx] ?? '';
         }
       });
       return obj;
     });
-    return { headers: headerRow, rows: dataRows };
+    return { headers: dedupedHeaders, rows: dataRows };
   }
   return rows;
+}
+
+/**
+ * Deduplicate headers by appending suffix to duplicates.
+ * Example: ["A", "B", "A", "A"] → ["A", "B", "A_1", "A_2"]
+ */
+function deduplicateHeaders(headers) {
+  const counts = new Map();
+  const result = [];
+
+  for (const header of headers) {
+    if (header === null || header === undefined) {
+      result.push(header);
+      continue;
+    }
+
+    const count = counts.get(header) ?? 0;
+    if (count === 0) {
+      result.push(header);
+    } else {
+      result.push(header + '_' + count);
+    }
+    counts.set(header, count + 1);
+  }
+
+  return result;
 }
 
 // =============================================================================

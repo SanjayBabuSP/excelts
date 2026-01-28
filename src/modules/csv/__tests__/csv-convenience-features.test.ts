@@ -670,4 +670,415 @@ describe("CSV Convenience Features", () => {
       expect(result.rows[0]).toEqual({ a: true, b: true, c: false, d: false });
     });
   });
+
+  // ============================================================================
+  // BOM Stripping Tests
+  // ============================================================================
+  describe("BOM stripping", () => {
+    // UTF-8 BOM character
+    const BOM = "\ufeff";
+
+    describe("parseCsv with BOM", () => {
+      it("should strip BOM from the start of CSV", () => {
+        const csv = BOM + "name,age\nAlice,30";
+        const result = parseCsv(csv, { headers: true }) as CsvParseResult<Record<string, string>>;
+
+        expect(result.rows[0]).toEqual({ name: "Alice", age: "30" });
+        // Should not have BOM in header name
+        expect(result.rows[0]["name"]).toBe("Alice");
+        expect(result.rows[0][BOM + "name"]).toBeUndefined();
+      });
+
+      it("should handle CSV without BOM normally", () => {
+        const csv = "name,age\nBob,25";
+        const result = parseCsv(csv, { headers: true }) as CsvParseResult<Record<string, string>>;
+
+        expect(result.rows[0]).toEqual({ name: "Bob", age: "25" });
+      });
+
+      it("should strip BOM with array output (no headers)", () => {
+        const csv = BOM + "a,b,c\n1,2,3";
+        const result = parseCsv(csv) as string[][];
+
+        expect(result[0]).toEqual(["a", "b", "c"]);
+        expect(result[0][0]).toBe("a"); // Not BOM + "a"
+      });
+
+      it("should work with BOM and dynamicTyping", () => {
+        const csv = BOM + "name,value\nTest,42";
+        const result = parseCsv(csv, {
+          headers: true,
+          dynamicTyping: true
+        }) as CsvParseResult<Record<string, unknown>>;
+
+        expect(result.rows[0]).toEqual({ name: "Test", value: 42 });
+      });
+
+      it("should work with BOM and beforeFirstChunk", () => {
+        const csv = BOM + "name,age\nAlice,30";
+        let receivedChunk = "";
+        const result = parseCsv(csv, {
+          headers: true,
+          beforeFirstChunk: chunk => {
+            receivedChunk = chunk;
+            return chunk;
+          }
+        }) as CsvParseResult<Record<string, string>>;
+
+        // beforeFirstChunk receives original with BOM, but final result has it stripped
+        expect(receivedChunk).toBe(csv);
+        expect(result.rows[0]["name"]).toBe("Alice");
+      });
+    });
+
+    describe("CsvParserStream with BOM", () => {
+      it("should strip BOM from streamed CSV", async () => {
+        const csv = BOM + "name,age\nAlice,30\nBob,25";
+        const parser = new CsvParserStream({ headers: true });
+        const rows = await parseStream<Record<string, string>>(csv, parser);
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toEqual({ name: "Alice", age: "30" });
+        expect(rows[0]["name"]).toBe("Alice");
+        expect(rows[0][BOM + "name"]).toBeUndefined();
+      });
+
+      it("should handle streamed CSV without BOM normally", async () => {
+        const csv = "name,age\nAlice,30";
+        const parser = new CsvParserStream({ headers: true });
+        const rows = await parseStream<Record<string, string>>(csv, parser);
+
+        expect(rows[0]).toEqual({ name: "Alice", age: "30" });
+      });
+    });
+  });
+
+  // ============================================================================
+  // Duplicate Header Auto-Rename Tests
+  // ============================================================================
+  describe("duplicate header auto-rename", () => {
+    describe("parseCsv with duplicate headers", () => {
+      it("should rename duplicate headers with suffix", () => {
+        const csv = "Name,Age,Name,Name\nAlice,30,Beijing,China";
+        const result = parseCsv(csv, { headers: true }) as CsvParseResult<Record<string, string>>;
+
+        expect(result.headers).toEqual(["Name", "Age", "Name_1", "Name_2"]);
+        expect(result.rows[0]).toEqual({
+          Name: "Alice",
+          Age: "30",
+          Name_1: "Beijing",
+          Name_2: "China"
+        });
+      });
+
+      it("should handle multiple different duplicates", () => {
+        const csv = "A,B,A,B,C,A\n1,2,3,4,5,6";
+        const result = parseCsv(csv, { headers: true }) as CsvParseResult<Record<string, string>>;
+
+        expect(result.headers).toEqual(["A", "B", "A_1", "B_1", "C", "A_2"]);
+        expect(result.rows[0]).toEqual({
+          A: "1",
+          B: "2",
+          A_1: "3",
+          B_1: "4",
+          C: "5",
+          A_2: "6"
+        });
+      });
+
+      it("should handle provided array headers with duplicates", () => {
+        const csv = "x,y,z\n1,2,3";
+        const result = parseCsv(csv, {
+          headers: ["col", "col", "col"],
+          renameHeaders: true
+        }) as CsvParseResult<Record<string, string>>;
+
+        expect(result.headers).toEqual(["col", "col_1", "col_2"]);
+        expect(result.rows[0]).toEqual({ col: "1", col_1: "2", col_2: "3" });
+      });
+
+      it("should work with dynamicTyping and duplicate headers", () => {
+        const csv = "value,name,value\n42,test,100";
+        const result = parseCsv(csv, {
+          headers: true,
+          dynamicTyping: true
+        }) as CsvParseResult<Record<string, unknown>>;
+
+        expect(result.headers).toEqual(["value", "name", "value_1"]);
+        expect(result.rows[0]).toEqual({ value: 42, name: "test", value_1: 100 });
+      });
+
+      it("should handle header transform function returning duplicates", () => {
+        const csv = "A,B,C\n1,2,3";
+        const result = parseCsv(csv, {
+          headers: () => ["same", "same", "same"]
+        }) as CsvParseResult<Record<string, string>>;
+
+        expect(result.headers).toEqual(["same", "same_1", "same_2"]);
+        expect(result.rows[0]).toEqual({ same: "1", same_1: "2", same_2: "3" });
+      });
+    });
+
+    describe("CsvParserStream with duplicate headers", () => {
+      it("should rename duplicate headers in stream", async () => {
+        const csv = "Name,Age,Name\nAlice,30,Beijing\nBob,25,Shanghai";
+        const parser = new CsvParserStream({ headers: true });
+        const rows = await parseStream<Record<string, string>>(csv, parser);
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toEqual({ Name: "Alice", Age: "30", Name_1: "Beijing" });
+        expect(rows[1]).toEqual({ Name: "Bob", Age: "25", Name_1: "Shanghai" });
+      });
+
+      it("should emit deduplicated headers event", async () => {
+        const csv = "A,B,A\n1,2,3";
+        const parser = new CsvParserStream({ headers: true });
+
+        let emittedHeaders: string[] | null = null;
+        parser.on("headers", headers => {
+          emittedHeaders = headers;
+        });
+
+        await parseStream(csv, parser);
+
+        expect(emittedHeaders).toEqual(["A", "B", "A_1"]);
+      });
+    });
+  });
+
+  // ============================================================================
+  // meta Object Tests
+  // ============================================================================
+  describe("meta object", () => {
+    it("should include meta in result with headers", () => {
+      const csv = "name,age\nAlice,25\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta).toBeDefined();
+      expect(result.meta.delimiter).toBe(",");
+      expect(result.meta.linebreak).toBe("\n");
+      expect(result.meta.aborted).toBe(false);
+      expect(result.meta.truncated).toBe(false);
+      expect(result.meta.cursor).toBe(2); // 2 data rows
+      expect(result.meta.fields).toEqual(["name", "age"]);
+    });
+
+    it("should set truncated to true when maxRows is reached", () => {
+      const csv = "name,age\nAlice,25\nBob,30\nCharlie,35";
+      const result = parseCsv(csv, {
+        headers: true,
+        maxRows: 2
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.truncated).toBe(true);
+      expect(result.meta.cursor).toBe(2);
+      expect(result.rows).toHaveLength(2);
+    });
+
+    it("should set truncated to false when all rows are processed", () => {
+      const csv = "name,age\nAlice,25";
+      const result = parseCsv(csv, {
+        headers: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.truncated).toBe(false);
+      expect(result.meta.cursor).toBe(1);
+    });
+
+    it("should detect CRLF line terminator", () => {
+      const csv = "name,age\r\nAlice,25\r\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.linebreak).toBe("\r\n");
+    });
+
+    it("should detect CR line terminator", () => {
+      const csv = "name,age\rAlice,25\rBob,30";
+      const result = parseCsv(csv, {
+        headers: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.linebreak).toBe("\r");
+    });
+
+    it("should include detected delimiter in meta", () => {
+      const csv = "name;age\nAlice;25";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "" // auto-detect
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe(";");
+    });
+
+    it("should include configured delimiter in meta", () => {
+      const csv = "name|age\nAlice|25";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "|"
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe("|");
+    });
+
+    it("should not include fields in meta for array mode", () => {
+      const csv = "Alice,25\nBob,30";
+      const result = parseCsv(csv, { headers: false });
+
+      // Array mode returns string[][], no meta
+      expect(Array.isArray(result)).toBe(true);
+    });
+
+    it("should work with fastMode", () => {
+      const csv = "name,age\nAlice,25\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true,
+        fastMode: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta).toBeDefined();
+      expect(result.meta.delimiter).toBe(",");
+      expect(result.meta.cursor).toBe(2);
+    });
+  });
+
+  // ============================================================================
+  // newline Option Tests
+  // ============================================================================
+  describe("newline option", () => {
+    it("should use provided newline in meta when specified", () => {
+      const csv = "name,age\nAlice,25\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true,
+        newline: "\n"
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.linebreak).toBe("\n");
+    });
+
+    it("should auto-detect newline when not specified", () => {
+      const csv = "name,age\r\nAlice,25\r\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.linebreak).toBe("\r\n");
+    });
+
+    it("should use specified newline for fastMode splitting", () => {
+      // Custom line separator
+      const csv = "name,age|Alice,25|Bob,30";
+      const result = parseCsv(csv, {
+        headers: true,
+        newline: "|",
+        fastMode: true
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0]).toEqual({ name: "Alice", age: "25" });
+      expect(result.rows[1]).toEqual({ name: "Bob", age: "30" });
+      expect(result.meta.linebreak).toBe("|");
+    });
+
+    it("should work with CRLF when explicitly specified", () => {
+      const csv = "name,age\r\nAlice,25\r\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true,
+        newline: "\r\n"
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.linebreak).toBe("\r\n");
+      expect(result.rows).toHaveLength(2);
+    });
+
+    it("should work with empty string (auto-detect)", () => {
+      const csv = "name,age\nAlice,25\nBob,30";
+      const result = parseCsv(csv, {
+        headers: true,
+        newline: "" // explicit auto-detect
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.linebreak).toBe("\n");
+    });
+  });
+
+  // ============================================================================
+  // delimitersToGuess Option Tests
+  // ============================================================================
+  describe("delimitersToGuess option", () => {
+    it("should use default delimiters when not specified", () => {
+      const csv = "name;age\nAlice;25\nBob;30";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "" // auto-detect
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe(";");
+    });
+
+    it("should use custom delimiters list for auto-detection", () => {
+      // Colon-separated data
+      const csv = "name:age\nAlice:25\nBob:30";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "",
+        delimitersToGuess: [":", ";", ","]
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe(":");
+      expect(result.rows[0]).toEqual({ name: "Alice", age: "25" });
+    });
+
+    it("should prefer earlier delimiter in list when scores are equal", () => {
+      // Data with no delimiters - should pick first in list
+      const csv = "name\nAlice\nBob";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "",
+        delimitersToGuess: ["|", ";", ","]
+      }) as CsvParseResult<Record<string, string>>;
+
+      // First delimiter in list should be selected as fallback
+      expect(result.meta.delimiter).toBe("|");
+    });
+
+    it("should detect semicolon when comma is not in guess list", () => {
+      const csv = "name;age\nAlice;25";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "",
+        delimitersToGuess: [";", "\t"] // no comma in list
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe(";");
+    });
+
+    it("should work with single delimiter in guess list", () => {
+      const csv = "name|age\nAlice|25";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: "",
+        delimitersToGuess: ["|"]
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe("|");
+      expect(result.rows[0]).toEqual({ name: "Alice", age: "25" });
+    });
+
+    it("should ignore delimitersToGuess when delimiter is explicitly set", () => {
+      const csv = "name,age\nAlice,25";
+      const result = parseCsv(csv, {
+        headers: true,
+        delimiter: ",", // explicit, not ""
+        delimitersToGuess: [";"] // should be ignored
+      }) as CsvParseResult<Record<string, string>>;
+
+      expect(result.meta.delimiter).toBe(",");
+      expect(result.rows[0]).toEqual({ name: "Alice", age: "25" });
+    });
+  });
 });

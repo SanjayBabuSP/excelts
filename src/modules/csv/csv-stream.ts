@@ -27,7 +27,9 @@ import {
   detectDelimiter,
   escapeRegex,
   applyDynamicTypingToRow,
-  applyDynamicTypingToArrayRow
+  applyDynamicTypingToArrayRow,
+  deduplicateHeaders,
+  stripBom
 } from "@csv/csv-core";
 import { formatNumberForCsv } from "@csv/csv-number";
 
@@ -178,6 +180,11 @@ export class CsvParserStream extends Transform {
     try {
       const data = typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
       this.buffer += data;
+
+      // Strip BOM on first chunk if present
+      if (!this.beforeFirstChunkApplied) {
+        this.buffer = stripBom(this.buffer);
+      }
 
       // Apply beforeFirstChunk on first chunk
       if (!this.beforeFirstChunkApplied && this.options.beforeFirstChunk) {
@@ -429,8 +436,8 @@ export class CsvParserStream extends Transform {
             continue;
           }
 
-          // Skip comment/empty lines
-          const isEmpty = this.currentRow.length === 1 && this.currentRow[0] === "";
+          // Skip comment/empty lines (greedy: also skips whitespace-only lines)
+          const isEmpty = this.currentRow.length === 1 && this.currentRow[0].trim() === "";
           if (this.shouldSkipLine(this.currentRow[0] ?? "", isEmpty, shouldSkipEmpty)) {
             this.currentRow = [];
             i++;
@@ -562,24 +569,30 @@ export class CsvParserStream extends Transform {
 
     // Handle headers - first row or provided array
     if (this.headerRow === null) {
-      if (
-        headers === true ||
-        typeof headers === "function" ||
-        (Array.isArray(headers) && renameHeaders)
-      ) {
-        if (typeof headers === "function") {
-          this.headerRow = headers(row).filter((h): h is string => h != null);
-        } else if (Array.isArray(headers) && renameHeaders) {
-          this.headerRow = headers.filter((h): h is string => h != null);
-        } else {
-          this.headerRow = row;
-        }
-        this.emitHeaders();
-        return true;
+      // Determine header source: function result, provided array, or first row
+      let rawHeaders: string[];
+      let skipCurrentRow = false;
+
+      if (typeof headers === "function") {
+        rawHeaders = headers(row).filter((h): h is string => h != null);
+        skipCurrentRow = true;
+      } else if (Array.isArray(headers)) {
+        rawHeaders = headers.filter((h): h is string => h != null);
+        skipCurrentRow = renameHeaders; // Skip first row only if renaming
+      } else if (headers === true) {
+        rawHeaders = row;
+        skipCurrentRow = true;
+      } else {
+        // No headers mode - process row normally
+        rawHeaders = [];
       }
-      if (Array.isArray(headers) && !renameHeaders) {
-        this.headerRow = headers.filter((h): h is string => h != null);
+
+      if (rawHeaders.length > 0) {
+        this.headerRow = deduplicateHeaders(rawHeaders) as string[];
         this.emitHeaders();
+        if (skipCurrentRow) {
+          return true;
+        }
       }
     }
 

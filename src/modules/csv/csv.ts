@@ -35,4 +35,5 @@ class CSV extends CSVBrowser {
 export { CSV };
 export type { CsvOptions, CsvInput } from "@csv/csv.browser";
 export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
-export { detectDelimiter } from "@csv/csv-core";
+export { detectDelimiter, detectLinebreak, stripBom, deduplicateHeaders } from "@csv/csv-core";
+export type { CsvParseMeta, CsvParseResult, DynamicTypingConfig, ChunkMeta } from "@csv/csv-core";
