@@ -15,7 +15,9 @@ import type {
   Row,
   RowTransformCallback,
   RowValidateCallback,
-  ChunkMeta
+  ChunkMeta,
+  TypeTransformMap,
+  TransformContext
 } from "@csv/csv-core";
 import {
   isSyncTransform,
@@ -31,9 +33,10 @@ import {
   deduplicateHeaders,
   stripBom,
   makeTrimField,
-  startsWithFormulaChar
+  startsWithFormulaChar,
+  applyTypeTransform,
+  defaultToString
 } from "@csv/csv-core";
-import { formatNumberForCsv } from "@csv/csv-number";
 
 const NON_WHITESPACE_RE = /\S/;
 
@@ -981,11 +984,16 @@ export class CsvFormatterStream extends Transform {
   private headerWritten: boolean = false;
   private headers: string[] | null = null;
   private shouldWriteHeaders: boolean;
-  private rowCount: number = 0;
-  private _rowTransform: ((row: Row, cb: RowTransformCallback<Row>) => void) | null = null;
+  /** Index of source row (before filtering), passed to transform.row */
+  private sourceRowIndex: number = 0;
+  /** Index of output data row (after filtering, excludes header), used for ctx.index */
+  private outputRowIndex: number = 0;
+  private transform_: TypeTransformMap | null = null;
   // Pre-compiled regex for quote escaping
   private escapeQuoteRegex: RegExp | null = null;
   private escapedQuote: string = "";
+  // Pre-compiled regex for needsQuote check
+  private needsQuoteRegex: RegExp | null = null;
 
   constructor(options: CsvFormatterStreamOptions = {}) {
     super({
@@ -1016,6 +1024,10 @@ export class CsvFormatterStream extends Transform {
     if (this.quoteEnabled) {
       this.escapeQuoteRegex = new RegExp(escapeRegex(this.quote), "g");
       this.escapedQuote = this.escape + this.quote;
+      // Pre-compile regex to check if quoting is needed
+      this.needsQuoteRegex = new RegExp(
+        `[${escapeRegex(this.delimiter)}${escapeRegex(this.quote)}\r\n]`
+      );
     }
 
     if (Array.isArray(options.headers)) {
@@ -1024,33 +1036,8 @@ export class CsvFormatterStream extends Transform {
 
     // Set up transform from options
     if (options.transform) {
-      this.transform(options.transform);
+      this.transform_ = options.transform;
     }
-  }
-
-  /**
-   * Set a transform function to modify rows before formatting
-   */
-  transform<I extends Row = Row, O extends Row = Row>(
-    transformFunction: RowTransformFunction<I, O>
-  ): this {
-    if (typeof transformFunction !== "function") {
-      throw new TypeError("The transform should be a function");
-    }
-
-    if (isSyncTransform(transformFunction)) {
-      this._rowTransform = (row: Row, cb: RowTransformCallback<Row>): void => {
-        try {
-          const result = transformFunction(row as I);
-          cb(null, result as Row);
-        } catch (e) {
-          cb(e as Error);
-        }
-      };
-    } else {
-      this._rowTransform = transformFunction as (row: Row, cb: RowTransformCallback<Row>) => void;
-    }
-    return this;
   }
 
   /**
@@ -1089,26 +1076,20 @@ export class CsvFormatterStream extends Transform {
         this.headerWritten = true;
       }
 
-      // Apply transform if set
-      if (this._rowTransform) {
-        this._rowTransform(chunk, (err, transformedRow) => {
-          if (err) {
-            callback(err);
-            return;
-          }
-
-          if (transformedRow === null || transformedRow === undefined) {
-            callback();
-            return;
-          }
-
-          this.formatAndPush(transformedRow);
+      // Apply row-level transform if provided
+      let processedChunk: Row | null = chunk;
+      const sourceIndex = this.sourceRowIndex++;
+      if (this.transform_?.row) {
+        processedChunk = this.transform_.row(chunk, sourceIndex);
+        if (processedChunk === null) {
           callback();
-        });
-      } else {
-        this.formatAndPush(chunk);
-        callback();
+          return;
+        }
       }
+
+      this.formatAndPush(processedChunk);
+      this.outputRowIndex++;
+      callback();
     } catch (error) {
       callback(error as Error);
     }
@@ -1130,7 +1111,9 @@ export class CsvFormatterStream extends Transform {
     }
 
     // Add trailing row delimiter if includeEndRowDelimiter is true
-    if (this.options.includeEndRowDelimiter && this.rowCount > 0) {
+    // hasOutput = wrote header OR wrote any data row
+    const hasOutput = (this.shouldWriteHeaders && this.headers) || this.outputRowIndex > 0;
+    if (this.options.includeEndRowDelimiter && hasOutput) {
       this.push(this.rowDelimiter);
     }
 
@@ -1165,20 +1148,16 @@ export class CsvFormatterStream extends Transform {
     const fields = row.map((field, index) => {
       const headerName = this.headers?.[index];
       const shouldForceQuote = this.shouldQuoteField(index, headerName, quoteConfig);
-      return this.formatField(field, shouldForceQuote);
+      return this.formatField(field, index, headerName, shouldForceQuote, isHeader);
     });
 
     const formattedRow = fields.join(this.delimiter);
 
-    // Use row delimiter as prefix (except for first row)
-    // rowDelimiter separates rows, no trailing delimiter by default
-    if (this.rowCount === 0) {
-      this.rowCount++;
-      return formattedRow;
-    }
-
-    this.rowCount++;
-    return this.rowDelimiter + formattedRow;
+    // Use row delimiter as prefix (except for first output)
+    // First output = header row OR (no header AND first data row)
+    const isFirstLine =
+      isHeader || (!(this.shouldWriteHeaders && this.headers) && this.outputRowIndex === 0);
+    return isFirstLine ? formattedRow : this.rowDelimiter + formattedRow;
   }
 
   private shouldQuoteField(
@@ -1201,13 +1180,25 @@ export class CsvFormatterStream extends Transform {
     return false;
   }
 
-  private formatField(value: unknown, forceQuote: boolean = false): string {
-    if (value === null || value === undefined) {
-      return "";
+  private formatField(
+    value: unknown,
+    index: number,
+    headerName: string | undefined,
+    forceQuote: boolean = false,
+    isHeader: boolean = false
+  ): string {
+    // Apply type-based transform if provided (not for headers)
+    let str: string;
+    if (!isHeader && this.transform_) {
+      const ctx: TransformContext = {
+        column: headerName ?? index,
+        index: this.outputRowIndex
+      };
+      const transformed = applyTypeTransform(value, this.transform_, ctx);
+      str = transformed !== undefined ? transformed : defaultToString(value, this.decimalSeparator);
+    } else {
+      str = defaultToString(value, this.decimalSeparator);
     }
-
-    let str =
-      typeof value === "number" ? formatNumberForCsv(value, this.decimalSeparator) : String(value);
 
     // Escape formulae to prevent CSV injection (OWASP recommendation)
     if (this.escapeFormulae && startsWithFormulaChar(str)) {
@@ -1218,14 +1209,8 @@ export class CsvFormatterStream extends Transform {
       return str;
     }
 
-    // Check if quoting is needed
-    const needsQuote =
-      this.alwaysQuote ||
-      forceQuote ||
-      str.includes(this.delimiter) ||
-      str.includes(this.quote) ||
-      str.includes("\r") ||
-      str.includes("\n");
+    // Check if quoting is needed using pre-compiled regex
+    const needsQuote = this.alwaysQuote || forceQuote || this.needsQuoteRegex!.test(str);
 
     if (needsQuote) {
       // Use pre-compiled regex for escaping

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ArchiveAbortError,
+  AbortError,
   createAbortError,
   createLinkedAbortController,
   isAbortError,
@@ -11,7 +11,7 @@ import {
 describe("abort utils", () => {
   it("createAbortError should preserve reason and message", () => {
     const e0 = createAbortError();
-    expect(e0).toBeInstanceOf(ArchiveAbortError);
+    expect(e0).toBeInstanceOf(AbortError);
     expect(e0.name).toBe("AbortError");
     expect(e0.message).toBe("Aborted");
     expect((e0 as any).reason).toBeUndefined();

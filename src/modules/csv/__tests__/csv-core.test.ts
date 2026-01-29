@@ -2679,10 +2679,10 @@ describe("CSV Core - Formatter Options", () => {
   });
 
   // ===========================================================================
-  // Sync transform in formatCsv
+  // TypeTransformMap (row-level transform and type-based transforms)
   // ===========================================================================
-  describe("formatCsv sync transform", () => {
-    it("should apply sync transform to formatted rows (objects)", () => {
+  describe("formatCsv TypeTransformMap", () => {
+    it("should apply row transform to formatted rows (objects)", () => {
       const result = formatCsv(
         [
           { name: "alice", age: "30" },
@@ -2690,16 +2690,18 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           headers: true,
-          transform: (row: Record<string, string>) => ({
-            ...row,
-            name: row.name.toUpperCase()
-          })
+          transform: {
+            row: (row: Record<string, string>) => ({
+              ...row,
+              name: row.name.toUpperCase()
+            })
+          }
         }
       );
       expect(result).toBe("name,age\nALICE,30\nBOB,25");
     });
 
-    it("should skip rows when transform returns null (objects)", () => {
+    it("should skip rows when row transform returns null (objects)", () => {
       const result = formatCsv(
         [
           { name: "Alice", age: "30" },
@@ -2708,31 +2710,35 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           headers: true,
-          transform: (row: Record<string, string>) => {
-            if (Number(row.age) < 30) {
-              return null;
+          transform: {
+            row: (row: Record<string, string>) => {
+              if (Number(row.age) < 30) {
+                return null;
+              }
+              return row;
             }
-            return row;
           }
         }
       );
       expect(result).toBe("name,age\nAlice,30\nCharlie,35");
     });
 
-    it("should apply sync transform to formatted rows (arrays)", () => {
+    it("should apply row transform to formatted rows (arrays)", () => {
       const result = formatCsv(
         [
           ["alice", "30"],
           ["bob", "25"]
         ],
         {
-          transform: (row: string[]) => [row[0].toUpperCase(), row[1]]
+          transform: {
+            row: (row: string[]) => [row[0].toUpperCase(), row[1]]
+          }
         }
       );
       expect(result).toBe("ALICE,30\nBOB,25");
     });
 
-    it("should skip rows when transform returns null (arrays)", () => {
+    it("should skip rows when row transform returns null (arrays)", () => {
       const result = formatCsv(
         [
           ["Alice", "30"],
@@ -2740,18 +2746,20 @@ describe("CSV Core - Formatter Options", () => {
           ["Charlie", "35"]
         ],
         {
-          transform: (row: string[]) => {
-            if (Number(row[1]) < 30) {
-              return null;
+          transform: {
+            row: (row: string[]) => {
+              if (Number(row[1]) < 30) {
+                return null;
+              }
+              return row;
             }
-            return row;
           }
         }
       );
       expect(result).toBe("Alice,30\nCharlie,35");
     });
 
-    it("should work with headers and transform together", () => {
+    it("should work with headers and row transform together", () => {
       const result = formatCsv(
         [
           ["alice", "30"],
@@ -2759,10 +2767,288 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           headers: ["Name", "Age"],
-          transform: (row: string[]) => [row[0].toUpperCase(), row[1]]
+          transform: {
+            row: (row: string[]) => [row[0].toUpperCase(), row[1]]
+          }
         }
       );
       expect(result).toBe("Name,Age\nALICE,30\nBOB,25");
+    });
+
+    it("should apply type-based boolean transform", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", active: true },
+          { name: "Bob", active: false }
+        ],
+        {
+          headers: true,
+          transform: {
+            boolean: (v: boolean) => (v ? "Yes" : "No")
+          }
+        }
+      );
+      expect(result).toBe("name,active\nAlice,Yes\nBob,No");
+    });
+
+    it("should apply type-based date transform", () => {
+      const result = formatCsv([{ name: "Alice", date: new Date("2024-01-15T12:30:00.000Z") }], {
+        headers: true,
+        transform: {
+          date: (v: Date) => v.toISOString().split("T")[0]
+        }
+      });
+      expect(result).toBe("name,date\nAlice,2024-01-15");
+    });
+
+    it("should apply type-based number transform with context", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", price: 19.99, quantity: 5 },
+          { name: "Bob", price: 29.5, quantity: 3 }
+        ],
+        {
+          headers: true,
+          transform: {
+            number: (v: number, ctx) => (ctx.column === "price" ? `$${v.toFixed(2)}` : String(v))
+          }
+        }
+      );
+      expect(result).toBe("name,price,quantity\nAlice,$19.99,5\nBob,$29.50,3");
+    });
+
+    it("should apply type-based string transform", () => {
+      const result = formatCsv(
+        [
+          { name: "alice", city: "new york" },
+          { name: "bob", city: "los angeles" }
+        ],
+        {
+          headers: true,
+          transform: {
+            string: (v: string) => v.toUpperCase()
+          }
+        }
+      );
+      expect(result).toBe("name,city\nALICE,NEW YORK\nBOB,LOS ANGELES");
+    });
+
+    it("should combine row transform with type transforms", () => {
+      const result = formatCsv(
+        [
+          { name: "alice", age: 30, active: true },
+          { name: "bob", age: 25, active: false },
+          { name: "charlie", age: 35, active: true }
+        ],
+        {
+          headers: true,
+          transform: {
+            row: (row: any) => (row.age >= 30 ? row : null), // Filter out young users
+            boolean: (v: boolean) => (v ? "Active" : "Inactive"),
+            number: (v: number) => v.toString()
+          }
+        }
+      );
+      expect(result).toBe("name,age,active\nalice,30,Active\ncharlie,35,Active");
+    });
+
+    it("should apply type-based bigint transform", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", count: BigInt(1000000000000) },
+          { name: "Bob", count: BigInt(9999999999999) }
+        ],
+        {
+          headers: true,
+          transform: {
+            bigint: (v: bigint) => v.toLocaleString()
+          }
+        }
+      );
+      expect(result).toContain("Alice");
+      expect(result).toContain("Bob");
+      // BigInt formatting depends on locale, just check it contains formatted number
+      expect(result).not.toContain("1000000000000n");
+    });
+
+    it("should apply type-based object transform", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", meta: { role: "admin", level: 5 } },
+          { name: "Bob", meta: { role: "user", level: 1 } }
+        ],
+        {
+          headers: true,
+          transform: {
+            object: (v: Record<string, any>) => `${v.role}:${v.level}`
+          }
+        }
+      );
+      expect(result).toBe("name,meta\nAlice,admin:5\nBob,user:1");
+    });
+
+    it("should handle empty transform object (no transforms defined)", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", active: true },
+          { name: "Bob", active: false }
+        ],
+        {
+          headers: true,
+          transform: {} // Empty transform object
+        }
+      );
+      // Should use default behavior
+      expect(result).toBe("name,active\nAlice,true\nBob,false");
+    });
+
+    it("should handle transform returning empty string", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", secret: "password123" },
+          { name: "Bob", secret: "hunter2" }
+        ],
+        {
+          headers: true,
+          transform: {
+            string: (v: string, ctx) => (ctx.column === "secret" ? "" : v)
+          }
+        }
+      );
+      expect(result).toBe("name,secret\nAlice,\nBob,");
+    });
+
+    it("should provide correct context.index across rows", () => {
+      const indices: number[] = [];
+      formatCsv([{ val: 1 }, { val: 2 }, { val: 3 }], {
+        headers: true,
+        transform: {
+          number: (v, ctx) => {
+            indices.push(ctx.index);
+            return String(v);
+          }
+        }
+      });
+      expect(indices).toEqual([0, 1, 2]);
+    });
+
+    it("should handle row transform that modifies row structure", () => {
+      const result = formatCsv(
+        [
+          { first: "Alice", last: "Smith" },
+          { first: "Bob", last: "Jones" }
+        ],
+        {
+          headers: ["fullName"], // Only output fullName
+          transform: {
+            row: (row: any) => ({ fullName: `${row.first} ${row.last}` })
+          }
+        }
+      );
+      expect(result).toBe("fullName\nAlice Smith\nBob Jones");
+    });
+
+    it("should handle null/undefined values without transform", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", value: null },
+          { name: "Bob", value: undefined }
+        ],
+        {
+          headers: true
+        }
+      );
+      expect(result).toBe("name,value\nAlice,\nBob,");
+    });
+
+    it("should handle arrays in data without object transform", () => {
+      const result = formatCsv([{ name: "Alice", tags: ["a", "b", "c"] }], {
+        headers: true
+      });
+      // Arrays should be JSON stringified by default
+      expect(result).toBe('name,tags\nAlice,"[""a"",""b"",""c""]"');
+    });
+
+    it("should work with RowHashArray and type transforms", () => {
+      const result = formatCsv(
+        [
+          [
+            ["name", "Alice"],
+            ["active", true]
+          ],
+          [
+            ["name", "Bob"],
+            ["active", false]
+          ]
+        ] as any,
+        {
+          headers: true,
+          transform: {
+            boolean: (v: boolean) => (v ? "YES" : "NO")
+          }
+        }
+      );
+      expect(result).toBe("name,active\nAlice,YES\nBob,NO");
+    });
+
+    it("should handle transform combined with escapeFormulae", () => {
+      const result = formatCsv(
+        [
+          { name: "Alice", formula: "=SUM(A1:A10)" },
+          { name: "Bob", formula: "+1234" }
+        ],
+        {
+          headers: true,
+          escapeFormulae: true,
+          transform: {
+            string: (v: string, ctx) => (ctx.column === "name" ? v.toUpperCase() : v)
+          }
+        }
+      );
+      // Formula values should be escaped with tab prefix
+      expect(result).toContain("ALICE");
+      expect(result).toContain("\t=SUM(A1:A10)");
+      expect(result).toContain("\t+1234");
+    });
+
+    it("should handle transform with decimalSeparator override", () => {
+      const result = formatCsv([{ name: "Alice", price: 19.99 }], {
+        headers: true,
+        decimalSeparator: ",",
+        delimiter: ";"
+      });
+      expect(result).toBe("name;price\nAlice;19,99");
+    });
+
+    it("should handle invalid Date in data", () => {
+      const result = formatCsv([{ name: "Alice", date: new Date("invalid") }], {
+        headers: true
+      });
+      // Invalid Date should still be converted (NaN timestamp)
+      expect(result).toContain("Alice");
+      expect(result).toContain("NaN");
+    });
+
+    it("should provide sourceIndex to row transform and ctx.index for type transforms", () => {
+      const sourceIndices: number[] = [];
+      const outputIndices: number[] = [];
+      formatCsv([{ val: 1 }, { val: 2 }, { val: 3 }, { val: 4 }], {
+        headers: true,
+        transform: {
+          row: (row: any, sourceIndex) => {
+            sourceIndices.push(sourceIndex);
+            return sourceIndex % 2 === 0 ? row : null; // Keep rows at even source indices
+          },
+          number: (v, ctx) => {
+            outputIndices.push(ctx.index);
+            return String(v);
+          }
+        }
+      });
+      // row transform receives source indices: 0, 1, 2, 3
+      expect(sourceIndices).toEqual([0, 1, 2, 3]);
+      // type transforms receive output indices: 0, 1 (after filtering)
+      expect(outputIndices).toEqual([0, 1]);
     });
   });
 

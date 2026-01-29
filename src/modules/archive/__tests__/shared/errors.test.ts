@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ArchiveError,
-  ArchiveAbortError,
+  AbortError,
   ZipParseError,
   InvalidZipSignatureError,
   EocdNotFoundError,
@@ -31,23 +31,23 @@ describe("errors", () => {
     });
   });
 
-  describe("ArchiveAbortError", () => {
+  describe("AbortError", () => {
     it("should create with no reason", () => {
-      const error = new ArchiveAbortError();
+      const error = new AbortError();
       expect(error.message).toBe("Aborted");
       expect(error.name).toBe("AbortError");
       expect(error.reason).toBeUndefined();
     });
 
     it("should create with string reason", () => {
-      const error = new ArchiveAbortError("user cancelled");
+      const error = new AbortError("user cancelled");
       expect(error.message).toBe("user cancelled");
       expect(error.reason).toBe("user cancelled");
     });
 
     it("should create with Error reason", () => {
       const cause = new Error("timeout");
-      const error = new ArchiveAbortError(cause);
+      const error = new AbortError(cause);
       expect(error.message).toBe("timeout");
       expect(error.reason).toBe(cause);
     });

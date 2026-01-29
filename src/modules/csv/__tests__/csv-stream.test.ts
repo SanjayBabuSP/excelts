@@ -1573,16 +1573,17 @@ describe("CSV Stream - objectMode Option", () => {
   });
 });
 
-describe("CSV Stream - Transform Function (CsvFormatterStream)", () => {
-  it("should support sync transform on formatter", async () => {
+describe("CSV Stream - TypeTransformMap (CsvFormatterStream)", () => {
+  it("should support row transform via options", async () => {
     const formatter = new CsvFormatterStream({
-      headers: ["name", "age"]
+      headers: ["name", "age"],
+      transform: {
+        row: (row: Record<string, string>) => ({
+          name: row.name?.toUpperCase(),
+          age: row.age
+        })
+      }
     });
-
-    formatter.transform((row: Record<string, string>) => ({
-      name: row.name?.toUpperCase(),
-      age: row.age
-    }));
 
     const chunks: string[] = [];
     formatter.on("data", (chunk: string) => chunks.push(chunk));
@@ -1595,40 +1596,17 @@ describe("CSV Stream - Transform Function (CsvFormatterStream)", () => {
     expect(output).toContain("ALICE");
   });
 
-  it("should support async transform on formatter", async () => {
+  it("should skip row when row transform returns null", async () => {
     const formatter = new CsvFormatterStream({
-      headers: ["name"]
-    });
-
-    formatter.transform(
-      (row: Record<string, string>, cb: (err: Error | null, row?: any) => void) => {
-        setImmediate(() => {
-          cb(null, { name: row.name?.toUpperCase() });
-        });
+      headers: ["name"],
+      transform: {
+        row: (row: Record<string, string>) => {
+          if (row.name === "skip") {
+            return null;
+          }
+          return row;
+        }
       }
-    );
-
-    const chunks: string[] = [];
-    formatter.on("data", (chunk: string) => chunks.push(chunk));
-
-    formatter.write({ name: "bob" });
-    formatter.end();
-
-    await new Promise<void>(resolve => formatter.on("finish", resolve));
-    const output = chunks.join("");
-    expect(output).toContain("BOB");
-  });
-
-  it("should skip row when transform returns null", async () => {
-    const formatter = new CsvFormatterStream({
-      headers: ["name"]
-    });
-
-    formatter.transform((row: Record<string, string>) => {
-      if (row.name === "skip") {
-        return null;
-      }
-      return row;
     });
 
     const chunks: string[] = [];
@@ -1646,12 +1624,94 @@ describe("CSV Stream - Transform Function (CsvFormatterStream)", () => {
     expect(output).not.toContain("skip");
   });
 
-  it("should throw if transform is not a function", () => {
-    const formatter = new CsvFormatterStream();
-    // @ts-expect-error Testing runtime type check with invalid argument
-    expect(() => formatter.transform("not a function")).toThrow(
-      "The transform should be a function"
-    );
+  it("should apply type-based boolean transform", async () => {
+    const formatter = new CsvFormatterStream({
+      headers: ["name", "active"],
+      transform: {
+        boolean: (v: boolean) => (v ? "Yes" : "No")
+      }
+    });
+
+    const chunks: string[] = [];
+    formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+    formatter.write({ name: "alice", active: true });
+    formatter.write({ name: "bob", active: false });
+    formatter.end();
+
+    await new Promise<void>(resolve => formatter.on("finish", resolve));
+    const output = chunks.join("");
+    expect(output).toContain("alice,Yes");
+    expect(output).toContain("bob,No");
+  });
+
+  it("should apply type-based number transform with context", async () => {
+    const formatter = new CsvFormatterStream({
+      headers: ["name", "price", "quantity"],
+      transform: {
+        number: (v: number, ctx) => (ctx.column === "price" ? `$${v.toFixed(2)}` : String(v))
+      }
+    });
+
+    const chunks: string[] = [];
+    formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+    formatter.write({ name: "Item1", price: 19.99, quantity: 5 });
+    formatter.end();
+
+    await new Promise<void>(resolve => formatter.on("finish", resolve));
+    const output = chunks.join("");
+    expect(output).toContain("$19.99");
+    expect(output).toContain(",5");
+  });
+
+  it("should provide sourceIndex to row transform for position-based filtering", async () => {
+    const formatter = new CsvFormatterStream({
+      headers: ["val"],
+      transform: {
+        row: (row: any, sourceIndex: number) => (sourceIndex < 2 ? row : null) // Keep first 2 rows
+      }
+    });
+
+    const chunks: string[] = [];
+    formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+    formatter.write({ val: 1 });
+    formatter.write({ val: 2 });
+    formatter.write({ val: 3 });
+    formatter.write({ val: 4 });
+    formatter.end();
+
+    await new Promise<void>(resolve => formatter.on("finish", resolve));
+    const output = chunks.join("");
+    expect(output).toBe("val\n1\n2");
+  });
+
+  it("should provide ctx.index as output index for type transforms", async () => {
+    const outputIndices: number[] = [];
+    const formatter = new CsvFormatterStream({
+      headers: ["val"],
+      transform: {
+        row: (row: any, sourceIndex: number) => (sourceIndex % 2 === 0 ? row : null),
+        number: (v: number, ctx) => {
+          outputIndices.push(ctx.index);
+          return String(v);
+        }
+      }
+    });
+
+    const chunks: string[] = [];
+    formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+    formatter.write({ val: 1 });
+    formatter.write({ val: 2 });
+    formatter.write({ val: 3 });
+    formatter.write({ val: 4 });
+    formatter.end();
+
+    await new Promise<void>(resolve => formatter.on("finish", resolve));
+    // ctx.index is output index (0, 1), not source index (0, 2)
+    expect(outputIndices).toEqual([0, 1]);
   });
 });
 

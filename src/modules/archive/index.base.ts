@@ -35,7 +35,7 @@ export {
 // Abort and Error types - all from centralized errors module
 export {
   // Abort helpers
-  ArchiveAbortError,
+  AbortError,
   createAbortError,
   isAbortError,
   throwIfAborted,

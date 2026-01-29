@@ -56,5 +56,7 @@ export type {
   CsvParseError,
   CsvParseErrorCode,
   DynamicTypingConfig,
-  ChunkMeta
+  ChunkMeta,
+  TransformContext,
+  TypeTransformMap
 } from "@csv/csv-core";

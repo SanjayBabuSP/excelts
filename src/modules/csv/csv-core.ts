@@ -36,6 +36,48 @@ export type RowTransformFunction<I = Row, O = Row> =
   | ((row: I) => O | null)
   | ((row: I, callback: RowTransformCallback<O>) => void);
 
+/**
+ * Context passed to type-based transform functions.
+ * Provides information about the current field being transformed.
+ */
+export interface TransformContext {
+  /** Column name (for object rows) or column index (for array rows) */
+  column: string | number;
+  /**
+   * Output record index (0-based).
+   * This is the index of the current record in the output, after row filtering.
+   * For example, if rows 0, 2, 4 pass the row filter, their indices will be 0, 1, 2.
+   */
+  index: number;
+}
+
+/**
+ * Type-based transform functions for formatting specific data types.
+ * Each function receives the value and context, returns a string.
+ */
+export interface TypeTransformMap {
+  /** Transform boolean values */
+  boolean?: (value: boolean, ctx: TransformContext) => string;
+  /** Transform Date values */
+  date?: (value: Date, ctx: TransformContext) => string;
+  /** Transform number values */
+  number?: (value: number, ctx: TransformContext) => string;
+  /** Transform bigint values */
+  bigint?: (value: bigint, ctx: TransformContext) => string;
+  /** Transform object values (excluding Date, null, arrays) */
+  object?: (value: Record<string, any>, ctx: TransformContext) => string;
+  /** Transform string values */
+  string?: (value: string, ctx: TransformContext) => string;
+  /**
+   * Row-level transform (runs before type transforms).
+   * Return null to skip the row entirely.
+   *
+   * @param row - The row data
+   * @param sourceIndex - Index in the source data array (0-based, before filtering)
+   */
+  row?: (row: Row, sourceIndex: number) => Row | null;
+}
+
 /** Row validate callback */
 export type RowValidateCallback = (
   error?: Error | null,
@@ -370,10 +412,33 @@ export interface CsvFormatOptions {
   /** Write headers even when there's no data (default: false) */
   alwaysWriteHeaders?: boolean;
   /**
-   * Transform function to apply to each row before formatting
-   * Can be sync (returns row) or async (calls callback)
+   * Transform configuration for data conversion.
+   *
+   * Supports type-based field transforms and row-level filtering:
+   * - `boolean`: Transform boolean values
+   * - `date`: Transform Date values
+   * - `number`: Transform number values
+   * - `bigint`: Transform bigint values
+   * - `object`: Transform object values
+   * - `string`: Transform string values
+   * - `row`: Row-level filter/transform (runs first, return null to skip)
+   *
+   * @example
+   * // Type-based transforms
+   * transform: {
+   *   boolean: (v) => v ? 'Yes' : 'No',
+   *   date: (v) => v.toISOString().split('T')[0],
+   *   number: (v, ctx) => ctx.column === 'price' ? '$' + v.toFixed(2) : String(v)
+   * }
+   *
+   * @example
+   * // Row filtering + type transforms
+   * transform: {
+   *   row: (row) => row.active ? row : null,
+   *   boolean: (v) => v ? 'Active' : 'Inactive'
+   * }
    */
-  transform?: RowTransformFunction<Row, Row>;
+  transform?: TypeTransformMap;
   /**
    * Enable object mode (default: true for Node.js streams)
    * - true: accept row objects/arrays directly
@@ -1638,6 +1703,73 @@ export function parseCsv(
 // =============================================================================
 
 /**
+ * Apply type-based transform to a single value.
+ * Returns the transformed string, or undefined if no transform applies.
+ * @internal Exported for use in csv-stream.ts
+ */
+export function applyTypeTransform(
+  value: any,
+  transform: TypeTransformMap,
+  ctx: TransformContext
+): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  const type = typeof value;
+
+  if (type === "boolean" && transform.boolean) {
+    return transform.boolean(value, ctx);
+  }
+  if (value instanceof Date && transform.date) {
+    return transform.date(value, ctx);
+  }
+  if (type === "number" && transform.number) {
+    return transform.number(value, ctx);
+  }
+  if (type === "bigint" && transform.bigint) {
+    return transform.bigint(value, ctx);
+  }
+  if (type === "string" && transform.string) {
+    return transform.string(value, ctx);
+  }
+  // Handle plain objects (not Date, not Array, not null)
+  if (type === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)) {
+    if (transform.object) {
+      return transform.object(value, ctx);
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Default type conversion to string.
+ * @internal Exported for use in csv-stream.ts
+ */
+export function defaultToString(value: any, decimalSeparator: DecimalSeparator): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "number") {
+    return formatNumberForCsv(value, decimalSeparator);
+  }
+  if (value instanceof Date) {
+    return String(value.getTime());
+  }
+  if (typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/**
  * Format data as a CSV string
  */
 export function formatCsv(
@@ -1681,6 +1813,7 @@ export function formatCsv(
   const escapedQuote = escape + quote;
 
   const lines: string[] = [];
+  let recordsProcessed = 0;
 
   const shouldQuoteColumn = (
     index: number,
@@ -1707,14 +1840,21 @@ export function formatCsv(
     header?: string,
     isHeader: boolean = false
   ): string => {
-    if (value === null || value === undefined) {
-      return "";
+    // Apply type-based transform if provided (not for headers)
+    let str: string;
+    if (!isHeader && transform) {
+      const ctx: TransformContext = {
+        column: header ?? index,
+        index: recordsProcessed
+      };
+      const transformed = applyTypeTransform(value, transform, ctx);
+      str =
+        transformed !== undefined
+          ? transformed
+          : defaultToString(value, decimalSeparator as DecimalSeparator);
+    } else {
+      str = defaultToString(value, decimalSeparator as DecimalSeparator);
     }
-
-    let str =
-      typeof value === "number"
-        ? formatNumberForCsv(value, decimalSeparator as DecimalSeparator)
-        : String(value);
 
     // Escape formulae to prevent CSV injection (OWASP recommendation)
     // Prefix dangerous characters with tab to neutralize them in spreadsheet apps
@@ -1749,16 +1889,10 @@ export function formatCsv(
   // Determine headers
   let keys: string[] | null = null;
 
-  // Helper to apply transform if provided (sync only)
-  const applyTransform = (row: any): any | null => {
-    if (transform) {
-      // Check if it's a sync transform (1 argument)
-      if (transform.length === 1) {
-        return (transform as (row: any) => any)(row);
-      }
-      // For async transform in sync context, just return the row unchanged
-      // Async transforms should use streaming API
-      return row;
+  // Helper to apply row-level transform if provided
+  const applyRowTransform = (row: any, sourceIndex: number): any | null => {
+    if (transform?.row) {
+      return transform.row(row, sourceIndex);
     }
     return row;
   };
@@ -1774,13 +1908,14 @@ export function formatCsv(
     }
 
     // Add data rows
-    for (const obj of objects) {
-      const transformedObj = applyTransform(obj);
+    for (let i = 0; i < objects.length; i++) {
+      const transformedObj = applyRowTransform(objects[i], i);
       if (transformedObj === null || transformedObj === undefined) {
-        continue; // Skip row if transform returns null
+        continue; // Skip row if transform.row returns null
       }
       const row = keys ? keys.map(key => transformedObj[key]) : Object.values(transformedObj);
       lines.push(formatRow(row, keys ?? undefined));
+      recordsProcessed++;
     }
   } else if (data.length > 0 && isRowHashArray(data[0])) {
     // Handle array of RowHashArray (array of [key, value] tuples)
@@ -1799,8 +1934,8 @@ export function formatCsv(
     }
 
     // Add data rows
-    for (const hashArray of hashArrays) {
-      const transformedRow = applyTransform(hashArray);
+    for (let i = 0; i < hashArrays.length; i++) {
+      const transformedRow = applyRowTransform(hashArrays[i], i);
       if (transformedRow === null || transformedRow === undefined) {
         continue;
       }
@@ -1818,6 +1953,7 @@ export function formatCsv(
       }
 
       lines.push(formatRow(values, keys ?? undefined));
+      recordsProcessed++;
     }
   } else if (data.length > 0) {
     // Handle 2D array with data (plain arrays)
@@ -1831,12 +1967,13 @@ export function formatCsv(
       }
     }
 
-    for (const row of arrays) {
-      const transformedRow = applyTransform(row);
+    for (let i = 0; i < arrays.length; i++) {
+      const transformedRow = applyRowTransform(arrays[i], i);
       if (transformedRow === null || transformedRow === undefined) {
-        continue; // Skip row if transform returns null
+        continue; // Skip row if transform.row returns null
       }
       lines.push(formatRow(transformedRow, keys ?? undefined));
+      recordsProcessed++;
     }
   } else if (alwaysWriteHeaders && Array.isArray(headers) && shouldWriteHeaders) {
     // Handle empty data with alwaysWriteHeaders

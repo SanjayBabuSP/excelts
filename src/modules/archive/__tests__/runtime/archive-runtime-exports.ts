@@ -104,7 +104,7 @@ export const ARCHIVE_BROWSER_EXPORTS = [
 
   // Error types
   "ArchiveError",
-  "ArchiveAbortError",
+  "AbortError",
   "ZipParseError",
   "InvalidZipSignatureError",
   "EocdNotFoundError",

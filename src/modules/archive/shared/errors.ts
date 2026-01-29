@@ -39,11 +39,6 @@ export function isArchiveError(err: unknown): err is ArchiveError {
   return err instanceof ArchiveError;
 }
 
-/**
- * @deprecated Use `AbortError` from `@utils/errors` instead.
- */
-export { AbortError as ArchiveAbortError } from "@utils/errors";
-
 // -----------------------------------------------------------------------------
 // ZIP Parsing Errors
 // -----------------------------------------------------------------------------
