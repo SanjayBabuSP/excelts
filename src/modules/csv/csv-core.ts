@@ -10,7 +10,13 @@
  */
 
 import { formatNumberForCsv, type DecimalSeparator } from "@csv/csv-number";
-import { detectDelimiter, detectLinebreak, stripBom, startsWithFormulaChar } from "@csv/csv-detect";
+import { detectDelimiter, detectLinebreak, stripBom } from "@csv/utils/detect";
+import {
+  createFormatRegex,
+  createQuoteLookup,
+  formatRowWithLookup,
+  type QuoteColumnConfig
+} from "@csv/utils/format";
 import {
   type HeaderArray,
   type RowHashArray,
@@ -18,13 +24,49 @@ import {
   rowHashArrayToValues,
   rowHashArrayToHeaders,
   rowHashArrayMapByHeaders,
-  deduplicateHeaders,
-  deduplicateHeadersWithRenames
-} from "@csv/csv-row-utils";
+  deduplicateHeaders
+} from "@csv/utils/row";
+import {
+  type DynamicTypingConfig,
+  applyDynamicTypingToRow,
+  applyDynamicTypingToArrayRow,
+  applyDynamicTyping
+} from "@csv/utils/dynamic-typing";
+import {
+  processHeaders,
+  validateAndAdjustColumns,
+  isEmptyRow,
+  rowToObject,
+  LINE_SPLIT_REGEX
+} from "@csv/utils/parse";
+
 // Re-export types from utility files
-export type { HeaderArray, RowHashArray } from "@csv/csv-row-utils";
+export type { HeaderArray, RowHashArray } from "@csv/utils/row";
+export type { DynamicTypingConfig } from "@csv/utils/dynamic-typing";
+
 // Re-export detection utilities
-export { detectDelimiter, detectLinebreak, stripBom, startsWithFormulaChar } from "@csv/csv-detect";
+export {
+  detectDelimiter,
+  detectLinebreak,
+  stripBom,
+  startsWithFormulaChar,
+  escapeRegex
+} from "@csv/utils/detect";
+
+// Re-export format utilities
+export {
+  createFormatRegex,
+  createQuoteLookup,
+  formatField,
+  formatRow as formatRowUtil,
+  formatRowWithLookup,
+  shouldQuoteColumn,
+  type QuoteColumnConfig,
+  type QuoteLookupFn,
+  type CsvFormatRegex,
+  type FormatFieldContext
+} from "@csv/utils/format";
+
 // Re-export row utilities
 export {
   isRowHashArray,
@@ -35,7 +77,15 @@ export {
   rowHashArrayMapByHeaders,
   deduplicateHeaders,
   deduplicateHeadersWithRenames
-} from "@csv/csv-row-utils";
+} from "@csv/utils/row";
+
+// Re-export dynamic typing utilities
+export {
+  convertValue,
+  applyDynamicTyping,
+  applyDynamicTypingToRow,
+  applyDynamicTypingToArrayRow
+} from "@csv/utils/dynamic-typing";
 
 // =============================================================================
 // Types
@@ -139,16 +189,6 @@ export type RowValidateFunction<T = Row> =
   | ((row: T, callback: RowValidateCallback) => void);
 
 /**
- * Dynamic typing configuration for automatic type conversion.
- *
- * - `true`: Convert all columns using built-in rules
- * - `false`: Keep all values as strings
- * - `Record<string, boolean>`: Enable/disable per column
- * - `Record<string, (value: string) => unknown>`: Custom converter per column
- */
-export type DynamicTypingConfig = boolean | Record<string, boolean | ((value: string) => unknown)>;
-
-/**
  * Metadata passed to chunk callback during streaming parse
  */
 export interface ChunkMeta {
@@ -214,8 +254,13 @@ export interface CsvParseOptions extends CsvBaseOptions {
    * if you know the exact format.
    */
   newline?: string;
-  /** Skip empty lines (default: false). Uses greedy mode: also skips whitespace-only lines. */
-  skipEmptyLines?: boolean;
+  /**
+   * Skip empty lines:
+   * - true: skip completely empty lines
+   * - false: keep all lines (default)
+   * - "greedy": skip empty lines AND whitespace-only lines
+   */
+  skipEmptyLines?: boolean | "greedy";
   /** Alias for skipEmptyLines */
   ignoreEmpty?: boolean;
   /** Trim whitespace from both sides of fields (default: false) */
@@ -577,27 +622,6 @@ export interface CsvParseResult<T = string[]> {
 // =============================================================================
 
 /**
- * Escape special regex characters
- */
-export function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-const NON_WHITESPACE_RE = /\S/;
-
-function isEmptyRowGreedy(row: string[], shouldSkipEmpty: boolean): boolean {
-  if (!shouldSkipEmpty) {
-    return false;
-  }
-  for (const field of row) {
-    if (NON_WHITESPACE_RE.test(field)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
  * Create a trim function based on options.
  * Pre-computes the function to avoid repeated condition checks.
  */
@@ -617,188 +641,6 @@ export function makeTrimField(
   }
   return (s: string) => s;
 }
-
-// =============================================================================
-// Dynamic Typing - Automatic Type Conversion
-// =============================================================================
-
-/**
- * Convert a string value to its appropriate JavaScript type.
- * Used internally by dynamicTyping feature.
- *
- * Conversion rules:
- * - Empty string → null
- * - "true"/"TRUE"/"True" → true
- * - "false"/"FALSE"/"False" → false
- * - Numeric strings → number (int or float)
- * - Everything else → original string
- */
-export function convertValue(value: string): string | number | boolean | null {
-  // Empty string stays empty (not converted to null)
-  if (value === "") {
-    return "";
-  }
-
-  // Boolean detection (case-insensitive)
-  const lowerValue = value.toLowerCase();
-  if (lowerValue === "true") {
-    return true;
-  }
-  if (lowerValue === "false") {
-    return false;
-  }
-
-  // Null detection (case-insensitive)
-  if (lowerValue === "null") {
-    return null;
-  }
-
-  // Number detection
-  // Handle leading/trailing whitespace by trimming first
-  const trimmed = value.trim();
-  if (trimmed !== "" && trimmed === value) {
-    // Special numeric values
-    if (trimmed === "Infinity") {
-      return Infinity;
-    }
-    if (trimmed === "-Infinity") {
-      return -Infinity;
-    }
-    if (trimmed === "NaN") {
-      return NaN;
-    }
-
-    // Preserve leading zeros (important for zip codes, phone numbers, IDs)
-    // Only convert if the number doesn't have leading zeros (except for "0" itself or "0.xxx")
-    if (/^-?0[0-9]/.test(trimmed)) {
-      // Has leading zero followed by another digit - preserve as string
-      return value;
-    }
-
-    // Check for valid number format (avoid converting "123abc" or "1.2.3")
-    if (/^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
-      const num = Number(trimmed);
-      if (!isNaN(num)) {
-        return num;
-      }
-    }
-  }
-
-  // Default: keep as string
-  return value;
-}
-
-/**
- * Type guard to check if dynamicTyping config has custom converter function
- */
-function isCustomConverter(
-  config: boolean | ((value: string) => unknown)
-): config is (value: string) => unknown {
-  return typeof config === "function";
-}
-
-/**
- * Apply dynamic typing to a single field value
- *
- * @param value - The string value to convert
- * @param columnConfig - Column-specific config (true, false, or custom function)
- * @returns Converted value
- */
-export function applyDynamicTyping(
-  value: string,
-  columnConfig: boolean | ((value: string) => unknown)
-): unknown {
-  if (columnConfig === false) {
-    return value;
-  }
-
-  if (isCustomConverter(columnConfig)) {
-    return columnConfig(value);
-  }
-
-  // columnConfig === true → use default conversion
-  return convertValue(value);
-}
-
-/**
- * Apply dynamic typing to an entire row (object form)
- *
- * @param row - Row object with string values
- * @param dynamicTyping - DynamicTyping configuration
- * @returns New row object with converted values
- */
-export function applyDynamicTypingToRow(
-  row: Record<string, string>,
-  dynamicTyping: DynamicTypingConfig
-): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-
-  if (dynamicTyping === true) {
-    // Convert all columns
-    for (const key of Object.keys(row)) {
-      result[key] = convertValue(row[key]);
-    }
-  } else if (dynamicTyping === false) {
-    // No conversion
-    return row;
-  } else {
-    // Per-column configuration
-    for (const key of Object.keys(row)) {
-      const config = dynamicTyping[key];
-      if (config === undefined) {
-        // Column not in config → keep as string
-        result[key] = row[key];
-      } else {
-        result[key] = applyDynamicTyping(row[key], config);
-      }
-    }
-  }
-
-  return result;
-}
-
-/**
- * Apply dynamic typing to an array row
- *
- * @param row - Row array with string values
- * @param headers - Header names (for per-column config lookup)
- * @param dynamicTyping - DynamicTyping configuration
- * @returns New row array with converted values
- */
-export function applyDynamicTypingToArrayRow(
-  row: string[],
-  headers: string[] | null,
-  dynamicTyping: DynamicTypingConfig
-): unknown[] {
-  if (dynamicTyping === true) {
-    // Convert all columns
-    return row.map(convertValue);
-  }
-
-  if (dynamicTyping === false) {
-    // No conversion
-    return row;
-  }
-
-  // Per-column configuration - need headers to look up column names
-  if (!headers) {
-    // No headers available, can't use per-column config → no conversion
-    return row;
-  }
-
-  return row.map((value, index) => {
-    const header = headers[index];
-    const config = header ? dynamicTyping[header] : undefined;
-    if (config === undefined) {
-      return value;
-    }
-    return applyDynamicTyping(value, config);
-  });
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
 
 /**
  * Check if a transform function is synchronous (1 argument) vs async (2 arguments)
@@ -930,22 +772,22 @@ export function parseCsv(
 
   // Header handling
   let headerRow: HeaderArray | null = null;
-  let headersLength = 0;
   let useHeaders = false;
   let headerRowProcessed = false;
 
   // Track renamed headers for meta (PapaParse-compatible)
   let renamedHeadersForMeta: Record<string, string> | null = null;
 
-  // Determine header mode
+  // Determine header mode using shared utility for pre-configured headers
   if (headers === true) {
     useHeaders = true;
   } else if (Array.isArray(headers)) {
-    const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(headers);
-    headerRow = dedupedHeaders;
-    // For explicit headers, track renames for meta
-    renamedHeadersForMeta = renamedHeaders;
-    headersLength = headerRow.filter(h => h !== null && h !== undefined).length;
+    // Use shared utility for initial header setup
+    const result = processHeaders([], { headers, renameHeaders }, null);
+    if (result) {
+      headerRow = result.headers;
+      renamedHeadersForMeta = result.renamedHeaders;
+    }
     useHeaders = true;
     if (!renameHeaders) {
       headerRowProcessed = true; // We already have headers, don't wait for first row
@@ -960,21 +802,19 @@ export function parseCsv(
   const processRow = (row: string[]): boolean => {
     // Handle first row as headers when needed
     if (useHeaders && !headerRowProcessed) {
-      if (typeof headers === "function") {
-        const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(
-          headers(row)
-        );
-        headerRow = dedupedHeaders;
-        renamedHeadersForMeta = renamedHeaders;
-      } else if (!Array.isArray(headers)) {
-        const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(row);
-        headerRow = dedupedHeaders;
-        renamedHeadersForMeta = renamedHeaders;
+      // Use shared utility for header processing from first row
+      const result = processHeaders(row, { headers, renameHeaders }, headerRow);
+      if (result) {
+        headerRow = result.headers;
+        renamedHeadersForMeta = result.renamedHeaders;
+        headerRowProcessed = true;
+        if (result.skipCurrentRow) {
+          return false;
+        }
+      } else {
+        // Headers already set (array case without renaming)
+        headerRowProcessed = true;
       }
-      headersLength = headerRow!.filter(h => h !== null && h !== undefined).length;
-      headerRowProcessed = true;
-      // Header row is never added to data rows
-      return false;
     }
 
     // Skip data rows
@@ -984,46 +824,35 @@ export function parseCsv(
     }
 
     // Column validation when using headers
+    // Note: use headerRow.length (not headersLength) because null headers still occupy a column position
     if (headerRow && headerRow.length > 0) {
-      const expectedCols = headersLength;
+      const expectedCols = headerRow.length;
       const actualCols = row.length;
 
-      if (actualCols > expectedCols) {
+      // Use shared validation utility
+      const validation = validateAndAdjustColumns(row, expectedCols, {
+        strictColumnHandling,
+        discardUnmappedColumns
+      });
+
+      // Record errors regardless of validation result
+      if (validation.errorCode) {
         errors.push({
-          code: "TooManyFields",
-          message: `Too many fields: expected ${expectedCols}, found ${actualCols}`,
+          code: validation.errorCode,
+          message:
+            validation.errorCode === "TooManyFields"
+              ? `Too many fields: expected ${expectedCols}, found ${actualCols}`
+              : `Too few fields: expected ${expectedCols}, found ${actualCols}`,
           row: dataRowCount
         });
+      }
 
-        if (strictColumnHandling && !discardUnmappedColumns) {
-          // Mark as invalid but continue
-          invalidRows.push({
-            row,
-            reason: `Column header mismatch expected: ${expectedCols} columns got: ${actualCols}`
-          });
-          return false;
-        } else {
-          // Default: trim extra columns
-          row.length = headerRow.length;
-        }
-      } else if (actualCols < expectedCols) {
-        errors.push({
-          code: "TooFewFields",
-          message: `Too few fields: expected ${expectedCols}, found ${actualCols}`,
-          row: dataRowCount
+      if (!validation.isValid) {
+        invalidRows.push({
+          row,
+          reason: `Column header mismatch expected: ${expectedCols} columns got: ${actualCols}`
         });
-
-        if (strictColumnHandling) {
-          invalidRows.push({
-            row,
-            reason: `Column header mismatch expected: ${expectedCols} columns got: ${actualCols}`
-          });
-          return false;
-        }
-        // Pad with empty strings
-        while (row.length < headerRow.length) {
-          row.push("");
-        }
+        return false;
       }
     }
 
@@ -1034,10 +863,10 @@ export function parseCsv(
   // Fast Mode: Skip quote detection, split directly by delimiter
   // ==========================================================================
   if (fastMode) {
-    // Split by lines - use specified newline or handle all line endings
+    // Split by lines - use specified newline or pre-compiled regex for all line endings
     const lines = newlineOption
       ? processedInput.split(newlineOption)
-      : processedInput.split(/\r\n|\r|\n/);
+      : processedInput.split(LINE_SPLIT_REGEX);
     let lineIdx = 0;
 
     for (const line of lines) {
@@ -1058,11 +887,19 @@ export function parseCsv(
         continue;
       }
 
+      // Check maxRowBytes limit (security check - should not be skipped in fastMode)
+      if (maxRowBytes !== undefined) {
+        const rowBytes = new TextEncoder().encode(line).length;
+        if (rowBytes > maxRowBytes) {
+          throw new Error(`Row exceeds the maximum size of ${maxRowBytes} bytes`);
+        }
+      }
+
       // Split by delimiter (fast path - no quote detection)
       const row = line.split(delimiter).map(trimField);
 
       // Greedy skipEmptyLines: also skips whitespace-only and delimiter-only rows
-      if (isEmptyRowGreedy(row, shouldSkipEmpty)) {
+      if (isEmptyRow(row, shouldSkipEmpty)) {
         continue;
       }
 
@@ -1120,19 +957,8 @@ export function parseCsv(
       const headers = headerRow.filter((h): h is string => h !== null && h !== undefined);
       meta.fields = headers;
 
-      // Convert rows to objects using headers
-      const rowToObject = (row: string[]): Record<string, string> => {
-        const obj: Record<string, string> = {};
-        for (let i = 0; i < headerRow!.length; i++) {
-          const header = headerRow![i];
-          if (header !== null && header !== undefined) {
-            obj[header] = row[i] ?? "";
-          }
-        }
-        return obj;
-      };
-
-      let dataRows: Record<string, unknown>[] = rows.map(rowToObject);
+      // Convert rows to objects using shared utility
+      let dataRows: Record<string, unknown>[] = rows.map(row => rowToObject(row, headerRow!));
 
       // Apply dynamicTyping if provided (before transform)
       if (dynamicTyping) {
@@ -1281,7 +1107,7 @@ export function parseCsv(
         }
 
         // Skip empty lines (greedy: also skips whitespace-only lines)
-        if (isEmptyRowGreedy(currentRow, shouldSkipEmpty)) {
+        if (isEmptyRow(currentRow, shouldSkipEmpty)) {
           currentRow = [];
           i++;
           continue;
@@ -1327,7 +1153,7 @@ export function parseCsv(
     const shouldProcessLastRow =
       lineNumber >= skipLines &&
       !(comment && currentRow[0]?.startsWith(comment)) &&
-      !isEmptyRowGreedy(currentRow, shouldSkipEmpty) &&
+      !isEmptyRow(currentRow, shouldSkipEmpty) &&
       !(maxRows !== undefined && dataRowCount >= maxRows);
 
     if (shouldProcessLastRow && processRow(currentRow)) {
@@ -1444,94 +1270,19 @@ export function formatCsv(
   const columnKeys = columnsConfig?.keys ?? null;
   const columnHeaders = columnsConfig?.headers ?? null;
 
-  // If quote is false or null, disable quoting entirely
-  const quoteEnabled = quoteOption !== false && quoteOption !== null;
-  const quote = quoteEnabled ? String(quoteOption) : "";
-  const escape =
-    escapeOption !== undefined && escapeOption !== false && escapeOption !== null
-      ? String(escapeOption)
-      : quote;
+  // Pre-compile regex patterns for performance (using shared utility)
+  const formatRegex = createFormatRegex({
+    quote: quoteOption,
+    delimiter,
+    escape: escapeOption
+  });
 
-  // Pre-compile regex patterns for performance
-  const needsQuoteRegex = quoteEnabled
-    ? new RegExp(`[${escapeRegex(delimiter)}${escapeRegex(quote)}\r\n]`)
-    : null;
-  const escapeQuoteRegex = quoteEnabled ? new RegExp(escapeRegex(quote), "g") : null;
-  const escapedQuote = escape + quote;
+  // Pre-compute quote lookups once (avoid recreating per row)
+  const quoteColumnsLookup = createQuoteLookup(quoteColumns as QuoteColumnConfig);
+  const quoteHeadersLookup = createQuoteLookup(quoteHeaders as QuoteColumnConfig);
 
   const lines: string[] = [];
   let recordsProcessed = 0;
-
-  const shouldQuoteColumn = (
-    index: number,
-    header?: string,
-    isHeader: boolean = false
-  ): boolean => {
-    const quoteConfig = isHeader ? quoteHeaders : quoteColumns;
-
-    if (typeof quoteConfig === "boolean") {
-      return quoteConfig;
-    }
-    if (Array.isArray(quoteConfig)) {
-      return quoteConfig[index] === true;
-    }
-    if (typeof quoteConfig === "object" && header) {
-      return quoteConfig[header] === true;
-    }
-    return false;
-  };
-
-  const formatField = (
-    value: any,
-    index: number,
-    header?: string,
-    isHeader: boolean = false
-  ): string => {
-    // Apply type-based transform if provided (not for headers)
-    let str: string;
-    if (!isHeader && transform) {
-      const ctx: TransformContext = {
-        column: header ?? index,
-        index: recordsProcessed
-      };
-      const transformed = applyTypeTransform(value, transform, ctx);
-      str =
-        transformed !== undefined
-          ? transformed
-          : defaultToString(value, decimalSeparator as DecimalSeparator);
-    } else {
-      str = defaultToString(value, decimalSeparator as DecimalSeparator);
-    }
-
-    // Escape formulae to prevent CSV injection (OWASP recommendation)
-    // Prefix dangerous characters with tab to neutralize them in spreadsheet apps
-    if (escapeFormulae && startsWithFormulaChar(str)) {
-      str = "\t" + str;
-    }
-
-    // If quoting is disabled, return raw string
-    if (!quoteEnabled) {
-      return str;
-    }
-
-    // Check if quoting is needed
-    const forceQuote = alwaysQuote || shouldQuoteColumn(index, header, isHeader);
-    const needsQuote = forceQuote || needsQuoteRegex!.test(str);
-
-    if (needsQuote) {
-      // Escape quotes using pre-compiled regex
-      const escaped = str.replace(escapeQuoteRegex!, escapedQuote);
-      return quote + escaped + quote;
-    }
-
-    return str;
-  };
-
-  const formatRow = (row: any[], rowHeaders?: string[], isHeader: boolean = false): string => {
-    return row
-      .map((value, index) => formatField(value, index, rowHeaders?.[index], isHeader))
-      .join(delimiter);
-  };
 
   // Determine headers
   let keys: string[] | null = null;
@@ -1591,7 +1342,21 @@ export function formatCsv(
 
   // Write header row if needed
   if (displayHeaders && shouldWriteHeaders) {
-    lines.push(formatRow(displayHeaders, displayHeaders, true));
+    lines.push(
+      formatRowWithLookup(
+        displayHeaders,
+        formatRegex,
+        quoteHeadersLookup,
+        delimiter,
+        displayHeaders,
+        true,
+        recordsProcessed,
+        alwaysQuote,
+        escapeFormulae,
+        decimalSeparator as DecimalSeparator,
+        transform
+      )
+    );
   }
 
   // Process data rows
@@ -1601,7 +1366,21 @@ export function formatCsv(
       continue;
     }
     const values = extractValues(transformedRow, keys);
-    lines.push(formatRow(values, displayHeaders ?? undefined));
+    lines.push(
+      formatRowWithLookup(
+        values,
+        formatRegex,
+        quoteColumnsLookup,
+        delimiter,
+        displayHeaders ?? undefined,
+        false,
+        recordsProcessed,
+        alwaysQuote,
+        escapeFormulae,
+        decimalSeparator as DecimalSeparator,
+        transform
+      )
+    );
     recordsProcessed++;
   }
 
@@ -1609,7 +1388,21 @@ export function formatCsv(
   if (data.length === 0 && alwaysWriteHeaders && shouldWriteHeaders) {
     const emptyHeaders = columnHeaders ?? (Array.isArray(headers) ? headers : null);
     if (emptyHeaders) {
-      lines.push(formatRow(emptyHeaders, emptyHeaders, true));
+      lines.push(
+        formatRowWithLookup(
+          emptyHeaders,
+          formatRegex,
+          quoteHeadersLookup,
+          delimiter,
+          emptyHeaders,
+          true,
+          recordsProcessed,
+          alwaysQuote,
+          escapeFormulae,
+          decimalSeparator as DecimalSeparator,
+          transform
+        )
+      );
     }
   }
 
@@ -1659,10 +1452,12 @@ export async function* parseCsvStream(
     skipLines = 0,
     skipRows = 0,
     strictColumnHandling = false,
-    discardUnmappedColumns = false
+    discardUnmappedColumns = false,
+    dynamicTyping = false
   } = options;
 
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
+  const skipEmptyGreedy = skipEmptyLines === "greedy";
 
   // Handle quote: null/false to disable quoting
   const quoteEnabled = quoteOption !== null && quoteOption !== false;
@@ -1765,6 +1560,7 @@ export async function* parseCsvStream(
   let dataRowCount = 0;
   let skippedDataRows = 0;
   let currentRowBytes = 0; // Track row size for maxRowBytes check
+  let trailingCR = false; // Track if last chunk ended with \r for CRLF across chunks
   const maxRowBytes = options.maxRowBytes;
 
   // Helper to check row size limit (inlined for performance in hot path)
@@ -1847,13 +1643,33 @@ export async function* parseCsvStream(
 
     // Convert to object if using headers
     if (useHeaders && headerRow) {
-      const obj: Record<string, string> = {};
+      const obj: Record<string, unknown> = {};
       headerRow.forEach((header, index) => {
         if (header !== null && header !== undefined) {
-          obj[header] = row[index] ?? "";
+          const value = row[index] ?? "";
+          if (dynamicTyping === true) {
+            obj[header] = applyDynamicTyping(value, true);
+          } else if (dynamicTyping && typeof dynamicTyping === "object") {
+            const columnConfig = dynamicTyping[header];
+            obj[header] =
+              columnConfig !== undefined ? applyDynamicTyping(value, columnConfig) : value;
+          } else {
+            obj[header] = value;
+          }
         }
       });
-      return { valid: true, row: obj };
+      return { valid: true, row: obj as Record<string, string> };
+    }
+
+    // Apply dynamicTyping to array rows if enabled
+    if (dynamicTyping) {
+      // For array rows without headers, pass null - per-column config won't work
+      const typedRow = applyDynamicTypingToArrayRow(
+        row,
+        headerRow as string[] | null,
+        dynamicTyping
+      );
+      return { valid: true, row: typedRow as string[] };
     }
 
     return { valid: true, row };
@@ -1862,6 +1678,14 @@ export async function* parseCsvStream(
   const processBuffer = function* (): Generator<string[] | Record<string, string>> {
     let i = 0;
     const len = buffer.length;
+
+    // Handle CRLF split across chunks: skip \n if previous chunk ended with \r
+    if (trailingCR && len > 0 && buffer[0] === "\n") {
+      i = 1;
+      trailingCR = false;
+    } else {
+      trailingCR = false;
+    }
 
     while (i < len) {
       const char = buffer[i];
@@ -1907,8 +1731,13 @@ export async function* parseCsvStream(
           i++;
           checkRowBytes?.();
         } else if (char === "\n" || char === "\r") {
-          if (char === "\r" && buffer[i + 1] === "\n") {
-            i++;
+          if (char === "\r") {
+            if (buffer[i + 1] === "\n") {
+              i++; // Skip \r, will skip \n on next increment
+            } else if (i === len - 1) {
+              // \r at end of buffer - track for CRLF across chunks
+              trailingCR = true;
+            }
           }
 
           currentRow.push(trimField(currentField));
@@ -1928,7 +1757,10 @@ export async function* parseCsvStream(
           }
 
           const isEmpty = currentRow.length === 1 && currentRow[0] === "";
-          if (shouldSkipEmpty && isEmpty) {
+          // For greedy mode, also skip whitespace-only rows
+          const shouldSkipRow =
+            shouldSkipEmpty && (isEmpty || (skipEmptyGreedy && isEmptyRow(currentRow, true)));
+          if (shouldSkipRow) {
             currentRow = [];
             i++;
             continue;

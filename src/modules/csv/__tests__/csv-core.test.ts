@@ -1464,6 +1464,232 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       }
       expect(rows).toEqual([["hello, world", "test"]]);
     });
+
+    it("should handle escaped quotes in quoted field across chunks", async () => {
+      async function* chunks() {
+        yield '"hello ""';
+        yield 'world""",test\n';
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks())) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([['hello "world"', "test"]]);
+    });
+
+    it("should handle newline at chunk boundary", async () => {
+      async function* chunks() {
+        yield "a,b,c\n";
+        yield "1,2,3\n";
+        yield "4,5,6";
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks())) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"],
+        ["4", "5", "6"]
+      ]);
+    });
+
+    it("should handle delimiter at chunk boundary", async () => {
+      async function* chunks() {
+        yield "a,";
+        yield "b,c\n1,2,3";
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks())) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should handle CRLF split across chunks", async () => {
+      // Simulate CRLF split: first chunk ends with \r, second starts with \n
+      async function* chunks(): AsyncGenerator<string> {
+        yield "a,b\r";
+        yield "\nc,d\r\n";
+        yield "e,f";
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks())) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b"],
+        ["c", "d"],
+        ["e", "f"]
+      ]);
+    });
+
+    it("should handle dynamicTyping with streaming", async () => {
+      const input = "name,age,active\nAlice,30,true\nBob,25,false";
+      const rows: Record<string, unknown>[] = [];
+      for await (const row of parseCsvStream(input, {
+        headers: true,
+        dynamicTyping: true
+      })) {
+        rows.push(row as Record<string, unknown>);
+      }
+      expect(rows).toEqual([
+        { name: "Alice", age: 30, active: true },
+        { name: "Bob", age: 25, active: false }
+      ]);
+    });
+
+    it("should handle skipRows with streaming", async () => {
+      const input = "header1,header2\nskip1,skip2\na,b\nc,d";
+      const rows: Record<string, string>[] = [];
+      for await (const row of parseCsvStream(input, {
+        headers: true,
+        skipRows: 1
+      })) {
+        rows.push(row as Record<string, string>);
+      }
+      expect(rows).toEqual([
+        { header1: "a", header2: "b" },
+        { header1: "c", header2: "d" }
+      ]);
+    });
+
+    it("should handle comment lines with streaming", async () => {
+      const input = "a,b\n# comment\n1,2\n# another\n3,4";
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(input, { comment: "#" })) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b"],
+        ["1", "2"],
+        ["3", "4"]
+      ]);
+    });
+
+    it("should handle empty input", async () => {
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream("")) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([]);
+    });
+
+    it("should handle single row without newline", async () => {
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream("a,b,c")) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([["a", "b", "c"]]);
+    });
+
+    it("should handle multiline quoted field in stream", async () => {
+      const input = '"line1\nline2\nline3",value\nnormal,row';
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(input)) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["line1\nline2\nline3", "value"],
+        ["normal", "row"]
+      ]);
+    });
+
+    // Test greedy skipEmptyLines: should skip whitespace-only rows
+    it("should handle skipEmptyLines greedy mode with streaming", async () => {
+      const input = "a,b\n   \t  \nc,d\n\ne,f";
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(input, { skipEmptyLines: "greedy" })) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b"],
+        ["c", "d"],
+        ["e", "f"]
+      ]);
+    });
+  });
+
+  // ===========================================================================
+  // Section 17.5: maxRowBytes Edge Cases
+  // ===========================================================================
+  describe("maxRowBytes edge cases", () => {
+    it("should allow row exactly at maxRowBytes limit", () => {
+      // "abc,def" = 7 bytes
+      const result = parseCsv("abc,def", { maxRowBytes: 7 });
+      expect(result).toEqual([["abc", "def"]]);
+    });
+
+    it("should throw when row is one byte over limit", () => {
+      // "abc,defg" = 8 bytes
+      expect(() => parseCsv("abc,defg", { maxRowBytes: 7 })).toThrow(
+        "Row exceeds the maximum size of 7 bytes"
+      );
+    });
+
+    it("should count bytes correctly for quoted fields", () => {
+      // '"a,b",c' = 7 bytes (including quotes)
+      const result = parseCsv('"a,b",c', { maxRowBytes: 7 });
+      expect(result).toEqual([["a,b", "c"]]);
+    });
+
+    it("should count bytes correctly for escaped quotes", () => {
+      // '"a""b"' = 6 bytes
+      const result = parseCsv('"a""b"', { maxRowBytes: 6 });
+      expect(result).toEqual([['a"b']]);
+    });
+
+    it("should handle maxRowBytes with multiple rows", () => {
+      const input = "ab,cd\nef,gh\nij,kl";
+      const result = parseCsv(input, { maxRowBytes: 5 });
+      expect(result).toEqual([
+        ["ab", "cd"],
+        ["ef", "gh"],
+        ["ij", "kl"]
+      ]);
+    });
+
+    it("should throw on specific row that exceeds limit", () => {
+      const input = "ab,cd\nthis_row_is_too_long\nef,gh";
+      expect(() => parseCsv(input, { maxRowBytes: 10 })).toThrow(
+        "Row exceeds the maximum size of 10 bytes"
+      );
+    });
+
+    it("should handle maxRowBytes in fastMode", () => {
+      const result = parseCsv("a,b,c\n1,2,3", { maxRowBytes: 5, fastMode: true });
+      expect(result).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should throw in fastMode when limit exceeded", () => {
+      expect(() => parseCsv("this_is_too_long", { maxRowBytes: 5, fastMode: true })).toThrow(
+        "Row exceeds the maximum size of 5 bytes"
+      );
+    });
+
+    it("should handle maxRowBytes in streaming mode exactly at limit", async () => {
+      const input = "abc,def\n123,456";
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(input, { maxRowBytes: 7 })) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["abc", "def"],
+        ["123", "456"]
+      ]);
+    });
+
+    it("should handle maxRowBytes with unicode characters", () => {
+      // "你好" = 6 bytes in UTF-8
+      const result = parseCsv("你好,世界", { maxRowBytes: 15 });
+      expect(result).toEqual([["你好", "世界"]]);
+    });
   });
 
   // ===========================================================================

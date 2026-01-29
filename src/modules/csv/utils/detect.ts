@@ -5,6 +5,17 @@
  */
 
 // =============================================================================
+// Utility Functions
+// =============================================================================
+
+/**
+ * Escape special regex characters
+ */
+export function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -137,7 +148,7 @@ export function detectDelimiter(
   quote: string = '"',
   delimitersToGuess?: string[],
   comment?: string,
-  skipEmptyLines?: boolean
+  skipEmptyLines?: boolean | "greedy"
 ): string {
   const delimiters = delimitersToGuess ?? AUTO_DETECT_DELIMITERS;
   const defaultDelimiter = delimiters[0] ?? DEFAULT_DELIMITER;
@@ -184,7 +195,7 @@ function getSampleLines(
   maxLines: number,
   quote: string,
   comment?: string,
-  skipEmptyLines?: boolean
+  skipEmptyLines?: boolean | "greedy"
 ): string[] {
   const lines: string[] = [];
   let start = 0;

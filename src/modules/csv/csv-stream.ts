@@ -16,30 +16,33 @@ import type {
   RowTransformCallback,
   RowValidateCallback,
   ChunkMeta,
-  TypeTransformMap,
-  TransformContext
+  TypeTransformMap
 } from "@csv/csv-core";
+import { isSyncTransform, isSyncValidate, makeTrimField, processColumns } from "@csv/csv-core";
+import { detectDelimiter, stripBom } from "@csv/utils/detect";
 import {
-  isSyncTransform,
-  isSyncValidate,
-  escapeRegex,
-  applyDynamicTypingToRow,
-  applyDynamicTypingToArrayRow,
-  makeTrimField,
-  applyTypeTransform,
-  defaultToString,
-  processColumns
-} from "@csv/csv-core";
-import { detectDelimiter, stripBom, startsWithFormulaChar } from "@csv/csv-detect";
+  createFormatRegex,
+  createQuoteLookup,
+  formatRowWithLookup,
+  type CsvFormatRegex,
+  type QuoteColumnConfig,
+  type QuoteLookupFn
+} from "@csv/utils/format";
 import {
   isRowHashArray,
   rowHashArrayMapByHeaders,
   rowHashArrayToValues,
-  rowHashArrayToHeaders,
-  deduplicateHeaders
-} from "@csv/csv-row-utils";
-
-const NON_WHITESPACE_RE = /\S/;
+  rowHashArrayToHeaders
+} from "@csv/utils/row";
+import { applyDynamicTypingToRow, applyDynamicTypingToArrayRow } from "@csv/utils/dynamic-typing";
+import {
+  processHeaders,
+  validateAndAdjustColumns,
+  isEmptyRow as isEmptyRowUtil,
+  isCommentRow,
+  rowToObject,
+  LINE_SPLIT_REGEX
+} from "@csv/utils/parse";
 
 /**
  * Transform stream that parses CSV data row by row
@@ -535,7 +538,7 @@ export class CsvParserStream extends Transform {
    */
   private processBufferFastMode(
     callback: (error?: Error | null) => void,
-    shouldSkipEmpty: boolean
+    shouldSkipEmpty: boolean | "greedy"
   ): void {
     const { skipLines = 0 } = this.options;
     const pendingRows: Row[] = [];
@@ -555,8 +558,8 @@ export class CsvParserStream extends Transform {
     const completeData = this.buffer.slice(0, lastNewlineIndex + 1);
     this.buffer = this.buffer.slice(lastNewlineIndex + 1);
 
-    // Split by lines, handling different line endings
-    const lines = completeData.split(/\r\n|\r|\n/);
+    // Split by lines using pre-compiled regex for all line endings
+    const lines = completeData.split(LINE_SPLIT_REGEX);
 
     for (const line of lines) {
       this.lineNumber++;
@@ -592,11 +595,8 @@ export class CsvParserStream extends Transform {
     const { dynamicTyping } = this.options;
 
     if (this.options.headers && this.headerRow) {
-      const obj: Record<string, string> = {};
-      for (let index = 0; index < this.headerRow.length; index++) {
-        const header = this.headerRow[index];
-        obj[header] = rawRow[index] ?? "";
-      }
+      // Use shared utility for row-to-object conversion
+      const obj = rowToObject(rawRow, this.headerRow);
 
       // Apply dynamicTyping if configured
       if (dynamicTyping) {
@@ -632,30 +632,18 @@ export class CsvParserStream extends Transform {
 
     // Handle headers - first row or provided array
     if (this.headerRow === null) {
-      // Determine header source: function result, provided array, or first row
-      let rawHeaders: string[];
-      let skipCurrentRow = false;
+      // Use shared utility for header processing
+      const result = processHeaders(row, { headers, renameHeaders }, null);
 
-      if (typeof headers === "function") {
-        rawHeaders = headers(row).filter((h): h is string => h != null);
-        skipCurrentRow = true;
-      } else if (Array.isArray(headers)) {
-        rawHeaders = headers.filter((h): h is string => h != null);
-        skipCurrentRow = renameHeaders; // Skip first row only if renaming
-      } else if (headers === true) {
-        rawHeaders = row;
-        skipCurrentRow = true;
-      } else {
-        // No headers mode - process row normally
-        rawHeaders = [];
-      }
-
-      if (rawHeaders.length > 0) {
-        this.headerRow = deduplicateHeaders(rawHeaders) as string[];
+      if (result && result.headers.length > 0) {
+        // Filter to only string headers for stream API
+        this.headerRow = result.headers.filter((h): h is string => h != null) as string[];
         this.emitHeaders();
-        if (skipCurrentRow) {
+        if (result.skipCurrentRow) {
           return true;
         }
+      } else if (!result && headers === false) {
+        // No headers mode - process row normally (handled below)
       }
     }
 
@@ -665,35 +653,18 @@ export class CsvParserStream extends Transform {
       return true;
     }
 
-    // Column validation
+    // Column validation using shared utility
     if (this.headerRow && this.headerRow.length > 0) {
       const expectedCols = this.headerRow.length;
-      const actualCols = row.length;
 
-      if (actualCols !== expectedCols) {
-        if (actualCols > expectedCols) {
-          if (strictColumnHandling && !discardUnmappedColumns) {
-            this.emit(
-              "data-invalid",
-              row,
-              `Column mismatch: expected ${expectedCols}, got ${actualCols}`
-            );
-            return true;
-          }
-          row.length = expectedCols;
-        } else {
-          if (strictColumnHandling) {
-            this.emit(
-              "data-invalid",
-              row,
-              `Column mismatch: expected ${expectedCols}, got ${actualCols}`
-            );
-            return true;
-          }
-          while (row.length < expectedCols) {
-            row.push("");
-          }
-        }
+      const validation = validateAndAdjustColumns(row, expectedCols, {
+        strictColumnHandling,
+        discardUnmappedColumns
+      });
+
+      if (!validation.isValid) {
+        this.emit("data-invalid", row, validation.reason!);
+        return true;
       }
     }
 
@@ -716,23 +687,13 @@ export class CsvParserStream extends Transform {
   /**
    * Check if a line should be skipped (comment or empty)
    */
-  private shouldSkipRow(row: string[], shouldSkipEmpty: boolean): boolean {
+  private shouldSkipRow(row: string[], shouldSkipEmpty: boolean | "greedy"): boolean {
     const { comment } = this.options;
-    const firstField = row[0] ?? "";
-    if (comment && firstField.startsWith(comment)) {
+    // Use shared utilities for comment and empty row detection
+    if (isCommentRow(row, comment)) {
       return true;
     }
-
-    if (!shouldSkipEmpty) {
-      return false;
-    }
-
-    for (const field of row) {
-      if (NON_WHITESPACE_RE.test(field)) {
-        return false;
-      }
-    }
-    return true;
+    return isEmptyRowUtil(row, shouldSkipEmpty);
   }
 
   private processPendingRows(rows: Row[], callback: (error?: Error | null) => void): void {
@@ -967,10 +928,7 @@ export class CsvParserStream extends Transform {
 export class CsvFormatterStream extends Transform {
   private options: CsvFormatOptions;
   private delimiter: string;
-  private quote: string;
-  private escape: string;
   private rowDelimiter: string;
-  private quoteEnabled: boolean;
   private alwaysQuote: boolean;
   private decimalSeparator: "." | ",";
   private escapeFormulae: boolean;
@@ -985,11 +943,11 @@ export class CsvFormatterStream extends Transform {
   /** Index of output data row (after filtering, excludes header), used for ctx.index */
   private outputRowIndex: number = 0;
   private transform_: TypeTransformMap | null = null;
-  // Pre-compiled regex for quote escaping
-  private escapeQuoteRegex: RegExp | null = null;
-  private escapedQuote: string = "";
-  // Pre-compiled regex for needsQuote check
-  private needsQuoteRegex: RegExp | null = null;
+  // Pre-compiled format regex using shared utility
+  private formatRegex: CsvFormatRegex;
+  // Pre-computed quote lookup functions for performance
+  private quoteColumnsLookup: QuoteLookupFn;
+  private quoteHeadersLookup: QuoteLookupFn;
 
   constructor(options: CsvFormatOptions = {}) {
     super({
@@ -997,16 +955,6 @@ export class CsvFormatterStream extends Transform {
       writableObjectMode: options.objectMode !== false
     });
     this.options = options;
-
-    const quoteOption = options.quote ?? '"';
-    this.quoteEnabled = quoteOption !== null && quoteOption !== false;
-    this.quote = this.quoteEnabled ? String(quoteOption) : "";
-
-    const escapeOption = options.escape;
-    this.escape =
-      escapeOption !== undefined && escapeOption !== null && escapeOption !== false
-        ? String(escapeOption)
-        : this.quote;
 
     this.delimiter = options.delimiter ?? ",";
     this.rowDelimiter = options.rowDelimiter ?? "\n";
@@ -1016,15 +964,16 @@ export class CsvFormatterStream extends Transform {
     // writeHeaders defaults to true when headers is provided
     this.shouldWriteHeaders = options.writeHeaders ?? true;
 
-    // Pre-compile regex for performance
-    if (this.quoteEnabled) {
-      this.escapeQuoteRegex = new RegExp(escapeRegex(this.quote), "g");
-      this.escapedQuote = this.escape + this.quote;
-      // Pre-compile regex to check if quoting is needed
-      this.needsQuoteRegex = new RegExp(
-        `[${escapeRegex(this.delimiter)}${escapeRegex(this.quote)}\r\n]`
-      );
-    }
+    // Pre-compile regex for performance using shared utility
+    this.formatRegex = createFormatRegex({
+      quote: options.quote ?? '"',
+      delimiter: this.delimiter,
+      escape: options.escape
+    });
+
+    // Pre-compute quote lookup functions for performance
+    this.quoteColumnsLookup = createQuoteLookup(options.quoteColumns as QuoteColumnConfig);
+    this.quoteHeadersLookup = createQuoteLookup(options.quoteHeaders as QuoteColumnConfig);
 
     // Process columns config (takes precedence over headers)
     const columnsConfig = processColumns(options.columns);
@@ -1147,84 +1096,28 @@ export class CsvFormatterStream extends Transform {
   }
 
   private formatRow(row: unknown[], isHeader: boolean = false): string {
-    const { quoteColumns, quoteHeaders } = this.options;
-    const quoteConfig = isHeader ? quoteHeaders : quoteColumns;
+    // Use pre-computed quote lookup for performance
+    const quoteLookup = isHeader ? this.quoteHeadersLookup : this.quoteColumnsLookup;
 
-    const fields = row.map((field, index) => {
-      // Use displayHeaders for header names in context
-      const headerName = this.displayHeaders?.[index];
-      const shouldForceQuote = this.shouldQuoteField(index, headerName, quoteConfig);
-      return this.formatField(field, index, headerName, shouldForceQuote, isHeader);
-    });
-
-    const formattedRow = fields.join(this.delimiter);
+    const formattedRow = formatRowWithLookup(
+      row,
+      this.formatRegex,
+      quoteLookup,
+      this.delimiter,
+      this.displayHeaders ?? undefined,
+      isHeader,
+      this.outputRowIndex,
+      this.alwaysQuote,
+      this.escapeFormulae,
+      this.decimalSeparator,
+      this.transform_ ?? undefined
+    );
 
     // Use row delimiter as prefix (except for first output)
     // First output = header row OR (no header AND first data row)
     const isFirstLine =
       isHeader || (!(this.shouldWriteHeaders && this.displayHeaders) && this.outputRowIndex === 0);
     return isFirstLine ? formattedRow : this.rowDelimiter + formattedRow;
-  }
-
-  private shouldQuoteField(
-    index: number,
-    header: string | undefined,
-    quoteConfig: boolean | boolean[] | Record<string, boolean> | undefined
-  ): boolean {
-    if (quoteConfig === true) {
-      return true;
-    }
-    if (quoteConfig === false || quoteConfig === undefined) {
-      return false;
-    }
-    if (Array.isArray(quoteConfig)) {
-      return quoteConfig[index] === true;
-    }
-    if (typeof quoteConfig === "object" && header) {
-      return quoteConfig[header] === true;
-    }
-    return false;
-  }
-
-  private formatField(
-    value: unknown,
-    index: number,
-    headerName: string | undefined,
-    forceQuote: boolean = false,
-    isHeader: boolean = false
-  ): string {
-    // Apply type-based transform if provided (not for headers)
-    let str: string;
-    if (!isHeader && this.transform_) {
-      const ctx: TransformContext = {
-        column: headerName ?? index,
-        index: this.outputRowIndex
-      };
-      const transformed = applyTypeTransform(value, this.transform_, ctx);
-      str = transformed !== undefined ? transformed : defaultToString(value, this.decimalSeparator);
-    } else {
-      str = defaultToString(value, this.decimalSeparator);
-    }
-
-    // Escape formulae to prevent CSV injection (OWASP recommendation)
-    if (this.escapeFormulae && startsWithFormulaChar(str)) {
-      str = "\t" + str;
-    }
-
-    if (!this.quoteEnabled) {
-      return str;
-    }
-
-    // Check if quoting is needed using pre-compiled regex
-    const needsQuote = this.alwaysQuote || forceQuote || this.needsQuoteRegex!.test(str);
-
-    if (needsQuote) {
-      // Use pre-compiled regex for escaping
-      const escaped = str.replace(this.escapeQuoteRegex!, this.escapedQuote);
-      return this.quote + escaped + this.quote;
-    }
-
-    return str;
   }
 }
 
