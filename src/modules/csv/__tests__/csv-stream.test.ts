@@ -1713,6 +1713,49 @@ describe("CSV Stream - TypeTransformMap (CsvFormatterStream)", () => {
     // ctx.index is output index (0, 1), not source index (0, 2)
     expect(outputIndices).toEqual([0, 1]);
   });
+
+  it("should support columns with key/header separation", async () => {
+    const formatter = new CsvFormatterStream({
+      columns: [
+        { key: "firstName", header: "First Name" },
+        { key: "lastName", header: "Last Name" }
+      ]
+    });
+
+    const chunks: string[] = [];
+    formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+    formatter.write({ firstName: "Alice", lastName: "Smith" });
+    formatter.write({ firstName: "Bob", lastName: "Jones" });
+    formatter.end();
+
+    await new Promise<void>(resolve => formatter.on("finish", resolve));
+    const output = chunks.join("");
+    expect(output).toBe("First Name,Last Name\nAlice,Smith\nBob,Jones");
+  });
+
+  it("should work with columns and type transforms", async () => {
+    const formatter = new CsvFormatterStream({
+      columns: [
+        { key: "name", header: "Name" },
+        { key: "active", header: "Status" }
+      ],
+      transform: {
+        boolean: (v: boolean) => (v ? "Active" : "Inactive")
+      }
+    });
+
+    const chunks: string[] = [];
+    formatter.on("data", (chunk: string) => chunks.push(chunk));
+
+    formatter.write({ name: "Alice", active: true });
+    formatter.write({ name: "Bob", active: false });
+    formatter.end();
+
+    await new Promise<void>(resolve => formatter.on("finish", resolve));
+    const output = chunks.join("");
+    expect(output).toBe("Name,Status\nAlice,Active\nBob,Inactive");
+  });
 });
 
 describe("CSV Stream - Combined Transform and Validate", () => {

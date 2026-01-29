@@ -3053,6 +3053,227 @@ describe("CSV Core - Formatter Options", () => {
   });
 
   // ===========================================================================
+  // Column configuration (key/header separation)
+  // ===========================================================================
+  describe("formatCsv columns configuration", () => {
+    it("should use columns as simple string array (same as headers)", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", lastName: "Smith" },
+          { firstName: "Bob", lastName: "Jones" }
+        ],
+        { columns: ["firstName", "lastName"] }
+      );
+      expect(result).toBe("firstName,lastName\nAlice,Smith\nBob,Jones");
+    });
+
+    it("should separate key and header with ColumnConfig", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", lastName: "Smith", createdAt: "2024-01-01" },
+          { firstName: "Bob", lastName: "Jones", createdAt: "2024-02-01" }
+        ],
+        {
+          columns: [
+            { key: "firstName", header: "First Name" },
+            { key: "lastName", header: "Last Name" },
+            { key: "createdAt", header: "Registration Date" }
+          ]
+        }
+      );
+      expect(result).toBe(
+        "First Name,Last Name,Registration Date\nAlice,Smith,2024-01-01\nBob,Jones,2024-02-01"
+      );
+    });
+
+    it("should use key as header when header is not specified", () => {
+      const result = formatCsv(
+        [
+          { id: 1, firstName: "Alice" },
+          { id: 2, firstName: "Bob" }
+        ],
+        {
+          columns: [
+            "id", // key and header are both 'id'
+            { key: "firstName", header: "First Name" }
+          ]
+        }
+      );
+      expect(result).toBe("id,First Name\n1,Alice\n2,Bob");
+    });
+
+    it("should work with columns and type transforms", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", active: true },
+          { firstName: "Bob", active: false }
+        ],
+        {
+          columns: [
+            { key: "firstName", header: "Name" },
+            { key: "active", header: "Status" }
+          ],
+          transform: {
+            boolean: (v: boolean) => (v ? "Active" : "Inactive")
+          }
+        }
+      );
+      expect(result).toBe("Name,Status\nAlice,Active\nBob,Inactive");
+    });
+
+    it("should work with columns and row transform", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", lastName: "Smith", age: 30 },
+          { firstName: "Bob", lastName: "Jones", age: 25 },
+          { firstName: "Charlie", lastName: "Brown", age: 35 }
+        ],
+        {
+          columns: [
+            { key: "firstName", header: "First Name" },
+            { key: "lastName", header: "Last Name" }
+          ],
+          transform: {
+            row: (row: any) => (row.age >= 30 ? row : null)
+          }
+        }
+      );
+      expect(result).toBe("First Name,Last Name\nAlice,Smith\nCharlie,Brown");
+    });
+
+    it("columns should take precedence over headers", () => {
+      const result = formatCsv([{ firstName: "Alice", lastName: "Smith" }], {
+        headers: ["firstName", "lastName"], // This should be ignored
+        columns: [{ key: "firstName", header: "Name" }]
+      });
+      expect(result).toBe("Name\nAlice");
+    });
+
+    it("should work with writeHeaders: false", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", lastName: "Smith" },
+          { firstName: "Bob", lastName: "Jones" }
+        ],
+        {
+          columns: [
+            { key: "firstName", header: "First Name" },
+            { key: "lastName", header: "Last Name" }
+          ],
+          writeHeaders: false
+        }
+      );
+      expect(result).toBe("Alice,Smith\nBob,Jones");
+    });
+
+    it("should work with alwaysWriteHeaders for empty data", () => {
+      const result = formatCsv([], {
+        columns: [
+          { key: "firstName", header: "First Name" },
+          { key: "lastName", header: "Last Name" }
+        ],
+        alwaysWriteHeaders: true
+      });
+      expect(result).toBe("First Name,Last Name");
+    });
+
+    it("should work with 2D arrays and columns (headers only)", () => {
+      const result = formatCsv(
+        [
+          ["Alice", "Smith"],
+          ["Bob", "Jones"]
+        ],
+        {
+          columns: [
+            { key: "firstName", header: "First Name" },
+            { key: "lastName", header: "Last Name" }
+          ]
+        }
+      );
+      expect(result).toBe("First Name,Last Name\nAlice,Smith\nBob,Jones");
+    });
+
+    it("should provide correct ctx.column with displayHeaders", () => {
+      const columns: (string | number)[] = [];
+      formatCsv([{ firstName: "Alice", age: 30 }], {
+        columns: [
+          { key: "firstName", header: "First Name" },
+          { key: "age", header: "Age" }
+        ],
+        transform: {
+          string: (v, ctx) => {
+            columns.push(ctx.column);
+            return v;
+          },
+          number: (v, ctx) => {
+            columns.push(ctx.column);
+            return String(v);
+          }
+        }
+      });
+      // ctx.column should be the display header, not the key
+      expect(columns).toEqual(["First Name", "Age"]);
+    });
+
+    it("should ignore empty columns array (fallback to no headers)", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", lastName: "Smith" },
+          { firstName: "Bob", lastName: "Jones" }
+        ],
+        { columns: [] }
+      );
+      // Empty columns = no headers, use object values
+      expect(result).toBe("Alice,Smith\nBob,Jones");
+    });
+
+    it("should work with columns and RowHashArray input", () => {
+      const data: [string, any][][] = [
+        [
+          ["firstName", "Alice"],
+          ["lastName", "Smith"],
+          ["extra", "ignored"]
+        ],
+        [
+          ["firstName", "Bob"],
+          ["lastName", "Jones"],
+          ["extra", "ignored"]
+        ]
+      ];
+      const result = formatCsv(data, {
+        columns: [
+          { key: "lastName", header: "Last Name" },
+          { key: "firstName", header: "First Name" }
+        ]
+      });
+      // columns should reorder and rename
+      expect(result).toBe("Last Name,First Name\nSmith,Alice\nJones,Bob");
+    });
+
+    it("should handle columns when transform.row changes row type", () => {
+      const result = formatCsv(
+        [
+          { firstName: "Alice", lastName: "Smith" },
+          { firstName: "Bob", lastName: "Jones" }
+        ],
+        {
+          columns: [
+            { key: "fullName", header: "Full Name" },
+            { key: "initials", header: "Initials" }
+          ],
+          transform: {
+            row: (row: any) => ({
+              fullName: `${row.firstName} ${row.lastName}`,
+              initials: `${row.firstName[0]}${row.lastName[0]}`
+            })
+          }
+        }
+      );
+      expect(result).toBe("Full Name,Initials\nAlice Smith,AS\nBob Jones,BJ");
+    });
+  });
+
+  // ===========================================================================
   // Combined options
   // ===========================================================================
   describe("combined options", () => {

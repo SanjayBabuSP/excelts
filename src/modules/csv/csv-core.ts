@@ -10,13 +10,36 @@
  */
 
 import { formatNumberForCsv, type DecimalSeparator } from "@csv/csv-number";
+import { detectDelimiter, detectLinebreak, stripBom, startsWithFormulaChar } from "@csv/csv-detect";
+import {
+  type HeaderArray,
+  type RowHashArray,
+  isRowHashArray,
+  rowHashArrayToValues,
+  rowHashArrayToHeaders,
+  rowHashArrayMapByHeaders,
+  deduplicateHeaders,
+  deduplicateHeadersWithRenames
+} from "@csv/csv-row-utils";
+// Re-export types from utility files
+export type { HeaderArray, RowHashArray } from "@csv/csv-row-utils";
+// Re-export detection utilities
+export { detectDelimiter, detectLinebreak, stripBom, startsWithFormulaChar } from "@csv/csv-detect";
+// Re-export row utilities
+export {
+  isRowHashArray,
+  rowHashArrayToMap,
+  rowHashArrayToValues,
+  rowHashArrayToHeaders,
+  rowHashArrayGet,
+  rowHashArrayMapByHeaders,
+  deduplicateHeaders,
+  deduplicateHeadersWithRenames
+} from "@csv/csv-row-utils";
 
 // =============================================================================
 // Types
 // =============================================================================
-
-/** Header array type (can include undefined to skip columns) */
-export type HeaderArray = (string | undefined | null)[];
 
 /** Header transform function */
 export type HeaderTransformFunction = (headers: string[]) => HeaderArray;
@@ -24,8 +47,6 @@ export type HeaderTransformFunction = (headers: string[]) => HeaderArray;
 /** Row types */
 export type RowArray = string[];
 export type RowMap = Record<string, string>;
-/** Row as array of [header, value] tuples */
-export type RowHashArray<V = any> = [string, V][];
 export type Row = RowArray | RowMap | RowHashArray;
 
 /** Row transform callback */
@@ -78,6 +99,33 @@ export interface TypeTransformMap {
   row?: (row: Row, sourceIndex: number) => Row | null;
 }
 
+/**
+ * Column configuration for formatting.
+ * Allows separation of data field names (key) from output header names (header).
+ */
+export interface ColumnConfig {
+  /** Key to access data in the source object */
+  key: string;
+  /** Header name for output (defaults to key if not specified) */
+  header?: string;
+}
+
+/**
+ * Process columns configuration to extract keys and headers.
+ * Returns null if columns is empty or undefined.
+ * @internal Exported for use in csv-stream.ts
+ */
+export function processColumns(
+  columns: (string | ColumnConfig)[] | undefined
+): { keys: string[]; headers: string[] } | null {
+  if (!columns || columns.length === 0) {
+    return null;
+  }
+  const keys = columns.map(c => (typeof c === "string" ? c : c.key));
+  const headers = columns.map(c => (typeof c === "string" ? c : (c.header ?? c.key)));
+  return { keys, headers };
+}
+
 /** Row validate callback */
 export type RowValidateCallback = (
   error?: Error | null,
@@ -115,9 +163,27 @@ export interface ChunkMeta {
 }
 
 /**
+ * Base options shared between CsvParseOptions and CsvFormatOptions
+ */
+export interface CsvBaseOptions {
+  /** Field delimiter (default: ",") */
+  delimiter?: string;
+  /** Quote character (default: '"'), set to false or null to disable quoting */
+  quote?: string | false | null;
+  /** Escape character (default: same as quote) */
+  escape?: string | false | null;
+  /**
+   * Enable object mode (default: true for Node.js streams)
+   * - Parse: push row objects/arrays vs JSON strings
+   * - Format: accept row objects/arrays directly vs JSON strings
+   */
+  objectMode?: boolean;
+}
+
+/**
  * CSV parsing options
  */
-export interface CsvParseOptions {
+export interface CsvParseOptions extends CsvBaseOptions {
   /**
    * Field delimiter (default: ",")
    * - Set to empty string "" to enable auto-detection
@@ -148,10 +214,6 @@ export interface CsvParseOptions {
    * if you know the exact format.
    */
   newline?: string;
-  /** Quote character (default: '"'), set to false or null to disable quoting */
-  quote?: string | false | null;
-  /** Escape character for quotes (default: '"'), set to false or null to disable */
-  escape?: string | false | null;
   /** Skip empty lines (default: false). Uses greedy mode: also skips whitespace-only lines. */
   skipEmptyLines?: boolean;
   /** Alias for skipEmptyLines */
@@ -204,12 +266,6 @@ export interface CsvParseOptions {
    * Only valid when headers are specified
    */
   discardUnmappedColumns?: boolean;
-  /**
-   * Enable object mode (default: true for Node.js streams)
-   * - true: push row objects/arrays
-   * - false: push JSON strings
-   */
-  objectMode?: boolean;
   /**
    * Character encoding for input (default: "utf8")
    * Only used in Node.js streaming context
@@ -354,13 +410,7 @@ export type SkipEmptyLines = boolean;
 /**
  * CSV formatting options
  */
-export interface CsvFormatOptions {
-  /** Field delimiter (default: ",") */
-  delimiter?: string;
-  /** Quote character (default: '"'), set to false or null to disable quoting */
-  quote?: string | false | null;
-  /** Escape character (default: same as quote) */
-  escape?: string | false | null;
+export interface CsvFormatOptions extends CsvBaseOptions {
   /** Row delimiter (default: "\n") */
   rowDelimiter?: string;
   /**
@@ -378,9 +428,33 @@ export interface CsvFormatOptions {
    * Header handling:
    * - true: auto-detect headers from first object
    * - false/null: no headers
-   * - string[]: use these as headers
+   * - string[]: use these as headers (also used as keys)
    */
   headers?: string[] | boolean | null;
+  /**
+   * Column configuration with key/header separation.
+   * When provided, takes precedence over `headers` for determining output structure.
+   *
+   * @example
+   * // Simple: same as headers: ['firstName', 'lastName']
+   * columns: ['firstName', 'lastName']
+   *
+   * @example
+   * // With header renaming
+   * columns: [
+   *   { key: 'firstName', header: 'First Name' },
+   *   { key: 'lastName', header: 'Last Name' },
+   *   { key: 'createdAt', header: 'Registration Date' }
+   * ]
+   *
+   * @example
+   * // Mixed
+   * columns: [
+   *   'id',  // key and header are both 'id'
+   *   { key: 'firstName', header: 'First Name' }
+   * ]
+   */
+  columns?: (string | ColumnConfig)[];
   /**
    * Whether to write headers (default: true when headers is provided)
    * Set to false to suppress header row output
@@ -439,12 +513,6 @@ export interface CsvFormatOptions {
    * }
    */
   transform?: TypeTransformMap;
-  /**
-   * Enable object mode (default: true for Node.js streams)
-   * - true: accept row objects/arrays directly
-   * - false: accept JSON strings
-   */
-  objectMode?: boolean;
 }
 
 /**
@@ -515,270 +583,6 @@ export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// =============================================================================
-// Delimiter and Linebreak Detection
-// =============================================================================
-
-/**
- * Common CSV delimiters to try during auto-detection
- * Order matters - comma is most common, then semicolon (European), tab, pipe
- */
-const AUTO_DETECT_DELIMITERS = [",", ";", "\t", "|"] as const;
-
-/**
- * Characters that trigger formula escaping (CSV injection prevention).
- * Per OWASP recommendations, these characters at the start of a field
- * could be interpreted as formulas by spreadsheet applications.
- *
- * @see https://owasp.org/www-community/attacks/CSV_Injection
- */
-const FORMULA_ESCAPE_CHARS = new Set([
-  "=", // Equals - formula prefix
-  "+", // Plus - formula prefix
-  "-", // Minus - formula prefix
-  "@", // At - formula prefix
-  "\t", // Tab (0x09)
-  "\r", // Carriage return (0x0D)
-  "\n", // Line feed (0x0A)
-  "\uFF1D", // ＝ (full-width equals)
-  "\uFF0B", // ＋ (full-width plus)
-  "\uFF0D", // － (full-width minus)
-  "\uFF20" // ＠ (full-width at)
-]);
-
-/**
- * Check if a string starts with a formula escape character.
- * Used for CSV injection prevention.
- */
-export function startsWithFormulaChar(str: string): boolean {
-  return str.length > 0 && FORMULA_ESCAPE_CHARS.has(str[0]);
-}
-
-/**
- * Default delimiter when auto-detection fails
- */
-const DEFAULT_DELIMITER = ",";
-
-/**
- * Strip UTF-8 BOM (Byte Order Mark) from start of string if present.
- * Excel exports UTF-8 CSV files with BOM (\ufeff).
- *
- * @param input - String to process
- * @returns String without BOM
- */
-export function stripBom(input: string): string {
-  return input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
-}
-
-/**
- * Detect the line terminator used in a string.
- * Uses fast detection without quote handling since the result is only
- * informational for meta - the parser handles all line ending types.
- *
- * @param input - String to analyze
- * @returns Detected line terminator or '\n' as default
- *
- * @example
- * detectLinebreak('a,b\r\nc,d') // '\r\n'
- * detectLinebreak('a,b\nc,d') // '\n'
- * detectLinebreak('a,b\rc,d') // '\r'
- * detectLinebreak('a,b,c') // '\n' (default)
- */
-export function detectLinebreak(input: string): string {
-  // Fast path: find first newline character
-  const crIndex = input.indexOf("\r");
-  const lfIndex = input.indexOf("\n");
-
-  // No newline found
-  if (crIndex === -1 && lfIndex === -1) {
-    return "\n";
-  }
-
-  // Only LF found
-  if (crIndex === -1) {
-    return "\n";
-  }
-
-  // Only CR found, or CR comes before LF (could be CRLF or standalone CR)
-  if (lfIndex === -1 || crIndex < lfIndex) {
-    // Check if CRLF
-    return input[crIndex + 1] === "\n" ? "\r\n" : "\r";
-  }
-
-  // LF comes before CR
-  return "\n";
-}
-
-/**
- * Auto-detect the delimiter used in a CSV string
- *
- * Algorithm:
- * 1. Sample the first few lines (up to 10) for analysis
- * 2. For each candidate delimiter:
- *    - Count occurrences per line (respecting quotes)
- *    - Check consistency: all lines should have the same count
- *    - Higher count = more fields = better delimiter candidate
- * 3. Choose the delimiter with highest consistent field count
- *
- * @param input - CSV string to analyze
- * @param quote - Quote character (default: '"')
- * @param delimitersToGuess - Custom list of delimiters to try (default: [",", ";", "\t", "|"])
- * @returns Detected delimiter or first delimiter in list
- *
- * @example
- * detectDelimiter('a,b,c\n1,2,3') // ','
- * detectDelimiter('a;b;c\n1;2;3') // ';'
- * detectDelimiter('a\tb\tc\n1\t2\t3') // '\t'
- * detectDelimiter('a:b:c\n1:2:3', '"', [':']) // ':'
- */
-export function detectDelimiter(
-  input: string,
-  quote: string = '"',
-  delimitersToGuess?: string[],
-  comment?: string,
-  skipEmptyLines?: boolean
-): string {
-  const delimiters = delimitersToGuess ?? AUTO_DETECT_DELIMITERS;
-  const defaultDelimiter = delimiters[0] ?? DEFAULT_DELIMITER;
-
-  // Get sample lines (first 10 meaningful lines)
-  const lines = getSampleLines(input, 10, quote, comment, skipEmptyLines);
-
-  if (lines.length === 0) {
-    return defaultDelimiter;
-  }
-
-  let bestDelimiter = defaultDelimiter;
-  let bestDelta: number | undefined;
-  let bestAvgFieldCount: number | undefined;
-
-  for (const delimiter of delimiters) {
-    const { avgFieldCount, delta } = scoreDelimiter(lines, delimiter, quote);
-
-    // Require at least ~2 fields on average, similar to PapaParse
-    if (avgFieldCount <= 1.99) {
-      continue;
-    }
-
-    if (
-      bestDelta === undefined ||
-      delta < bestDelta ||
-      (delta === bestDelta &&
-        (bestAvgFieldCount === undefined || avgFieldCount > bestAvgFieldCount))
-    ) {
-      bestDelta = delta;
-      bestAvgFieldCount = avgFieldCount;
-      bestDelimiter = delimiter;
-    }
-  }
-
-  return bestDelimiter;
-}
-
-/**
- * Get sample lines from input, skipping empty lines
- */
-function getSampleLines(
-  input: string,
-  maxLines: number,
-  quote: string,
-  comment?: string,
-  skipEmptyLines?: boolean
-): string[] {
-  const lines: string[] = [];
-  let start = 0;
-  let inQuotes = false;
-  const len = input.length;
-
-  for (let i = 0; i < len && lines.length < maxLines; i++) {
-    const char = input[i];
-
-    if (quote && char === quote) {
-      // Toggle quote state, but handle escaped quotes ("" inside quoted field)
-      if (inQuotes && input[i + 1] === quote) {
-        i++; // Skip escaped quote
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (!inQuotes && (char === "\n" || char === "\r")) {
-      const line = input.slice(start, i);
-
-      // Skip comment lines
-      if (comment && line.startsWith(comment)) {
-        // skip
-      } else {
-        // For delimiter detection, whitespace-only lines are never useful.
-        const trimmed = line.trim();
-        const shouldDrop = line.length === 0 || (skipEmptyLines && trimmed === "");
-        if (!shouldDrop && trimmed !== "") {
-          lines.push(line);
-        }
-      }
-
-      // Skip \r\n
-      if (char === "\r" && input[i + 1] === "\n") {
-        i++;
-      }
-      start = i + 1;
-    }
-  }
-
-  // Add last line if exists
-  if (start < len && lines.length < maxLines) {
-    const line = input.slice(start);
-    if (!comment || !line.startsWith(comment)) {
-      const trimmed = line.trim();
-      const shouldDrop = line.length === 0 || (skipEmptyLines && trimmed === "");
-      if (!shouldDrop && trimmed !== "") {
-        lines.push(line);
-      }
-    }
-  }
-
-  return lines;
-}
-
-/**
- * Score a delimiter candidate based on consistency and field count
- *
- * Returns 0 if:
- * - Delimiter not found in any line
- * - Field counts are inconsistent across lines
- *
- * Higher score = more fields per row with consistent counts
- */
-function scoreDelimiter(
-  lines: string[],
-  delimiter: string,
-  quote: string
-): { avgFieldCount: number; delta: number } {
-  if (lines.length === 0) {
-    return { avgFieldCount: 0, delta: Number.POSITIVE_INFINITY };
-  }
-
-  let delta = 0;
-  let avgFieldCount = 0;
-  let prevFieldCount: number | undefined;
-
-  for (const line of lines) {
-    const fieldCount = countDelimiters(line, delimiter, quote) + 1;
-    avgFieldCount += fieldCount;
-
-    if (prevFieldCount === undefined) {
-      prevFieldCount = fieldCount;
-      continue;
-    }
-
-    // Like PapaParse, allow variability but prefer consistent counts
-    delta += Math.abs(fieldCount - prevFieldCount);
-    prevFieldCount = fieldCount;
-  }
-
-  avgFieldCount /= lines.length;
-
-  return { avgFieldCount, delta };
-}
-
 const NON_WHITESPACE_RE = /\S/;
 
 function isEmptyRowGreedy(row: string[], shouldSkipEmpty: boolean): boolean {
@@ -812,39 +616,6 @@ export function makeTrimField(
     return (s: string) => s.trimEnd();
   }
   return (s: string) => s;
-}
-
-/**
- * Count delimiters in a line, respecting quoted fields
- */
-function countDelimiters(line: string, delimiter: string, quote: string): number {
-  let count = 0;
-  let inQuotes = false;
-  const len = line.length;
-  const delimLen = delimiter.length;
-
-  for (let i = 0; i < len; i++) {
-    if (quote && line[i] === quote) {
-      // Toggle quote state, but handle escaped quotes ("" inside quoted field)
-      if (inQuotes && line[i + 1] === quote) {
-        i++; // Skip escaped quote
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (!inQuotes) {
-      // Check for delimiter match (supports multi-char delimiters)
-      if (delimLen === 1) {
-        if (line[i] === delimiter) {
-          count++;
-        }
-      } else if (line.slice(i, i + delimLen) === delimiter) {
-        count++;
-        i += delimLen - 1;
-      }
-    }
-  }
-
-  return count;
 }
 
 // =============================================================================
@@ -1045,136 +816,6 @@ export function isSyncValidate<T>(
   validate: RowValidateFunction<T>
 ): validate is (row: T) => boolean {
   return validate.length === 1;
-}
-
-/**
- * Check if a row is a RowHashArray (array of [key, value] tuples)
- */
-export function isRowHashArray(row: unknown): row is RowHashArray {
-  if (!Array.isArray(row) || row.length === 0) {
-    return false;
-  }
-  // Check if first element is a 2-element array with string key
-  const first = row[0];
-  return Array.isArray(first) && first.length === 2 && typeof first[0] === "string";
-}
-
-/**
- * Convert RowHashArray to RowMap
- * Note: Manual loop is ~4x faster than Object.fromEntries
- */
-export function rowHashArrayToMap<V = any>(row: RowHashArray<V>): Record<string, V> {
-  const obj: Record<string, V> = {};
-  for (const [key, value] of row) {
-    obj[key] = value;
-  }
-  return obj;
-}
-
-/**
- * Convert RowHashArray to values array (preserving order)
- */
-export function rowHashArrayToValues<V = any>(row: RowHashArray<V>): V[] {
-  return row.map(([, value]) => value);
-}
-
-/**
- * Get headers from RowHashArray
- */
-export function rowHashArrayToHeaders(row: RowHashArray): string[] {
-  return row.map(([key]) => key);
-}
-
-/**
- * Get value by key from RowHashArray (returns undefined if not found)
- * More efficient than creating a full map when you need only specific values
- */
-export function rowHashArrayGet<V = any>(row: RowHashArray<V>, key: string): V | undefined {
-  for (const [k, v] of row) {
-    if (k === key) {
-      return v;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Map RowHashArray values according to header order
- * Optimized: builds values array in single pass without intermediate object
- */
-export function rowHashArrayMapByHeaders<V = any>(
-  row: RowHashArray<V>,
-  headers: string[]
-): (V | undefined)[] {
-  // For small headers array, linear search per header is faster than building a map
-  // For larger headers (>10), build a map once
-  if (headers.length <= 10) {
-    return headers.map(h => rowHashArrayGet(row, h));
-  }
-  const map = rowHashArrayToMap(row);
-  return headers.map(h => map[h]);
-}
-
-/**
- * Deduplicate headers by appending suffix to duplicates.
- * Example: ["A", "B", "A", "A"] → ["A", "B", "A_1", "A_2"]
- *
- * @param headers - Original header array
- * @returns New array with unique header names
- */
-export function deduplicateHeaders(headers: HeaderArray): HeaderArray {
-  return deduplicateHeadersWithRenames(headers).headers;
-}
-
-export function deduplicateHeadersWithRenames(headers: HeaderArray): {
-  headers: HeaderArray;
-  renamedHeaders: Record<string, string> | null;
-} {
-  const headerCount = new Map<string, number>();
-  const usedHeaders = new Set<string>();
-  // Reserve all original header names so we don't generate a rename that
-  // collides with a header that appears later in the row.
-  const reservedHeaders = new Set<string>();
-  const result: HeaderArray = [];
-  const renamedHeaders: Record<string, string> = {};
-
-  let hasRenames = false;
-
-  for (const header of headers) {
-    if (header !== null && header !== undefined) {
-      reservedHeaders.add(header);
-    }
-  }
-
-  for (const header of headers) {
-    if (header === null || header === undefined) {
-      result.push(header);
-      continue;
-    }
-
-    if (!usedHeaders.has(header)) {
-      usedHeaders.add(header);
-      headerCount.set(header, 1);
-      result.push(header);
-      continue;
-    }
-
-    // Duplicate: find a unique suffix, avoiding collisions with already-present headers
-    let suffix = headerCount.get(header) ?? 1;
-    let candidate = `${header}_${suffix}`;
-    while (usedHeaders.has(candidate) || reservedHeaders.has(candidate)) {
-      suffix++;
-      candidate = `${header}_${suffix}`;
-    }
-
-    headerCount.set(header, suffix + 1);
-    usedHeaders.add(candidate);
-    result.push(candidate);
-    renamedHeaders[candidate] = header;
-    hasRenames = true;
-  }
-
-  return { headers: result, renamedHeaders: hasRenames ? renamedHeaders : null };
 }
 
 /**
@@ -1785,6 +1426,7 @@ export function formatCsv(
     quoteColumns = false,
     quoteHeaders = false,
     headers,
+    columns,
     writeHeaders: writeHeadersOption,
     writeBOM = false,
     includeEndRowDelimiter = false,
@@ -1796,6 +1438,11 @@ export function formatCsv(
 
   // Determine if headers should be written (default: true when headers is provided)
   const shouldWriteHeaders = writeHeadersOption ?? true;
+
+  // Process columns config to extract keys and headers
+  const columnsConfig = processColumns(columns);
+  const columnKeys = columnsConfig?.keys ?? null;
+  const columnHeaders = columnsConfig?.headers ?? null;
 
   // If quote is false or null, disable quoting entirely
   const quoteEnabled = quoteOption !== false && quoteOption !== null;
@@ -1897,87 +1544,73 @@ export function formatCsv(
     return row;
   };
 
-  // Handle array of objects (non-array first element)
-  if (data.length > 0 && !Array.isArray(data[0])) {
-    const objects = data as Record<string, any>[];
-    keys = headers === true ? Object.keys(objects[0]) : Array.isArray(headers) ? headers : null;
-
-    if (keys && shouldWriteHeaders) {
-      // Add header row
-      lines.push(formatRow(keys, keys, true));
+  /**
+   * Extract values from a row based on keys.
+   * Handles objects, RowHashArray, and plain arrays uniformly.
+   */
+  const extractValues = (row: any, rowKeys: string[] | null): any[] => {
+    if (isRowHashArray(row)) {
+      return rowKeys ? rowHashArrayMapByHeaders(row, rowKeys) : rowHashArrayToValues(row);
     }
-
-    // Add data rows
-    for (let i = 0; i < objects.length; i++) {
-      const transformedObj = applyRowTransform(objects[i], i);
-      if (transformedObj === null || transformedObj === undefined) {
-        continue; // Skip row if transform.row returns null
-      }
-      const row = keys ? keys.map(key => transformedObj[key]) : Object.values(transformedObj);
-      lines.push(formatRow(row, keys ?? undefined));
-      recordsProcessed++;
+    if (Array.isArray(row)) {
+      return row;
     }
-  } else if (data.length > 0 && isRowHashArray(data[0])) {
-    // Handle array of RowHashArray (array of [key, value] tuples)
-    const hashArrays = data as RowHashArray[];
+    // Plain object
+    return rowKeys ? rowKeys.map(key => row[key]) : Object.values(row);
+  };
 
-    // Determine headers: auto-detect from first row, use custom headers, or null
-    keys =
-      headers === true
-        ? rowHashArrayToHeaders(hashArrays[0])
-        : Array.isArray(headers)
-          ? headers
-          : null;
-
-    if (keys && shouldWriteHeaders) {
-      lines.push(formatRow(keys, keys, true));
+  /**
+   * Auto-detect keys from first row based on data type.
+   */
+  const autoDetectKeys = (firstRow: any): string[] => {
+    if (isRowHashArray(firstRow)) {
+      return rowHashArrayToHeaders(firstRow);
     }
-
-    // Add data rows
-    for (let i = 0; i < hashArrays.length; i++) {
-      const transformedRow = applyRowTransform(hashArrays[i], i);
-      if (transformedRow === null || transformedRow === undefined) {
-        continue;
-      }
-
-      // Convert to values array based on row type after transform
-      let values: any[];
-      if (isRowHashArray(transformedRow)) {
-        values = keys
-          ? rowHashArrayMapByHeaders(transformedRow, keys)
-          : rowHashArrayToValues(transformedRow);
-      } else if (Array.isArray(transformedRow)) {
-        values = transformedRow;
-      } else {
-        values = keys ? keys.map(key => transformedRow[key]) : Object.values(transformedRow);
-      }
-
-      lines.push(formatRow(values, keys ?? undefined));
-      recordsProcessed++;
+    if (!Array.isArray(firstRow) && typeof firstRow === "object" && firstRow !== null) {
+      return Object.keys(firstRow);
     }
-  } else if (data.length > 0) {
-    // Handle 2D array with data (plain arrays)
-    const arrays = data as any[][];
+    return []; // Arrays don't have intrinsic keys
+  };
 
-    // Add custom headers if provided
-    if (Array.isArray(headers)) {
+  // Determine keys and displayHeaders upfront
+  // Priority: columns > headers array > auto-detect (when headers: true)
+  let displayHeaders: string[] | null = null;
+
+  if (data.length > 0) {
+    if (columnKeys) {
+      keys = columnKeys;
+      displayHeaders = columnHeaders;
+    } else if (headers === true) {
+      keys = autoDetectKeys(data[0]);
+      displayHeaders = keys.length > 0 ? keys : null;
+    } else if (Array.isArray(headers)) {
       keys = headers;
-      if (shouldWriteHeaders) {
-        lines.push(formatRow(headers, headers, true));
-      }
+      displayHeaders = headers;
     }
+  }
 
-    for (let i = 0; i < arrays.length; i++) {
-      const transformedRow = applyRowTransform(arrays[i], i);
-      if (transformedRow === null || transformedRow === undefined) {
-        continue; // Skip row if transform.row returns null
-      }
-      lines.push(formatRow(transformedRow, keys ?? undefined));
-      recordsProcessed++;
+  // Write header row if needed
+  if (displayHeaders && shouldWriteHeaders) {
+    lines.push(formatRow(displayHeaders, displayHeaders, true));
+  }
+
+  // Process data rows
+  for (let i = 0; i < data.length; i++) {
+    const transformedRow = applyRowTransform(data[i], i);
+    if (transformedRow === null || transformedRow === undefined) {
+      continue;
     }
-  } else if (alwaysWriteHeaders && Array.isArray(headers) && shouldWriteHeaders) {
-    // Handle empty data with alwaysWriteHeaders
-    lines.push(formatRow(headers, headers, true));
+    const values = extractValues(transformedRow, keys);
+    lines.push(formatRow(values, displayHeaders ?? undefined));
+    recordsProcessed++;
+  }
+
+  // Handle empty data with alwaysWriteHeaders
+  if (data.length === 0 && alwaysWriteHeaders && shouldWriteHeaders) {
+    const emptyHeaders = columnHeaders ?? (Array.isArray(headers) ? headers : null);
+    if (emptyHeaders) {
+      lines.push(formatRow(emptyHeaders, emptyHeaders, true));
+    }
   }
 
   let result = lines.join(rowDelimiter);

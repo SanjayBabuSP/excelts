@@ -22,21 +22,22 @@ import type {
 import {
   isSyncTransform,
   isSyncValidate,
+  escapeRegex,
+  applyDynamicTypingToRow,
+  applyDynamicTypingToArrayRow,
+  makeTrimField,
+  applyTypeTransform,
+  defaultToString,
+  processColumns
+} from "@csv/csv-core";
+import { detectDelimiter, stripBom, startsWithFormulaChar } from "@csv/csv-detect";
+import {
   isRowHashArray,
   rowHashArrayMapByHeaders,
   rowHashArrayToValues,
   rowHashArrayToHeaders,
-  detectDelimiter,
-  escapeRegex,
-  applyDynamicTypingToRow,
-  applyDynamicTypingToArrayRow,
-  deduplicateHeaders,
-  stripBom,
-  makeTrimField,
-  startsWithFormulaChar,
-  applyTypeTransform,
-  defaultToString
-} from "@csv/csv-core";
+  deduplicateHeaders
+} from "@csv/csv-row-utils";
 
 const NON_WHITESPACE_RE = /\S/;
 
@@ -952,14 +953,6 @@ export class CsvParserStream extends Transform {
 }
 
 /**
- * Options for CSV formatter stream
- */
-export interface CsvFormatterStreamOptions extends CsvFormatOptions {
-  /** Whether input is objects (vs arrays) */
-  objectMode?: boolean;
-}
-
-/**
  * Transform stream that formats rows to CSV
  *
  * @example
@@ -972,7 +965,7 @@ export interface CsvFormatterStreamOptions extends CsvFormatOptions {
  * ```
  */
 export class CsvFormatterStream extends Transform {
-  private options: CsvFormatterStreamOptions;
+  private options: CsvFormatOptions;
   private delimiter: string;
   private quote: string;
   private escape: string;
@@ -982,7 +975,10 @@ export class CsvFormatterStream extends Transform {
   private decimalSeparator: "." | ",";
   private escapeFormulae: boolean;
   private headerWritten: boolean = false;
-  private headers: string[] | null = null;
+  /** Keys to access data from source objects */
+  private keys: string[] | null = null;
+  /** Headers to write to output (may differ from keys) */
+  private displayHeaders: string[] | null = null;
   private shouldWriteHeaders: boolean;
   /** Index of source row (before filtering), passed to transform.row */
   private sourceRowIndex: number = 0;
@@ -995,7 +991,7 @@ export class CsvFormatterStream extends Transform {
   // Pre-compiled regex for needsQuote check
   private needsQuoteRegex: RegExp | null = null;
 
-  constructor(options: CsvFormatterStreamOptions = {}) {
+  constructor(options: CsvFormatOptions = {}) {
     super({
       objectMode: options.objectMode !== false,
       writableObjectMode: options.objectMode !== false
@@ -1030,8 +1026,14 @@ export class CsvFormatterStream extends Transform {
       );
     }
 
-    if (Array.isArray(options.headers)) {
-      this.headers = options.headers;
+    // Process columns config (takes precedence over headers)
+    const columnsConfig = processColumns(options.columns);
+    if (columnsConfig) {
+      this.keys = columnsConfig.keys;
+      this.displayHeaders = columnsConfig.headers;
+    } else if (Array.isArray(options.headers)) {
+      this.keys = options.headers;
+      this.displayHeaders = options.headers;
     }
 
     // Set up transform from options
@@ -1041,13 +1043,17 @@ export class CsvFormatterStream extends Transform {
   }
 
   /**
-   * Auto-detect headers from a row (object or RowHashArray)
+   * Auto-detect keys/headers from a row (object or RowHashArray)
    */
   private detectHeadersFromRow(chunk: Row): void {
     if (isRowHashArray(chunk)) {
-      this.headers = rowHashArrayToHeaders(chunk);
+      const detectedKeys = rowHashArrayToHeaders(chunk);
+      this.keys = detectedKeys;
+      this.displayHeaders = detectedKeys;
     } else if (!Array.isArray(chunk) && typeof chunk === "object" && chunk !== null) {
-      this.headers = Object.keys(chunk);
+      const detectedKeys = Object.keys(chunk);
+      this.keys = detectedKeys;
+      this.displayHeaders = detectedKeys;
     }
   }
 
@@ -1065,13 +1071,13 @@ export class CsvFormatterStream extends Transform {
       // Handle header writing on first row
       if (!this.headerWritten) {
         // Auto-detect headers from first row if needed
-        if (this.options.headers === true && !this.headers) {
+        if (this.options.headers === true && !this.keys) {
           this.detectHeadersFromRow(chunk);
         }
 
         // Write headers if we should and have them
-        if (this.shouldWriteHeaders && this.headers) {
-          this.push(this.formatRow(this.headers, true));
+        if (this.shouldWriteHeaders && this.displayHeaders) {
+          this.push(this.formatRow(this.displayHeaders, true));
         }
         this.headerWritten = true;
       }
@@ -1100,19 +1106,19 @@ export class CsvFormatterStream extends Transform {
     if (
       !this.headerWritten &&
       this.options.alwaysWriteHeaders &&
-      this.headers &&
+      this.displayHeaders &&
       this.shouldWriteHeaders
     ) {
       if (this.options.writeBOM) {
         this.push("\uFEFF");
       }
-      this.push(this.formatRow(this.headers, true));
+      this.push(this.formatRow(this.displayHeaders, true));
       this.headerWritten = true;
     }
 
     // Add trailing row delimiter if includeEndRowDelimiter is true
     // hasOutput = wrote header OR wrote any data row
-    const hasOutput = (this.shouldWriteHeaders && this.headers) || this.outputRowIndex > 0;
+    const hasOutput = (this.shouldWriteHeaders && this.displayHeaders) || this.outputRowIndex > 0;
     if (this.options.includeEndRowDelimiter && hasOutput) {
       this.push(this.rowDelimiter);
     }
@@ -1124,15 +1130,14 @@ export class CsvFormatterStream extends Transform {
     let row: unknown[];
     if (isRowHashArray(chunk)) {
       // Handle RowHashArray: array of [key, value] tuples
-      // Optimized: use rowHashArrayMapByHeaders for header ordering, else preserve tuple order
-      row = this.headers
-        ? rowHashArrayMapByHeaders(chunk, this.headers)
-        : rowHashArrayToValues(chunk);
+      // Use keys for data access
+      row = this.keys ? rowHashArrayMapByHeaders(chunk, this.keys) : rowHashArrayToValues(chunk);
     } else if (Array.isArray(chunk)) {
       row = chunk;
     } else if (typeof chunk === "object" && chunk !== null) {
-      row = this.headers
-        ? this.headers.map(h => (chunk as Record<string, unknown>)[h])
+      // Use keys for data access from objects
+      row = this.keys
+        ? this.keys.map(k => (chunk as Record<string, unknown>)[k])
         : Object.values(chunk);
     } else {
       row = [chunk];
@@ -1146,7 +1151,8 @@ export class CsvFormatterStream extends Transform {
     const quoteConfig = isHeader ? quoteHeaders : quoteColumns;
 
     const fields = row.map((field, index) => {
-      const headerName = this.headers?.[index];
+      // Use displayHeaders for header names in context
+      const headerName = this.displayHeaders?.[index];
       const shouldForceQuote = this.shouldQuoteField(index, headerName, quoteConfig);
       return this.formatField(field, index, headerName, shouldForceQuote, isHeader);
     });
@@ -1156,7 +1162,7 @@ export class CsvFormatterStream extends Transform {
     // Use row delimiter as prefix (except for first output)
     // First output = header row OR (no header AND first data row)
     const isFirstLine =
-      isHeader || (!(this.shouldWriteHeaders && this.headers) && this.outputRowIndex === 0);
+      isHeader || (!(this.shouldWriteHeaders && this.displayHeaders) && this.outputRowIndex === 0);
     return isFirstLine ? formattedRow : this.rowDelimiter + formattedRow;
   }
 
@@ -1252,8 +1258,6 @@ export function createCsvParserStream(options: CsvParseOptions = {}): CsvParserS
 /**
  * Create formatter stream factory
  */
-export function createCsvFormatterStream(
-  options: CsvFormatterStreamOptions = {}
-): CsvFormatterStream {
+export function createCsvFormatterStream(options: CsvFormatOptions = {}): CsvFormatterStream {
   return new CsvFormatterStream(options);
 }

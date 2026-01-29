@@ -58,5 +58,6 @@ export type {
   DynamicTypingConfig,
   ChunkMeta,
   TransformContext,
-  TypeTransformMap
+  TypeTransformMap,
+  ColumnConfig
 } from "@csv/csv-core";
