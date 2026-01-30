@@ -28,8 +28,11 @@ import {
   rowHashArrayToValues,
   rowHashArrayToHeaders,
   rowHashArrayMapByHeaders,
-  rowHashArrayGet
+  rowHashArrayGet,
+  quoted,
+  unquoted
 } from "@csv/csv-core";
+import { isFormattedValue } from "@csv/utils/formatted-value";
 
 // ===========================================================================
 // Helper Functions Tests
@@ -2434,6 +2437,48 @@ describe("CSV Core - Formatter Options", () => {
       });
       expect(result).toBe("a,b");
     });
+
+    it("should fallback to quote char when escape: false but quoting is enabled", () => {
+      // When quoting is enabled but escape is disabled, we must still escape
+      // internal quotes to produce valid CSV (RFC 4180 standard: "" escapes ")
+      const result = formatCsv([['say "hello"']], {
+        escape: false,
+        includeEndRowDelimiter: false
+      });
+      // Should properly escape the internal quotes as "" (not leave them unescaped)
+      expect(result).toBe('"say ""hello"""');
+    });
+
+    it("should fallback to quote char when escape: null but quoting is enabled", () => {
+      // Same behavior for escape: null
+      const result = formatCsv([['value with "quotes" inside']], {
+        escape: null,
+        includeEndRowDelimiter: false
+      });
+      expect(result).toBe('"value with ""quotes"" inside"');
+    });
+
+    it("should use custom quote char for fallback when escape disabled", () => {
+      // When using custom quote char and escape: false, fallback to that quote char
+      const result = formatCsv([["it's a 'test'"]], {
+        quote: "'",
+        escape: false,
+        includeEndRowDelimiter: false
+      });
+      // Internal single quotes should be escaped as ''
+      expect(result).toBe("'it''s a ''test'''");
+    });
+
+    it("should not apply escape fallback when quoting is disabled", () => {
+      // When both quote and escape are disabled, no escaping needed
+      const result = formatCsv([['say "hello"']], {
+        quote: false,
+        escape: false,
+        includeEndRowDelimiter: false
+      });
+      // Output raw value without any escaping (may produce invalid CSV, but user explicitly disabled)
+      expect(result).toBe('say "hello"');
+    });
   });
 
   // ===========================================================================
@@ -3496,6 +3541,296 @@ describe("CSV Core - Formatter Options", () => {
         }
       );
       expect(result).toBe("Full Name,Initials\nAlice Smith,AS\nBob Jones,BJ");
+    });
+  });
+
+  // ===========================================================================
+  // quoted() and unquoted() helper functions for field-level quoting control
+  // ===========================================================================
+  describe("quoted() and unquoted() helper functions", () => {
+    describe("quoted() helper", () => {
+      it("should return a FormattedValue with quote=true", () => {
+        const result = quoted("test");
+        expect(isFormattedValue(result)).toBe(true);
+        expect(result.value).toBe("test");
+        expect(result.quote).toBe(true);
+      });
+
+      it("should handle empty string", () => {
+        const result = quoted("");
+        expect(result.value).toBe("");
+        expect(result.quote).toBe(true);
+      });
+
+      it("should handle string with special characters", () => {
+        const result = quoted("hello,world");
+        expect(result.value).toBe("hello,world");
+        expect(result.quote).toBe(true);
+      });
+    });
+
+    describe("unquoted() helper", () => {
+      it("should return a FormattedValue with quote=false", () => {
+        const result = unquoted("test");
+        expect(isFormattedValue(result)).toBe(true);
+        expect(result.value).toBe("test");
+        expect(result.quote).toBe(false);
+      });
+
+      it("should handle empty string", () => {
+        const result = unquoted("");
+        expect(result.value).toBe("");
+        expect(result.quote).toBe(false);
+      });
+    });
+
+    describe("isFormattedValue() type guard", () => {
+      it("should return true for FormattedValue instances", () => {
+        expect(isFormattedValue(quoted("test"))).toBe(true);
+        expect(isFormattedValue(unquoted("test"))).toBe(true);
+      });
+
+      it("should return false for regular strings", () => {
+        expect(isFormattedValue("test")).toBe(false);
+      });
+
+      it("should return false for null/undefined", () => {
+        expect(isFormattedValue(null)).toBe(false);
+        expect(isFormattedValue(undefined)).toBe(false);
+      });
+
+      it("should return false for objects without symbol", () => {
+        expect(isFormattedValue({ value: "test", quote: true })).toBe(false);
+      });
+    });
+
+    describe("formatCsv with quoted()", () => {
+      it("should force quoting when transform returns quoted()", () => {
+        const result = formatCsv(
+          [
+            { name: "alice", code: "123" },
+            { name: "bob", code: "456" }
+          ],
+          {
+            headers: true,
+            transform: {
+              string: (v, ctx) => (ctx.column === "code" ? quoted(v) : v)
+            }
+          }
+        );
+        // code column should be quoted even though values don't need it
+        expect(result).toBe('name,code\nalice,"123"\nbob,"456"');
+      });
+
+      it("should force quoting for all string values", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", city: "New York" },
+            { name: "Bob", city: "LA" }
+          ],
+          {
+            headers: true,
+            transform: {
+              string: v => quoted(v)
+            }
+          }
+        );
+        expect(result).toBe('name,city\n"Alice","New York"\n"Bob","LA"');
+      });
+
+      it("should work with boolean transform returning quoted()", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", active: true },
+            { name: "Bob", active: false }
+          ],
+          {
+            headers: true,
+            transform: {
+              boolean: v => quoted(v ? "Yes" : "No")
+            }
+          }
+        );
+        expect(result).toBe('name,active\nAlice,"Yes"\nBob,"No"');
+      });
+
+      it("should force quoting for empty strings with quoted()", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", note: "" },
+            { name: "Bob", note: "hello" }
+          ],
+          {
+            headers: true,
+            transform: {
+              string: (v, ctx) => (ctx.column === "note" && v === "" ? quoted("") : v)
+            }
+          }
+        );
+        expect(result).toBe('name,note\nAlice,""\nBob,hello');
+      });
+
+      it("should force quoting based on pattern match with quoted()", () => {
+        const result = formatCsv(
+          [
+            { id: "001", value: "normal" },
+            { id: "002", value: "SPECIAL" },
+            { id: "003", value: "also normal" }
+          ],
+          {
+            headers: true,
+            transform: {
+              string: v => (/^[A-Z]+$/.test(v) ? quoted(v) : v)
+            }
+          }
+        );
+        expect(result).toBe('id,value\n001,normal\n002,"SPECIAL"\n003,also normal');
+      });
+    });
+
+    describe("formatCsv with unquoted()", () => {
+      it("should prevent quoting when transform returns unquoted()", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", formula: "=A1+B1" },
+            { name: "Bob", formula: "=C2*D2" }
+          ],
+          {
+            headers: true,
+            alwaysQuote: true, // Would normally quote everything
+            transform: {
+              string: (v, ctx) => (ctx.column === "formula" ? unquoted(v) : v)
+            }
+          }
+        );
+        // formula column should NOT be quoted despite alwaysQuote
+        expect(result).toBe('"name","formula"\n"Alice",=A1+B1\n"Bob",=C2*D2');
+      });
+
+      it("should prevent quoting for values that normally need quotes", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", data: "hello,world" }, // comma would normally require quotes
+            { name: "Bob", data: 'say "hi"' } // quotes would normally require escaping
+          ],
+          {
+            headers: true,
+            transform: {
+              string: (v, ctx) => (ctx.column === "data" ? unquoted(v) : v)
+            }
+          }
+        );
+        // data column is not quoted - WARNING: this produces invalid CSV
+        expect(result).toBe('name,data\nAlice,hello,world\nBob,say "hi"');
+      });
+    });
+
+    describe("formatCsv combining quoted() and unquoted() with other options", () => {
+      it("should work with quoteColumns option", () => {
+        const result = formatCsv([{ name: "Alice", code: "123", note: "test" }], {
+          headers: true,
+          quoteColumns: { code: true }, // Force quote 'code' column
+          transform: {
+            string: (v, ctx) => (ctx.column === "code" ? unquoted(v) : v)
+          }
+        });
+        // transform takes precedence over quoteColumns
+        expect(result).toBe("name,code,note\nAlice,123,test");
+      });
+
+      it("should work with escapeFormulae option", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", formula: "=SUM(A1:A10)" },
+            { name: "Bob", formula: "normal" }
+          ],
+          {
+            headers: true,
+            escapeFormulae: true,
+            transform: {
+              string: (v, ctx) => (ctx.column === "formula" ? quoted(v) : v)
+            }
+          }
+        );
+        // Formula should be escaped AND quoted
+        expect(result).toBe('name,formula\nAlice,"\t=SUM(A1:A10)"\nBob,"normal"');
+      });
+
+      it("should work with number transform", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", price: 19.99, quantity: 5 },
+            { name: "Bob", price: 29.5, quantity: 3 }
+          ],
+          {
+            headers: true,
+            transform: {
+              number: (v, ctx) => (ctx.column === "price" ? quoted(`$${v.toFixed(2)}`) : String(v))
+            }
+          }
+        );
+        expect(result).toBe('name,price,quantity\nAlice,"$19.99",5\nBob,"$29.50",3');
+      });
+
+      it("should work with row transform that returns FormattedValue in field", () => {
+        // Note: row transform affects the row, type transform affects field values
+        const result = formatCsv(
+          [
+            { name: "Alice", status: "active" },
+            { name: "Bob", status: "inactive" }
+          ],
+          {
+            headers: true,
+            transform: {
+              // string transform can return quoted() for specific conditions
+              string: (v, ctx) => {
+                if (ctx.column === "status" && v === "active") {
+                  return quoted("ACTIVE");
+                }
+                return v;
+              }
+            }
+          }
+        );
+        expect(result).toBe('name,status\nAlice,"ACTIVE"\nBob,inactive');
+      });
+    });
+
+    describe("backward compatibility", () => {
+      it("should work when transform returns plain string (no FormattedValue)", () => {
+        const result = formatCsv(
+          [
+            { name: "alice", age: 30 },
+            { name: "bob", age: 25 }
+          ],
+          {
+            headers: true,
+            transform: {
+              string: v => v.toUpperCase(),
+              number: v => String(v)
+            }
+          }
+        );
+        // Should work exactly as before
+        expect(result).toBe("name,age\nALICE,30\nBOB,25");
+      });
+
+      it("should work when transform returns null or undefined", () => {
+        const result = formatCsv(
+          [
+            { name: "Alice", optional: "value" },
+            { name: "Bob", optional: null as any }
+          ],
+          {
+            headers: true,
+            transform: {
+              string: v => (v === "value" ? null : v) // Return null to use default
+            }
+          }
+        );
+        // null return means use default conversion (original value)
+        expect(result).toBe("name,optional\nAlice,value\nBob,");
+      });
     });
   });
 

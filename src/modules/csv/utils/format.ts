@@ -5,10 +5,15 @@
  * and CsvFormatterStream (streaming) to avoid code duplication.
  */
 
-import { escapeRegex, startsWithFormulaChar } from "@csv/utils/detect";
-import type { DecimalSeparator } from "@csv/csv-number";
-import type { TransformContext, TypeTransformMap } from "@csv/csv-core";
-import { applyTypeTransform, defaultToString } from "@csv/csv-core";
+import {
+  escapeRegex,
+  startsWithFormulaChar,
+  normalizeQuoteOption,
+  normalizeEscapeOption
+} from "@csv/utils/detect";
+import { formatNumberForCsv, type DecimalSeparator } from "@csv/csv-number";
+import type { TransformContext, TypeTransformMap, TransformResult } from "@csv/csv-core";
+import { isFormattedValue } from "@csv/utils/formatted-value";
 
 /**
  * Configuration for quoting specific columns
@@ -53,13 +58,9 @@ export interface FormatRegexOptions {
 export function createFormatRegex(options: FormatRegexOptions): CsvFormatRegex {
   const { quote: quoteOption, delimiter, escape: escapeOption } = options;
 
-  // If quote is false or null, disable quoting entirely
-  const quoteEnabled = quoteOption !== false && quoteOption !== null;
-  const quote = quoteEnabled ? String(quoteOption) : "";
-  const escape =
-    escapeOption !== undefined && escapeOption !== false && escapeOption !== null
-      ? String(escapeOption)
-      : quote;
+  // Use centralized normalization utilities
+  const { enabled: quoteEnabled, char: quote } = normalizeQuoteOption(quoteOption);
+  const escapeNormalized = normalizeEscapeOption(escapeOption, quote);
 
   if (!quoteEnabled) {
     return {
@@ -72,6 +73,11 @@ export function createFormatRegex(options: FormatRegexOptions): CsvFormatRegex {
       useFastCheck: false
     };
   }
+
+  // When quoting is enabled, we must have a valid escape character to produce valid CSV.
+  // If escape was explicitly disabled (escape: false/null), fall back to quote char (RFC 4180 standard).
+  // This ensures internal quotes are always properly escaped as "" rather than producing invalid CSV.
+  const escape = escapeNormalized.char || quote;
 
   // Use fast string.includes() check for single-char delimiter and quote
   const useFastCheck = delimiter.length === 1 && quote.length === 1;
@@ -111,29 +117,6 @@ export function createQuoteLookup(quoteConfig: QuoteColumnConfig | undefined): Q
 }
 
 /**
- * Check if a specific column should be force-quoted based on config
- */
-export function shouldQuoteColumn(
-  index: number,
-  header: string | undefined,
-  quoteConfig: QuoteColumnConfig | undefined
-): boolean {
-  if (quoteConfig === true) {
-    return true;
-  }
-  if (quoteConfig === false || quoteConfig === undefined) {
-    return false;
-  }
-  if (Array.isArray(quoteConfig)) {
-    return quoteConfig[index] === true;
-  }
-  if (typeof quoteConfig === "object" && header) {
-    return quoteConfig[header] === true;
-  }
-  return false;
-}
-
-/**
  * Context for formatting a single field
  */
 export interface FormatFieldContext {
@@ -156,6 +139,79 @@ export interface FormatFieldContext {
   /** Type transform map */
   transform?: TypeTransformMap;
 }
+
+// =============================================================================
+// Type Transform Functions
+// =============================================================================
+
+/**
+ * Apply type-based transform to a single value.
+ * Returns the transformed result, or undefined if no transform applies.
+ */
+export function applyTypeTransform(
+  value: any,
+  transform: TypeTransformMap,
+  ctx: TransformContext
+): TransformResult {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  const type = typeof value;
+
+  if (type === "boolean" && transform.boolean) {
+    return transform.boolean(value, ctx);
+  }
+  if (value instanceof Date && transform.date) {
+    return transform.date(value, ctx);
+  }
+  if (type === "number" && transform.number) {
+    return transform.number(value, ctx);
+  }
+  if (type === "bigint" && transform.bigint) {
+    return transform.bigint(value, ctx);
+  }
+  if (type === "string" && transform.string) {
+    return transform.string(value, ctx);
+  }
+  // Handle plain objects (not Date, not Array, not null)
+  if (type === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)) {
+    if (transform.object) {
+      return transform.object(value, ctx);
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Default type conversion to string.
+ */
+export function defaultToString(value: any, decimalSeparator: DecimalSeparator): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "number") {
+    return formatNumberForCsv(value, decimalSeparator);
+  }
+  if (value instanceof Date) {
+    return String(value.getTime());
+  }
+  if (typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+// =============================================================================
+// Field Formatting
+// =============================================================================
 
 /**
  * Fast check if a string needs quoting (for single-char delimiter/quote)
@@ -198,12 +254,24 @@ export function formatField(
 
   // Apply type-based transform if provided (not for headers)
   let str: string;
+  // Track if transform explicitly requested quoting control
+  let transformQuoteHint: boolean | undefined;
+
   if (!isHeader && transform) {
     // Reuse TransformContext object to reduce GC pressure
     reusableTransformCtx.column = header ?? index;
     reusableTransformCtx.index = outputRowIndex;
     const transformed = applyTypeTransform(value, transform, reusableTransformCtx);
-    str = transformed !== undefined ? transformed : defaultToString(value, decimalSeparator);
+
+    if (transformed === undefined || transformed === null) {
+      str = defaultToString(value, decimalSeparator);
+    } else if (isFormattedValue(transformed)) {
+      // FormattedValue contains explicit quoting hint
+      str = transformed.value;
+      transformQuoteHint = transformed.quote;
+    } else {
+      str = transformed;
+    }
   } else {
     str = defaultToString(value, decimalSeparator);
   }
@@ -220,12 +288,18 @@ export function formatField(
   }
 
   // Check if quoting is needed
-  const needsQuote =
-    alwaysQuote ||
-    forceQuote ||
-    (regex.useFastCheck
-      ? needsQuoteFast(str, regex.delimiter, regex.quote)
-      : regex.needsQuoteRegex!.test(str));
+  // Transform quote hint takes precedence (explicit control via quoted()/unquoted())
+  let needsQuote: boolean;
+  if (transformQuoteHint !== undefined) {
+    needsQuote = transformQuoteHint;
+  } else {
+    needsQuote =
+      alwaysQuote ||
+      forceQuote ||
+      (regex.useFastCheck
+        ? needsQuoteFast(str, regex.delimiter, regex.quote)
+        : regex.needsQuoteRegex!.test(str));
+  }
 
   if (needsQuote) {
     // Escape quotes using pre-compiled regex
@@ -236,43 +310,44 @@ export function formatField(
   return str;
 }
 
+// =============================================================================
+// Row Formatting
+// =============================================================================
+
+/**
+ * Options for formatting a row
+ */
+export interface FormatRowOptions {
+  /** Pre-computed quote lookup function */
+  quoteLookup: QuoteLookupFn;
+  /** Field delimiter */
+  delimiter: string;
+  /** Header names for columns (used for transform context) */
+  headers?: string[];
+  /** Whether this row is a header row */
+  isHeader: boolean;
+  /** Current output row index (0-based) */
+  outputRowIndex: number;
+  /** Force quote all fields */
+  alwaysQuote: boolean;
+  /** Escape formulae (CSV injection protection) */
+  escapeFormulae: boolean;
+  /** Decimal separator for number formatting */
+  decimalSeparator: DecimalSeparator;
+  /** Type transform map */
+  transform?: TypeTransformMap;
+}
+
 /**
  * Format an entire row to CSV string
  */
-export function formatRow(
+export function formatRowWithLookup(
   row: unknown[],
   regex: CsvFormatRegex,
-  options: {
-    delimiter: string;
-    headers?: string[];
-    isHeader: boolean;
-    outputRowIndex: number;
-    alwaysQuote: boolean;
-    escapeFormulae: boolean;
-    decimalSeparator: DecimalSeparator;
-    transform?: TypeTransformMap;
-    quoteConfig?: QuoteColumnConfig;
-  }
+  options: FormatRowOptions
 ): string {
   const {
-    delimiter,
-    headers,
-    isHeader,
-    outputRowIndex,
-    alwaysQuote,
-    escapeFormulae,
-    decimalSeparator,
-    transform,
-    quoteConfig
-  } = options;
-
-  // Pre-compute quote lookup function to avoid repeated type checks
-  const getForceQuote = createQuoteLookup(quoteConfig);
-
-  return formatRowWithLookup(
-    row,
-    regex,
-    getForceQuote,
+    quoteLookup,
     delimiter,
     headers,
     isHeader,
@@ -281,26 +356,8 @@ export function formatRow(
     escapeFormulae,
     decimalSeparator,
     transform
-  );
-}
+  } = options;
 
-/**
- * Format an entire row to CSV string (optimized version with pre-computed lookup)
- * Use this when formatting multiple rows with the same quoteConfig
- */
-export function formatRowWithLookup(
-  row: unknown[],
-  regex: CsvFormatRegex,
-  quoteLookup: QuoteLookupFn,
-  delimiter: string,
-  headers: string[] | undefined,
-  isHeader: boolean,
-  outputRowIndex: number,
-  alwaysQuote: boolean,
-  escapeFormulae: boolean,
-  decimalSeparator: DecimalSeparator,
-  transform?: TypeTransformMap
-): string {
   return row
     .map((value, index) => {
       const header = headers?.[index];

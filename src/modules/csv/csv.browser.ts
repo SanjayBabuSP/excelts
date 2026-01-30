@@ -630,8 +630,11 @@ export {
   detectDelimiter,
   detectLinebreak,
   stripBom,
-  deduplicateHeaders
+  deduplicateHeaders,
+  quoted,
+  unquoted
 } from "@csv/csv-core";
+export type { FormattedValue } from "@csv/csv-core";
 export type {
   CsvParseOptions,
   CsvFormatOptions,
@@ -643,5 +646,6 @@ export type {
   ChunkMeta,
   TransformContext,
   TypeTransformMap,
+  TransformResult,
   ColumnConfig
 } from "@csv/csv-core";

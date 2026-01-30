@@ -15,6 +15,41 @@ export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Normalize quote option to { enabled, char } form.
+ * Centralizes the quote/false/null handling logic.
+ */
+export function normalizeQuoteOption(option: string | false | null | undefined): {
+  enabled: boolean;
+  char: string;
+} {
+  if (option === false || option === null) {
+    return { enabled: false, char: "" };
+  }
+  return { enabled: true, char: option ?? '"' };
+}
+
+/**
+ * Normalize escape option to { enabled, char } form.
+ * Consistent with normalizeQuoteOption API design.
+ *
+ * @param escapeOption - User's escape option (string, false, null, or undefined)
+ * @param quoteChar - The quote character (used as default when escape is undefined)
+ * @returns { enabled: boolean, char: string }
+ *   - enabled=false, char="" when explicitly disabled (false/null)
+ *   - enabled=true, char=quoteChar when undefined (default behavior)
+ *   - enabled=true, char=escapeOption when string provided
+ */
+export function normalizeEscapeOption(
+  escapeOption: string | false | null | undefined,
+  quoteChar: string
+): { enabled: boolean; char: string } {
+  if (escapeOption === false || escapeOption === null) {
+    return { enabled: false, char: "" };
+  }
+  return { enabled: true, char: escapeOption ?? quoteChar };
+}
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -167,7 +202,7 @@ export function detectDelimiter(
   for (const delimiter of delimiters) {
     const { avgFieldCount, delta } = scoreDelimiter(lines, delimiter, quote);
 
-    // Require at least ~2 fields on average, similar to PapaParse
+    // Require at least ~2 fields on average
     if (avgFieldCount <= 1.99) {
       continue;
     }
@@ -281,7 +316,7 @@ function scoreDelimiter(
       continue;
     }
 
-    // Like PapaParse, allow variability but prefer consistent counts
+    // Allow variability but prefer consistent counts
     delta += Math.abs(fieldCount - prevFieldCount);
     prevFieldCount = fieldCount;
   }

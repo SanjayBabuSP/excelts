@@ -49,7 +49,15 @@ class CSV extends CSVBrowser {
 export { CSV };
 export type { CsvOptions, CsvInput } from "@csv/csv.browser";
 export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
-export { detectDelimiter, detectLinebreak, stripBom, deduplicateHeaders } from "@csv/csv-core";
+export {
+  detectDelimiter,
+  detectLinebreak,
+  stripBom,
+  deduplicateHeaders,
+  quoted,
+  unquoted
+} from "@csv/csv-core";
+export type { FormattedValue } from "@csv/csv-core";
 export type {
   CsvParseMeta,
   CsvParseResult,
@@ -59,5 +67,6 @@ export type {
   ChunkMeta,
   TransformContext,
   TypeTransformMap,
+  TransformResult,
   ColumnConfig
 } from "@csv/csv-core";

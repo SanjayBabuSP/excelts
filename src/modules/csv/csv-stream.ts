@@ -19,7 +19,12 @@ import type {
   TypeTransformMap
 } from "@csv/csv-core";
 import { isSyncTransform, isSyncValidate, makeTrimField, processColumns } from "@csv/csv-core";
-import { detectDelimiter, stripBom } from "@csv/utils/detect";
+import {
+  detectDelimiter,
+  stripBom,
+  normalizeQuoteOption,
+  normalizeEscapeOption
+} from "@csv/utils/detect";
 import {
   createFormatRegex,
   createQuoteLookup,
@@ -28,12 +33,7 @@ import {
   type QuoteColumnConfig,
   type QuoteLookupFn
 } from "@csv/utils/format";
-import {
-  isRowHashArray,
-  rowHashArrayMapByHeaders,
-  rowHashArrayToValues,
-  rowHashArrayToHeaders
-} from "@csv/utils/row";
+import { extractRowValues, detectRowKeys } from "@csv/utils/row";
 import { applyDynamicTypingToRow, applyDynamicTypingToArrayRow } from "@csv/utils/dynamic-typing";
 import {
   processHeaders,
@@ -98,13 +98,13 @@ export class CsvParserStream extends Transform {
     // multi-byte characters split across chunks.
     this.decoder = new TextDecoder();
 
-    const quoteOption = options.quote ?? '"';
-    this.quoteEnabled = quoteOption !== null && quoteOption !== false;
-    this.quote = this.quoteEnabled ? String(quoteOption) : "";
-
-    const escapeOption = options.escape ?? '"';
-    this.escape =
-      escapeOption !== null && escapeOption !== false ? String(escapeOption) : this.quote;
+    // Use centralized normalization utilities
+    const { enabled: quoteEnabled, char: quote } = normalizeQuoteOption(options.quote);
+    this.quoteEnabled = quoteEnabled;
+    this.quote = quote;
+    const escapeNormalized = normalizeEscapeOption(options.escape, quote);
+    // When quoting is enabled, fall back to quote char if escape was disabled (RFC 4180)
+    this.escape = quoteEnabled ? escapeNormalized.char || quote : escapeNormalized.char;
 
     // Check if auto-detection is requested (delimiter === "")
     const delimiterOption = options.delimiter ?? ",";
@@ -191,7 +191,7 @@ export class CsvParserStream extends Transform {
       const data = typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true });
       this.buffer += data;
 
-      // Apply beforeFirstChunk on first chunk (PapaParse order: beforeFirstChunk runs before BOM stripping)
+      // Apply beforeFirstChunk on first chunk
       if (!this.beforeFirstChunkApplied && this.options.beforeFirstChunk) {
         this.beforeFirstChunkApplied = true;
         const result = this.options.beforeFirstChunk(this.buffer);
@@ -995,12 +995,8 @@ export class CsvFormatterStream extends Transform {
    * Auto-detect keys/headers from a row (object or RowHashArray)
    */
   private detectHeadersFromRow(chunk: Row): void {
-    if (isRowHashArray(chunk)) {
-      const detectedKeys = rowHashArrayToHeaders(chunk);
-      this.keys = detectedKeys;
-      this.displayHeaders = detectedKeys;
-    } else if (!Array.isArray(chunk) && typeof chunk === "object" && chunk !== null) {
-      const detectedKeys = Object.keys(chunk);
+    const detectedKeys = detectRowKeys(chunk);
+    if (detectedKeys.length > 0) {
       this.keys = detectedKeys;
       this.displayHeaders = detectedKeys;
     }
@@ -1076,22 +1072,7 @@ export class CsvFormatterStream extends Transform {
   }
 
   private formatAndPush(chunk: Row): void {
-    let row: unknown[];
-    if (isRowHashArray(chunk)) {
-      // Handle RowHashArray: array of [key, value] tuples
-      // Use keys for data access
-      row = this.keys ? rowHashArrayMapByHeaders(chunk, this.keys) : rowHashArrayToValues(chunk);
-    } else if (Array.isArray(chunk)) {
-      row = chunk;
-    } else if (typeof chunk === "object" && chunk !== null) {
-      // Use keys for data access from objects
-      row = this.keys
-        ? this.keys.map(k => (chunk as Record<string, unknown>)[k])
-        : Object.values(chunk);
-    } else {
-      row = [chunk];
-    }
-
+    const row = extractRowValues(chunk, this.keys);
     this.push(this.formatRow(row, false));
   }
 
@@ -1099,19 +1080,17 @@ export class CsvFormatterStream extends Transform {
     // Use pre-computed quote lookup for performance
     const quoteLookup = isHeader ? this.quoteHeadersLookup : this.quoteColumnsLookup;
 
-    const formattedRow = formatRowWithLookup(
-      row,
-      this.formatRegex,
+    const formattedRow = formatRowWithLookup(row, this.formatRegex, {
       quoteLookup,
-      this.delimiter,
-      this.displayHeaders ?? undefined,
+      delimiter: this.delimiter,
+      headers: this.displayHeaders ?? undefined,
       isHeader,
-      this.outputRowIndex,
-      this.alwaysQuote,
-      this.escapeFormulae,
-      this.decimalSeparator,
-      this.transform_ ?? undefined
-    );
+      outputRowIndex: this.outputRowIndex,
+      alwaysQuote: this.alwaysQuote,
+      escapeFormulae: this.escapeFormulae,
+      decimalSeparator: this.decimalSeparator,
+      transform: this.transform_ ?? undefined
+    });
 
     // Use row delimiter as prefix (except for first output)
     // First output = header row OR (no header AND first data row)

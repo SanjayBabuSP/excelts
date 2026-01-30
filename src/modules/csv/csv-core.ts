@@ -9,8 +9,14 @@
  * @see https://tools.ietf.org/html/rfc4180
  */
 
-import { formatNumberForCsv, type DecimalSeparator } from "@csv/csv-number";
-import { detectDelimiter, detectLinebreak, stripBom } from "@csv/utils/detect";
+import { type DecimalSeparator } from "@csv/csv-number";
+import {
+  detectDelimiter,
+  detectLinebreak,
+  stripBom,
+  normalizeQuoteOption,
+  normalizeEscapeOption
+} from "@csv/utils/detect";
 import {
   createFormatRegex,
   createQuoteLookup,
@@ -20,10 +26,8 @@ import {
 import {
   type HeaderArray,
   type RowHashArray,
-  isRowHashArray,
-  rowHashArrayToValues,
-  rowHashArrayToHeaders,
-  rowHashArrayMapByHeaders,
+  extractRowValues,
+  detectRowKeys,
   deduplicateHeaders
 } from "@csv/utils/row";
 import {
@@ -39,6 +43,7 @@ import {
   rowToObject,
   LINE_SPLIT_REGEX
 } from "@csv/utils/parse";
+import type { FormattedValue } from "@csv/utils/formatted-value";
 
 // Re-export types from utility files
 export type { HeaderArray, RowHashArray } from "@csv/utils/row";
@@ -50,7 +55,9 @@ export {
   detectLinebreak,
   stripBom,
   startsWithFormulaChar,
-  escapeRegex
+  escapeRegex,
+  normalizeQuoteOption,
+  normalizeEscapeOption
 } from "@csv/utils/detect";
 
 // Re-export format utilities
@@ -58,13 +65,14 @@ export {
   createFormatRegex,
   createQuoteLookup,
   formatField,
-  formatRow as formatRowUtil,
   formatRowWithLookup,
-  shouldQuoteColumn,
+  applyTypeTransform,
+  defaultToString,
   type QuoteColumnConfig,
   type QuoteLookupFn,
   type CsvFormatRegex,
-  type FormatFieldContext
+  type FormatFieldContext,
+  type FormatRowOptions
 } from "@csv/utils/format";
 
 // Re-export row utilities
@@ -75,6 +83,8 @@ export {
   rowHashArrayToHeaders,
   rowHashArrayGet,
   rowHashArrayMapByHeaders,
+  extractRowValues,
+  detectRowKeys,
   deduplicateHeaders,
   deduplicateHeadersWithRenames
 } from "@csv/utils/row";
@@ -86,6 +96,10 @@ export {
   applyDynamicTypingToRow,
   applyDynamicTypingToArrayRow
 } from "@csv/utils/dynamic-typing";
+
+// Re-export formatted value utilities for field-level quoting control
+export type { FormattedValue } from "@csv/utils/formatted-value";
+export { quoted, unquoted } from "@csv/utils/formatted-value";
 
 // =============================================================================
 // Types
@@ -123,22 +137,52 @@ export interface TransformContext {
 }
 
 /**
+ * Result type for transform functions.
+ *
+ * - `string` - Output as-is, apply global quoting rules
+ * - `FormattedValue` - Output with explicit quoting control (use `quoted()` or `unquoted()` helpers)
+ * - `null` / `undefined` - Output as empty field
+ */
+export type TransformResult = string | FormattedValue | null | undefined;
+
+/**
  * Type-based transform functions for formatting specific data types.
- * Each function receives the value and context, returns a string.
+ *
+ * Each function receives the value and context, and can return:
+ * - A string (uses global quoting settings)
+ * - `quoted(value)` to force quoting
+ * - `unquoted(value)` to prevent quoting
+ * - `null`/`undefined` for empty field
+ *
+ * @example
+ * ```ts
+ * import { quoted, unquoted } from '@cj-tech-master/excelts';
+ *
+ * transform: {
+ *   // Force all strings to be quoted
+ *   string: (v) => quoted(v),
+ *
+ *   // Excel formula without outer quotes
+ *   number: (v, ctx) => ctx.column === 'id' ? unquoted(`="${v}"`) : String(v),
+ *
+ *   // Regular string (follows global settings)
+ *   date: (v) => v.toISOString()
+ * }
+ * ```
  */
 export interface TypeTransformMap {
   /** Transform boolean values */
-  boolean?: (value: boolean, ctx: TransformContext) => string;
+  boolean?: (value: boolean, ctx: TransformContext) => TransformResult;
   /** Transform Date values */
-  date?: (value: Date, ctx: TransformContext) => string;
+  date?: (value: Date, ctx: TransformContext) => TransformResult;
   /** Transform number values */
-  number?: (value: number, ctx: TransformContext) => string;
+  number?: (value: number, ctx: TransformContext) => TransformResult;
   /** Transform bigint values */
-  bigint?: (value: bigint, ctx: TransformContext) => string;
+  bigint?: (value: bigint, ctx: TransformContext) => TransformResult;
   /** Transform object values (excluding Date, null, arrays) */
-  object?: (value: Record<string, any>, ctx: TransformContext) => string;
+  object?: (value: Record<string, any>, ctx: TransformContext) => TransformResult;
   /** Transform string values */
-  string?: (value: string, ctx: TransformContext) => string;
+  string?: (value: string, ctx: TransformContext) => TransformResult;
   /**
    * Row-level transform (runs before type transforms).
    * Return null to skip the row entirely.
@@ -724,26 +768,21 @@ export function parseCsv(
 
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
 
+  // Use centralized normalization utilities
+  const { enabled: quoteEnabled, char: quote } = normalizeQuoteOption(quoteOption);
+  const escapeNormalized = normalizeEscapeOption(escapeOption, quote);
+  // When quoting is enabled, fall back to quote char if escape was disabled (RFC 4180)
+  const escape = quoteEnabled ? escapeNormalized.char || quote : escapeNormalized.char;
+
   // Auto-detect delimiter if empty string is passed
   const delimiter =
     delimiterOption === ""
-      ? detectDelimiter(
-          processedInput,
-          quoteOption !== false && quoteOption !== null ? String(quoteOption) : '"',
-          delimitersToGuess,
-          comment,
-          shouldSkipEmpty
-        )
+      ? detectDelimiter(processedInput, quote || '"', delimitersToGuess, comment, shouldSkipEmpty)
       : delimiterOption;
 
   // Detect or use provided line terminator for meta info
   // Note: The parser always handles all line ending types, this is mainly for meta info
   const linebreak = newlineOption || detectLinebreak(processedInput);
-
-  // Handle quote: null/false to disable quoting
-  const quoteEnabled = quoteOption !== null && quoteOption !== false;
-  const quote = quoteEnabled ? String(quoteOption) : "";
-  const escape = escapeOption !== null && escapeOption !== false ? String(escapeOption) : "";
 
   const rows: string[][] = [];
   const invalidRows: { row: string[]; reason: string }[] = [];
@@ -775,7 +814,7 @@ export function parseCsv(
   let useHeaders = false;
   let headerRowProcessed = false;
 
-  // Track renamed headers for meta (PapaParse-compatible)
+  // Track renamed headers for meta
   let renamedHeadersForMeta: Record<string, string> | null = null;
 
   // Determine header mode using shared utility for pre-configured headers
@@ -1170,73 +1209,6 @@ export function parseCsv(
 // =============================================================================
 
 /**
- * Apply type-based transform to a single value.
- * Returns the transformed string, or undefined if no transform applies.
- * @internal Exported for use in csv-stream.ts
- */
-export function applyTypeTransform(
-  value: any,
-  transform: TypeTransformMap,
-  ctx: TransformContext
-): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-
-  const type = typeof value;
-
-  if (type === "boolean" && transform.boolean) {
-    return transform.boolean(value, ctx);
-  }
-  if (value instanceof Date && transform.date) {
-    return transform.date(value, ctx);
-  }
-  if (type === "number" && transform.number) {
-    return transform.number(value, ctx);
-  }
-  if (type === "bigint" && transform.bigint) {
-    return transform.bigint(value, ctx);
-  }
-  if (type === "string" && transform.string) {
-    return transform.string(value, ctx);
-  }
-  // Handle plain objects (not Date, not Array, not null)
-  if (type === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)) {
-    if (transform.object) {
-      return transform.object(value, ctx);
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Default type conversion to string.
- * @internal Exported for use in csv-stream.ts
- */
-export function defaultToString(value: any, decimalSeparator: DecimalSeparator): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  if (typeof value === "number") {
-    return formatNumberForCsv(value, decimalSeparator);
-  }
-  if (value instanceof Date) {
-    return String(value.getTime());
-  }
-  if (typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
-/**
  * Format data as a CSV string
  */
 export function formatCsv(
@@ -1295,34 +1267,6 @@ export function formatCsv(
     return row;
   };
 
-  /**
-   * Extract values from a row based on keys.
-   * Handles objects, RowHashArray, and plain arrays uniformly.
-   */
-  const extractValues = (row: any, rowKeys: string[] | null): any[] => {
-    if (isRowHashArray(row)) {
-      return rowKeys ? rowHashArrayMapByHeaders(row, rowKeys) : rowHashArrayToValues(row);
-    }
-    if (Array.isArray(row)) {
-      return row;
-    }
-    // Plain object
-    return rowKeys ? rowKeys.map(key => row[key]) : Object.values(row);
-  };
-
-  /**
-   * Auto-detect keys from first row based on data type.
-   */
-  const autoDetectKeys = (firstRow: any): string[] => {
-    if (isRowHashArray(firstRow)) {
-      return rowHashArrayToHeaders(firstRow);
-    }
-    if (!Array.isArray(firstRow) && typeof firstRow === "object" && firstRow !== null) {
-      return Object.keys(firstRow);
-    }
-    return []; // Arrays don't have intrinsic keys
-  };
-
   // Determine keys and displayHeaders upfront
   // Priority: columns > headers array > auto-detect (when headers: true)
   let displayHeaders: string[] | null = null;
@@ -1332,7 +1276,7 @@ export function formatCsv(
       keys = columnKeys;
       displayHeaders = columnHeaders;
     } else if (headers === true) {
-      keys = autoDetectKeys(data[0]);
+      keys = detectRowKeys(data[0]);
       displayHeaders = keys.length > 0 ? keys : null;
     } else if (Array.isArray(headers)) {
       keys = headers;
@@ -1343,19 +1287,17 @@ export function formatCsv(
   // Write header row if needed
   if (displayHeaders && shouldWriteHeaders) {
     lines.push(
-      formatRowWithLookup(
-        displayHeaders,
-        formatRegex,
-        quoteHeadersLookup,
+      formatRowWithLookup(displayHeaders, formatRegex, {
+        quoteLookup: quoteHeadersLookup,
         delimiter,
-        displayHeaders,
-        true,
-        recordsProcessed,
+        headers: displayHeaders,
+        isHeader: true,
+        outputRowIndex: recordsProcessed,
         alwaysQuote,
         escapeFormulae,
-        decimalSeparator as DecimalSeparator,
+        decimalSeparator: decimalSeparator as DecimalSeparator,
         transform
-      )
+      })
     );
   }
 
@@ -1365,21 +1307,19 @@ export function formatCsv(
     if (transformedRow === null || transformedRow === undefined) {
       continue;
     }
-    const values = extractValues(transformedRow, keys);
+    const values = extractRowValues(transformedRow, keys);
     lines.push(
-      formatRowWithLookup(
-        values,
-        formatRegex,
-        quoteColumnsLookup,
+      formatRowWithLookup(values, formatRegex, {
+        quoteLookup: quoteColumnsLookup,
         delimiter,
-        displayHeaders ?? undefined,
-        false,
-        recordsProcessed,
+        headers: displayHeaders ?? undefined,
+        isHeader: false,
+        outputRowIndex: recordsProcessed,
         alwaysQuote,
         escapeFormulae,
-        decimalSeparator as DecimalSeparator,
+        decimalSeparator: decimalSeparator as DecimalSeparator,
         transform
-      )
+      })
     );
     recordsProcessed++;
   }
@@ -1389,19 +1329,17 @@ export function formatCsv(
     const emptyHeaders = columnHeaders ?? (Array.isArray(headers) ? headers : null);
     if (emptyHeaders) {
       lines.push(
-        formatRowWithLookup(
-          emptyHeaders,
-          formatRegex,
-          quoteHeadersLookup,
+        formatRowWithLookup(emptyHeaders, formatRegex, {
+          quoteLookup: quoteHeadersLookup,
           delimiter,
-          emptyHeaders,
-          true,
-          recordsProcessed,
+          headers: emptyHeaders,
+          isHeader: true,
+          outputRowIndex: recordsProcessed,
           alwaysQuote,
           escapeFormulae,
-          decimalSeparator as DecimalSeparator,
+          decimalSeparator: decimalSeparator as DecimalSeparator,
           transform
-        )
+        })
       );
     }
   }
@@ -1459,10 +1397,11 @@ export async function* parseCsvStream(
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
   const skipEmptyGreedy = skipEmptyLines === "greedy";
 
-  // Handle quote: null/false to disable quoting
-  const quoteEnabled = quoteOption !== null && quoteOption !== false;
-  const quote = quoteEnabled ? String(quoteOption) : "";
-  const escape = escapeOption !== null && escapeOption !== false ? String(escapeOption) : "";
+  // Use centralized normalization utilities
+  const { enabled: quoteEnabled, char: quote } = normalizeQuoteOption(quoteOption);
+  const escapeNormalized = normalizeEscapeOption(escapeOption, quote);
+  // When quoting is enabled, fall back to quote char if escape was disabled (RFC 4180)
+  const escape = quoteEnabled ? escapeNormalized.char || quote : escapeNormalized.char;
 
   // For string input, auto-detect delimiter upfront
   // For async iterable, we need to buffer first chunk for detection

@@ -85,6 +85,46 @@ export function rowHashArrayMapByHeaders<V = any>(
   return headers.map(h => map[h]);
 }
 
+/**
+ * Extract values from a row (array, object, or RowHashArray) in consistent order.
+ * This is the unified function for row value extraction used by both
+ * batch (formatCsv) and streaming (CsvFormatterStream) code paths.
+ *
+ * @param row - The row data (array, object, or RowHashArray)
+ * @param keys - Optional key order for object/RowHashArray rows
+ * @returns Array of values in the specified key order (or natural order if no keys)
+ */
+export function extractRowValues(row: unknown, keys: string[] | null | undefined): unknown[] {
+  if (isRowHashArray(row)) {
+    return keys ? rowHashArrayMapByHeaders(row, keys) : rowHashArrayToValues(row);
+  }
+  if (Array.isArray(row)) {
+    return row;
+  }
+  if (row !== null && typeof row === "object") {
+    return keys ? keys.map(key => (row as Record<string, unknown>)[key]) : Object.values(row);
+  }
+  // Primitive value: wrap in array
+  return [row];
+}
+
+/**
+ * Auto-detect keys (headers) from a row based on its type.
+ * Returns empty array for arrays or primitive values.
+ *
+ * @param row - The row data to detect keys from
+ * @returns Array of string keys, or empty array if not applicable
+ */
+export function detectRowKeys(row: unknown): string[] {
+  if (isRowHashArray(row)) {
+    return rowHashArrayToHeaders(row);
+  }
+  if (!Array.isArray(row) && row !== null && typeof row === "object") {
+    return Object.keys(row);
+  }
+  return [];
+}
+
 // =============================================================================
 // Header Utilities
 // =============================================================================

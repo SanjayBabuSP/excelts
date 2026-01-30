@@ -301,10 +301,9 @@ describe("CSV Stream - CsvParserStream", () => {
         rows.push(row as string[]);
       }
 
-      // With quoting disabled, the quotes stay as-is but the field boundary
-      // parsing may be different. In our implementation, the leading quote
-      // becomes part of the field value if quote is disabled
-      expect(rows).toEqual([["hello", "world"]]);
+      // With quoting disabled, the quotes become literal characters in the field value
+      // Input: "hello",world -> Field 1: "hello" (with quotes), Field 2: world
+      expect(rows).toEqual([['"hello"', "world"]]);
     });
 
     it("should auto-detect delimiter when delimiter is empty string", async () => {
