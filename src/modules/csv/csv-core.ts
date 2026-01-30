@@ -492,6 +492,58 @@ export interface CsvParseOptions extends CsvBaseOptions {
    * }
    */
   beforeFirstChunk?: (chunk: string) => string | void;
+  /**
+   * Include additional information about each record.
+   * When enabled, each row becomes an object with `record` and `info` properties.
+   *
+   * The info object contains:
+   * - `index`: 0-based record index (data rows only, excluding header)
+   * - `line`: 1-based line number in the original file where this record started
+   * - `bytes`: Byte offset from the start of the file where this record started
+   * - `invalid_field_length`: Number of fields (only present if mismatched)
+   * - `raw`: Raw unparsed string of this record (only when `raw: true`)
+   * - `quoted`: Array of booleans indicating which fields were quoted
+   *
+   * @example
+   * const result = parseCsv('a,b\n1,2', { headers: true, info: true });
+   * // result.rows[0] = {
+   * //   record: { a: '1', b: '2' },
+   * //   info: { index: 0, line: 2, bytes: 4, quoted: [false, false] }
+   * // }
+   *
+   * @default false
+   */
+  info?: boolean;
+  /**
+   * Include the raw unparsed string for each record in the info object.
+   * Only effective when `info: true` is also set.
+   *
+   * @example
+   * const result = parseCsv('a,b\n"1","2"', { headers: true, info: true, raw: true });
+   * // result.rows[0].info.raw === '"1","2"'
+   *
+   * @default false
+   */
+  raw?: boolean;
+  /**
+   * Tolerate quotes appearing inside unquoted fields.
+   * When enabled, a quote character mid-field is treated as a literal quote
+   * instead of triggering quote mode.
+   *
+   * This is useful for parsing malformed CSV files where fields contain
+   * unescaped quote characters.
+   *
+   * @example
+   * // Without relaxQuotes (throws error or corrupts data):
+   * // John's "nickname" is Bob
+   *
+   * // With relaxQuotes: true
+   * const result = parseCsv('John\'s "nickname" is Bob', { relaxQuotes: true });
+   * // result = [['John\'s "nickname" is Bob']]
+   *
+   * @default false
+   */
+  relaxQuotes?: boolean;
 }
 
 export type SkipEmptyLines = boolean;
@@ -661,6 +713,36 @@ export interface CsvParseResult<T = string[]> {
   meta: CsvParseMeta;
 }
 
+/**
+ * Additional information about a parsed record.
+ * Available when parsing with `info: true` option.
+ */
+export interface RecordInfo {
+  /** 0-based record index (data rows only, excluding header) */
+  index: number;
+  /** 1-based line number in the original file where this record started */
+  line: number;
+  /** Byte offset from the start of the file where this record started */
+  bytes: number;
+  /** Array of booleans indicating which fields were quoted */
+  quoted: boolean[];
+  /** Raw unparsed string of this record (only when `raw: true`) */
+  raw?: string;
+  /** Number of fields if mismatched with expected column count */
+  invalid_field_length?: number;
+}
+
+/**
+ * A parsed record with additional info metadata.
+ * Returned when parsing with `info: true` option.
+ */
+export interface RecordWithInfo<T = Record<string, unknown>> {
+  /** The parsed record data */
+  record: T;
+  /** Additional information about this record */
+  info: RecordInfo;
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -727,7 +809,12 @@ function processValidateResult(result: boolean | { isValid: boolean; reason?: st
 export function parseCsv(
   input: string,
   options: CsvParseOptions = {}
-): string[][] | CsvParseResult<Record<string, string>> | CsvParseResult<Record<string, unknown>> {
+):
+  | string[][]
+  | CsvParseResult<Record<string, string>>
+  | CsvParseResult<Record<string, unknown>>
+  | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+  | CsvParseResult<RecordWithInfo<string[]>> {
   const {
     delimiter: delimiterOption = ",",
     delimitersToGuess,
@@ -751,7 +838,10 @@ export function parseCsv(
     transform,
     validate,
     dynamicTyping,
-    beforeFirstChunk
+    beforeFirstChunk,
+    info: infoOption = false,
+    raw: rawOption = false,
+    relaxQuotes = false
   } = options;
 
   // Apply beforeFirstChunk if provided
@@ -794,6 +884,29 @@ export function parseCsv(
   let lineNumber = 0;
   let currentRowBytes = 0; // Track row size for maxRowBytes check
   const maxRowBytes = options.maxRowBytes;
+
+  // Info tracking variables (only tracked when info option is enabled)
+  let rowInfos: RecordInfo[] = [];
+  let currentRowStartLine = 0; // 1-based line number where current row started
+  let currentRowStartBytes = 0; // Byte offset where current row started
+  let currentFieldQuoted = false; // Whether current field started with a quote
+  let currentRowQuoted: boolean[] = []; // Quote status for each field in current row
+  let currentRawRow = ""; // Raw string of current row (only tracked when raw option is enabled)
+
+  // Helper to reset info/raw state when skipping a row (reduces code duplication)
+  const resetInfoState =
+    infoOption || rawOption
+      ? (nextLine: number, nextBytes: number) => {
+          if (infoOption) {
+            currentRowQuoted = [];
+            currentRowStartLine = nextLine;
+            currentRowStartBytes = nextBytes;
+          }
+          if (rawOption) {
+            currentRawRow = "";
+          }
+        }
+      : null;
 
   // Helper to check row size limit (inlined for performance in hot path)
   const checkRowBytes =
@@ -962,7 +1075,9 @@ export function parseCsv(
   function buildResult():
     | string[][]
     | CsvParseResult<Record<string, string>>
-    | CsvParseResult<Record<string, unknown>> {
+    | CsvParseResult<Record<string, unknown>>
+    | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+    | CsvParseResult<RecordWithInfo<string[]>> {
     // Build meta object
     const meta: CsvParseMeta = {
       delimiter,
@@ -972,24 +1087,6 @@ export function parseCsv(
       cursor: dataRowCount,
       renamedHeaders: renamedHeadersForMeta
     };
-
-    // Helper to apply validation and collect invalid rows
-    function applyValidation<T>(
-      dataRows: T[],
-      toStringArray: (row: T) => string[]
-    ): { validRows: T[]; newInvalidRows: { row: string[]; reason: string }[] } {
-      const validRows: T[] = [];
-      const newInvalidRows: { row: string[]; reason: string }[] = [];
-      for (const row of dataRows) {
-        const { isValid, reason } = processValidateResult(validate!(row as Row));
-        if (isValid) {
-          validRows.push(row);
-        } else {
-          newInvalidRows.push({ row: toStringArray(row), reason });
-        }
-      }
-      return { validRows, newInvalidRows };
-    }
 
     // Convert to objects if headers enabled
     if (useHeaders && headerRow) {
@@ -1008,23 +1105,53 @@ export function parseCsv(
 
       // Apply transform if provided
       if (transform) {
-        dataRows = dataRows
-          .map(row => transform(row as Record<string, string>))
-          .filter(row => row !== null && row !== undefined) as Record<string, unknown>[];
+        const transformedDataRows: Record<string, unknown>[] = [];
+        const transformedInfos: RecordInfo[] = [];
+        for (let idx = 0; idx < dataRows.length; idx++) {
+          const transformed = transform(dataRows[idx] as Record<string, string>);
+          if (transformed !== null && transformed !== undefined) {
+            transformedDataRows.push(transformed as Record<string, unknown>);
+            if (infoOption) {
+              transformedInfos.push(rowInfos[idx]);
+            }
+          }
+        }
+        dataRows = transformedDataRows;
+        if (infoOption) {
+          rowInfos = transformedInfos;
+        }
       }
 
       // Apply validate if provided
       if (validate) {
-        const { validRows, newInvalidRows } = applyValidation(dataRows, row =>
-          Object.values(row).map(v => (v === null ? "" : String(v)))
-        );
-        dataRows = validRows;
-        invalidRows.push(...newInvalidRows);
+        const validDataRows: Record<string, unknown>[] = [];
+        const validInfos: RecordInfo[] = [];
+        for (let idx = 0; idx < dataRows.length; idx++) {
+          const { isValid, reason } = processValidateResult(validate!(dataRows[idx] as Row));
+          if (isValid) {
+            validDataRows.push(dataRows[idx]);
+            if (infoOption) {
+              validInfos.push(rowInfos[idx]);
+            }
+          } else {
+            invalidRows.push({
+              row: Object.values(dataRows[idx]).map(v => (v === null ? "" : String(v))),
+              reason
+            });
+          }
+        }
+        dataRows = validDataRows;
+        if (infoOption) {
+          rowInfos = validInfos;
+        }
       }
 
-      const result: CsvParseResult<Record<string, unknown>> = {
+      // Build result object
+      const result: any = {
         headers,
-        rows: dataRows,
+        rows: infoOption
+          ? dataRows.map((row, idx) => ({ record: row, info: rowInfos[idx] }))
+          : dataRows,
         meta
       };
       if (invalidRows.length > 0) {
@@ -1050,24 +1177,58 @@ export function parseCsv(
     }
 
     if (transform) {
-      resultRows = resultRows
-        .map(row => transform(row as string[]))
-        .filter((row): row is string[] => row !== null && row !== undefined && Array.isArray(row));
+      const transformedRows: (string[] | unknown[])[] = [];
+      const transformedInfos: RecordInfo[] = [];
+      for (let idx = 0; idx < resultRows.length; idx++) {
+        const transformed = transform(resultRows[idx] as string[]);
+        if (transformed !== null && transformed !== undefined && Array.isArray(transformed)) {
+          transformedRows.push(transformed);
+          if (infoOption) {
+            transformedInfos.push(rowInfos[idx]);
+          }
+        }
+      }
+      resultRows = transformedRows;
+      if (infoOption) {
+        rowInfos = transformedInfos;
+      }
     }
 
     if (validate) {
-      const { validRows, newInvalidRows } = applyValidation(resultRows, row =>
-        row.map(v => (v === null ? "" : String(v)))
-      );
-      resultRows = validRows;
-
-      // Return with invalidRows for array mode when validate is used
-      if (newInvalidRows.length > 0) {
-        return {
-          rows: resultRows,
-          invalidRows: newInvalidRows
-        } as any;
+      const validResultRows: (string[] | unknown[])[] = [];
+      const validInfos: RecordInfo[] = [];
+      for (let idx = 0; idx < resultRows.length; idx++) {
+        const { isValid, reason } = processValidateResult(validate!(resultRows[idx] as Row));
+        if (isValid) {
+          validResultRows.push(resultRows[idx]);
+          if (infoOption) {
+            validInfos.push(rowInfos[idx]);
+          }
+        } else {
+          invalidRows.push({
+            row: (resultRows[idx] as unknown[]).map(v => (v === null ? "" : String(v))),
+            reason
+          });
+        }
       }
+      resultRows = validResultRows;
+      if (infoOption) {
+        rowInfos = validInfos;
+      }
+    }
+
+    // Build result - for array mode without headers
+    if (infoOption || invalidRows.length > 0) {
+      const result: any = {
+        rows: infoOption
+          ? resultRows.map((row, idx) => ({ record: row as string[], info: rowInfos[idx] }))
+          : resultRows,
+        meta
+      };
+      if (invalidRows.length > 0) {
+        result.invalidRows = invalidRows;
+      }
+      return result;
     }
 
     return resultRows as string[][];
@@ -1077,6 +1238,13 @@ export function parseCsv(
   // Standard Mode: Full RFC 4180 compliant parsing with quote handling
   // ==========================================================================
   const len = processedInput.length;
+
+  // Initialize row tracking for info option
+  if (infoOption) {
+    currentRowStartLine = 1;
+    currentRowStartBytes = 0;
+  }
+
   while (i < len) {
     const char = processedInput[i];
 
@@ -1086,47 +1254,108 @@ export function parseCsv(
         // Escaped quote ("" becomes single ")
         currentField += quote;
         currentRowBytes++;
+        if (rawOption) {
+          currentRawRow += char + processedInput[i + 1];
+        }
         i += 2;
         checkRowBytes?.();
       } else if (char === quote) {
-        // End of quoted field
-        inQuotes = false;
-        i++;
+        // Check if this is truly end of quoted field or if relaxQuotes allows continuation
+        const nextChar = processedInput[i + 1];
+        if (
+          relaxQuotes &&
+          nextChar !== undefined &&
+          nextChar !== delimiter &&
+          nextChar !== "\n" &&
+          nextChar !== "\r"
+        ) {
+          // relaxQuotes: quote mid-field, treat as literal
+          currentField += char;
+          currentRowBytes++;
+          if (rawOption) {
+            currentRawRow += char;
+          }
+          i++;
+          checkRowBytes?.();
+        } else {
+          // End of quoted field
+          inQuotes = false;
+          if (rawOption) {
+            currentRawRow += char;
+          }
+          i++;
+        }
       } else if (char === "\r") {
         // Normalize CRLF to LF inside quoted fields
         if (processedInput[i + 1] === "\n") {
+          if (rawOption) {
+            currentRawRow += char;
+          }
           i++; // Skip \r, will add \n on next iteration
         } else {
           currentField += "\n"; // Convert standalone \r to \n
           currentRowBytes++;
+          if (rawOption) {
+            currentRawRow += char;
+          }
           i++;
           checkRowBytes?.();
         }
       } else {
         currentField += char;
         currentRowBytes++;
+        if (rawOption) {
+          currentRawRow += char;
+        }
         i++;
         checkRowBytes?.();
       }
     } else {
       // Outside quoted field
       if (quoteEnabled && char === quote && currentField === "") {
-        // Start of quoted field
+        // Start of quoted field (only at field start)
         inQuotes = true;
+        if (infoOption) {
+          currentFieldQuoted = true;
+        }
+        if (rawOption) {
+          currentRawRow += char;
+        }
         i++;
+      } else if (quoteEnabled && char === quote && relaxQuotes) {
+        // relaxQuotes: quote mid-field (not at start), treat as literal
+        currentField += char;
+        currentRowBytes++;
+        if (rawOption) {
+          currentRawRow += char;
+        }
+        i++;
+        checkRowBytes?.();
       } else if (char === delimiter) {
         // Field separator
         currentRow.push(trimField(currentField));
+        if (infoOption) {
+          currentRowQuoted.push(currentFieldQuoted);
+          currentFieldQuoted = false;
+        }
         currentField = "";
         currentRowBytes++; // Count delimiter
+        if (rawOption) {
+          currentRawRow += char;
+        }
         i++;
         checkRowBytes?.();
       } else if (char === "\n" || char === "\r") {
         // End of row - handle \r\n, \r, and \n
-        if (char === "\r" && processedInput[i + 1] === "\n") {
+        const isWindowsLineEnding = char === "\r" && processedInput[i + 1] === "\n";
+        if (isWindowsLineEnding) {
           i++; // Skip the \n in \r\n
         }
         currentRow.push(trimField(currentField));
+        if (infoOption) {
+          currentRowQuoted.push(currentFieldQuoted);
+          currentFieldQuoted = false;
+        }
         currentField = "";
 
         lineNumber++;
@@ -1134,6 +1363,7 @@ export function parseCsv(
         // Skip lines at beginning
         if (lineNumber <= skipLines) {
           currentRow = [];
+          resetInfoState?.(lineNumber + 1, i + 1);
           i++;
           continue;
         }
@@ -1141,6 +1371,7 @@ export function parseCsv(
         // Skip comment lines
         if (comment && currentRow[0]?.startsWith(comment)) {
           currentRow = [];
+          resetInfoState?.(lineNumber + 1, i + 1);
           i++;
           continue;
         }
@@ -1148,6 +1379,7 @@ export function parseCsv(
         // Skip empty lines (greedy: also skips whitespace-only lines)
         if (isEmptyRow(currentRow, shouldSkipEmpty)) {
           currentRow = [];
+          resetInfoState?.(lineNumber + 1, i + 1);
           i++;
           continue;
         }
@@ -1155,11 +1387,25 @@ export function parseCsv(
         // Process row (handles headers, validation)
         if (processRow(currentRow)) {
           rows.push(currentRow);
+          // Build RecordInfo if info option is enabled
+          if (infoOption) {
+            const info: RecordInfo = {
+              index: dataRowCount,
+              line: currentRowStartLine,
+              bytes: currentRowStartBytes,
+              quoted: [...currentRowQuoted]
+            };
+            if (rawOption) {
+              info.raw = currentRawRow;
+            }
+            rowInfos.push(info);
+          }
           dataRowCount++;
         }
 
         currentRow = [];
         currentRowBytes = 0; // Reset row bytes counter
+        resetInfoState?.(lineNumber + 1, i + 1);
         i++;
 
         // Check max rows - after resetting currentRow
@@ -1170,6 +1416,9 @@ export function parseCsv(
       } else {
         currentField += char;
         currentRowBytes++;
+        if (rawOption) {
+          currentRawRow += char;
+        }
         i++;
         checkRowBytes?.();
       }
@@ -1187,6 +1436,9 @@ export function parseCsv(
     }
 
     currentRow.push(trimField(currentField));
+    if (infoOption) {
+      currentRowQuoted.push(currentFieldQuoted);
+    }
 
     // Use early-return style for cleaner logic
     const shouldProcessLastRow =
@@ -1197,6 +1449,19 @@ export function parseCsv(
 
     if (shouldProcessLastRow && processRow(currentRow)) {
       rows.push(currentRow);
+      // Build RecordInfo if info option is enabled
+      if (infoOption) {
+        const info: RecordInfo = {
+          index: dataRowCount,
+          line: currentRowStartLine,
+          bytes: currentRowStartBytes,
+          quoted: [...currentRowQuoted]
+        };
+        if (rawOption) {
+          info.raw = currentRawRow;
+        }
+        rowInfos.push(info);
+      }
       dataRowCount++;
     }
   }

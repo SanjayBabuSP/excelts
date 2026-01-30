@@ -73,6 +73,7 @@ export class CsvParserStream extends Transform {
   private escape: string;
   private quoteEnabled: boolean;
   private fastMode: boolean;
+  private relaxQuotes: boolean;
   private trimField: (s: string) => string;
   private decoder: TextDecoder;
   private _rowTransform: ((row: Row, cb: RowTransformCallback<Row>) => void) | null = null;
@@ -117,6 +118,9 @@ export class CsvParserStream extends Transform {
 
     // Fast mode - skip quote detection
     this.fastMode = options.fastMode ?? false;
+
+    // Relax quotes - allow unescaped quotes mid-field
+    this.relaxQuotes = options.relaxQuotes ?? false;
 
     // Pre-compute trim function for performance
     const { trim = false, ltrim = false, rtrim = false } = options;
@@ -460,8 +464,22 @@ export class CsvParserStream extends Transform {
           this.appendToField(this.quote);
           i += 2;
         } else if (char === this.quote) {
-          this.inQuotes = false;
-          i++;
+          // Check if this is truly end of quoted field or if relaxQuotes allows continuation
+          const nextChar = this.buffer[i + 1];
+          if (
+            this.relaxQuotes &&
+            nextChar !== undefined &&
+            nextChar !== this.delimiter &&
+            nextChar !== "\n" &&
+            nextChar !== "\r"
+          ) {
+            // relaxQuotes: quote mid-field, treat as literal
+            this.appendToField(char);
+            i++;
+          } else {
+            this.inQuotes = false;
+            i++;
+          }
         } else if (i === len - 1) {
           // Need more data - preserve buffer from current position
           this.buffer = this.buffer.slice(i);
@@ -482,6 +500,10 @@ export class CsvParserStream extends Transform {
       } else {
         if (this.quoteEnabled && char === this.quote && this.currentFieldLength === 0) {
           this.inQuotes = true;
+          i++;
+        } else if (this.quoteEnabled && char === this.quote && this.relaxQuotes) {
+          // relaxQuotes: quote mid-field (not at start), treat as literal
+          this.appendToField(char);
           i++;
         } else if (char === this.delimiter) {
           this.currentRow.push(this.trimField(this.takeCurrentField()));
