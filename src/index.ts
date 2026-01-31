@@ -79,7 +79,24 @@ export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "@excel/stre
 
 // Node.js CSV types and stream classes (native implementation)
 export type { CsvOptions } from "@csv/csv";
-export { CsvParserStream, CsvFormatterStream } from "@csv/csv";
+export {
+  CsvParserStream,
+  CsvFormatterStream,
+  csvGenerate,
+  csvGenerateRows,
+  csvGenerateAsync,
+  csvGenerateData,
+  createCsvGenerator,
+  type CsvGenerateOptions,
+  type CsvGenerateResult,
+  type ColumnDef,
+  type GenerateColumnConfig,
+  type BuiltinColumnType,
+  type GeneratorFn,
+  type GeneratorContext,
+  type StopCondition,
+  type StopContext
+} from "@csv/csv";
 
 // =============================================================================
 // Utilities
