@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, type RecordWithInfo, type CsvParseResult } from "@csv/csv-core";
+import { parseCsv, parseCsvStream, type RecordWithInfo, type CsvParseResult } from "@csv/csv-core";
 import { CsvParserStream } from "@csv/csv-stream";
 
 // ===========================================================================
@@ -153,6 +153,181 @@ describe("raw option", () => {
 });
 
 // ===========================================================================
+// parseCsvStream info/raw Option Tests
+// ===========================================================================
+describe("parseCsvStream info/raw options", () => {
+  describe("info option", () => {
+    it("should return record with info when info: true (array mode)", async () => {
+      const csv = "Alice,30\nBob,25";
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(csv, { info: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveProperty("record");
+      expect(rows[0]).toHaveProperty("info");
+      expect(rows[0].record).toEqual(["Alice", "30"]);
+      expect(rows[0].info.index).toBe(0);
+      expect(rows[0].info.line).toBe(1);
+      expect(rows[1].record).toEqual(["Bob", "25"]);
+      expect(rows[1].info.index).toBe(1);
+      expect(rows[1].info.line).toBe(2);
+    });
+
+    it("should return record with info when info: true (headers mode)", async () => {
+      const csv = "name,age\nAlice,30\nBob,25";
+      const rows: RecordWithInfo<Record<string, unknown>>[] = [];
+      for await (const row of parseCsvStream(csv, { headers: true, info: true })) {
+        rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
+      }
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveProperty("record");
+      expect(rows[0]).toHaveProperty("info");
+      expect(rows[0].record).toEqual({ name: "Alice", age: "30" });
+      expect(rows[0].info.index).toBe(0);
+      expect(rows[0].info.line).toBe(2); // Header is line 1, first data is line 2
+      expect(rows[0].info.quoted).toEqual([false, false]);
+    });
+
+    it("should track quoted fields correctly", async () => {
+      const csv = '"Alice",30\nBob,"25"';
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(csv, { info: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows[0].info.quoted).toEqual([true, false]);
+      expect(rows[1].info.quoted).toEqual([false, true]);
+    });
+
+    it("should track byte offset correctly", async () => {
+      const csv = "a,b\n1,2\n3,4";
+      const rows: RecordWithInfo<Record<string, unknown>>[] = [];
+      for await (const row of parseCsvStream(csv, { headers: true, info: true })) {
+        rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
+      }
+
+      // "a,b\n" = 4 bytes, so first data row starts at byte 4
+      expect(rows[0].info.bytes).toBe(4);
+      // "a,b\n1,2\n" = 8 bytes, so second data row starts at byte 8
+      expect(rows[1].info.bytes).toBe(8);
+    });
+
+    it("should handle skipLines with info correctly", async () => {
+      const csv = "# comment\nname,age\nAlice,30";
+      const rows: RecordWithInfo<Record<string, unknown>>[] = [];
+      for await (const row of parseCsvStream(csv, { headers: true, info: true, skipLines: 1 })) {
+        rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
+      }
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].info.line).toBe(3); // Line 1 skipped, line 2 is header, line 3 is data
+    });
+
+    it("should handle chunked input with info", async () => {
+      async function* chunks() {
+        yield "name,a";
+        yield "ge\nAl";
+        yield "ice,30";
+      }
+      const rows: RecordWithInfo<Record<string, unknown>>[] = [];
+      for await (const row of parseCsvStream(chunks(), { headers: true, info: true })) {
+        rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
+      }
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].record).toEqual({ name: "Alice", age: "30" });
+      expect(rows[0].info.index).toBe(0);
+      expect(rows[0].info.line).toBe(2);
+    });
+  });
+
+  describe("raw option", () => {
+    it("should include raw string when raw: true", async () => {
+      const csv = '"Alice",30\nBob,"25"';
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(csv, { info: true, raw: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows[0].info.raw).toBe('"Alice",30');
+      expect(rows[1].info.raw).toBe('Bob,"25"');
+    });
+
+    it("should not include raw string when raw: false", async () => {
+      const csv = "Alice,30";
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(csv, { info: true, raw: false })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows[0].info.raw).toBeUndefined();
+    });
+
+    it("should capture raw string with embedded newlines in quoted fields", async () => {
+      const csv = '"Hello\nWorld",test';
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(csv, { info: true, raw: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      // The raw string should contain the original quoted field
+      expect(rows[0].info.raw).toContain('"Hello');
+      expect(rows[0].record[0]).toBe("Hello\nWorld"); // Parsed correctly
+    });
+
+    it("should handle CRLF line endings in raw", async () => {
+      const csv = "a,b\r\n1,2";
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(csv, { info: true, raw: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows[0].info.raw).toBe("a,b");
+      expect(rows[1].info.raw).toBe("1,2");
+    });
+
+    it("should handle chunked input with raw", async () => {
+      async function* chunks() {
+        yield '"Hel';
+        yield 'lo",wor';
+        yield "ld\ntest,data";
+      }
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(chunks(), { info: true, raw: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0].info.raw).toBe('"Hello",world');
+      expect(rows[1].info.raw).toBe("test,data");
+    });
+
+    it("should track byte offset correctly with chunked input containing quoted fields", async () => {
+      // Chunks split in the middle of a quoted field
+      async function* chunks() {
+        yield '"Hel'; // 4 bytes
+        yield 'lo",wor'; // 7 bytes
+        yield "ld\ntest,data"; // 12 bytes
+      }
+      // Total: '"Hello",world\ntest,data'
+      // Row 1 '"Hello",world' starts at byte 0
+      // Row 2 'test,data' starts at byte 14 (after '"Hello",world\n')
+      const rows: RecordWithInfo<string[]>[] = [];
+      for await (const row of parseCsvStream(chunks(), { info: true, raw: true })) {
+        rows.push(row as unknown as RecordWithInfo<string[]>);
+      }
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0].info.bytes).toBe(0);
+      expect(rows[1].info.bytes).toBe(14); // 13 chars for '"Hello",world' + 1 for newline
+    });
+  });
+});
+
+// ===========================================================================
 // RelaxQuotes Option Tests
 // ===========================================================================
 describe("relaxQuotes option", () => {
@@ -257,6 +432,168 @@ describe("combined info and relaxQuotes", () => {
     expect(result.rows[0].record).toEqual({ name: "Alice", quote: 'says "hi"' });
     expect(result.rows[0].info.raw).toBe('Alice,says "hi"');
     expect(result.rows[0].info.quoted).toEqual([false, false]);
+  });
+});
+
+// ===========================================================================
+// CsvParserStream info/raw Option Tests
+// ===========================================================================
+describe("CsvParserStream info/raw options", () => {
+  describe("info option", () => {
+    it("should return record with info when info: true (array mode)", async () => {
+      const csv = "Alice,30\nBob,25";
+      const parser = new CsvParserStream({ info: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveProperty("record");
+      expect(rows[0]).toHaveProperty("info");
+      expect(rows[0].record).toEqual(["Alice", "30"]);
+      expect(rows[0].info.index).toBe(0);
+      expect(rows[0].info.line).toBe(1);
+      expect(rows[1].record).toEqual(["Bob", "25"]);
+      expect(rows[1].info.index).toBe(1);
+      expect(rows[1].info.line).toBe(2);
+    });
+
+    it("should return record with info when info: true (headers mode)", async () => {
+      const csv = "name,age\nAlice,30\nBob,25";
+      const parser = new CsvParserStream({ headers: true, info: true });
+
+      const rows: RecordWithInfo<Record<string, string>>[] = [];
+      parser.on("data", (row: RecordWithInfo<Record<string, string>>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveProperty("record");
+      expect(rows[0]).toHaveProperty("info");
+      expect(rows[0].record).toEqual({ name: "Alice", age: "30" });
+      expect(rows[0].info.index).toBe(0);
+      expect(rows[0].info.line).toBe(2); // Header is line 1, first data is line 2
+      expect(rows[0].info.quoted).toEqual([false, false]);
+    });
+
+    it("should track quoted fields correctly", async () => {
+      const csv = '"Alice",30\nBob,"25"';
+      const parser = new CsvParserStream({ info: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows[0].info.quoted).toEqual([true, false]);
+      expect(rows[1].info.quoted).toEqual([false, true]);
+    });
+
+    it("should track byte offset correctly", async () => {
+      const csv = "a,b\n1,2\n3,4";
+      const parser = new CsvParserStream({ headers: true, info: true });
+
+      const rows: RecordWithInfo<Record<string, string>>[] = [];
+      parser.on("data", (row: RecordWithInfo<Record<string, string>>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      // "a,b\n" = 4 bytes, so first data row starts at byte 4
+      expect(rows[0].info.bytes).toBe(4);
+      // "a,b\n1,2\n" = 8 bytes, so second data row starts at byte 8
+      expect(rows[1].info.bytes).toBe(8);
+    });
+  });
+
+  describe("raw option", () => {
+    it("should include raw string when raw: true", async () => {
+      const csv = '"Alice",30\nBob,"25"';
+      const parser = new CsvParserStream({ info: true, raw: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows[0].info.raw).toBe('"Alice",30');
+      expect(rows[1].info.raw).toBe('Bob,"25"');
+    });
+
+    it("should not include raw string when raw: false", async () => {
+      const csv = "Alice,30";
+      const parser = new CsvParserStream({ info: true, raw: false });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows[0].info.raw).toBeUndefined();
+    });
+
+    it("should handle chunked input with raw", async () => {
+      const parser = new CsvParserStream({ info: true, raw: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      const done = new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+      });
+
+      // Write in chunks
+      parser.write('"Hel');
+      parser.write('lo",wor');
+      parser.write("ld\ntest,data");
+      parser.end();
+
+      await done;
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0].info.raw).toBe('"Hello",world');
+      expect(rows[1].info.raw).toBe("test,data");
+    });
   });
 });
 

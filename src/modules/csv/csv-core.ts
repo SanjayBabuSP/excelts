@@ -43,7 +43,9 @@ import {
   convertRowToObject,
   getEffectiveHeaderCount,
   filterValidHeaders,
-  LINE_SPLIT_REGEX
+  LINE_SPLIT_REGEX,
+  createOnSkipHandler,
+  type CsvSkipError as CsvSkipErrorType
 } from "@csv/utils/parse";
 import type { FormattedValue } from "@csv/utils/formatted-value";
 
@@ -711,15 +713,9 @@ export interface CsvParseOptions extends CsvBaseOptions {
 
 /**
  * Error object passed to onSkip callback
+ * @see CsvSkipErrorType in utils/parse.ts for the canonical definition
  */
-export interface CsvSkipError {
-  /** Error code */
-  code: CsvParseErrorCode | "ParseError";
-  /** Human-readable error message */
-  message: string;
-  /** The raw text of the problematic record (if available) */
-  raw?: string;
-}
+export type CsvSkipError = CsvSkipErrorType;
 
 export type SkipEmptyLines = boolean;
 
@@ -1138,16 +1134,19 @@ export function parseCsv(
   // Pre-compute trim function to avoid repeated condition checks
   const trimField = makeTrimField(trim, ltrim, rtrim);
 
-  // Helper to invoke onSkip callback
-  const invokeOnSkip = onSkip
-    ? (error: CsvSkipError, record: string[] | null, line: number) => {
-        try {
-          onSkip(error, record, line);
-        } catch {
-          // Ignore errors in onSkip callback
-        }
-      }
-    : null;
+  // Helper to complete a field and track quoted status (reduces duplication)
+  const completeField = (): string => {
+    const value = trimField(currentField);
+    currentField = "";
+    if (infoOption) {
+      currentRowQuoted.push(currentFieldQuoted);
+      currentFieldQuoted = false;
+    }
+    return value;
+  };
+
+  // Helper to invoke onSkip callback (uses shared utility)
+  const invokeOnSkip = createOnSkipHandler(onSkip);
 
   const processRow = (row: string[], currentLineNumber: number): boolean => {
     // Handle first row as headers when needed
@@ -1586,12 +1585,7 @@ export function parseCsv(
         checkRowBytes?.();
       } else if (char === delimiter) {
         // Field separator
-        currentRow.push(trimField(currentField));
-        if (infoOption) {
-          currentRowQuoted.push(currentFieldQuoted);
-          currentFieldQuoted = false;
-        }
-        currentField = "";
+        currentRow.push(completeField());
         currentRowBytes++; // Count delimiter
         if (rawOption) {
           currentRawRow += char;
@@ -1604,12 +1598,7 @@ export function parseCsv(
         if (isWindowsLineEnding) {
           i++; // Skip the \n in \r\n
         }
-        currentRow.push(trimField(currentField));
-        if (infoOption) {
-          currentRowQuoted.push(currentFieldQuoted);
-          currentFieldQuoted = false;
-        }
-        currentField = "";
+        currentRow.push(completeField());
 
         lineNumber++;
 
@@ -1714,10 +1703,7 @@ export function parseCsv(
       }
     }
 
-    currentRow.push(trimField(currentField));
-    if (infoOption) {
-      currentRowQuoted.push(currentFieldQuoted);
-    }
+    currentRow.push(completeField());
 
     // Use early-return style for cleaner logic
     const shouldProcessLastRow =
@@ -1923,7 +1909,16 @@ export function formatCsv(
 export async function* parseCsvStream(
   input: string | AsyncIterable<string>,
   options: CsvParseOptions = {}
-): AsyncGenerator<string[] | Record<string, string>, void, unknown> {
+): AsyncGenerator<
+  | string[]
+  | Record<string, string>
+  | Record<string, string | string[]>
+  | RecordWithInfo<string[]>
+  | RecordWithInfo<Record<string, string>>
+  | RecordWithInfo<Record<string, string | string[]>>,
+  void,
+  unknown
+> {
   const {
     delimiter: delimiterOption = ",",
     delimitersToGuess,
@@ -1948,7 +1943,11 @@ export async function* parseCsvStream(
     dynamicTyping = false,
     castDate,
     skipRecordsWithEmptyValues = false,
-    groupColumnsByName = false
+    skipRecordsWithError = false,
+    onSkip,
+    groupColumnsByName = false,
+    info: infoOption = false,
+    raw: rawOption = false
   } = options;
 
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
@@ -2060,6 +2059,41 @@ export async function* parseCsvStream(
   let trailingCR = false; // Track if last chunk ended with \r for CRLF across chunks
   const maxRowBytes = options.maxRowBytes;
 
+  // Info tracking variables (only tracked when info option is enabled)
+  let dataRowIndex = 0; // 0-based index of data rows (excluding header)
+  let currentRowStartLine = infoOption ? 1 : 0; // 1-based line number where current row started
+  let currentRowStartBytes = 0; // Byte offset where current row started
+  let totalBytesProcessed = 0; // Total bytes processed so far
+  let currentFieldQuoted = false; // Whether current field started with a quote
+  let currentRowQuoted: boolean[] = []; // Quote status for each field in current row
+  let currentRawRow = ""; // Raw string of current row (only tracked when raw option is enabled)
+
+  // Helper to reset info/raw state when skipping a row
+  const resetInfoState =
+    infoOption || rawOption
+      ? (nextBytes: number) => {
+          if (infoOption) {
+            currentRowQuoted = [];
+            currentRowStartLine = lineNumber + 1;
+            currentRowStartBytes = nextBytes;
+          }
+          if (rawOption) {
+            currentRawRow = "";
+          }
+        }
+      : null;
+
+  // Helper to complete a field and track quoted status
+  const completeField = (): string => {
+    const value = trimField(currentField);
+    currentField = "";
+    if (infoOption) {
+      currentRowQuoted.push(currentFieldQuoted);
+      currentFieldQuoted = false;
+    }
+    return value;
+  };
+
   // Helper to check row size limit (inlined for performance in hot path)
   const checkRowBytes =
     maxRowBytes !== undefined
@@ -2091,9 +2125,22 @@ export async function* parseCsvStream(
   // Pre-compute trim function to avoid repeated condition checks
   const trimField = makeTrimField(trim, ltrim, rtrim);
 
+  // Helper to invoke onSkip callback (uses shared utility)
+  const invokeOnSkip = createOnSkipHandler(onSkip);
+
+  // Type alias for yielded row type
+  type YieldedRow =
+    | string[]
+    | Record<string, string>
+    | Record<string, string | string[]>
+    | RecordWithInfo<string[]>
+    | RecordWithInfo<Record<string, string>>
+    | RecordWithInfo<Record<string, string | string[]>>;
+
   const processRow = (
-    row: string[]
-  ): { valid: boolean; row: string[] | Record<string, string> | null } => {
+    row: string[],
+    currentLineNumber: number
+  ): { valid: boolean; row: YieldedRow | null } => {
     // Header handling
     if (useHeaders && !headerRowProcessed) {
       // Use shared utility for header processing
@@ -2127,43 +2174,71 @@ export async function* parseCsvStream(
         relaxColumnCountMore
       });
       if (!validation.isValid) {
+        // If skipRecordsWithError is enabled, invoke onSkip callback
+        if (skipRecordsWithError && validation.errorCode) {
+          invokeOnSkip?.(
+            {
+              code: validation.errorCode,
+              message: validation.reason || `Column count mismatch`
+            },
+            row,
+            currentLineNumber
+          );
+        }
         return { valid: false, row: null };
       }
     }
+
+    // Build record (object or array)
+    let record: Record<string, unknown> | unknown[];
 
     // Convert to object if using headers
     if (useHeaders && headerRow) {
       const obj = convertRowToObject(row, headerRow, originalHeaders, groupColumnsByName);
       // Apply dynamicTyping and/or castDate if configured
       if (dynamicTyping || castDate) {
-        return {
-          valid: true,
-          row: applyDynamicTypingToRow(
-            obj as Record<string, string>,
-            dynamicTyping || false,
-            castDate
-          ) as Record<string, string>
-        };
+        record = applyDynamicTypingToRow(
+          obj as Record<string, string>,
+          dynamicTyping || false,
+          castDate
+        );
+      } else {
+        record = obj;
       }
-      return { valid: true, row: obj as Record<string, string> };
+    } else {
+      // Apply dynamicTyping and/or castDate to array rows if enabled
+      if (dynamicTyping || castDate) {
+        // For array rows without headers, pass null - per-column config won't work
+        record = applyDynamicTypingToArrayRow(
+          row,
+          headerRow as string[] | null,
+          dynamicTyping || false,
+          castDate
+        );
+      } else {
+        record = row;
+      }
     }
 
-    // Apply dynamicTyping and/or castDate to array rows if enabled
-    if (dynamicTyping || castDate) {
-      // For array rows without headers, pass null - per-column config won't work
-      const typedRow = applyDynamicTypingToArrayRow(
-        row,
-        headerRow as string[] | null,
-        dynamicTyping || false,
-        castDate
-      );
-      return { valid: true, row: typedRow as string[] };
+    // Wrap with info if info option is enabled
+    if (infoOption) {
+      const info: RecordInfo = {
+        index: dataRowIndex,
+        line: currentRowStartLine,
+        bytes: currentRowStartBytes,
+        quoted: [...currentRowQuoted]
+      };
+      if (rawOption) {
+        info.raw = currentRawRow;
+      }
+      dataRowIndex++;
+      return { valid: true, row: { record, info } as YieldedRow };
     }
 
-    return { valid: true, row };
+    return { valid: true, row: record as YieldedRow };
   };
 
-  const processBuffer = function* (): Generator<string[] | Record<string, string>> {
+  const processBuffer = function* (): Generator<YieldedRow> {
     let i = 0;
     const len = buffer.length;
 
@@ -2179,10 +2254,18 @@ export async function* parseCsvStream(
       const char = buffer[i];
 
       if (inQuotes && quoteEnabled) {
+        // Track raw row data for quoted fields (including quote char itself)
+        if (rawOption) {
+          currentRawRow += char;
+        }
+
         if (escape && char === escape && buffer[i + 1] === quote) {
           // Escaped quote ("" becomes single ")
           currentField += quote;
           currentRowBytes++;
+          if (rawOption) {
+            currentRawRow += buffer[i + 1];
+          }
           i += 2;
           checkRowBytes?.();
         } else if (char === quote) {
@@ -2190,11 +2273,20 @@ export async function* parseCsvStream(
           i++;
         } else if (i === len - 1) {
           // Need more data for quoted field
+          // Remove the char we just added to raw since it will be re-processed
+          if (rawOption && currentRawRow.length > 0) {
+            currentRawRow = currentRawRow.slice(0, -1);
+          }
+          // Update bytes processed before early return
+          totalBytesProcessed += i;
           buffer = buffer.slice(i);
           return;
         } else if (char === "\r") {
           // Normalize CRLF to LF inside quoted fields
           if (buffer[i + 1] === "\n") {
+            if (rawOption) {
+              currentRawRow += buffer[i + 1];
+            }
             i++; // Skip \r, will add \n on next iteration
           } else {
             currentField += "\n"; // Convert standalone \r to \n
@@ -2209,12 +2301,19 @@ export async function* parseCsvStream(
           checkRowBytes?.();
         }
       } else {
+        // Track raw row data for unquoted fields (NOT newlines)
+        if (rawOption && char !== "\n" && char !== "\r") {
+          currentRawRow += char;
+        }
+
         if (quoteEnabled && char === quote && currentField === "") {
           inQuotes = true;
+          if (infoOption) {
+            currentFieldQuoted = true;
+          }
           i++;
         } else if (char === delimiter) {
-          currentRow.push(trimField(currentField));
-          currentField = "";
+          currentRow.push(completeField());
           currentRowBytes++; // Count delimiter
           i++;
           checkRowBytes?.();
@@ -2228,9 +2327,9 @@ export async function* parseCsvStream(
             }
           }
 
-          currentRow.push(trimField(currentField));
-          currentField = "";
+          currentRow.push(completeField());
           lineNumber++;
+          const nextByteOffset = totalBytesProcessed + i + 1;
 
           // Check toLine - stop parsing at specified line number
           if (toLine !== undefined && lineNumber > toLine) {
@@ -2242,12 +2341,14 @@ export async function* parseCsvStream(
 
           if (lineNumber <= skipLines) {
             currentRow = [];
+            resetInfoState?.(nextByteOffset);
             i++;
             continue;
           }
 
           if (comment && currentRow[0]?.startsWith(comment)) {
             currentRow = [];
+            resetInfoState?.(nextByteOffset);
             i++;
             continue;
           }
@@ -2258,6 +2359,7 @@ export async function* parseCsvStream(
             shouldSkipEmpty && (isEmpty || (skipEmptyGreedy && isEmptyRow(currentRow, true)));
           if (shouldSkipRow) {
             currentRow = [];
+            resetInfoState?.(nextByteOffset);
             i++;
             continue;
           }
@@ -2265,11 +2367,12 @@ export async function* parseCsvStream(
           // Skip records where all values are empty strings
           if (skipRecordsWithEmptyValues && hasAllEmptyValues(currentRow)) {
             currentRow = [];
+            resetInfoState?.(nextByteOffset);
             i++;
             continue;
           }
 
-          const result = processRow(currentRow);
+          const result = processRow(currentRow, lineNumber);
           if (result.valid && result.row) {
             dataRowCount++;
 
@@ -2277,11 +2380,12 @@ export async function* parseCsvStream(
               return;
             }
 
-            yield result.row;
+            yield result.row as YieldedRow;
           }
 
           currentRow = [];
           currentRowBytes = 0; // Reset row bytes counter
+          resetInfoState?.(nextByteOffset);
           i++;
         } else {
           currentField += char;
@@ -2292,6 +2396,7 @@ export async function* parseCsvStream(
       }
     }
 
+    totalBytesProcessed += len;
     buffer = "";
   };
 
@@ -2302,12 +2407,12 @@ export async function* parseCsvStream(
 
     // Handle last row
     if (currentField !== "" || currentRow.length > 0) {
-      currentRow.push(trimField(currentField));
+      currentRow.push(completeField());
 
       if (!(maxRows !== undefined && dataRowCount >= maxRows)) {
-        const result = processRow(currentRow);
+        const result = processRow(currentRow, lineNumber + 1);
         if (result.valid && result.row) {
-          yield result.row;
+          yield result.row as YieldedRow;
         }
       }
     }
@@ -2334,12 +2439,12 @@ export async function* parseCsvStream(
 
   // Handle last row
   if (currentField !== "" || currentRow.length > 0) {
-    currentRow.push(trimField(currentField));
+    currentRow.push(completeField());
 
     if (!(maxRows !== undefined && dataRowCount >= maxRows)) {
-      const result = processRow(currentRow);
+      const result = processRow(currentRow, lineNumber + 1);
       if (result.valid && result.row) {
-        yield result.row;
+        yield result.row as YieldedRow;
       }
     }
   }

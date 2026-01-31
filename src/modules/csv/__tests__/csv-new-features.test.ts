@@ -468,6 +468,67 @@ describe("skipRecordsWithError + onSkip", () => {
       expect(invalidRows.length).toBe(0);
     });
   });
+
+  describe("parseCsvStream (async generator)", () => {
+    it("should skip records with column mismatch and invoke onSkip", async () => {
+      const csv = "a,b,c\n1,2\n3,4,5\n6,7";
+      const skippedRecords: Array<{ code: string; line: number }> = [];
+      const rows: Record<string, string>[] = [];
+
+      for await (const row of parseCsvStream(csv, {
+        headers: true,
+        strictColumnHandling: true,
+        skipRecordsWithError: true,
+        onSkip: (error, _record, line) => {
+          skippedRecords.push({ code: error.code, line });
+        }
+      })) {
+        rows.push(row as Record<string, string>);
+      }
+
+      expect(skippedRecords.length).toBe(2);
+      expect(skippedRecords[0]).toEqual({ code: "TooFewFields", line: 2 });
+      expect(skippedRecords[1]).toEqual({ code: "TooFewFields", line: 4 });
+      expect(rows).toEqual([{ a: "3", b: "4", c: "5" }]);
+    });
+
+    it("should skip records with too many fields", async () => {
+      const csv = "a,b\n1,2,3\n4,5";
+      const skippedRecords: Array<{ code: string; line: number }> = [];
+      const rows: Record<string, string>[] = [];
+
+      for await (const row of parseCsvStream(csv, {
+        headers: true,
+        strictColumnHandling: true,
+        skipRecordsWithError: true,
+        onSkip: (error, _record, line) => {
+          skippedRecords.push({ code: error.code, line });
+        }
+      })) {
+        rows.push(row as Record<string, string>);
+      }
+
+      expect(skippedRecords.length).toBe(1);
+      expect(skippedRecords[0]).toEqual({ code: "TooManyFields", line: 2 });
+      expect(rows).toEqual([{ a: "4", b: "5" }]);
+    });
+
+    it("should work without onSkip callback", async () => {
+      const csv = "a,b,c\n1,2\n3,4,5";
+      const rows: Record<string, string>[] = [];
+
+      for await (const row of parseCsvStream(csv, {
+        headers: true,
+        strictColumnHandling: true,
+        skipRecordsWithError: true
+        // No onSkip callback
+      })) {
+        rows.push(row as Record<string, string>);
+      }
+
+      expect(rows).toEqual([{ a: "3", b: "4", c: "5" }]);
+    });
+  });
 });
 
 // =============================================================================

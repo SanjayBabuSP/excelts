@@ -16,7 +16,8 @@ import type {
   RowTransformCallback,
   RowValidateCallback,
   ChunkMeta,
-  TypeTransformMap
+  TypeTransformMap,
+  RecordInfo
 } from "@csv/csv-core";
 import { isSyncTransform, isSyncValidate, makeTrimField, processColumns } from "@csv/csv-core";
 import {
@@ -43,7 +44,9 @@ import {
   hasAllEmptyValues,
   convertRowToObject,
   filterValidHeaders,
-  LINE_SPLIT_REGEX
+  LINE_SPLIT_REGEX,
+  createOnSkipHandler,
+  type CsvSkipError
 } from "@csv/utils/parse";
 
 /**
@@ -95,6 +98,20 @@ export class CsvParserStream extends Transform {
   private bomStripped: boolean = false;
   // toLine support
   private toLineReached: boolean = false;
+  // info/raw support
+  private infoOption: boolean = false;
+  private rawOption: boolean = false;
+  private dataRowIndex: number = 0; // 0-based index of data rows (excluding header)
+  private totalBytesProcessed: number = 0; // Total bytes processed so far
+  private currentRowStartLine: number = 0; // 1-based line number where current row started
+  private currentRowStartBytes: number = 0; // Byte offset where current row started
+  private currentFieldQuoted: boolean = false; // Whether current field started with a quote
+  private currentRowQuoted: boolean[] = []; // Quote status for each field in current row
+  private currentRawRow: string = ""; // Raw string of current row
+  // Cached onSkip handler
+  private invokeOnSkip:
+    | ((error: CsvSkipError, record: string[] | null, line: number) => void)
+    | null = null;
 
   constructor(options: CsvParseOptions = {}) {
     super({ objectMode: options.objectMode !== false });
@@ -134,6 +151,18 @@ export class CsvParserStream extends Transform {
 
     // Cache maxRowBytes for hot path performance
     this.maxRowBytes = options.maxRowBytes;
+
+    // Info/raw options
+    this.infoOption = options.info ?? false;
+    this.rawOption = options.raw ?? false;
+    // Initialize row tracking for info option
+    if (this.infoOption) {
+      this.currentRowStartLine = 1;
+      this.currentRowStartBytes = 0;
+    }
+
+    // Cache onSkip handler for performance
+    this.invokeOnSkip = createOnSkipHandler(options.onSkip);
   }
 
   /**
@@ -303,11 +332,11 @@ export class CsvParserStream extends Transform {
         return;
       }
 
-      this.currentRow.push(this.trimField(this.takeCurrentField()));
+      this.currentRow.push(this.completeField());
       // Use the same row processing path as normal rows for chunk callback support
       const row = this.buildRow(this.currentRow);
       this.currentRow = [];
-      this.currentRowBytes = 0; // Reset row bytes counter
+      this.currentRowBytes = 0;
       this.processPendingRows([row], callback);
       return;
     }
@@ -465,6 +494,41 @@ export class CsvParserStream extends Transform {
     return value;
   }
 
+  /**
+   * Complete current field and track quoted status for info option
+   */
+  private completeField(): string {
+    const value = this.trimField(this.takeCurrentField());
+    if (this.infoOption) {
+      this.currentRowQuoted.push(this.currentFieldQuoted);
+      this.currentFieldQuoted = false;
+    }
+    return value;
+  }
+
+  /**
+   * Reset info state for next row (used when skipping rows or after processing)
+   */
+  private resetInfoState(nextByteOffset: number): void {
+    if (this.infoOption) {
+      this.currentRowQuoted = [];
+      this.currentRowStartLine = this.lineNumber + 1;
+      this.currentRowStartBytes = nextByteOffset;
+    }
+    if (this.rawOption) {
+      this.currentRawRow = "";
+    }
+  }
+
+  /**
+   * Append character to raw row tracking
+   */
+  private appendToRaw(char: string): void {
+    if (this.rawOption) {
+      this.currentRawRow += char;
+    }
+  }
+
   private processBuffer(callback: (error?: Error | null) => void): void {
     const { skipEmptyLines = false, ignoreEmpty = false, skipLines = 0 } = this.options;
     const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
@@ -483,13 +547,18 @@ export class CsvParserStream extends Transform {
     let i = 0;
     const len = this.buffer.length;
     const pendingRows: Row[] = [];
+    const startByteOffset = this.totalBytesProcessed;
 
     while (i < len) {
       const char = this.buffer[i];
 
       if (this.inQuotes && this.quoteEnabled) {
+        // Track raw row data for quoted fields
+        this.appendToRaw(char);
+
         if (this.escape && char === this.escape && this.buffer[i + 1] === this.quote) {
           this.appendToField(this.quote);
+          this.appendToRaw(this.buffer[i + 1]);
           i += 2;
         } else if (char === this.quote) {
           // Check if this is truly end of quoted field or if relaxQuotes allows continuation
@@ -510,12 +579,18 @@ export class CsvParserStream extends Transform {
           }
         } else if (i === len - 1) {
           // Need more data - preserve buffer from current position
+          // Remove the char we just added to raw since it will be re-processed
+          if (this.rawOption && this.currentRawRow.length > 0) {
+            this.currentRawRow = this.currentRawRow.slice(0, -1);
+          }
           this.buffer = this.buffer.slice(i);
+          this.totalBytesProcessed = startByteOffset + i;
           this.processPendingRows(pendingRows, callback);
           return;
         } else if (char === "\r") {
           // Normalize CRLF to LF inside quoted fields
           if (this.buffer[i + 1] === "\n") {
+            this.appendToRaw(this.buffer[i + 1]);
             i++; // Skip \r, will add \n on next iteration
           } else {
             this.appendToField("\n"); // Convert standalone \r to \n
@@ -526,30 +601,40 @@ export class CsvParserStream extends Transform {
           i++;
         }
       } else {
+        // Track raw row data for unquoted fields (NOT newlines)
+        if (char !== "\n" && char !== "\r") {
+          this.appendToRaw(char);
+        }
+
         if (this.quoteEnabled && char === this.quote && this.currentFieldLength === 0) {
           this.inQuotes = true;
+          if (this.infoOption) {
+            this.currentFieldQuoted = true;
+          }
           i++;
         } else if (this.quoteEnabled && char === this.quote && this.relaxQuotes) {
           // relaxQuotes: quote mid-field (not at start), treat as literal
           this.appendToField(char);
           i++;
         } else if (char === this.delimiter) {
-          this.currentRow.push(this.trimField(this.takeCurrentField()));
+          this.currentRow.push(this.completeField());
           i++;
         } else if (char === "\n" || char === "\r") {
-          // Handle \r\n
+          // Handle \r\n (don't track in raw - newlines excluded from raw)
           if (char === "\r" && this.buffer[i + 1] === "\n") {
             i++;
           }
 
-          this.currentRow.push(this.trimField(this.takeCurrentField()));
+          this.currentRow.push(this.completeField());
           this.lineNumber++;
+          const nextByteOffset = startByteOffset + i + 1;
 
           // Check toLine - stop parsing at specified line number
           const { toLine } = this.options;
           if (toLine !== undefined && this.lineNumber > toLine) {
             this.toLineReached = true;
             this.buffer = "";
+            this.totalBytesProcessed = nextByteOffset;
             this.processPendingRows(pendingRows, callback);
             return;
           }
@@ -557,7 +642,8 @@ export class CsvParserStream extends Transform {
           // Skip lines at beginning
           if (this.lineNumber <= skipLines) {
             this.currentRow = [];
-            this.currentRowBytes = 0; // Reset row bytes counter
+            this.currentRowBytes = 0;
+            this.resetInfoState(nextByteOffset);
             i++;
             continue;
           }
@@ -565,7 +651,8 @@ export class CsvParserStream extends Transform {
           // Skip comment/empty lines, also skips delimiter-only rows
           if (this.shouldSkipRow(this.currentRow, shouldSkipEmpty)) {
             this.currentRow = [];
-            this.currentRowBytes = 0; // Reset row bytes counter
+            this.currentRowBytes = 0;
+            this.resetInfoState(nextByteOffset);
             i++;
             continue;
           }
@@ -573,12 +660,14 @@ export class CsvParserStream extends Transform {
           // Process completed row (handles headers, skipRows, column validation, maxRows)
           const rowToProcess = this.currentRow;
           this.currentRow = [];
-          this.currentRowBytes = 0; // Reset row bytes counter
+          this.currentRowBytes = 0;
           if (!this.processCompletedRow(rowToProcess, pendingRows)) {
             this.buffer = "";
+            this.totalBytesProcessed = nextByteOffset;
             this.processPendingRows(pendingRows, callback);
             return;
           }
+          this.resetInfoState(nextByteOffset);
 
           i++;
         } else {
@@ -589,6 +678,7 @@ export class CsvParserStream extends Transform {
     }
 
     this.buffer = "";
+    this.totalBytesProcessed = startByteOffset + len;
     this.processPendingRows(pendingRows, callback);
   }
 
@@ -601,6 +691,7 @@ export class CsvParserStream extends Transform {
   ): void {
     const { skipLines = 0 } = this.options;
     const pendingRows: Row[] = [];
+    const startByteOffset = this.totalBytesProcessed;
 
     // Find last complete line in buffer
     const lastLF = this.buffer.lastIndexOf("\n");
@@ -620,46 +711,73 @@ export class CsvParserStream extends Transform {
     // Split by lines using pre-compiled regex for all line endings
     const lines = completeData.split(LINE_SPLIT_REGEX);
 
+    let currentByteOffset = startByteOffset;
+
     for (const line of lines) {
+      const lineByteLength = line.length + 1; // +1 for newline char
       this.lineNumber++;
 
       // Check toLine - stop parsing at specified line number
       const { toLine } = this.options;
       if (toLine !== undefined && this.lineNumber > toLine) {
         this.toLineReached = true;
+        this.totalBytesProcessed = currentByteOffset;
         this.processPendingRows(pendingRows, callback);
         return;
       }
 
       // Skip lines at beginning
       if (this.lineNumber <= skipLines) {
+        currentByteOffset += lineByteLength;
         continue;
       }
 
       // FastMode: always auto-skip truly empty lines
       if (line === "") {
+        currentByteOffset += lineByteLength;
         continue;
+      }
+
+      // Set up info tracking state before processing row
+      if (this.infoOption) {
+        this.currentRowStartLine = this.lineNumber;
+        this.currentRowStartBytes = currentByteOffset;
+      }
+      if (this.rawOption) {
+        this.currentRawRow = line;
       }
 
       // Split by delimiter (fast path - no quote detection)
       const row = line.split(this.delimiter).map(this.trimField);
 
+      // In fast mode, no fields are quoted
+      if (this.infoOption) {
+        this.currentRowQuoted = new Array(row.length).fill(false);
+      }
+
       if (this.shouldSkipRow(row, shouldSkipEmpty)) {
+        currentByteOffset += lineByteLength;
         continue;
       }
 
       // Process completed row (handles headers, skipRows, column validation, maxRows)
       if (!this.processCompletedRow(row, pendingRows)) {
+        this.totalBytesProcessed = currentByteOffset + lineByteLength;
         this.processPendingRows(pendingRows, callback);
         return;
       }
+
+      currentByteOffset += lineByteLength;
     }
 
+    this.totalBytesProcessed = startByteOffset + completeData.length;
     this.processPendingRows(pendingRows, callback);
   }
 
   private buildRow(rawRow: string[]): Row {
     const { dynamicTyping, castDate, groupColumnsByName = false } = this.options;
+
+    let record: Record<string, unknown> | unknown[];
 
     if (this.options.headers && this.headerRow) {
       // Use shared utility for row-to-object conversion
@@ -672,29 +790,47 @@ export class CsvParserStream extends Transform {
 
       // Apply dynamicTyping and/or castDate if configured
       if (dynamicTyping || castDate) {
-        return applyDynamicTypingToRow(
+        record = applyDynamicTypingToRow(
           obj as Record<string, string>,
           dynamicTyping || false,
           castDate
-        ) as Row;
+        );
+      } else {
+        record = obj;
       }
-
-      return obj as Row;
+    } else {
+      // Array mode
+      if (dynamicTyping || castDate) {
+        // For array mode, can only use dynamicTyping: true (all columns)
+        // or per-column config if we happen to have headers
+        record = applyDynamicTypingToArrayRow(
+          rawRow,
+          this.headerRow,
+          dynamicTyping || false,
+          castDate
+        );
+      } else {
+        record = rawRow;
+      }
     }
 
-    // Array mode
-    if (dynamicTyping || castDate) {
-      // For array mode, can only use dynamicTyping: true (all columns)
-      // or per-column config if we happen to have headers
-      return applyDynamicTypingToArrayRow(
-        rawRow,
-        this.headerRow,
-        dynamicTyping || false,
-        castDate
-      ) as Row;
+    // Wrap with info if info option is enabled
+    if (this.infoOption) {
+      const info: RecordInfo = {
+        index: this.dataRowIndex,
+        line: this.currentRowStartLine,
+        bytes: this.currentRowStartBytes,
+        quoted: [...this.currentRowQuoted]
+      };
+      if (this.rawOption) {
+        info.raw = this.currentRawRow;
+      }
+      this.dataRowIndex++;
+      // Use unknown cast - when info: true, Row type is extended to RecordWithInfo
+      return { record, info } as unknown as Row;
     }
 
-    return rawRow;
+    return record as Row;
   }
 
   /**
@@ -710,7 +846,6 @@ export class CsvParserStream extends Transform {
       strictColumnHandling = false,
       discardUnmappedColumns = false,
       skipRecordsWithError = false,
-      onSkip,
       relaxColumnCountLess = false,
       relaxColumnCountMore = false,
       groupColumnsByName = false
@@ -757,20 +892,14 @@ export class CsvParserStream extends Transform {
       if (!validation.isValid) {
         // If skipRecordsWithError is enabled, invoke onSkip and continue
         if (skipRecordsWithError) {
-          if (onSkip) {
-            try {
-              onSkip(
-                {
-                  code: validation.errorCode || "ParseError",
-                  message: validation.reason || "Column count mismatch"
-                },
-                row,
-                this.lineNumber
-              );
-            } catch {
-              // Ignore errors in onSkip callback
-            }
-          }
+          this.invokeOnSkip?.(
+            {
+              code: validation.errorCode || "ParseError",
+              message: validation.reason || "Column count mismatch"
+            },
+            row,
+            this.lineNumber
+          );
           return true;
         }
         this.emit("data-invalid", row, validation.reason!);

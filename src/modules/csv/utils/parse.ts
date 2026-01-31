@@ -270,6 +270,45 @@ export function hasAllEmptyValues(row: string[]): boolean {
 }
 
 /**
+ * Error object passed to onSkip callback
+ */
+export interface CsvSkipError {
+  /** Error code identifying the type of error */
+  code: "TooManyFields" | "TooFewFields" | "MissingQuotes" | "ParseError";
+  /** Human-readable error message */
+  message: string;
+  /** The raw text of the problematic record (if available) */
+  raw?: string;
+}
+
+/**
+ * OnSkip callback type
+ */
+export type OnSkipCallback = (error: CsvSkipError, record: string[] | null, line: number) => void;
+
+/**
+ * Creates a wrapped onSkip handler that safely invokes the callback,
+ * ignoring any errors thrown by the callback itself.
+ *
+ * @param onSkip - The user-provided onSkip callback (or undefined)
+ * @returns A safe invoker function, or null if no callback provided
+ */
+export function createOnSkipHandler(
+  onSkip: OnSkipCallback | undefined
+): ((error: CsvSkipError, record: string[] | null, line: number) => void) | null {
+  if (!onSkip) {
+    return null;
+  }
+  return (error: CsvSkipError, record: string[] | null, line: number) => {
+    try {
+      onSkip(error, record, line);
+    } catch {
+      // Ignore errors in onSkip callback
+    }
+  };
+}
+
+/**
  * Convert a row array to an object using headers.
  * Internal helper for convertRowToObject.
  */
