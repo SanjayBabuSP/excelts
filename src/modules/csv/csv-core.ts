@@ -33,21 +33,23 @@ import {
 import {
   type DynamicTypingConfig,
   applyDynamicTypingToRow,
-  applyDynamicTypingToArrayRow,
-  applyDynamicTyping
+  applyDynamicTypingToArrayRow
 } from "@csv/utils/dynamic-typing";
 import {
   processHeaders,
   validateAndAdjustColumns,
   isEmptyRow,
-  rowToObject,
+  hasAllEmptyValues,
+  convertRowToObject,
+  getEffectiveHeaderCount,
+  filterValidHeaders,
   LINE_SPLIT_REGEX
 } from "@csv/utils/parse";
 import type { FormattedValue } from "@csv/utils/formatted-value";
 
 // Re-export types from utility files
 export type { HeaderArray, RowHashArray } from "@csv/utils/row";
-export type { DynamicTypingConfig } from "@csv/utils/dynamic-typing";
+export type { DynamicTypingConfig, CastDateConfig } from "@csv/utils/dynamic-typing";
 
 // Re-export detection utilities
 export {
@@ -329,6 +331,27 @@ export interface CsvParseOptions extends CsvBaseOptions {
   comment?: string;
   /** Maximum number of data rows to parse (excluding header) */
   maxRows?: number;
+  /**
+   * Stop parsing at this line number (1-based, inclusive).
+   * Unlike maxRows which counts data rows, toLine counts raw lines including:
+   * - Header row
+   * - Comment lines
+   * - Empty lines
+   * - Data rows
+   *
+   * Useful for:
+   * - Previewing the first N lines of a file
+   * - Sampling data from the beginning
+   * - Debugging by examining specific line ranges
+   *
+   * @example
+   * // Parse only first 100 lines (including header)
+   * parseCsv(data, { toLine: 100 })
+   *
+   * // Combined with skipLines
+   * parseCsv(data, { skipLines: 5, toLine: 50 }) // Lines 6-50
+   */
+  toLine?: number;
   /** Number of lines to skip at the beginning (before header detection) */
   skipLines?: number;
   /** Number of data rows to skip (after header detection) */
@@ -355,6 +378,60 @@ export interface CsvParseOptions extends CsvBaseOptions {
    * Only valid when headers are specified
    */
   discardUnmappedColumns?: boolean;
+  /**
+   * Tolerate rows with fewer fields than expected.
+   * When true, missing fields will be filled with empty strings.
+   * This is a more granular version of `strictColumnHandling: false`.
+   *
+   * @example
+   * const csv = "a,b,c\\n1,2\\n4,5,6";
+   * parseCsv(csv, { headers: true, relaxColumnCountLess: true });
+   * // Returns: [{ a: "1", b: "2", c: "" }, { a: "4", b: "5", c: "6" }]
+   *
+   * @default false
+   */
+  relaxColumnCountLess?: boolean;
+  /**
+   * Tolerate rows with more fields than expected.
+   * When true, extra fields will be discarded.
+   * This is a more granular version of `strictColumnHandling: false`.
+   *
+   * @example
+   * const csv = "a,b\\n1,2,3\\n4,5";
+   * parseCsv(csv, { headers: true, relaxColumnCountMore: true });
+   * // Returns: [{ a: "1", b: "2" }, { a: "4", b: "5" }]
+   *
+   * @default false
+   */
+  relaxColumnCountMore?: boolean;
+  /**
+   * When columns with the same name exist, group their values into an array.
+   * Requires `headers: true` or a headers array.
+   *
+   * @example
+   * const csv = "friend,username,friend\\nathos,porthos,aramis";
+   * parseCsv(csv, { headers: true, groupColumnsByName: true });
+   * // Returns: [{ username: "porthos", friend: ["athos", "aramis"] }]
+   *
+   * @default false
+   */
+  groupColumnsByName?: boolean;
+  /**
+   * Return records as an object keyed by the specified column value.
+   * Instead of returning an array of rows, returns an object where
+   * keys are the values from the specified column.
+   *
+   * Requires `headers: true` or a headers array. The column name must
+   * be a string matching one of the header names.
+   *
+   * Note: Duplicate keys will overwrite previous values.
+   *
+   * @example
+   * const csv = "id,name\\n1,Alice\\n2,Bob";
+   * parseCsv(csv, { headers: true, objname: "id" });
+   * // Returns: { "1": { id: "1", name: "Alice" }, "2": { id: "2", name: "Bob" } }
+   */
+  objname?: string;
   /**
    * Character encoding for input (default: "utf8")
    * Only used in Node.js streaming context
@@ -428,6 +505,37 @@ export interface CsvParseOptions extends CsvBaseOptions {
    * }
    */
   dynamicTyping?: DynamicTypingConfig;
+  /**
+   * Automatically detect and convert date strings to Date objects.
+   * Works with dynamicTyping to provide built-in date parsing.
+   *
+   * Supported formats (ISO-like, unambiguous):
+   * - YYYY-MM-DD (e.g., "2024-01-15")
+   * - YYYY-MM-DDTHH:mm:ss (e.g., "2024-01-15T10:30:00")
+   * - YYYY-MM-DD HH:mm:ss (e.g., "2024-01-15 10:30:00")
+   * - YYYY-MM-DDTHH:mm:ssZ (e.g., "2024-01-15T10:30:00Z")
+   * - YYYY-MM-DDTHH:mm:ss.SSSZ (e.g., "2024-01-15T10:30:00.000Z")
+   * - YYYY-MM-DDTHH:mm:ss+HH:mm (e.g., "2024-01-15T10:30:00+08:00")
+   *
+   * Note: US (MM-DD-YYYY) and EU (DD-MM-YYYY) formats are NOT auto-detected
+   * due to ambiguity. Use custom dynamicTyping converter for those formats.
+   *
+   * @example
+   * // Enable for all columns
+   * { castDate: true }
+   *
+   * // Enable for specific columns only
+   * { castDate: ['created_at', 'updated_at'] }
+   *
+   * // Combined with dynamicTyping
+   * {
+   *   dynamicTyping: true,
+   *   castDate: ['date_column']
+   * }
+   *
+   * @default false
+   */
+  castDate?: boolean | string[];
   /**
    * Callback function invoked for each chunk of rows during parsing.
    * Useful for processing large files without loading everything into memory.
@@ -544,6 +652,73 @@ export interface CsvParseOptions extends CsvBaseOptions {
    * @default false
    */
   relaxQuotes?: boolean;
+  /**
+   * Skip records that cause parsing errors instead of throwing.
+   * When enabled, malformed records are silently skipped and parsing continues.
+   *
+   * Errors that trigger skipping:
+   * - Unclosed quotes (MissingQuotes)
+   * - Column count mismatch (TooManyFields, TooFewFields) when strictColumnHandling is true
+   *
+   * Use with `onSkip` callback to log or track skipped records.
+   *
+   * @example
+   * // Skip bad records silently
+   * { skipRecordsWithError: true }
+   *
+   * // Skip and log
+   * {
+   *   skipRecordsWithError: true,
+   *   onSkip: (error, record, line) => {
+   *     console.warn(`Skipped line ${line}: ${error.message}`);
+   *   }
+   * }
+   *
+   * @default false
+   */
+  skipRecordsWithError?: boolean;
+  /**
+   * Skip records where all field values are empty strings.
+   * Unlike `skipEmptyLines` which skips lines that parse to single empty field,
+   * this option skips records after parsing where every field is "".
+   *
+   * This is useful for cleaning data that contains placeholder empty rows.
+   *
+   * @example
+   * const csv = "a,b,c\n1,2,3\n,,\n4,5,6";
+   * parseCsv(csv, { headers: true, skipRecordsWithEmptyValues: true });
+   * // Returns: [{ a: "1", b: "2", c: "3" }, { a: "4", b: "5", c: "6" }]
+   * // The row ",," is skipped because all values are empty
+   *
+   * @default false
+   */
+  skipRecordsWithEmptyValues?: boolean;
+  /**
+   * Callback invoked when a record is skipped due to an error.
+   * Only called when `skipRecordsWithError: true`.
+   *
+   * @param error - The error that caused the record to be skipped
+   * @param record - The raw record data (partial or malformed)
+   * @param line - The 1-based line number where the error occurred
+   *
+   * @example
+   * onSkip: (error, record, line) => {
+   *   errorLog.push({ line, error: error.message, data: record });
+   * }
+   */
+  onSkip?: (error: CsvSkipError, record: string[] | null, line: number) => void;
+}
+
+/**
+ * Error object passed to onSkip callback
+ */
+export interface CsvSkipError {
+  /** Error code */
+  code: CsvParseErrorCode | "ParseError";
+  /** Human-readable error message */
+  message: string;
+  /** The raw text of the problematic record (if available) */
+  raw?: string;
 }
 
 export type SkipEmptyLines = boolean;
@@ -830,18 +1005,27 @@ export function parseCsv(
     renameHeaders = false,
     comment,
     maxRows,
+    toLine,
     skipLines = 0,
     skipRows = 0,
     strictColumnHandling = false,
     discardUnmappedColumns = false,
+    relaxColumnCountLess = false,
+    relaxColumnCountMore = false,
+    groupColumnsByName = false,
+    objname,
     fastMode = false,
     transform,
     validate,
     dynamicTyping,
+    castDate,
     beforeFirstChunk,
     info: infoOption = false,
     raw: rawOption = false,
-    relaxQuotes = false
+    relaxQuotes = false,
+    skipRecordsWithError = false,
+    skipRecordsWithEmptyValues = false,
+    onSkip
   } = options;
 
   // Apply beforeFirstChunk if provided
@@ -924,6 +1108,8 @@ export function parseCsv(
 
   // Header handling
   let headerRow: HeaderArray | null = null;
+  // Original (non-deduplicated) headers for groupColumnsByName
+  let originalHeaders: HeaderArray | null = null;
   let useHeaders = false;
   let headerRowProcessed = false;
 
@@ -935,9 +1121,10 @@ export function parseCsv(
     useHeaders = true;
   } else if (Array.isArray(headers)) {
     // Use shared utility for initial header setup
-    const result = processHeaders([], { headers, renameHeaders }, null);
+    const result = processHeaders([], { headers, renameHeaders, groupColumnsByName }, null);
     if (result) {
       headerRow = result.headers;
+      originalHeaders = result.originalHeaders;
       renamedHeadersForMeta = result.renamedHeaders;
     }
     useHeaders = true;
@@ -951,13 +1138,25 @@ export function parseCsv(
   // Pre-compute trim function to avoid repeated condition checks
   const trimField = makeTrimField(trim, ltrim, rtrim);
 
-  const processRow = (row: string[]): boolean => {
+  // Helper to invoke onSkip callback
+  const invokeOnSkip = onSkip
+    ? (error: CsvSkipError, record: string[] | null, line: number) => {
+        try {
+          onSkip(error, record, line);
+        } catch {
+          // Ignore errors in onSkip callback
+        }
+      }
+    : null;
+
+  const processRow = (row: string[], currentLineNumber: number): boolean => {
     // Handle first row as headers when needed
     if (useHeaders && !headerRowProcessed) {
       // Use shared utility for header processing from first row
-      const result = processHeaders(row, { headers, renameHeaders }, headerRow);
+      const result = processHeaders(row, { headers, renameHeaders, groupColumnsByName }, headerRow);
       if (result) {
         headerRow = result.headers;
+        originalHeaders = result.originalHeaders;
         renamedHeadersForMeta = result.renamedHeaders;
         headerRowProcessed = true;
         if (result.skipCurrentRow) {
@@ -984,19 +1183,32 @@ export function parseCsv(
       // Use shared validation utility
       const validation = validateAndAdjustColumns(row, expectedCols, {
         strictColumnHandling,
-        discardUnmappedColumns
+        discardUnmappedColumns,
+        relaxColumnCountLess,
+        relaxColumnCountMore
       });
 
       // Record errors regardless of validation result
       if (validation.errorCode) {
-        errors.push({
+        const errorObj: CsvParseError = {
           code: validation.errorCode,
           message:
             validation.errorCode === "TooManyFields"
               ? `Too many fields: expected ${expectedCols}, found ${actualCols}`
               : `Too few fields: expected ${expectedCols}, found ${actualCols}`,
           row: dataRowCount
-        });
+        };
+        errors.push(errorObj);
+
+        // If skipRecordsWithError is enabled and validation failed, skip this row
+        if (skipRecordsWithError && !validation.isValid) {
+          invokeOnSkip?.(
+            { code: validation.errorCode, message: errorObj.message },
+            row,
+            currentLineNumber
+          );
+          return false;
+        }
       }
 
       if (!validation.isValid) {
@@ -1023,6 +1235,12 @@ export function parseCsv(
 
     for (const line of lines) {
       lineIdx++;
+
+      // Check toLine - stop parsing at specified line number
+      if (toLine !== undefined && lineIdx > toLine) {
+        truncated = true;
+        break;
+      }
 
       // Skip lines at beginning
       if (lineIdx <= skipLines) {
@@ -1055,7 +1273,12 @@ export function parseCsv(
         continue;
       }
 
-      if (processRow(row)) {
+      // Skip records where all values are empty strings
+      if (skipRecordsWithEmptyValues && hasAllEmptyValues(row)) {
+        continue;
+      }
+
+      if (processRow(row, lineIdx)) {
         rows.push(row);
         dataRowCount++;
       }
@@ -1090,16 +1313,18 @@ export function parseCsv(
 
     // Convert to objects if headers enabled
     if (useHeaders && headerRow) {
-      const headers = headerRow.filter((h): h is string => h !== null && h !== undefined);
+      const headers = filterValidHeaders(headerRow);
       meta.fields = headers;
 
       // Convert rows to objects using shared utility
-      let dataRows: Record<string, unknown>[] = rows.map(row => rowToObject(row, headerRow!));
+      let dataRows: Record<string, unknown>[] = rows.map(row =>
+        convertRowToObject(row, headerRow!, originalHeaders, groupColumnsByName)
+      );
 
-      // Apply dynamicTyping if provided (before transform)
-      if (dynamicTyping) {
+      // Apply dynamicTyping and/or castDate if provided (before transform)
+      if (dynamicTyping || castDate) {
         dataRows = dataRows.map(row =>
-          applyDynamicTypingToRow(row as Record<string, string>, dynamicTyping)
+          applyDynamicTypingToRow(row as Record<string, string>, dynamicTyping || false, castDate)
         ) as Record<string, unknown>[];
       }
 
@@ -1147,11 +1372,34 @@ export function parseCsv(
       }
 
       // Build result object
+      // If objname is specified, return rows as object keyed by the column value
+      let rowsResult: any;
+      if (objname) {
+        if (infoOption) {
+          const recordMap: Record<string, { record: Record<string, unknown>; info: RecordInfo }> =
+            {};
+          for (let idx = 0; idx < dataRows.length; idx++) {
+            const keyValue = String(dataRows[idx][objname] ?? "");
+            recordMap[keyValue] = { record: dataRows[idx], info: rowInfos[idx] };
+          }
+          rowsResult = recordMap;
+        } else {
+          const recordMap: Record<string, Record<string, unknown>> = {};
+          for (const row of dataRows) {
+            const keyValue = String(row[objname] ?? "");
+            recordMap[keyValue] = row;
+          }
+          rowsResult = recordMap;
+        }
+      } else {
+        rowsResult = infoOption
+          ? dataRows.map((row, idx) => ({ record: row, info: rowInfos[idx] }))
+          : dataRows;
+      }
+
       const result: any = {
         headers,
-        rows: infoOption
-          ? dataRows.map((row, idx) => ({ record: row, info: rowInfos[idx] }))
-          : dataRows,
+        rows: rowsResult,
         meta
       };
       if (invalidRows.length > 0) {
@@ -1166,13 +1414,18 @@ export function parseCsv(
     // For array mode, apply dynamicTyping, transform and validate
     let resultRows: (string[] | unknown[])[] = rows;
 
-    // Apply dynamicTyping if provided (before transform)
-    if (dynamicTyping) {
+    // Apply dynamicTyping and/or castDate if provided (before transform)
+    if (dynamicTyping || castDate) {
       // For array mode without headers, we can only use dynamicTyping: true (all columns)
       // Per-column config requires headers
-      const effectiveHeaders = headerRow?.filter((h): h is string => h != null) ?? null;
+      const effectiveHeaders = headerRow ? filterValidHeaders(headerRow) : null;
       resultRows = resultRows.map(row =>
-        applyDynamicTypingToArrayRow(row as string[], effectiveHeaders, dynamicTyping)
+        applyDynamicTypingToArrayRow(
+          row as string[],
+          effectiveHeaders,
+          dynamicTyping || false,
+          castDate
+        )
       );
     }
 
@@ -1360,6 +1613,12 @@ export function parseCsv(
 
         lineNumber++;
 
+        // Check toLine - stop parsing at specified line number
+        if (toLine !== undefined && lineNumber > toLine) {
+          truncated = true;
+          break;
+        }
+
         // Skip lines at beginning
         if (lineNumber <= skipLines) {
           currentRow = [];
@@ -1384,8 +1643,16 @@ export function parseCsv(
           continue;
         }
 
+        // Skip records where all values are empty strings
+        if (skipRecordsWithEmptyValues && hasAllEmptyValues(currentRow)) {
+          currentRow = [];
+          resetInfoState?.(lineNumber + 1, i + 1);
+          i++;
+          continue;
+        }
+
         // Process row (handles headers, validation)
-        if (processRow(currentRow)) {
+        if (processRow(currentRow, lineNumber)) {
           rows.push(currentRow);
           // Build RecordInfo if info option is enabled
           if (infoOption) {
@@ -1428,11 +1695,23 @@ export function parseCsv(
   // Handle last field/row
   if (currentField !== "" || currentRow.length > 0) {
     if (inQuotes && quoteEnabled) {
-      errors.push({
+      const errorObj: CsvParseError = {
         code: "MissingQuotes",
         message: "Quoted field unterminated",
         row: dataRowCount
-      });
+      };
+      errors.push(errorObj);
+
+      // If skipRecordsWithError is enabled, skip this malformed row
+      if (skipRecordsWithError) {
+        invokeOnSkip?.(
+          { code: "MissingQuotes", message: errorObj.message, raw: currentRawRow || undefined },
+          currentRow.length > 0 ? [...currentRow, trimField(currentField)] : null,
+          lineNumber + 1
+        );
+        // Don't process this row
+        return buildResult();
+      }
     }
 
     currentRow.push(trimField(currentField));
@@ -1445,9 +1724,16 @@ export function parseCsv(
       lineNumber >= skipLines &&
       !(comment && currentRow[0]?.startsWith(comment)) &&
       !isEmptyRow(currentRow, shouldSkipEmpty) &&
-      !(maxRows !== undefined && dataRowCount >= maxRows);
+      !(skipRecordsWithEmptyValues && hasAllEmptyValues(currentRow)) &&
+      !(maxRows !== undefined && dataRowCount >= maxRows) &&
+      !(toLine !== undefined && lineNumber + 1 > toLine);
 
-    if (shouldProcessLastRow && processRow(currentRow)) {
+    // Set truncated flag if toLine stopped processing the last row
+    if (toLine !== undefined && lineNumber + 1 > toLine) {
+      truncated = true;
+    }
+
+    if (shouldProcessLastRow && processRow(currentRow, lineNumber + 1)) {
       rows.push(currentRow);
       // Build RecordInfo if info option is enabled
       if (infoOption) {
@@ -1652,11 +1938,17 @@ export async function* parseCsvStream(
     renameHeaders = false,
     comment,
     maxRows,
+    toLine,
     skipLines = 0,
     skipRows = 0,
     strictColumnHandling = false,
     discardUnmappedColumns = false,
-    dynamicTyping = false
+    relaxColumnCountLess = false,
+    relaxColumnCountMore = false,
+    dynamicTyping = false,
+    castDate,
+    skipRecordsWithEmptyValues = false,
+    groupColumnsByName = false
   } = options;
 
   const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
@@ -1753,6 +2045,7 @@ export async function* parseCsvStream(
   }
 
   let headerRow: HeaderArray | null = null;
+  let originalHeaders: string[] | null = null;
   let headersLength = 0;
   let useHeaders = false;
   let headerRowProcessed = false;
@@ -1781,8 +2074,12 @@ export async function* parseCsvStream(
   if (headers === true) {
     useHeaders = true;
   } else if (Array.isArray(headers)) {
+    // Store original headers before deduplication if groupColumnsByName is enabled
+    if (groupColumnsByName) {
+      originalHeaders = [...headers] as string[];
+    }
     headerRow = deduplicateHeaders(headers);
-    headersLength = headerRow.filter(h => h !== null && h !== undefined).length;
+    headersLength = getEffectiveHeaderCount(headerRow);
     useHeaders = true;
     if (!renameHeaders) {
       headerRowProcessed = true;
@@ -1799,21 +2096,19 @@ export async function* parseCsvStream(
   ): { valid: boolean; row: string[] | Record<string, string> | null } => {
     // Header handling
     if (useHeaders && !headerRowProcessed) {
-      if (typeof headers === "function") {
-        const transformed = headers(row);
-        headerRow = deduplicateHeaders(transformed);
-      } else if (!Array.isArray(headers)) {
-        headerRow = deduplicateHeaders(row);
+      // Use shared utility for header processing
+      const result = processHeaders(row, { headers, renameHeaders, groupColumnsByName }, headerRow);
+      if (result) {
+        headerRow = result.headers;
+        originalHeaders = result.originalHeaders;
+        headersLength = getEffectiveHeaderCount(result.headers);
+        headerRowProcessed = true;
+        if (result.skipCurrentRow) {
+          return { valid: false, row: null };
+        }
       }
-      headersLength = headerRow!.filter(h => h !== null && h !== undefined).length;
+      // If processHeaders returns null, headers were already set from array config
       headerRowProcessed = true;
-
-      if (renameHeaders) {
-        return { valid: false, row: null };
-      }
-      if (headers === true || typeof headers === "function") {
-        return { valid: false, row: null };
-      }
       return { valid: false, row: null };
     }
 
@@ -1823,55 +2118,44 @@ export async function* parseCsvStream(
       return { valid: false, row: null };
     }
 
-    // Column validation
+    // Column validation using shared utility
     if (headerRow && headerRow.length > 0) {
-      const expectedCols = headersLength;
-      const actualCols = row.length;
-
-      if (actualCols > expectedCols) {
-        if (strictColumnHandling && !discardUnmappedColumns) {
-          return { valid: false, row: null };
-        } else {
-          // Default: trim extra columns
-          row.length = headerRow.length;
-        }
-      } else if (actualCols < expectedCols) {
-        if (strictColumnHandling) {
-          return { valid: false, row: null };
-        }
-        while (row.length < headerRow.length) {
-          row.push("");
-        }
+      const validation = validateAndAdjustColumns(row, headersLength, {
+        strictColumnHandling,
+        discardUnmappedColumns,
+        relaxColumnCountLess,
+        relaxColumnCountMore
+      });
+      if (!validation.isValid) {
+        return { valid: false, row: null };
       }
     }
 
     // Convert to object if using headers
     if (useHeaders && headerRow) {
-      const obj: Record<string, unknown> = {};
-      headerRow.forEach((header, index) => {
-        if (header !== null && header !== undefined) {
-          const value = row[index] ?? "";
-          if (dynamicTyping === true) {
-            obj[header] = applyDynamicTyping(value, true);
-          } else if (dynamicTyping && typeof dynamicTyping === "object") {
-            const columnConfig = dynamicTyping[header];
-            obj[header] =
-              columnConfig !== undefined ? applyDynamicTyping(value, columnConfig) : value;
-          } else {
-            obj[header] = value;
-          }
-        }
-      });
+      const obj = convertRowToObject(row, headerRow, originalHeaders, groupColumnsByName);
+      // Apply dynamicTyping and/or castDate if configured
+      if (dynamicTyping || castDate) {
+        return {
+          valid: true,
+          row: applyDynamicTypingToRow(
+            obj as Record<string, string>,
+            dynamicTyping || false,
+            castDate
+          ) as Record<string, string>
+        };
+      }
       return { valid: true, row: obj as Record<string, string> };
     }
 
-    // Apply dynamicTyping to array rows if enabled
-    if (dynamicTyping) {
+    // Apply dynamicTyping and/or castDate to array rows if enabled
+    if (dynamicTyping || castDate) {
       // For array rows without headers, pass null - per-column config won't work
       const typedRow = applyDynamicTypingToArrayRow(
         row,
         headerRow as string[] | null,
-        dynamicTyping
+        dynamicTyping || false,
+        castDate
       );
       return { valid: true, row: typedRow as string[] };
     }
@@ -1948,6 +2232,14 @@ export async function* parseCsvStream(
           currentField = "";
           lineNumber++;
 
+          // Check toLine - stop parsing at specified line number
+          if (toLine !== undefined && lineNumber > toLine) {
+            buffer = "";
+            currentField = "";
+            currentRow = [];
+            return;
+          }
+
           if (lineNumber <= skipLines) {
             currentRow = [];
             i++;
@@ -1965,6 +2257,13 @@ export async function* parseCsvStream(
           const shouldSkipRow =
             shouldSkipEmpty && (isEmpty || (skipEmptyGreedy && isEmptyRow(currentRow, true)));
           if (shouldSkipRow) {
+            currentRow = [];
+            i++;
+            continue;
+          }
+
+          // Skip records where all values are empty strings
+          if (skipRecordsWithEmptyValues && hasAllEmptyValues(currentRow)) {
             currentRow = [];
             i++;
             continue;

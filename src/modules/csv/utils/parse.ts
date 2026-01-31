@@ -27,6 +27,8 @@ export const NON_WHITESPACE_REGEX = /\S/;
 export interface HeaderProcessResult {
   /** The processed (deduplicated) headers */
   headers: HeaderArray;
+  /** The original (non-deduplicated) headers, for groupColumnsByName support. Null when groupColumnsByName is false. */
+  originalHeaders: HeaderArray | null;
   /** Map of renamed headers (new name -> original name) */
   renamedHeaders: Record<string, string> | null;
   /** Whether the current row should be skipped (was used as headers) */
@@ -55,6 +57,8 @@ export interface HeaderProcessOptions {
   headers: boolean | string[] | ((row: string[]) => (string | null | undefined)[]);
   /** Whether to rename headers from first data row */
   renameHeaders: boolean;
+  /** Whether to group columns by name (affects originalHeaders computation) */
+  groupColumnsByName?: boolean;
 }
 
 /**
@@ -65,6 +69,10 @@ export interface ColumnValidationOptions {
   strictColumnHandling: boolean;
   /** Whether to discard unmapped (extra) columns instead of erroring */
   discardUnmappedColumns: boolean;
+  /** If true, preserve rows with fewer columns than expected (pads with empty strings) */
+  relaxColumnCountLess?: boolean;
+  /** If true, preserve rows with more columns than expected (discards extra columns) */
+  relaxColumnCountMore?: boolean;
 }
 
 // =============================================================================
@@ -85,7 +93,7 @@ export function processHeaders(
   options: HeaderProcessOptions,
   existingHeaders: HeaderArray | null
 ): HeaderProcessResult | null {
-  const { headers, renameHeaders } = options;
+  const { headers, renameHeaders, groupColumnsByName = false } = options;
 
   // If we already have headers from array config and not renaming, no processing needed
   if (existingHeaders !== null && Array.isArray(headers) && !renameHeaders) {
@@ -116,8 +124,14 @@ export function processHeaders(
   // Deduplicate headers
   const { headers: dedupedHeaders, renamedHeaders } = deduplicateHeadersWithRenames(rawHeaders);
 
+  // Only compute originalHeaders when groupColumnsByName is true (performance optimization)
+  const originalHeaders: HeaderArray | null = groupColumnsByName
+    ? rawHeaders.map(h => (h === null || h === undefined ? null : String(h)))
+    : null;
+
   return {
     headers: dedupedHeaders,
+    originalHeaders,
     renamedHeaders,
     skipCurrentRow
   };
@@ -137,7 +151,12 @@ export function validateAndAdjustColumns(
   expectedCols: number,
   options: ColumnValidationOptions
 ): ColumnValidationResult {
-  const { strictColumnHandling, discardUnmappedColumns } = options;
+  const {
+    strictColumnHandling,
+    discardUnmappedColumns,
+    relaxColumnCountLess,
+    relaxColumnCountMore
+  } = options;
   const actualCols = row.length;
 
   if (actualCols === expectedCols) {
@@ -146,7 +165,13 @@ export function validateAndAdjustColumns(
 
   if (actualCols > expectedCols) {
     // Too many columns
-    if (strictColumnHandling && !discardUnmappedColumns) {
+    // relaxColumnCountMore takes precedence over strictColumnHandling
+    if (relaxColumnCountMore || discardUnmappedColumns) {
+      // Trim extra columns silently
+      row.length = expectedCols;
+      return { isValid: true, errorCode: "TooManyFields", modified: true };
+    }
+    if (strictColumnHandling) {
       return {
         isValid: false,
         errorCode: "TooManyFields",
@@ -154,12 +179,20 @@ export function validateAndAdjustColumns(
         modified: false
       };
     }
-    // Trim extra columns
+    // Default: trim extra columns
     row.length = expectedCols;
     return { isValid: true, errorCode: "TooManyFields", modified: true };
   }
 
   // Too few columns
+  // relaxColumnCountLess takes precedence over strictColumnHandling
+  if (relaxColumnCountLess) {
+    // Pad with empty strings silently
+    while (row.length < expectedCols) {
+      row.push("");
+    }
+    return { isValid: true, errorCode: "TooFewFields", modified: true };
+  }
   if (strictColumnHandling) {
     return {
       isValid: false,
@@ -168,7 +201,7 @@ export function validateAndAdjustColumns(
       modified: false
     };
   }
-  // Pad with empty strings
+  // Default: pad with empty strings
   while (row.length < expectedCols) {
     row.push("");
   }
@@ -180,6 +213,21 @@ export function validateAndAdjustColumns(
  */
 export function getEffectiveHeaderCount(headers: HeaderArray): number {
   return headers.filter(h => h !== null && h !== undefined).length;
+}
+
+/**
+ * Type guard to filter out null/undefined values from headers.
+ * Useful for extracting only valid string headers from a HeaderArray.
+ */
+export function isValidHeader(h: string | null | undefined): h is string {
+  return h !== null && h !== undefined;
+}
+
+/**
+ * Filter headers to only include valid (non-null/undefined) string values.
+ */
+export function filterValidHeaders(headers: HeaderArray): string[] {
+  return headers.filter(isValidHeader);
 }
 
 /**
@@ -209,19 +257,79 @@ export function isCommentRow(row: string[], commentChar: string | undefined): bo
 }
 
 /**
- * Convert a row array to an object using headers.
- * Shared logic between parseCsv and CsvParserStream.
- *
- * @param row - The row values as an array
- * @param headers - The header names (may contain null/undefined for skipped columns)
- * @returns Object with header keys and row values
+ * Check if all values in a row are empty strings.
+ * Used by skipRecordsWithEmptyValues option.
  */
-export function rowToObject(row: string[], headers: HeaderArray): Record<string, string> {
+export function hasAllEmptyValues(row: string[]): boolean {
+  for (const field of row) {
+    if (field !== "") {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Convert a row array to an object using headers.
+ * Internal helper for convertRowToObject.
+ */
+function rowToObject(row: string[], headers: HeaderArray): Record<string, string> {
   const obj: Record<string, string> = {};
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
     if (header !== null && header !== undefined) {
       obj[header] = row[i] ?? "";
+    }
+  }
+  return obj;
+}
+
+/**
+ * Convert a row array to an object, optionally grouping duplicate column names.
+ * Unified function that handles both normal and grouped modes.
+ *
+ * @param row - The row values as an array
+ * @param headers - The deduplicated header names
+ * @param originalHeaders - The original (non-deduplicated) headers for grouping
+ * @param groupColumnsByName - Whether to group duplicate column names
+ * @returns Object with header keys and row values
+ */
+export function convertRowToObject(
+  row: string[],
+  headers: HeaderArray,
+  originalHeaders: HeaderArray | null,
+  groupColumnsByName: boolean
+): Record<string, string | string[]> {
+  if (groupColumnsByName && originalHeaders) {
+    return rowToObjectGrouped(row, originalHeaders);
+  }
+  return rowToObject(row, headers);
+}
+
+/**
+ * Convert a row array to an object, grouping duplicate column names.
+ * Internal helper for convertRowToObject.
+ */
+function rowToObjectGrouped(
+  row: string[],
+  headers: HeaderArray
+): Record<string, string | string[]> {
+  const obj: Record<string, string | string[]> = {};
+  for (let i = 0; i < headers.length; i++) {
+    const header = headers[i];
+    if (header !== null && header !== undefined) {
+      const value = row[i] ?? "";
+      if (header in obj) {
+        // Column name already exists - convert to array or push to existing array
+        const existing = obj[header];
+        if (Array.isArray(existing)) {
+          existing.push(value);
+        } else {
+          obj[header] = [existing, value];
+        }
+      } else {
+        obj[header] = value;
+      }
     }
   }
   return obj;

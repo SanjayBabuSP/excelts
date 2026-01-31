@@ -5,6 +5,8 @@
  * Supports boolean, number, null detection with customizable per-column config.
  */
 
+import { DateParser } from "@utils/datetime";
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -18,6 +20,66 @@
  * - `Record<string, (value: string) => unknown>`: Custom converter per column
  */
 export type DynamicTypingConfig = boolean | Record<string, boolean | ((value: string) => unknown)>;
+
+/**
+ * Cast date configuration for automatic date parsing.
+ *
+ * - `true`: Try to parse all string values as dates (ISO formats only)
+ * - `false`: No date parsing
+ * - `string[]`: Only parse specified columns as dates
+ */
+export type CastDateConfig = boolean | string[];
+
+// Singleton date parser for ISO formats (created lazily)
+let isoDateParser: DateParser | null = null;
+
+/**
+ * Get or create the ISO date parser singleton
+ */
+function getIsoDateParser(): DateParser {
+  if (!isoDateParser) {
+    isoDateParser = DateParser.iso();
+  }
+  return isoDateParser;
+}
+
+/**
+ * Try to parse a string as an ISO date.
+ * Returns the Date if successful, or null if not a valid date.
+ *
+ * Supported formats:
+ * - YYYY-MM-DD
+ * - YYYY-MM-DDTHH:mm:ss
+ * - YYYY-MM-DD HH:mm:ss
+ * - YYYY-MM-DDTHH:mm:ssZ
+ * - YYYY-MM-DDTHH:mm:ss.SSSZ
+ * - YYYY-MM-DDTHH:mm:ss+HH:mm
+ */
+export function tryParseDate(value: string): Date | null {
+  if (!value || value.length < 10) {
+    return null;
+  }
+  return getIsoDateParser().parse(value);
+}
+
+/**
+ * Check if castDate config enables date parsing for a column
+ */
+export function shouldCastDate(
+  castDate: CastDateConfig | undefined,
+  columnName: string | number | undefined
+): boolean {
+  if (!castDate) {
+    return false;
+  }
+  if (castDate === true) {
+    return true;
+  }
+  if (Array.isArray(castDate) && typeof columnName === "string") {
+    return castDate.includes(columnName);
+  }
+  return false;
+}
 
 // =============================================================================
 // Core Conversion
@@ -171,13 +233,15 @@ export function applyDynamicTyping(
  *
  * @param row - Row object with string values
  * @param dynamicTyping - DynamicTyping configuration
+ * @param castDate - CastDate configuration for date parsing
  * @returns New row object with converted values
  */
 export function applyDynamicTypingToRow(
   row: Record<string, string>,
-  dynamicTyping: DynamicTypingConfig
+  dynamicTyping: DynamicTypingConfig,
+  castDate?: CastDateConfig
 ): Record<string, unknown> {
-  if (dynamicTyping === false) {
+  if (dynamicTyping === false && !castDate) {
     // No conversion - return as-is (fast path)
     return row;
   }
@@ -188,14 +252,46 @@ export function applyDynamicTypingToRow(
     // Convert all columns - use for...in for better performance
     for (const key in row) {
       if (Object.hasOwn(row, key)) {
+        // Try date parsing first if castDate is enabled for this column
+        if (shouldCastDate(castDate, key)) {
+          const dateValue = tryParseDate(row[key]);
+          if (dateValue !== null) {
+            result[key] = dateValue;
+            continue;
+          }
+        }
         result[key] = convertValue(row[key]);
+      }
+    }
+  } else if (dynamicTyping === false && castDate) {
+    // Only date conversion, no other dynamic typing
+    for (const key in row) {
+      if (Object.hasOwn(row, key)) {
+        if (shouldCastDate(castDate, key)) {
+          const dateValue = tryParseDate(row[key]);
+          if (dateValue !== null) {
+            result[key] = dateValue;
+            continue;
+          }
+        }
+        result[key] = row[key];
       }
     }
   } else {
     // Per-column configuration - use for...in for better performance
     for (const key in row) {
       if (Object.hasOwn(row, key)) {
-        const config = dynamicTyping[key];
+        // Try date parsing first if castDate is enabled for this column
+        if (shouldCastDate(castDate, key)) {
+          const dateValue = tryParseDate(row[key]);
+          if (dateValue !== null) {
+            result[key] = dateValue;
+            continue;
+          }
+        }
+        const config = (dynamicTyping as Record<string, boolean | ((value: string) => unknown)>)[
+          key
+        ];
         if (config === undefined) {
           // Column not in config → keep as string
           result[key] = row[key];
@@ -215,20 +311,65 @@ export function applyDynamicTypingToRow(
  * @param row - Row array with string values
  * @param headers - Header names (for per-column config lookup)
  * @param dynamicTyping - DynamicTyping configuration
+ * @param castDate - CastDate configuration for date parsing
  * @returns New row array with converted values
  */
 export function applyDynamicTypingToArrayRow(
   row: string[],
   headers: string[] | null,
-  dynamicTyping: DynamicTypingConfig
+  dynamicTyping: DynamicTypingConfig,
+  castDate?: CastDateConfig
 ): unknown[] {
   if (dynamicTyping === true) {
     // Convert all columns
+    if (castDate === true) {
+      // Try date parsing for all columns first
+      return row.map(value => {
+        const dateValue = tryParseDate(value);
+        if (dateValue !== null) {
+          return dateValue;
+        }
+        return convertValue(value);
+      });
+    } else if (Array.isArray(castDate) && headers) {
+      // Try date parsing only for specified columns
+      return row.map((value, index) => {
+        const header = headers[index];
+        if (header && castDate.includes(header)) {
+          const dateValue = tryParseDate(value);
+          if (dateValue !== null) {
+            return dateValue;
+          }
+        }
+        return convertValue(value);
+      });
+    }
     return row.map(convertValue);
   }
 
   if (dynamicTyping === false) {
-    // No conversion
+    // Only date conversion if castDate is enabled
+    if (!castDate) {
+      return row;
+    }
+    if (castDate === true) {
+      return row.map(value => {
+        const dateValue = tryParseDate(value);
+        return dateValue !== null ? dateValue : value;
+      });
+    }
+    if (Array.isArray(castDate) && headers) {
+      return row.map((value, index) => {
+        const header = headers[index];
+        if (header && castDate.includes(header)) {
+          const dateValue = tryParseDate(value);
+          if (dateValue !== null) {
+            return dateValue;
+          }
+        }
+        return value;
+      });
+    }
     return row;
   }
 
@@ -240,6 +381,13 @@ export function applyDynamicTypingToArrayRow(
 
   return row.map((value, index) => {
     const header = headers[index];
+    // Try date parsing first if castDate is enabled for this column
+    if (shouldCastDate(castDate, header)) {
+      const dateValue = tryParseDate(value);
+      if (dateValue !== null) {
+        return dateValue;
+      }
+    }
     const config = header ? dynamicTyping[header] : undefined;
     if (config === undefined) {
       return value;
