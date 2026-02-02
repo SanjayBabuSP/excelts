@@ -104,8 +104,6 @@ export interface ParseConfig {
   rawOption: boolean;
   dynamicTyping: CsvParseOptions["dynamicTyping"];
   castDate: CsvParseOptions["castDate"];
-  transform?: CsvParseOptions["transform"];
-  validate?: CsvParseOptions["validate"];
   invokeOnSkip: ReturnType<typeof createOnSkipHandler>;
   headers: CsvParseOptions["headers"];
   renameHeaders: boolean;
@@ -238,8 +236,6 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     relaxColumnCountMore = false,
     groupColumnsByName = false,
     fastMode = false,
-    transform,
-    validate,
     dynamicTyping,
     castDate,
     beforeFirstChunk,
@@ -335,8 +331,6 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     rawOption,
     dynamicTyping,
     castDate,
-    transform,
-    validate,
     invokeOnSkip: createOnSkipHandlerImpl(onSkip),
     headers,
     renameHeaders
@@ -524,7 +518,41 @@ export function resetInfoState(
 }
 
 /**
- * Check if row bytes exceed limit
+ * Get UTF-8 byte length of a single character.
+ * Optimized: ASCII chars (code < 128) are always 1 byte.
+ */
+export function charByteLength(char: string): number {
+  const code = char.charCodeAt(0);
+  if (code < 128) {
+    return 1; // ASCII: 1 byte
+  }
+  // Non-ASCII: use TextEncoder for accurate count
+  return sharedTextEncoder.encode(char).length;
+}
+
+/**
+ * Add bytes to row counter and check limit.
+ * Uses real UTF-8 byte count for accuracy.
+ */
+export function addRowBytes(
+  state: ParseState,
+  text: string,
+  maxRowBytes: number | undefined
+): void {
+  if (maxRowBytes === undefined) {
+    return; // No limit, skip tracking entirely
+  }
+  // Calculate real byte length
+  const byteLen = text.length === 1 ? charByteLength(text) : sharedTextEncoder.encode(text).length;
+  state.currentRowBytes += byteLen;
+  if (state.currentRowBytes > maxRowBytes) {
+    throw new Error(`Row exceeds the maximum size of ${maxRowBytes} bytes`);
+  }
+}
+
+/**
+ * Check if row bytes exceed limit (legacy function for backward compatibility)
+ * @deprecated Use addRowBytes instead for accurate byte counting
  */
 export function checkRowBytes(currentBytes: number, maxRowBytes: number | undefined): void {
   if (maxRowBytes !== undefined && currentBytes > maxRowBytes) {

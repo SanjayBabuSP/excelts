@@ -16,12 +16,8 @@ import {
 // Re-export row utilities for backward compatibility
 export { isEmptyRow, isCommentRow, hasAllEmptyValues };
 
-// =============================================================================
-// Pre-compiled Constants
-// =============================================================================
-
-/** Pre-compiled regex for splitting lines (handles all line endings) */
-export const LINE_SPLIT_REGEX = /\r\n|\r|\n/;
+// Re-export linebreak regex from parse-core (single source of truth)
+export { DEFAULT_LINEBREAK_REGEX as LINE_SPLIT_REGEX } from "@csv/parse-core";
 
 // =============================================================================
 // Types

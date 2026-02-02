@@ -35,12 +35,14 @@ import {
 } from "@csv/format";
 import { extractRowValues, detectRowKeys, processColumns } from "@csv/utils/row";
 import { applyDynamicTypingToRow, applyDynamicTypingToArrayRow } from "@csv/utils/dynamic-typing";
-import { convertRowToObject, filterValidHeaders, LINE_SPLIT_REGEX } from "@csv/utils/parse";
+import { convertRowToObject, filterValidHeaders } from "@csv/utils/parse";
 
 // Import shared core functionality
 import {
   type ParseConfig,
   type ParseState,
+  DEFAULT_LINEBREAK_REGEX,
+  sharedTextEncoder,
   createParseConfig,
   createParseState,
   appendToField as appendToFieldCore,
@@ -112,6 +114,14 @@ export class CsvParserStream extends Transform {
     const { config } = createParseConfig({ options });
     this.parseConfig = config;
     this.parseState = createParseState(config);
+
+    // Apply transform/validate from options if provided
+    if (options.transform) {
+      this.transform(options.transform);
+    }
+    if (options.validate) {
+      this.validate(options.validate);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -563,10 +573,12 @@ export class CsvParserStream extends Transform {
       return;
     }
 
-    // Track row bytes for maxRowBytes limit
-    this.currentRowBytes += text.length;
-    if (this.maxRowBytes !== undefined && this.currentRowBytes > this.maxRowBytes) {
-      throw new Error(`Row exceeds the maximum size of ${this.maxRowBytes} bytes`);
+    // Track row bytes for maxRowBytes limit (use real UTF-8 byte count)
+    if (this.maxRowBytes !== undefined) {
+      this.currentRowBytes += sharedTextEncoder.encode(text).length;
+      if (this.currentRowBytes > this.maxRowBytes) {
+        throw new Error(`Row exceeds the maximum size of ${this.maxRowBytes} bytes`);
+      }
     }
 
     // Use shared core logic directly on parseState
@@ -804,7 +816,7 @@ export class CsvParserStream extends Transform {
     this.buffer = this.buffer.slice(lastNewlineIndex + 1);
 
     // Split by lines using pre-compiled regex for all line endings
-    const lines = completeData.split(LINE_SPLIT_REGEX);
+    const lines = completeData.split(DEFAULT_LINEBREAK_REGEX);
 
     let currentByteOffset = startByteOffset;
 

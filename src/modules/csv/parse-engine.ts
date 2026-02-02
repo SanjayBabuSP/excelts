@@ -18,7 +18,7 @@ import {
   appendToField,
   completeField,
   resetInfoState,
-  checkRowBytes,
+  addRowBytes,
   processCompletedRow,
   sharedTextEncoder
 } from "./parse-core";
@@ -142,12 +142,11 @@ export function* parseStandardMode(
 
       if (config.escape && char === config.escape && input[i + 1] === config.quote) {
         appendToField(state, config.quote);
-        state.currentRowBytes++;
+        addRowBytes(state, config.quote, config.maxRowBytes);
         if (config.rawOption) {
           state.currentRawRow += input[i + 1];
         }
         i += 2;
-        checkRowBytes(state.currentRowBytes, config.maxRowBytes);
       } else if (char === config.quote) {
         const nextChar = input[i + 1];
         if (
@@ -158,9 +157,8 @@ export function* parseStandardMode(
           nextChar !== "\r"
         ) {
           appendToField(state, char);
-          state.currentRowBytes++;
+          addRowBytes(state, char, config.maxRowBytes);
           i++;
-          checkRowBytes(state.currentRowBytes, config.maxRowBytes);
         } else {
           state.inQuotes = false;
           i++;
@@ -173,15 +171,13 @@ export function* parseStandardMode(
           i++;
         } else {
           appendToField(state, "\n");
-          state.currentRowBytes++;
+          addRowBytes(state, "\n", config.maxRowBytes);
           i++;
-          checkRowBytes(state.currentRowBytes, config.maxRowBytes);
         }
       } else {
         appendToField(state, char);
-        state.currentRowBytes++;
+        addRowBytes(state, char, config.maxRowBytes);
         i++;
-        checkRowBytes(state.currentRowBytes, config.maxRowBytes);
       }
     } else {
       if (config.rawOption && char !== "\n" && char !== "\r") {
@@ -196,14 +192,12 @@ export function* parseStandardMode(
         i++;
       } else if (config.quoteEnabled && char === config.quote && config.relaxQuotes) {
         appendToField(state, char);
-        state.currentRowBytes++;
+        addRowBytes(state, char, config.maxRowBytes);
         i++;
-        checkRowBytes(state.currentRowBytes, config.maxRowBytes);
       } else if (char === config.delimiter) {
         state.currentRow.push(completeField(state, config.trimField, config.infoOption));
-        state.currentRowBytes++;
+        addRowBytes(state, config.delimiter, config.maxRowBytes);
         i++;
-        checkRowBytes(state.currentRowBytes, config.maxRowBytes);
       } else if (char === "\n" || char === "\r") {
         if (char === "\r" && input[i + 1] === "\n") {
           i++;
@@ -292,9 +286,8 @@ export function* parseStandardMode(
         i++;
       } else {
         appendToField(state, char);
-        state.currentRowBytes++;
+        addRowBytes(state, char, config.maxRowBytes);
         i++;
-        checkRowBytes(state.currentRowBytes, config.maxRowBytes);
       }
     }
   }
