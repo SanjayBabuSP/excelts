@@ -47,50 +47,7 @@ class CSV extends CSVBrowser {
 }
 
 export { CSV };
-export type { CsvOptions, CsvInput } from "./csv.browser";
+export type { CsvOptions, CsvInput, DefaultValueMapperOptions } from "./csv.browser";
+
+// Re-export stream classes for convenience (used by tests and consumers)
 export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
-export { parseCsv } from "./parse";
-export {
-  parseCsvAsync,
-  parseCsvStream,
-  parseCsvWithProgress,
-  type StreamParseMeta
-} from "./parse-async";
-export { formatCsv } from "./format";
-export {
-  detectDelimiter,
-  detectLinebreak,
-  stripBom,
-  startsWithFormulaChar,
-  escapeRegex,
-  normalizeQuoteOption,
-  normalizeEscapeOption
-} from "./utils/detect";
-export {
-  deduplicateHeaders,
-  deduplicateHeadersWithRenames,
-  detectRowKeys,
-  extractRowValues,
-  isRowHashArray,
-  rowHashArrayGet,
-  rowHashArrayMapByHeaders,
-  rowHashArrayToHeaders,
-  rowHashArrayToMap,
-  rowHashArrayToValues,
-  processColumns
-} from "./utils/row";
-export { isFormattedValue, quoted, unquoted, type FormattedValue } from "./types";
-export type {
-  CsvParseOptions,
-  CsvFormatOptions,
-  CsvParseMeta,
-  CsvParseResult,
-  CsvParseError,
-  CsvParseErrorCode,
-  DynamicTypingConfig,
-  ChunkMeta,
-  TransformContext,
-  TypeTransformMap,
-  TransformResult,
-  ColumnConfig
-} from "./types";

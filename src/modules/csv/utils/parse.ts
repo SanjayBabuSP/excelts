@@ -5,7 +5,16 @@
  * and CsvParserStream (streaming) to avoid code duplication.
  */
 
-import { deduplicateHeadersWithRenames, type HeaderArray } from "@csv/utils/row";
+import {
+  deduplicateHeadersWithRenames,
+  isEmptyRow,
+  isCommentRow,
+  hasAllEmptyValues,
+  type HeaderArray
+} from "@csv/utils/row";
+
+// Re-export row utilities for backward compatibility
+export { isEmptyRow, isCommentRow, hasAllEmptyValues };
 
 // =============================================================================
 // Pre-compiled Constants
@@ -13,9 +22,6 @@ import { deduplicateHeadersWithRenames, type HeaderArray } from "@csv/utils/row"
 
 /** Pre-compiled regex for splitting lines (handles all line endings) */
 export const LINE_SPLIT_REGEX = /\r\n|\r|\n/;
-
-/** Pre-compiled regex for non-whitespace detection */
-export const NON_WHITESPACE_REGEX = /\S/;
 
 // =============================================================================
 // Types
@@ -228,45 +234,6 @@ export function isValidHeader(h: string | null | undefined): h is string {
  */
 export function filterValidHeaders(headers: HeaderArray): string[] {
   return headers.filter(isValidHeader);
-}
-
-/**
- * Check if a row should be skipped as empty (greedy: whitespace-only also counts as empty)
- */
-export function isEmptyRow(row: string[], shouldSkipEmpty: boolean | "greedy"): boolean {
-  if (!shouldSkipEmpty) {
-    return false;
-  }
-  for (const field of row) {
-    if (NON_WHITESPACE_REGEX.test(field)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Check if a row is a comment line
- */
-export function isCommentRow(row: string[], commentChar: string | undefined): boolean {
-  if (!commentChar) {
-    return false;
-  }
-  const firstField = row[0] ?? "";
-  return firstField.startsWith(commentChar);
-}
-
-/**
- * Check if all values in a row are empty strings.
- * Used by skipRecordsWithEmptyValues option.
- */
-export function hasAllEmptyValues(row: string[]): boolean {
-  for (const field of row) {
-    if (field !== "") {
-      return false;
-    }
-  }
-  return true;
 }
 
 // Re-export types from central types.ts to avoid duplication

@@ -43,7 +43,7 @@ import {
   normalizeQuoteOption,
   normalizeEscapeOption
 } from "./utils/detect";
-import { formatNumberForCsv, type DecimalSeparator } from "./csv-number";
+import { formatNumberForCsv, type DecimalSeparator } from "./utils/number";
 import { isFormattedValue } from "./utils/formatted-value";
 
 // =============================================================================
@@ -438,7 +438,7 @@ interface FormatConfig {
   shouldQuoteHeader: QuoteLookupFn;
 }
 
-function resolveConfig(options: CsvFormatOptions): FormatConfig {
+function createFormatConfig(options: CsvFormatOptions): FormatConfig {
   const {
     delimiter = ",",
     rowDelimiter = "\n",
@@ -694,7 +694,7 @@ export function formatCsv(
   data: Row[] | Record<string, unknown>[],
   options: CsvFormatOptions = {}
 ): string {
-  const cfg = resolveConfig(options);
+  const cfg = createFormatConfig(options);
   const { displayHeaders, rows } = normalizeInput(data, options, cfg);
 
   const lines: string[] = [];

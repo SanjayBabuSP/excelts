@@ -43,4 +43,4 @@ export {
 // Number Formatting
 // =============================================================================
 
-export { formatNumberForCsv, parseNumberFromCsv, type DecimalSeparator } from "./csv-number";
+export { formatNumberForCsv, parseNumberFromCsv, type DecimalSeparator } from "./utils/number";

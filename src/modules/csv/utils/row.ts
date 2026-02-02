@@ -219,3 +219,61 @@ export function processColumns(
   const headers = columns.map(c => (typeof c === "string" ? c : (c.header ?? c.key)));
   return { keys, headers };
 }
+
+// =============================================================================
+// Row Validation Utilities
+// =============================================================================
+
+/** Pre-compiled regex for non-whitespace detection */
+const NON_WHITESPACE_REGEX = /\S/;
+
+/**
+ * Check if a row should be skipped as empty.
+ * When `shouldSkipEmpty` is "greedy", whitespace-only rows also count as empty.
+ *
+ * @param row - The row to check
+ * @param shouldSkipEmpty - true, false, or "greedy"
+ * @returns true if the row should be skipped
+ */
+export function isEmptyRow(row: string[], shouldSkipEmpty: boolean | "greedy"): boolean {
+  if (!shouldSkipEmpty) {
+    return false;
+  }
+  for (const field of row) {
+    if (NON_WHITESPACE_REGEX.test(field)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Check if a row is a comment line (first field starts with comment character).
+ *
+ * @param row - The row to check
+ * @param commentChar - The comment character (e.g., "#")
+ * @returns true if the row is a comment
+ */
+export function isCommentRow(row: string[], commentChar: string | undefined): boolean {
+  if (!commentChar) {
+    return false;
+  }
+  const firstField = row[0] ?? "";
+  return firstField.startsWith(commentChar);
+}
+
+/**
+ * Check if all values in a row are empty strings.
+ * Used by skipRecordsWithEmptyValues option.
+ *
+ * @param row - The row to check
+ * @returns true if all fields are empty strings
+ */
+export function hasAllEmptyValues(row: string[]): boolean {
+  for (const field of row) {
+    if (field !== "") {
+      return false;
+    }
+  }
+  return true;
+}

@@ -14,7 +14,7 @@ import {
   type ParseState,
   type RowProcessResult,
   createParseConfig,
-  createParseState as createParseStateBase,
+  createParseState,
   appendToField,
   completeField,
   resetInfoState,
@@ -25,22 +25,13 @@ import {
 
 // Re-export types and functions for external use
 export type { ParseConfig, ParseState, RowProcessResult };
-
-// Re-export from parse-core for use by parse.ts
-export { rowToRecord } from "./parse-core";
-
-/**
- * Create initial parse state - wrapper for createParseStateBase with full config
- */
-export function createParseState(config: ParseConfig): ParseState {
-  return createParseStateBase(config);
-}
+export { createParseState, rowToRecord } from "./parse-core";
 
 /**
  * Resolve options into a normalized config object.
- * This is a convenience wrapper around createParseConfig for backward compatibility.
+ * Convenience wrapper around createParseConfig that ensures processedInput is non-null.
  */
-export function resolveConfig(
+export function resolveParseConfig(
   input: string,
   options: CsvParseOptions
 ): { config: ParseConfig; processedInput: string } {

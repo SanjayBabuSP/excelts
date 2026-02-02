@@ -72,16 +72,17 @@ export { WorkbookWriter, WorkbookReader, WorksheetWriter, WorksheetReader };
 // CSV support (using native RFC 4180 implementation)
 // =============================================================================
 export type { CsvOptions } from "@csv/csv.browser";
+export { CSV, createDefaultValueMapper, createDefaultWriteMapper } from "@csv/csv.browser";
 export {
   CsvParserStream,
   CsvFormatterStream,
-  // Core exports only
-  parseCsv,
-  parseCsvAsync,
-  parseCsvStream,
-  parseCsvWithProgress,
-  formatCsv
-} from "@csv/csv.browser";
+  createCsvReadableStream,
+  createCsvParserStream,
+  createCsvFormatterStream
+} from "@csv/csv-stream";
+export { parseCsv } from "@csv/parse";
+export { parseCsvAsync, parseCsvStream, parseCsvWithProgress } from "@csv/parse-async";
+export { formatCsv } from "@csv/format";
 
 // CSV Generator (extras)
 export {

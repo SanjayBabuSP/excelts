@@ -16,7 +16,7 @@ import type {
   RecordWithInfo
 } from "./types";
 import {
-  resolveConfig,
+  resolveParseConfig,
   createParseState,
   parseFastMode,
   parseStandardMode,
@@ -108,7 +108,7 @@ export function parseCsv(
   | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
   | CsvParseResult<RecordWithInfo<string[]>> {
   // Resolve config and preprocess input
-  const { config, processedInput } = resolveConfig(input, options);
+  const { config, processedInput } = resolveParseConfig(input, options);
 
   // Initialize state
   const state = createParseState(config);

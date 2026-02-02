@@ -10,7 +10,7 @@ import { parseCsv } from "@csv/parse";
 import { formatCsv } from "@csv/format";
 import type { CsvParseOptions, CsvFormatOptions } from "@csv/types";
 import { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
-import { parseNumberFromCsv, type DecimalSeparator } from "@csv/csv-number";
+import { parseNumberFromCsv, type DecimalSeparator } from "@csv/utils/number";
 import { CsvDownloadError, CsvNotSupportedError, CsvFileError } from "@csv/errors";
 import { pipeline } from "@stream";
 import type { IReadable, IWritable } from "@stream/types";
@@ -690,49 +690,6 @@ export function formatWorksheetToCsv(
 }
 
 export { CSV };
+
+// Re-export stream classes for convenience (used by tests and consumers)
 export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
-export { parseCsv } from "./parse";
-export {
-  parseCsvAsync,
-  parseCsvStream,
-  parseCsvWithProgress,
-  type StreamParseMeta
-} from "./parse-async";
-export { formatCsv } from "./format";
-export {
-  detectDelimiter,
-  detectLinebreak,
-  stripBom,
-  startsWithFormulaChar,
-  escapeRegex,
-  normalizeQuoteOption,
-  normalizeEscapeOption
-} from "./utils/detect";
-export {
-  deduplicateHeaders,
-  deduplicateHeadersWithRenames,
-  detectRowKeys,
-  extractRowValues,
-  isRowHashArray,
-  rowHashArrayGet,
-  rowHashArrayMapByHeaders,
-  rowHashArrayToHeaders,
-  rowHashArrayToMap,
-  rowHashArrayToValues,
-  processColumns
-} from "./utils/row";
-export { isFormattedValue, quoted, unquoted, type FormattedValue } from "./types";
-export type {
-  CsvParseOptions,
-  CsvFormatOptions,
-  CsvParseMeta,
-  CsvParseResult,
-  CsvParseError,
-  CsvParseErrorCode,
-  DynamicTypingConfig,
-  ChunkMeta,
-  TransformContext,
-  TypeTransformMap,
-  TransformResult,
-  ColumnConfig
-} from "./types";

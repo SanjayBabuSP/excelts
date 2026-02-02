@@ -239,5 +239,6 @@ export interface QueryResult<T = Record<string, any>> extends BaseResult {
   aggregates?: Record<string, any>;
 }
 
-// Re-export for convenience
+// Re-export core CSV types for convenience - allows worker module consumers
+// to import all needed types from a single location
 export type { CsvParseOptions, CsvFormatOptions, CsvParseResult };
