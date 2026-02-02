@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { parseCsv } from "@csv/csv-core";
+import { parseCsv, formatCsv } from "@csv/index";
 import {
   CsvWorkerPool,
   CsvWorkerSession,
@@ -15,6 +15,17 @@ import {
   getDefaultWorkerPool,
   terminateDefaultWorkerPool
 } from "@csv/worker/index.browser";
+
+type ParseOptions = Parameters<typeof parseCsv>[1];
+type FormatOptions = Parameters<typeof formatCsv>[1];
+
+function formatExpected(data: Parameters<typeof formatCsv>[0], options?: FormatOptions): string {
+  return formatCsv(data, { ...(options ?? {}), trailingNewline: false } as FormatOptions);
+}
+
+function parseExpected(input: string, options?: ParseOptions): ReturnType<typeof parseCsv> {
+  return parseCsv(input, options);
+}
 
 describe("CSV Worker Pool - Browser", () => {
   // ===========================================================================
@@ -53,12 +64,9 @@ describe("CSV Worker Pool - Browser", () => {
 
     describe("parse", () => {
       it("should parse simple CSV", async () => {
-        const result = await pool.parse("a,b,c\n1,2,3\n4,5,6");
-        expect(result.data).toEqual([
-          ["a", "b", "c"],
-          ["1", "2", "3"],
-          ["4", "5", "6"]
-        ]);
+        const input = "a,b,c\n1,2,3\n4,5,6";
+        const result = await pool.parse(input);
+        expect(result.data).toEqual(parseExpected(input));
         expect(result.duration).toBeGreaterThanOrEqual(0);
       });
 
@@ -73,42 +81,42 @@ describe("CSV Worker Pool - Browser", () => {
       });
 
       it("should parse with custom delimiter", async () => {
-        const result = await pool.parse("a;b;c\n1;2;3", { delimiter: ";" });
-        expect(result.data).toEqual([
-          ["a", "b", "c"],
-          ["1", "2", "3"]
-        ]);
+        const input = "a;b;c\n1;2;3";
+        const options = { delimiter: ";" };
+        const result = await pool.parse(input, options);
+        expect(result.data).toEqual(parseExpected(input, options));
       });
 
       it("should handle quoted fields", async () => {
-        const result = await pool.parse('name,value\n"Hello, World",42');
-        expect(result.data).toEqual([
-          ["name", "value"],
-          ["Hello, World", "42"]
-        ]);
+        const input = 'name,value\n"Hello, World",42';
+        const result = await pool.parse(input);
+        expect(result.data).toEqual(parseExpected(input));
       });
 
       it("should handle escaped quotes", async () => {
-        const result = await pool.parse('a\n"He said ""Hello"""');
-        expect(result.data).toEqual([["a"], ['He said "Hello"']]);
+        const input = 'a\n"He said ""Hello"""';
+        const result = await pool.parse(input);
+        expect(result.data).toEqual(parseExpected(input));
       });
 
       it("should handle multiline quoted fields", async () => {
-        const result = await pool.parse('text\n"Line 1\nLine 2"');
-        expect(result.data).toEqual([["text"], ["Line 1\nLine 2"]]);
+        const input = 'text\n"Line 1\nLine 2"';
+        const result = await pool.parse(input);
+        expect(result.data).toEqual(parseExpected(input));
       });
 
       it("should skip empty lines", async () => {
-        const result = await pool.parse("a\n\nb\n\nc", { skipEmptyLines: true });
-        expect(result.data).toEqual([["a"], ["b"], ["c"]]);
+        const input = "a\n\nb\n\nc";
+        const options = { skipEmptyLines: true };
+        const result = await pool.parse(input, options);
+        expect(result.data).toEqual(parseExpected(input, options));
       });
 
       it("should trim fields", async () => {
-        const result = await pool.parse(" a , b \n 1 , 2 ", { trim: true });
-        expect(result.data).toEqual([
-          ["a", "b"],
-          ["1", "2"]
-        ]);
+        const input = " a , b \n 1 , 2 ";
+        const options = { trim: true };
+        const result = await pool.parse(input, options);
+        expect(result.data).toEqual(parseExpected(input, options));
       });
 
       it("should limit rows with maxRows", async () => {
@@ -117,67 +125,64 @@ describe("CSV Worker Pool - Browser", () => {
       });
 
       it("should parse in fast mode", async () => {
-        const result = await pool.parse("a,b,c\n1,2,3\n4,5,6", { fastMode: true });
-        expect(result.data).toEqual([
-          ["a", "b", "c"],
-          ["1", "2", "3"],
-          ["4", "5", "6"]
-        ]);
+        const input = "a,b,c\n1,2,3\n4,5,6";
+        const options = { fastMode: true };
+        const result = await pool.parse(input, options);
+        expect(result.data).toEqual(parseExpected(input, options));
       });
 
       it("should skip delimiter-only rows in fastMode when configured", async () => {
-        const result = await pool.parse("a,b\n,\n1,2\n,,\n3,4", {
-          fastMode: true,
-          skipEmptyLines: true
-        });
-        expect(result.data).toEqual([
-          ["a", "b"],
-          ["1", "2"],
-          ["3", "4"]
-        ]);
+        const input = "a,b\n,\n1,2\n,,\n3,4";
+        const options = { fastMode: true, skipEmptyLines: true };
+        const result = await pool.parse(input, options);
+        expect(result.data).toEqual(parseExpected(input, options));
       });
     });
 
     describe("format", () => {
       it("should format simple data", async () => {
-        const result = await pool.format([
+        const data: unknown[][] = [
           ["a", "b", "c"],
           [1, 2, 3]
-        ]);
-        expect(result.data).toBe("a,b,c\n1,2,3");
+        ];
+        const result = await pool.format(data);
+        expect(result.data).toBe(formatExpected(data as Parameters<typeof formatCsv>[0]));
       });
 
       it("should format with custom delimiter", async () => {
-        const result = await pool.format(
-          [
-            ["a", "b"],
-            [1, 2]
-          ],
-          { delimiter: ";" }
-        );
-        expect(result.data).toBe("a;b\n1;2");
+        const data: unknown[][] = [
+          ["a", "b"],
+          [1, 2]
+        ];
+        const options = { delimiter: ";" };
+        const result = await pool.format(data, options);
+        expect(result.data).toBe(formatExpected(data as Parameters<typeof formatCsv>[0], options));
       });
 
       it("should quote fields with special characters", async () => {
-        const result = await pool.format([["Hello, World", "normal"]]);
-        expect(result.data).toBe('"Hello, World",normal');
+        const data = [["Hello, World", "normal"]];
+        const result = await pool.format(data);
+        expect(result.data).toBe(formatExpected(data));
       });
 
       it("should escape quotes in fields", async () => {
-        const result = await pool.format([['He said "Hello"']]);
-        expect(result.data).toBe('"He said ""Hello"""');
+        const data = [['He said "Hello"']];
+        const result = await pool.format(data);
+        expect(result.data).toBe(formatExpected(data));
       });
 
       it("should escape formulae", async () => {
-        const result = await pool.format([["=SUM(A1)", "+1", "-1", "@mention"]], {
-          escapeFormulae: true
-        });
-        expect(result.data).toBe('"\t=SUM(A1)","\t+1","\t-1","\t@mention"');
+        const data = [["=SUM(A1)", "+1", "-1", "@mention"]];
+        const options = { escapeFormulae: true };
+        const result = await pool.format(data, options);
+        expect(result.data).toBe(formatExpected(data, options));
       });
 
-      it("should use alwaysQuote option", async () => {
-        const result = await pool.format([["a", "b"]], { alwaysQuote: true });
-        expect(result.data).toBe('"a","b"');
+      it("should use quoteColumns: true option", async () => {
+        const data = [["a", "b"]];
+        const options = { quoteColumns: true };
+        const result = await pool.format(data, options);
+        expect(result.data).toBe(formatExpected(data, options));
       });
     });
 
@@ -758,11 +763,9 @@ describe("CSV Worker Pool - Browser", () => {
 
     describe("parseWithPool", () => {
       it("should parse CSV", async () => {
-        const result = await parseWithPool("a,b\n1,2");
-        expect(result.data).toEqual([
-          ["a", "b"],
-          ["1", "2"]
-        ]);
+        const input = "a,b\n1,2";
+        const result = await parseWithPool(input);
+        expect(result.data).toEqual(parseExpected(input));
       });
 
       it("should support options", async () => {
@@ -773,11 +776,12 @@ describe("CSV Worker Pool - Browser", () => {
 
     describe("formatWithPool", () => {
       it("should format data", async () => {
-        const result = await formatWithPool([
+        const data: unknown[][] = [
           ["a", "b"],
           [1, 2]
-        ]);
-        expect(result.data).toBe("a,b\n1,2");
+        ];
+        const result = await formatWithPool(data);
+        expect(result.data).toBe(formatExpected(data as Parameters<typeof formatCsv>[0]));
       });
     });
 

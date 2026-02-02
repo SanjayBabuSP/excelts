@@ -7,11 +7,9 @@
  * - RowArray (string[])
  */
 
-// Types are duplicated here to avoid circular dependencies
-/** Header array type (can include undefined to skip columns) */
-export type HeaderArray = (string | undefined | null)[];
-/** Row as array of [header, value] tuples */
-export type RowHashArray<V = any> = [string, V][];
+// Re-export types from central types.ts to avoid duplication
+import type { ColumnConfig, HeaderArray, RowHashArray } from "@csv/types";
+export type { HeaderArray, RowHashArray } from "@csv/types";
 
 // =============================================================================
 // RowHashArray Utilities
@@ -189,4 +187,35 @@ export function deduplicateHeadersWithRenames(headers: HeaderArray): {
   }
 
   return { headers: result, renamedHeaders: hasRenames ? renamedHeaders : null };
+}
+
+// =============================================================================
+// Column Utilities
+// =============================================================================
+
+/**
+ * Process columns configuration to extract keys and headers.
+ * Returns null if columns is empty or undefined.
+ *
+ * This function is used by both formatCsv (batch) and CsvFormatterStream (streaming)
+ * to normalize column configuration into separate key/header arrays.
+ *
+ * @param columns - Column configuration array (string names or ColumnConfig objects)
+ * @returns Object with keys (data access) and headers (output names), or null if empty
+ *
+ * @example
+ * ```ts
+ * processColumns(['name', { key: 'age', header: 'Age (years)' }])
+ * // { keys: ['name', 'age'], headers: ['name', 'Age (years)'] }
+ * ```
+ */
+export function processColumns(
+  columns: (string | ColumnConfig)[] | undefined
+): { keys: string[]; headers: string[] } | null {
+  if (!columns || columns.length === 0) {
+    return null;
+  }
+  const keys = columns.map(c => (typeof c === "string" ? c : c.key));
+  const headers = columns.map(c => (typeof c === "string" ? c : (c.header ?? c.key)));
+  return { keys, headers };
 }

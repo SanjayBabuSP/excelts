@@ -34,11 +34,11 @@ class CSV extends CSVBrowser {
 
     // Append mode to existing file: write leading newline and skip headers
     if (isAppend) {
-      const rowDelimiter = options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter ?? "\n";
+      const rowDelimiter = options?.rowDelimiter ?? "\n";
       writeStream.write(rowDelimiter);
       return this.write(writeStream, {
         ...options,
-        formatterOptions: { ...options?.formatterOptions, writeHeaders: false }
+        writeHeaders: false
       });
     }
 
@@ -47,18 +47,42 @@ class CSV extends CSVBrowser {
 }
 
 export { CSV };
-export type { CsvOptions, CsvInput } from "@csv/csv.browser";
-export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
+export type { CsvOptions, CsvInput } from "./csv.browser";
+export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
+export { parseCsv } from "./parse";
+export {
+  parseCsvAsync,
+  parseCsvStream,
+  parseCsvWithProgress,
+  type StreamParseMeta
+} from "./parse-async";
+export { formatCsv } from "./format";
 export {
   detectDelimiter,
   detectLinebreak,
   stripBom,
+  startsWithFormulaChar,
+  escapeRegex,
+  normalizeQuoteOption,
+  normalizeEscapeOption
+} from "./utils/detect";
+export {
   deduplicateHeaders,
-  quoted,
-  unquoted
-} from "@csv/csv-core";
-export type { FormattedValue } from "@csv/csv-core";
+  deduplicateHeadersWithRenames,
+  detectRowKeys,
+  extractRowValues,
+  isRowHashArray,
+  rowHashArrayGet,
+  rowHashArrayMapByHeaders,
+  rowHashArrayToHeaders,
+  rowHashArrayToMap,
+  rowHashArrayToValues,
+  processColumns
+} from "./utils/row";
+export { isFormattedValue, quoted, unquoted, type FormattedValue } from "./types";
 export type {
+  CsvParseOptions,
+  CsvFormatOptions,
   CsvParseMeta,
   CsvParseResult,
   CsvParseError,
@@ -69,22 +93,4 @@ export type {
   TypeTransformMap,
   TransformResult,
   ColumnConfig
-} from "@csv/csv-core";
-
-// CSV Generator
-export {
-  csvGenerate,
-  csvGenerateRows,
-  csvGenerateAsync,
-  csvGenerateData,
-  createCsvGenerator,
-  type CsvGenerateOptions,
-  type CsvGenerateResult,
-  type ColumnDef,
-  type ColumnConfig as GenerateColumnConfig,
-  type BuiltinColumnType,
-  type GeneratorFn,
-  type GeneratorContext,
-  type StopCondition,
-  type StopContext
-} from "@csv/utils/generate";
+} from "./types";

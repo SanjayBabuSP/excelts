@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, parseCsvStream, type RecordWithInfo, type CsvParseResult } from "@csv/csv-core";
+import { parseCsv, parseCsvStream, type RecordWithInfo, type CsvParseResult } from "@csv/index";
 import { CsvParserStream } from "@csv/csv-stream";
 
 // ===========================================================================

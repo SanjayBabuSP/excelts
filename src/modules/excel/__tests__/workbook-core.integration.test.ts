@@ -926,18 +926,14 @@ describe("Workbook", () => {
         encoding: "utf-8",
         includeEmptyRows: false,
         sheetName: "sheet1",
-        formatterOptions: {
-          delimiter: "\t",
-          quote: false
-        }
+        delimiter: "\t",
+        quote: false
       };
       const readOptions: CsvOptions = {
         dateFormats: ["DD/MM/YYYY HH:mm:ss"],
         sheetName: "sheet1",
-        parserOptions: {
-          delimiter: "\t",
-          quote: null
-        }
+        delimiter: "\t",
+        quote: null
       };
       const wb = testUtils.createTestBook(new Workbook(), "csv", undefined);
 

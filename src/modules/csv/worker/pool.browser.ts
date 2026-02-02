@@ -57,7 +57,7 @@ import type {
   CsvFormatOptions,
   CsvParseResult
 } from "./types";
-import { getWorkerBlobUrl, releaseWorkerBlobUrl } from "./worker-script";
+import { getWorkerBlobUrl, releaseWorkerBlobUrl } from "./worker-script.bundle";
 
 // =============================================================================
 // Constants

@@ -100,11 +100,11 @@ export function runCsvWorksheetTests<TWorkbook extends WorkbookLike>(
       expect(worksheet.getCell("E1").value).toBe(1000000);
     });
 
-    it("should support comma decimalSeparator via valueMapperOptions", () => {
+    it("should support comma decimalSeparator", () => {
       const csv = "3,14;-0,5\n12,34;0";
       const worksheet = parseCsvToWorksheet(csv, workbook, {
-        parserOptions: { delimiter: ";" },
-        valueMapperOptions: { decimalSeparator: "," }
+        delimiter: ";",
+        decimalSeparator: ","
       });
 
       expect(worksheet.getCell("A1").value).toBe(3.14);
@@ -160,7 +160,7 @@ export function runCsvWorksheetTests<TWorkbook extends WorkbookLike>(
     it("should handle custom parser options", () => {
       const csv = "a;b;c\n1;2;3";
       const worksheet = parseCsvToWorksheet(csv, workbook, {
-        parserOptions: { delimiter: ";" }
+        delimiter: ";"
       });
 
       expect(worksheet.getCell("A1").value).toBe("a");
@@ -353,13 +353,13 @@ export function runCsvWorksheetTests<TWorkbook extends WorkbookLike>(
       expect(csv).toBe("row1\nrow3");
     });
 
-    it("should use custom formatter options", () => {
+    it("should use custom delimiter", () => {
       const worksheet = workbook.addWorksheet("Custom");
       worksheet.getCell("A1").value = "a";
       worksheet.getCell("B1").value = "b";
 
       const csv = formatWorksheetToCsv(worksheet, {
-        formatterOptions: { delimiter: "\t" }
+        delimiter: "\t"
       });
 
       expect(csv).toBe("a\tb");

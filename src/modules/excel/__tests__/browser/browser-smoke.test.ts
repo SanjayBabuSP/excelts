@@ -64,7 +64,7 @@ describe("ExcelTS Browser Tests", () => {
 
     // In browser, buffer is Uint8Array; use TextDecoder to convert to string
     const content = new TextDecoder().decode(buffer);
-    // Uses \n as row delimiter, includeEndRowDelimiter defaults to false
+    // Uses \n as row delimiter, trailingNewline defaults to false
     expect(content).toEqual('"Hello, World!",What time is it?\n7,12pm');
   });
 
@@ -204,10 +204,10 @@ describe("ExcelTS Browser Tests", () => {
       ws.getCell("A2").value = "A";
       ws.getCell("B2").value = "B";
 
-      // Write with tab delimiter - use formatterOptions
+      // Write with tab delimiter
       const output = wb.csv.stringify({
         sheetName: ws.name,
-        formatterOptions: { delimiter: "\t" }
+        delimiter: "\t"
       });
       expect(output).toBe("Col1\tCol2\nA\tB");
     });

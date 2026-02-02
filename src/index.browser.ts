@@ -75,6 +75,16 @@ export type { CsvOptions } from "@csv/csv.browser";
 export {
   CsvParserStream,
   CsvFormatterStream,
+  // Core exports only
+  parseCsv,
+  parseCsvAsync,
+  parseCsvStream,
+  parseCsvWithProgress,
+  formatCsv
+} from "@csv/csv.browser";
+
+// CSV Generator (extras)
+export {
   csvGenerate,
   csvGenerateRows,
   csvGenerateAsync,
@@ -83,13 +93,13 @@ export {
   type CsvGenerateOptions,
   type CsvGenerateResult,
   type ColumnDef,
-  type GenerateColumnConfig,
+  type ColumnConfig as GenerateColumnConfig,
   type BuiltinColumnType,
   type GeneratorFn,
   type GeneratorContext,
   type StopCondition,
   type StopContext
-} from "@csv/csv.browser";
+} from "@csv/utils/generate";
 
 // =============================================================================
 // Utilities

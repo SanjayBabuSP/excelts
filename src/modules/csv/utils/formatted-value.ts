@@ -38,7 +38,7 @@ export function isFormattedValue(value: unknown): value is FormattedValue {
  * Mark a value to be output with quotes.
  *
  * Use this in a transform function to force quoting for specific fields,
- * regardless of the global `alwaysQuote` or `quoteColumns` settings.
+ * regardless of the global `quoteColumns` setting.
  *
  * @param value - The string value to output
  * @returns A FormattedValue that will be quoted in the CSV output

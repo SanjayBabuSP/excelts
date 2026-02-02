@@ -39,4 +39,4 @@ export type {
   QueryResult
 } from "./types";
 
-export { getWorkerBlobUrl, releaseWorkerBlobUrl } from "./worker-script";
+export { getWorkerBlobUrl, releaseWorkerBlobUrl } from "./worker-script.bundle";

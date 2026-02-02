@@ -6,7 +6,7 @@
  * - skipRecordsWithEmptyValues: Skip records where all values are empty strings
  */
 import { describe, it, expect, vi } from "vitest";
-import { parseCsv, parseCsvStream, type CsvSkipError } from "@csv/csv-core";
+import { parseCsv, parseCsvStream, type CsvSkipError } from "@csv/index";
 import { CsvParserStream } from "@csv/csv-stream";
 
 // =============================================================================

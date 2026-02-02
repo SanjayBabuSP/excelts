@@ -640,8 +640,8 @@ describe("CSV Stream - CsvFormatterStream", () => {
       expect(chunks.join("")).toBe('"line1\nline2",test');
     });
 
-    it("should always quote when alwaysQuote is true", async () => {
-      const formatter = new CsvFormatterStream({ alwaysQuote: true });
+    it("should always quote when quoteColumns: true", async () => {
+      const formatter = new CsvFormatterStream({ quoteColumns: true });
       const chunks: string[] = [];
 
       formatter.on("data", chunk => {
@@ -710,8 +710,8 @@ describe("CSV Stream - CsvFormatterStream", () => {
       expect(chunks.join("")).toBe("a,b\n1,2");
     });
 
-    it("should add BOM when writeBOM is true", async () => {
-      const formatter = new CsvFormatterStream({ writeBOM: true });
+    it("should add BOM when bom is true", async () => {
+      const formatter = new CsvFormatterStream({ bom: true });
       const chunks: string[] = [];
 
       formatter.on("data", chunk => {
@@ -1253,7 +1253,7 @@ describe("CSV Stream - Backpressure", () => {
 // Additional Streaming Options Tests
 // =============================================================================
 
-import { parseCsvStream } from "@csv/csv-core";
+import { parseCsvStream } from "@csv/index";
 
 describe("CSV Stream - Parser Options", () => {
   it("should support ltrim in streaming", async () => {
@@ -1923,8 +1923,8 @@ describe("CSV Stream - Streaming Edge Cases", () => {
     expect(headers).toEqual(["newName", "newAge"]);
   });
 
-  it("should handle formatter with no rows written", async () => {
-    const formatter = new CsvFormatterStream({ headers: ["a", "b"] });
+  it("should handle formatter with no rows written and writeHeaders: false", async () => {
+    const formatter = new CsvFormatterStream({ headers: ["a", "b"], writeHeaders: false });
     const chunks: string[] = [];
 
     formatter.on("data", (chunk: any) => chunks.push(chunk.toString()));
@@ -1935,10 +1935,10 @@ describe("CSV Stream - Streaming Edge Cases", () => {
     expect(chunks.join("")).toBe("");
   });
 
-  it("should handle formatter with alwaysWriteHeaders and no rows", async () => {
+  it("should handle formatter with writeHeaders: true and no rows", async () => {
     const formatter = new CsvFormatterStream({
       headers: ["a", "b"],
-      alwaysWriteHeaders: true
+      writeHeaders: true
     });
     const chunks: string[] = [];
 
@@ -1950,9 +1950,9 @@ describe("CSV Stream - Streaming Edge Cases", () => {
     expect(chunks.join("")).toBe("a,b");
   });
 
-  it("should handle includeEndRowDelimiter with streaming", async () => {
+  it("should handle trailingNewline with streaming", async () => {
     const formatter = new CsvFormatterStream({
-      includeEndRowDelimiter: true
+      trailingNewline: true
     });
     const chunks: string[] = [];
 

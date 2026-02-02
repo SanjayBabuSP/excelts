@@ -6,7 +6,9 @@
  */
 
 import { DateParser, DateFormatter, type DateFormat } from "@utils/datetime";
-import { parseCsv, formatCsv, type CsvParseOptions, type CsvFormatOptions } from "@csv/csv-core";
+import { parseCsv } from "@csv/parse";
+import { formatCsv } from "@csv/format";
+import type { CsvParseOptions, CsvFormatOptions } from "@csv/types";
 import { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "@csv/csv-number";
 import { CsvDownloadError, CsvNotSupportedError, CsvFileError } from "@csv/errors";
@@ -50,32 +52,76 @@ export interface CsvOptions {
   sheetName?: string;
   sheetId?: number;
 
-  // === Parser options (flattened) ===
-  /** Field delimiter - empty string "" for auto-detection (default: auto-detect) */
+  // === Parse options (unified with CsvParseOptions) ===
+  /** Field delimiter (default: ","). Set to "" to auto-detect. */
   delimiter?: string;
-  /** Quote character (default: '"') */
+  /** Quote character (default: '"'), set to false/null to disable */
   quote?: string | false | null;
-  /** First row is header */
-  header?: boolean;
+  /** Escape character (default: same as quote), set to false/null to disable */
+  escape?: string | false | null;
+  /** Delimiters to try during auto-detection (when delimiter is "") */
+  delimitersToGuess?: string[];
+  /** Line terminator (default: auto-detect) */
+  newline?: string;
+  /** Header handling (first row headers, custom array, or transform function) */
+  headers?: CsvParseOptions["headers"];
+  /** Rename/discard first row and use provided headers */
+  renameHeaders?: boolean;
   /** Skip empty lines */
-  skipEmptyLines?: boolean;
-  /** Trim whitespace from fields */
+  skipEmptyLines?: CsvParseOptions["skipEmptyLines"];
+  /** Alias for skipEmptyLines */
+  ignoreEmpty?: boolean;
+  /** Trim whitespace from both sides */
   trim?: boolean;
+  /** Left trim only */
+  ltrim?: boolean;
+  /** Right trim only */
+  rtrim?: boolean;
   /** Comment character */
   comment?: string;
   /** Maximum rows to parse */
   maxRows?: number;
-  /**
-   * Fast parsing mode - skips quote detection for simple data.
-   * Provides 20-50% performance improvement for clean data without quoted fields.
-   * WARNING: Only use when data contains no quotes, delimiters, or newlines within fields.
-   * @default false
-   */
+  /** Stop parsing at this line number (1-based, inclusive) */
+  toLine?: number;
+  /** Number of lines to skip at the beginning */
+  skipLines?: number;
+  /** Number of data rows to skip (after header) */
+  skipRows?: number;
+  /** Strict column handling */
+  strictColumnHandling?: boolean;
+  /** Discard extra columns beyond header count */
+  discardUnmappedColumns?: boolean;
+  /** Tolerate rows with fewer fields than expected */
+  relaxColumnCountLess?: boolean;
+  /** Tolerate rows with more fields than expected */
+  relaxColumnCountMore?: boolean;
+  /** Group columns with same name into arrays */
+  groupColumnsByName?: boolean;
+  /** Allow unescaped quotes mid-field */
+  relaxQuotes?: boolean;
+  /** Fast parsing mode - skips quote detection for simple data */
   fastMode?: boolean;
+  /** Include record info */
+  info?: boolean;
+  /** Include raw string in info (requires info: true) */
+  raw?: boolean;
+  /** Skip malformed records instead of throwing */
+  skipRecordsWithError?: boolean;
+  /** Skip records where all values are empty */
+  skipRecordsWithEmptyValues?: boolean;
+  /** Callback when record is skipped due to error */
+  onSkip?: CsvParseOptions["onSkip"];
 
-  // === Formatter options ===
+  // === Format options (subset of CsvFormatOptions) ===
   rowDelimiter?: string;
-  alwaysQuote?: boolean;
+  /** Decimal separator for number formatting (default: ".") */
+  decimalSeparator?: DecimalSeparator;
+  /** Quote specific columns */
+  quoteColumns?: CsvFormatOptions["quoteColumns"];
+  /** Quote header fields */
+  quoteHeaders?: CsvFormatOptions["quoteHeaders"];
+  /** Whether to write a header row (used by append mode) */
+  writeHeaders?: boolean;
   /**
    * Escape formulae to prevent CSV injection attacks.
    * Fields starting with =, +, -, @, or tab are prefixed with a tab character.
@@ -96,7 +142,6 @@ export interface CsvOptions {
   dateFormats?: readonly DateFormat[];
   dateFormat?: string;
   dateUTC?: boolean;
-  decimalSeparator?: DecimalSeparator;
   map?(value: any, index: number): any;
   includeEmptyRows?: boolean;
 
@@ -113,11 +158,6 @@ export interface CsvOptions {
   // === Stream options ===
   stream?: boolean;
   highWaterMark?: number;
-
-  // === Legacy options (for backward compatibility) ===
-  parserOptions?: Partial<CsvParseOptions>;
-  formatterOptions?: Partial<CsvFormatOptions>;
-  valueMapperOptions?: DefaultValueMapperOptions;
 }
 
 export interface DefaultValueMapperOptions {
@@ -252,9 +292,11 @@ class CSV {
    *
    * @example
    * ```ts
-   * // String (auto-detects delimiter)
+   * // String (default delimiter is ",")
    * const ws = await workbook.csv.parse("a,b,c\n1,2,3");
-   * const ws = await workbook.csv.parse("a;b;c\n1;2;3"); // detects ';'
+   *
+   * // Opt-in delimiter auto-detect
+   * const ws2 = await workbook.csv.parse("a;b;c\n1;2;3", { delimiter: "" });
    *
    * // URL
    * const ws = await workbook.csv.parse("https://example.com/data.csv");
@@ -263,7 +305,7 @@ class CSV {
    * const ws = await workbook.csv.parse(fileInput.files[0]);
    *
    * // With options
-   * const ws = await workbook.csv.parse(input, { delimiter: ";", header: true });
+   * const ws = await workbook.csv.parse(input, { delimiter: ";", headers: true });
    * ```
    */
   async parse(input: CsvInput, options?: CsvOptions): Promise<Worksheet> {
@@ -315,11 +357,14 @@ class CSV {
     });
 
     return formatCsv(rows, {
-      delimiter: options?.delimiter ?? options?.formatterOptions?.delimiter ?? ",",
-      quote: options?.quote ?? options?.formatterOptions?.quote,
-      rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
-      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
-      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae
+      delimiter: options?.delimiter ?? ",",
+      quote: options?.quote,
+      escape: options?.escape,
+      rowDelimiter: options?.rowDelimiter,
+      quoteColumns: options?.quoteColumns,
+      quoteHeaders: options?.quoteHeaders,
+      decimalSeparator: options?.decimalSeparator ?? ".",
+      escapeFormulae: options?.escapeFormulae
     });
   }
 
@@ -335,17 +380,36 @@ class CSV {
   // ---------------------------------------------------------------------------
 
   _buildParserOptions(options?: CsvOptions): Partial<CsvParseOptions> {
-    // Support both new flattened options and legacy parserOptions
-    const legacy = options?.parserOptions;
     return {
-      delimiter: options?.delimiter ?? legacy?.delimiter ?? "",
-      quote: options?.quote ?? legacy?.quote,
-      headers: options?.header ?? legacy?.headers,
-      skipEmptyLines: options?.skipEmptyLines ?? legacy?.skipEmptyLines,
-      trim: options?.trim ?? legacy?.trim,
-      comment: options?.comment ?? legacy?.comment,
-      maxRows: options?.maxRows ?? legacy?.maxRows,
-      fastMode: options?.fastMode
+      delimiter: options?.delimiter ?? ",",
+      quote: options?.quote,
+      escape: options?.escape,
+      delimitersToGuess: options?.delimitersToGuess,
+      newline: options?.newline,
+      headers: options?.headers,
+      renameHeaders: options?.renameHeaders,
+      skipEmptyLines: options?.skipEmptyLines,
+      ignoreEmpty: options?.ignoreEmpty,
+      trim: options?.trim,
+      ltrim: options?.ltrim,
+      rtrim: options?.rtrim,
+      comment: options?.comment,
+      maxRows: options?.maxRows,
+      toLine: options?.toLine,
+      skipLines: options?.skipLines,
+      skipRows: options?.skipRows,
+      strictColumnHandling: options?.strictColumnHandling,
+      discardUnmappedColumns: options?.discardUnmappedColumns,
+      relaxColumnCountLess: options?.relaxColumnCountLess,
+      relaxColumnCountMore: options?.relaxColumnCountMore,
+      groupColumnsByName: options?.groupColumnsByName,
+      relaxQuotes: options?.relaxQuotes,
+      fastMode: options?.fastMode,
+      info: options?.info,
+      raw: options?.raw,
+      skipRecordsWithError: options?.skipRecordsWithError,
+      skipRecordsWithEmptyValues: options?.skipRecordsWithEmptyValues,
+      onSkip: options?.onSkip
     };
   }
 
@@ -361,9 +425,7 @@ class CSV {
 
     const worksheet = this.workbook.addWorksheet(options?.sheetName);
     const dateFormats = options?.dateFormats ?? DEFAULT_DATE_FORMATS;
-    // Support both new decimalSeparator and legacy valueMapperOptions
-    const decimalSeparator =
-      options?.decimalSeparator ?? options?.valueMapperOptions?.decimalSeparator;
+    const decimalSeparator = options?.decimalSeparator;
     const map = options?.map || createDefaultValueMapper(dateFormats, { decimalSeparator });
     const result = parseCsv(str, this._buildParserOptions(options));
 
@@ -387,8 +449,7 @@ class CSV {
   private async _parseStream(stream: IReadable<any>, options?: CsvOptions): Promise<Worksheet> {
     const worksheet = this.workbook.addWorksheet(options?.sheetName);
     const dateFormats = options?.dateFormats ?? DEFAULT_DATE_FORMATS;
-    const decimalSeparator =
-      options?.decimalSeparator ?? options?.valueMapperOptions?.decimalSeparator;
+    const decimalSeparator = options?.decimalSeparator;
     const map = options?.map || createDefaultValueMapper(dateFormats, { decimalSeparator });
     const parser = new CsvParserStream(this._buildParserOptions(options));
 
@@ -507,12 +568,15 @@ class CSV {
     const map = options?.map || createDefaultWriteMapper(options?.dateFormat, options?.dateUTC);
     const includeEmptyRows = options?.includeEmptyRows !== false;
     const formatter = new CsvFormatterStream({
-      delimiter: options?.delimiter ?? options?.formatterOptions?.delimiter ?? ",",
-      quote: options?.quote ?? options?.formatterOptions?.quote,
-      rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
-      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
-      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae,
-      writeHeaders: options?.formatterOptions?.writeHeaders
+      delimiter: options?.delimiter ?? ",",
+      quote: options?.quote,
+      escape: options?.escape,
+      rowDelimiter: options?.rowDelimiter,
+      quoteColumns: options?.quoteColumns,
+      quoteHeaders: options?.quoteHeaders,
+      decimalSeparator: options?.decimalSeparator ?? ".",
+      escapeFormulae: options?.escapeFormulae,
+      writeHeaders: options?.writeHeaders
     });
     const pipelinePromise = pipeline(formatter, stream);
 
@@ -538,11 +602,15 @@ class CSV {
     const map = options?.map || createDefaultWriteMapper(options?.dateFormat, options?.dateUTC);
     const includeEmptyRows = options?.includeEmptyRows !== false;
     const formatter = new CsvFormatterStream({
-      delimiter: options?.delimiter ?? options?.formatterOptions?.delimiter ?? ",",
-      quote: options?.quote ?? options?.formatterOptions?.quote,
-      rowDelimiter: options?.rowDelimiter ?? options?.formatterOptions?.rowDelimiter,
-      alwaysQuote: options?.alwaysQuote ?? options?.formatterOptions?.alwaysQuote,
-      escapeFormulae: options?.escapeFormulae ?? options?.formatterOptions?.escapeFormulae
+      delimiter: options?.delimiter ?? ",",
+      quote: options?.quote,
+      escape: options?.escape,
+      rowDelimiter: options?.rowDelimiter,
+      quoteColumns: options?.quoteColumns,
+      quoteHeaders: options?.quoteHeaders,
+      decimalSeparator: options?.decimalSeparator ?? ".",
+      escapeFormulae: options?.escapeFormulae,
+      writeHeaders: options?.writeHeaders
     });
 
     if (worksheet) {
@@ -571,8 +639,7 @@ class CSV {
   createWriteStream(options?: CsvOptions): IWritable<any> {
     const worksheet = this.workbook.addWorksheet(options?.sheetName);
     const dateFormats = options?.dateFormats ?? DEFAULT_DATE_FORMATS;
-    const decimalSeparator =
-      options?.decimalSeparator ?? options?.valueMapperOptions?.decimalSeparator;
+    const decimalSeparator = options?.decimalSeparator;
     const map = options?.map || createDefaultValueMapper(dateFormats, { decimalSeparator });
     const parser = new CsvParserStream(this._buildParserOptions(options));
     parser.on("data", (row: string[]) => worksheet.addRow(row.map(map)));
@@ -623,18 +690,38 @@ export function formatWorksheetToCsv(
 }
 
 export { CSV };
-export { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
+export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
+export { parseCsv } from "./parse";
 export {
-  parseCsv,
-  formatCsv,
+  parseCsvAsync,
+  parseCsvStream,
+  parseCsvWithProgress,
+  type StreamParseMeta
+} from "./parse-async";
+export { formatCsv } from "./format";
+export {
   detectDelimiter,
   detectLinebreak,
   stripBom,
+  startsWithFormulaChar,
+  escapeRegex,
+  normalizeQuoteOption,
+  normalizeEscapeOption
+} from "./utils/detect";
+export {
   deduplicateHeaders,
-  quoted,
-  unquoted
-} from "@csv/csv-core";
-export type { FormattedValue } from "@csv/csv-core";
+  deduplicateHeadersWithRenames,
+  detectRowKeys,
+  extractRowValues,
+  isRowHashArray,
+  rowHashArrayGet,
+  rowHashArrayMapByHeaders,
+  rowHashArrayToHeaders,
+  rowHashArrayToMap,
+  rowHashArrayToValues,
+  processColumns
+} from "./utils/row";
+export { isFormattedValue, quoted, unquoted, type FormattedValue } from "./types";
 export type {
   CsvParseOptions,
   CsvFormatOptions,
@@ -648,22 +735,4 @@ export type {
   TypeTransformMap,
   TransformResult,
   ColumnConfig
-} from "@csv/csv-core";
-
-// CSV Generator
-export {
-  csvGenerate,
-  csvGenerateRows,
-  csvGenerateAsync,
-  csvGenerateData,
-  createCsvGenerator,
-  type CsvGenerateOptions,
-  type CsvGenerateResult,
-  type ColumnDef,
-  type ColumnConfig as GenerateColumnConfig,
-  type BuiltinColumnType,
-  type GeneratorFn,
-  type GeneratorContext,
-  type StopCondition,
-  type StopContext
-} from "@csv/utils/generate";
+} from "./types";

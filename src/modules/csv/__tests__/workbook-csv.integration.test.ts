@@ -154,7 +154,7 @@ describe("Workbook", () => {
 
         it("should auto-detect semicolon delimiter", async () => {
           const wb = new Workbook();
-          const ws = await wb.csv.parse("a;b;c\n1;2;3");
+          const ws = await wb.csv.parse("a;b;c\n1;2;3", { delimiter: "" });
 
           expect(ws.getCell("A1").value).toBe("a");
           expect(ws.getCell("B1").value).toBe("b");
@@ -164,7 +164,7 @@ describe("Workbook", () => {
 
         it("should auto-detect tab delimiter", async () => {
           const wb = new Workbook();
-          const ws = await wb.csv.parse("a\tb\tc\n1\t2\t3");
+          const ws = await wb.csv.parse("a\tb\tc\n1\t2\t3", { delimiter: "" });
 
           expect(ws.getCell("A1").value).toBe("a");
           expect(ws.getCell("B1").value).toBe("b");
@@ -205,11 +205,11 @@ describe("Workbook", () => {
           expect(ws.name).toBe("MySheet");
         });
 
-        it("should support header option", async () => {
+        it("should support headers option", async () => {
           const wb = new Workbook();
-          const ws = await wb.csv.parse("name,age\nAlice,30\nBob,25", { header: true });
+          const ws = await wb.csv.parse("name,age\nAlice,30\nBob,25", { headers: true });
 
-          // When header: true, the first row becomes column headers but values are still parsed
+          // When headers: true, the first row becomes column headers but values are still parsed
           expect(ws.getCell("A1").value).toBe("name");
           expect(ws.getCell("B1").value).toBe("age");
         });

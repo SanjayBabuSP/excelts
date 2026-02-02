@@ -175,7 +175,7 @@ export function validateAndAdjustColumns(
       return {
         isValid: false,
         errorCode: "TooManyFields",
-        reason: `Column mismatch: expected ${expectedCols}, got ${actualCols}`,
+        reason: `column header mismatch expected: ${expectedCols} columns got: ${actualCols}`,
         modified: false
       };
     }
@@ -197,7 +197,7 @@ export function validateAndAdjustColumns(
     return {
       isValid: false,
       errorCode: "TooFewFields",
-      reason: `Column mismatch: expected ${expectedCols}, got ${actualCols}`,
+      reason: `column header mismatch expected: ${expectedCols} columns got: ${actualCols}`,
       modified: false
     };
   }
@@ -269,22 +269,9 @@ export function hasAllEmptyValues(row: string[]): boolean {
   return true;
 }
 
-/**
- * Error object passed to onSkip callback
- */
-export interface CsvSkipError {
-  /** Error code identifying the type of error */
-  code: "TooManyFields" | "TooFewFields" | "MissingQuotes" | "ParseError";
-  /** Human-readable error message */
-  message: string;
-  /** The raw text of the problematic record (if available) */
-  raw?: string;
-}
-
-/**
- * OnSkip callback type
- */
-export type OnSkipCallback = (error: CsvSkipError, record: string[] | null, line: number) => void;
+// Re-export types from central types.ts to avoid duplication
+import type { CsvSkipError, OnSkipCallback } from "@csv/types";
+export type { CsvSkipError, OnSkipCallback } from "@csv/types";
 
 /**
  * Creates a wrapped onSkip handler that safely invokes the callback,

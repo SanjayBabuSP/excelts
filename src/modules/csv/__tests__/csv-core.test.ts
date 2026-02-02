@@ -31,7 +31,7 @@ import {
   rowHashArrayGet,
   quoted,
   unquoted
-} from "@csv/csv-core";
+} from "@csv/index";
 import { isFormattedValue } from "@csv/utils/formatted-value";
 
 // ===========================================================================
@@ -1080,9 +1080,9 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       expect(result).toBe('""""');
     });
 
-    it("should handle alwaysQuote option", () => {
+    it("should handle quoteColumns: true option", () => {
       const data = [["a", "b", "c"]];
-      const result = formatCsv(data, { alwaysQuote: true });
+      const result = formatCsv(data, { quoteColumns: true });
       expect(result).toBe('"a","b","c"');
     });
 
@@ -1125,9 +1125,9 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       expect(result).toBe("a,b\n1,2");
     });
 
-    it("should add BOM when writeBOM is true", () => {
+    it("should add BOM when bom is true", () => {
       const data = [["a", "b"]];
-      const result = formatCsv(data, { writeBOM: true });
+      const result = formatCsv(data, { bom: true });
       expect(result.charCodeAt(0)).toBe(0xfeff);
       expect(result).toBe("\uFEFFa,b");
     });
@@ -1273,11 +1273,11 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       expect(result).toBe('"Hello, World","He said ""hi"""');
     });
 
-    it("should format empty RowHashArray with alwaysWriteHeaders", () => {
+    it("should format empty RowHashArray with writeHeaders: true", () => {
       const data: [string, any][][] = [];
       const result = formatCsv(data, {
         headers: ["name", "age"],
-        alwaysWriteHeaders: true
+        writeHeaders: true
       });
       expect(result).toBe("name,age");
     });
@@ -1527,6 +1527,59 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         ["a", "b"],
         ["c", "d"],
         ["e", "f"]
+      ]);
+    });
+
+    it("should handle standalone CR split across chunks", async () => {
+      // Test standalone \r (Mac OS 9 style) split across chunks
+      async function* chunks(): AsyncGenerator<string> {
+        yield "a,b\r";
+        yield "c,d\r";
+        yield "e,f";
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks())) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b"],
+        ["c", "d"],
+        ["e", "f"]
+      ]);
+    });
+
+    it("should handle multiple consecutive comment lines with auto-detect", async () => {
+      async function* chunks(): AsyncGenerator<string> {
+        yield "# comment 1\n";
+        yield "# comment 2\n";
+        yield "# comment 3\n";
+        yield "a;b;c\n";
+        yield "1;2;3";
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks(), { delimiter: "", comment: "#" })) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "b", "c"],
+        ["1", "2", "3"]
+      ]);
+    });
+
+    it("should handle CRLF inside quoted field split across chunks", async () => {
+      // Test CRLF inside quoted field where \r and \n are in different chunks
+      async function* chunks(): AsyncGenerator<string> {
+        yield 'a,"line1\r';
+        yield '\nline2",b\n';
+        yield "c,d,e";
+      }
+      const rows: string[][] = [];
+      for await (const row of parseCsvStream(chunks())) {
+        rows.push(row as string[]);
+      }
+      expect(rows).toEqual([
+        ["a", "line1\nline2", "b"],
+        ["c", "d", "e"]
       ]);
     });
 
@@ -1784,7 +1837,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("Rule 6: Quote character is double-quote", () => {
       // Default behavior should use double-quote
       const data = [["test"]];
-      const csv = formatCsv(data, { alwaysQuote: true });
+      const csv = formatCsv(data, { quoteColumns: true });
       expect(csv).toBe('"test"');
     });
 
@@ -2335,7 +2388,7 @@ describe("CSV Core - Formatter Options", () => {
           ["a", "b"],
           ["1", "2"]
         ],
-        { quoteColumns: true, includeEndRowDelimiter: false }
+        { quoteColumns: true, trailingNewline: false }
       );
       expect(result).toBe('"a","b"\n"1","2"');
     });
@@ -2346,7 +2399,7 @@ describe("CSV Core - Formatter Options", () => {
           ["a", "b", "c"],
           ["1", "2", "3"]
         ],
-        { quoteColumns: [true, false, true], includeEndRowDelimiter: false }
+        { quoteColumns: [true, false, true], trailingNewline: false }
       );
       expect(result).toBe('"a",b,"c"\n"1",2,"3"');
     });
@@ -2355,7 +2408,7 @@ describe("CSV Core - Formatter Options", () => {
       const result = formatCsv([{ name: "John", age: "30", city: "NYC" }], {
         headers: ["name", "age", "city"],
         quoteColumns: { name: true, city: true },
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('name,age,city\n"John",30,"NYC"');
     });
@@ -2364,7 +2417,7 @@ describe("CSV Core - Formatter Options", () => {
       const result = formatCsv([["1", "2"]], {
         headers: ["col1", "col2"],
         quoteHeaders: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('"col1","col2"\n1,2');
     });
@@ -2373,40 +2426,40 @@ describe("CSV Core - Formatter Options", () => {
       const result = formatCsv([["1", "2", "3"]], {
         headers: ["a", "b", "c"],
         quoteHeaders: [true, false, true],
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('"a",b,"c"\n1,2,3');
     });
   });
 
   // ===========================================================================
-  // includeEndRowDelimiter and alwaysWriteHeaders
+  // trailingNewline and writeHeaders
   // ===========================================================================
-  describe("includeEndRowDelimiter/alwaysWriteHeaders options", () => {
+  describe("trailingNewline/writeHeaders options", () => {
     it("should not include trailing newline by default", () => {
       const result = formatCsv([["a", "b"]]);
       expect(result.endsWith("\n")).toBe(false);
       expect(result).toBe("a,b");
     });
 
-    it("should include trailing newline when includeEndRowDelimiter is true", () => {
-      const result = formatCsv([["a", "b"]], { includeEndRowDelimiter: true });
+    it("should include trailing newline when trailingNewline is true", () => {
+      const result = formatCsv([["a", "b"]], { trailingNewline: true });
       expect(result.endsWith("\n")).toBe(true);
     });
 
-    it("should write headers with no data when alwaysWriteHeaders is true", () => {
+    it("should write headers with no data when writeHeaders is true", () => {
       const result = formatCsv([], {
         headers: ["name", "age"],
-        alwaysWriteHeaders: true,
-        includeEndRowDelimiter: false
+        writeHeaders: true,
+        trailingNewline: false
       });
       expect(result).toBe("name,age");
     });
 
-    it("should write empty string with no data when alwaysWriteHeaders is false", () => {
+    it("should write empty string with no data when writeHeaders is false", () => {
       const result = formatCsv([], {
         headers: ["name", "age"],
-        alwaysWriteHeaders: false
+        writeHeaders: false
       });
       expect(result).toBe("");
     });
@@ -2417,14 +2470,14 @@ describe("CSV Core - Formatter Options", () => {
   // ===========================================================================
   describe("escape option", () => {
     it("should use default escape (same as quote)", () => {
-      const result = formatCsv([['a"b']], { includeEndRowDelimiter: false });
+      const result = formatCsv([['a"b']], { trailingNewline: false });
       expect(result).toBe('"a""b"');
     });
 
     it("should use custom escape character", () => {
       const result = formatCsv([['a"b']], {
         escape: "\\",
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('"a\\"b"');
     });
@@ -2433,7 +2486,7 @@ describe("CSV Core - Formatter Options", () => {
       const result = formatCsv([["a,b"]], {
         escape: null,
         quote: null,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe("a,b");
     });
@@ -2443,7 +2496,7 @@ describe("CSV Core - Formatter Options", () => {
       // internal quotes to produce valid CSV (RFC 4180 standard: "" escapes ")
       const result = formatCsv([['say "hello"']], {
         escape: false,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       // Should properly escape the internal quotes as "" (not leave them unescaped)
       expect(result).toBe('"say ""hello"""');
@@ -2453,7 +2506,7 @@ describe("CSV Core - Formatter Options", () => {
       // Same behavior for escape: null
       const result = formatCsv([['value with "quotes" inside']], {
         escape: null,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('"value with ""quotes"" inside"');
     });
@@ -2463,7 +2516,7 @@ describe("CSV Core - Formatter Options", () => {
       const result = formatCsv([["it's a 'test'"]], {
         quote: "'",
         escape: false,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       // Internal single quotes should be escaped as ''
       expect(result).toBe("'it''s a ''test'''");
@@ -2474,7 +2527,7 @@ describe("CSV Core - Formatter Options", () => {
       const result = formatCsv([['say "hello"']], {
         quote: false,
         escape: false,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       // Output raw value without any escaping (may produce invalid CSV, but user explicitly disabled)
       expect(result).toBe('say "hello"');
@@ -2486,14 +2539,14 @@ describe("CSV Core - Formatter Options", () => {
   // ===========================================================================
   describe("escapeFormulae option", () => {
     it("should not escape by default", () => {
-      const result = formatCsv([["=SUM(A1:A10)"]], { includeEndRowDelimiter: false });
+      const result = formatCsv([["=SUM(A1:A10)"]], { trailingNewline: false });
       expect(result).toBe("=SUM(A1:A10)");
     });
 
     it("should escape fields starting with =", () => {
       const result = formatCsv([["=SUM(A1:A10)"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       // Tab prefix is added to prevent formula execution
       expect(result).toBe("\t=SUM(A1:A10)");
@@ -2502,7 +2555,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should escape fields starting with +", () => {
       const result = formatCsv([["+1234567890"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe("\t+1234567890");
     });
@@ -2510,7 +2563,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should escape fields starting with -", () => {
       const result = formatCsv([["-100"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe("\t-100");
     });
@@ -2518,7 +2571,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should escape fields starting with @", () => {
       const result = formatCsv([["@username"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe("\t@username");
     });
@@ -2526,7 +2579,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should escape fields starting with tab", () => {
       const result = formatCsv([["\tindented"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       // Tab is added as prefix to already-tab-prefixed field
       expect(result).toBe("\t\tindented");
@@ -2535,7 +2588,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should escape fields starting with carriage return", () => {
       const result = formatCsv([["\rdata"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('"\t\rdata"');
     });
@@ -2543,7 +2596,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should escape fields starting with line feed", () => {
       const result = formatCsv([["\ndata"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe('"\t\ndata"');
     });
@@ -2559,7 +2612,7 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           escapeFormulae: true,
-          includeEndRowDelimiter: false
+          trailingNewline: false
         }
       );
       expect(result).toBe("\t\uFF1D1+1\n\t\uFF0B100\n\t\uFF0D50\n\t\uFF20user");
@@ -2568,7 +2621,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should not escape normal values", () => {
       const result = formatCsv([["hello", "world", "123"]], {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
       expect(result).toBe("hello,world,123");
     });
@@ -2582,7 +2635,7 @@ describe("CSV Core - Formatter Options", () => {
       ];
       const result = formatCsv(maliciousData, {
         escapeFormulae: true,
-        includeEndRowDelimiter: false
+        trailingNewline: false
       });
 
       // Normal values should not be escaped
@@ -2851,14 +2904,14 @@ describe("CSV Core - Formatter Options", () => {
   // BOM handling
   // ===========================================================================
   describe("BOM handling", () => {
-    it("should write BOM when writeBOM is true", () => {
-      const result = formatCsv([["a", "b"]], { writeBOM: true, includeEndRowDelimiter: false });
+    it("should write BOM when bom is true", () => {
+      const result = formatCsv([["a", "b"]], { bom: true, trailingNewline: false });
       expect(result.charCodeAt(0)).toBe(0xfeff);
       expect(result.slice(1)).toBe("a,b");
     });
 
     it("should not write BOM by default", () => {
-      const result = formatCsv([["a", "b"]], { includeEndRowDelimiter: false });
+      const result = formatCsv([["a", "b"]], { trailingNewline: false });
       expect(result.charCodeAt(0)).not.toBe(0xfeff);
     });
   });
@@ -3437,13 +3490,13 @@ describe("CSV Core - Formatter Options", () => {
       expect(result).toBe("Alice,Smith\nBob,Jones");
     });
 
-    it("should work with alwaysWriteHeaders for empty data", () => {
+    it("should work with writeHeaders for empty data", () => {
       const result = formatCsv([], {
         columns: [
           { key: "firstName", header: "First Name" },
           { key: "lastName", header: "Last Name" }
         ],
-        alwaysWriteHeaders: true
+        writeHeaders: true
       });
       expect(result).toBe("First Name,Last Name");
     });
@@ -3697,13 +3750,13 @@ describe("CSV Core - Formatter Options", () => {
           ],
           {
             headers: true,
-            alwaysQuote: true, // Would normally quote everything
+            quoteColumns: true, // Would normally quote everything
             transform: {
               string: (v, ctx) => (ctx.column === "formula" ? unquoted(v) : v)
             }
           }
         );
-        // formula column should NOT be quoted despite alwaysQuote
+        // formula column should NOT be quoted despite quoteColumns
         expect(result).toBe('"name","formula"\n"Alice",=A1+B1\n"Bob",=C2*D2');
       });
 
@@ -3848,8 +3901,8 @@ describe("CSV Core - Formatter Options", () => {
         rowDelimiter: "\r\n",
         quoteColumns: true,
         quoteHeaders: true,
-        includeEndRowDelimiter: true,
-        writeBOM: false
+        trailingNewline: true,
+        bom: false
       });
       expect(result).toBe("'name';'age'\r\n'Alice';'30'\r\n");
     });
@@ -3934,7 +3987,7 @@ describe("CSV Core - Formatter Options", () => {
     it("should format empty array of objects", () => {
       const result = formatCsv([] as Record<string, any>[], {
         headers: ["a", "b"],
-        alwaysWriteHeaders: false
+        writeHeaders: false
       });
       expect(result).toBe("");
     });

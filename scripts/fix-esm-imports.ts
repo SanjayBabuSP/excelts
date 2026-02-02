@@ -53,8 +53,14 @@ function isRelativeSpecifier(specifier: string): boolean {
   return RELATIVE_PATH_RE.test(specifier);
 }
 
+// Known JS/TS extensions that indicate a complete specifier
+const JS_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx"]);
+
 function hasExtension(specifier: string): boolean {
-  return Boolean(path.posix.extname(specifier));
+  const ext = path.posix.extname(specifier);
+  // Only consider it "has extension" if it's a known JS extension
+  // This prevents ".browser" from being treated as a complete extension
+  return JS_EXTENSIONS.has(ext);
 }
 
 /**

@@ -5,7 +5,7 @@
  * Uses generics and base types to reduce repetition.
  */
 
-import type { CsvParseOptions, CsvFormatOptions, CsvParseResult } from "@csv/csv-core";
+import type { CsvParseOptions, CsvFormatOptions, CsvParseResult } from "@csv/types";
 
 // =============================================================================
 // Base Result Type (for reuse)
