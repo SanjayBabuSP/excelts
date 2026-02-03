@@ -140,6 +140,45 @@ export interface ColumnConfig {
 }
 
 // =============================================================================
+// Column Mismatch Handling
+// =============================================================================
+
+/**
+ * Strategy for handling rows with fewer columns than expected.
+ * - 'error': Treat as invalid (emit error, skip if skipRecordsWithError)
+ * - 'pad': Pad with empty strings to match expected column count
+ */
+export type ColumnMismatchLess = "error" | "pad";
+
+/**
+ * Strategy for handling rows with more columns than expected.
+ * - 'error': Treat as invalid (emit error, skip if skipRecordsWithError)
+ * - 'truncate': Discard extra columns silently
+ * - 'keep': Keep extra columns (appended as _extra array in record)
+ */
+export type ColumnMismatchMore = "error" | "truncate" | "keep";
+
+/**
+ * Configuration for handling column count mismatches.
+ *
+ * @example
+ * // Strict: error on any mismatch (default)
+ * columnMismatch: { less: 'error', more: 'error' }
+ *
+ * // Lenient: pad missing, truncate extra
+ * columnMismatch: { less: 'pad', more: 'truncate' }
+ *
+ * // Keep extra columns for debugging
+ * columnMismatch: { less: 'pad', more: 'keep' }
+ */
+export interface ColumnMismatchConfig {
+  /** How to handle rows with fewer columns than expected */
+  less: ColumnMismatchLess;
+  /** How to handle rows with more columns than expected */
+  more: ColumnMismatchMore;
+}
+
+// =============================================================================
 // Skip Error Types
 // =============================================================================
 
@@ -194,8 +233,6 @@ export interface CsvParseOptions extends CsvBaseOptions {
   rtrim?: boolean;
   /** Header handling: true, array, or transform function */
   headers?: boolean | HeaderArray | HeaderTransformFunction;
-  /** Discard first row and use provided headers */
-  renameHeaders?: boolean;
   /** Comment character - lines starting with this are ignored */
   comment?: string;
   /**
@@ -217,14 +254,15 @@ export interface CsvParseOptions extends CsvBaseOptions {
   skipRows?: number;
   /** Maximum bytes per row (safety limit) */
   maxRowBytes?: number;
-  /** Strict column handling - emit invalid rows instead of error */
-  strictColumnHandling?: boolean;
-  /** Discard extra columns beyond header count */
-  discardUnmappedColumns?: boolean;
-  /** Tolerate rows with fewer fields than expected */
-  relaxColumnCountLess?: boolean;
-  /** Tolerate rows with more fields than expected */
-  relaxColumnCountMore?: boolean;
+  /**
+   * How to handle column count mismatches.
+   * Default: { less: 'error', more: 'error' } (strict)
+   *
+   * @example
+   * // Lenient: pad missing columns, truncate extra
+   * columnMismatch: { less: 'pad', more: 'truncate' }
+   */
+  columnMismatch?: ColumnMismatchConfig;
   /** Group columns with same name into arrays */
   groupColumnsByName?: boolean;
   /** Return records as object keyed by column value */

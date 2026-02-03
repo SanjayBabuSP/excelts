@@ -10,7 +10,6 @@ interface ParseEvent {
 
 // HAN CELL namespace prefix normalization
 // HAN CELL uses non-standard namespace prefixes (ep:, cp:, dc:, etc.)
-// See: https://github.com/exceljs/exceljs/issues/3014
 const HAN_CELL_PREFIXES = new Set(["ep", "cp", "dc", "dcterms", "dcmitype", "vt"]);
 const SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 

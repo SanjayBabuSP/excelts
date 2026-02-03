@@ -330,7 +330,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       parseCsv(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: (error, record, line) => {
           skippedRecords.push({ error, record, line });
@@ -350,7 +350,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       const result = parseCsv(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: (_error, _record, line) => {
           skippedLines.push(line);
@@ -372,7 +372,7 @@ describe("skipRecordsWithError + onSkip", () => {
       // This should not throw even though onSkip throws
       const result = parseCsv(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: () => {
           throw new Error("Callback error");
@@ -388,7 +388,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       const result = parseCsv(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: error => {
           errors.push(error.code);
@@ -406,7 +406,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       parseCsv(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: false, // Explicitly false
         onSkip: onSkipCalled
       });
@@ -424,7 +424,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       const parser = new CsvParserStream({
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: (error, _record, line) => {
           skippedRecords.push({ code: error.code, line });
@@ -451,7 +451,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       const parser = new CsvParserStream({
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: () => {} // Has onSkip
       });
@@ -477,7 +477,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       for await (const row of parseCsvRows(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: (error, _record, line) => {
           skippedRecords.push({ code: error.code, line });
@@ -499,7 +499,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       for await (const row of parseCsvRows(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true,
         onSkip: (error, _record, line) => {
           skippedRecords.push({ code: error.code, line });
@@ -519,7 +519,7 @@ describe("skipRecordsWithError + onSkip", () => {
 
       for await (const row of parseCsvRows(csv, {
         headers: true,
-        strictColumnHandling: true,
+        // columnMismatch defaults to { less: 'error', more: 'error' }
         skipRecordsWithError: true
         // No onSkip callback
       })) {
@@ -559,7 +559,7 @@ describe("Combined features", () => {
     const result = parseCsv(csv, {
       headers: true,
       toLine: 4,
-      strictColumnHandling: true,
+      // columnMismatch defaults to { less: 'error', more: 'error' }
       skipRecordsWithError: true,
       onSkip: (_error, _record, line) => {
         skippedLines.push(line);
@@ -581,7 +581,7 @@ describe("Combined features", () => {
       headers: true,
       castDate: ["date"],
       dynamicTyping: { count: true },
-      strictColumnHandling: true,
+      // columnMismatch defaults to { less: 'error', more: 'error' }
       skipRecordsWithError: true,
       onSkip: (_error, _record, line) => {
         skippedRecords.push(line);
@@ -742,17 +742,17 @@ describe("skipRecordsWithEmptyValues option", () => {
 });
 
 // =============================================================================
-// relaxColumnCountLess / relaxColumnCountMore Tests
+// columnMismatch option Tests
 // =============================================================================
 
-describe("relaxColumnCountLess / relaxColumnCountMore options", () => {
+describe("columnMismatch option", () => {
   describe("parseCsv", () => {
-    it("should tolerate rows with fewer columns when relaxColumnCountLess: true", () => {
+    it("should pad rows with fewer columns when less: 'pad'", () => {
       const csv = "name,age,city\nAlice,30\nBob,25,NYC";
       // Row 2 has fewer columns (2 instead of 3)
       const result = parseCsv(csv, {
         headers: true,
-        relaxColumnCountLess: true
+        columnMismatch: { less: "pad", more: "error" }
       }) as any;
 
       expect(result.rows).toEqual([
@@ -761,12 +761,12 @@ describe("relaxColumnCountLess / relaxColumnCountMore options", () => {
       ]);
     });
 
-    it("should tolerate rows with more columns when relaxColumnCountMore: true", () => {
+    it("should truncate rows with more columns when more: 'truncate'", () => {
       const csv = "name,age\nAlice,30,extra\nBob,25";
       // Row 2 has more columns (3 instead of 2)
       const result = parseCsv(csv, {
         headers: true,
-        relaxColumnCountMore: true
+        columnMismatch: { less: "error", more: "truncate" }
       }) as any;
 
       expect(result.rows).toEqual([
@@ -775,12 +775,11 @@ describe("relaxColumnCountLess / relaxColumnCountMore options", () => {
       ]);
     });
 
-    it("should tolerate both fewer and more columns when both options are true", () => {
+    it("should handle both fewer and more columns with lenient mode", () => {
       const csv = "name,age,city\nAlice,30\nBob,25,NYC,extra\nCharlie";
       const result = parseCsv(csv, {
         headers: true,
-        relaxColumnCountLess: true,
-        relaxColumnCountMore: true
+        columnMismatch: { less: "pad", more: "truncate" }
       }) as any;
 
       expect(result.rows).toEqual([
@@ -790,42 +789,24 @@ describe("relaxColumnCountLess / relaxColumnCountMore options", () => {
       ]);
     });
 
-    it("should override strictColumnHandling when relaxColumnCountLess: true", () => {
-      const csv = "name,age\nAlice\nBob,25";
-      // Even with strictColumnHandling, relaxColumnCountLess should allow fewer columns
+    it("should keep extra columns in _extra when more: 'keep'", () => {
+      const csv = "name,age\nAlice,30,extra1,extra2\nBob,25";
       const result = parseCsv(csv, {
         headers: true,
-        strictColumnHandling: true,
-        relaxColumnCountLess: true
+        columnMismatch: { less: "error", more: "keep" }
       }) as any;
 
       expect(result.rows).toEqual([
-        { name: "Alice", age: "" },
+        { name: "Alice", age: "30", _extra: ["extra1", "extra2"] },
         { name: "Bob", age: "25" }
       ]);
     });
 
-    it("should override strictColumnHandling when relaxColumnCountMore: true", () => {
-      const csv = "name,age\nAlice,30,extra\nBob,25";
-      // Even with strictColumnHandling, relaxColumnCountMore should allow more columns
-      const result = parseCsv(csv, {
-        headers: true,
-        strictColumnHandling: true,
-        relaxColumnCountMore: true
-      }) as any;
-
-      expect(result.rows).toEqual([
-        { name: "Alice", age: "30" },
-        { name: "Bob", age: "25" }
-      ]);
-    });
-
-    it("should still report errors even when relaxed", () => {
+    it("should still report errors even when lenient", () => {
       const csv = "name,age\nAlice\nBob,25,extra";
       const result = parseCsv(csv, {
         headers: true,
-        relaxColumnCountLess: true,
-        relaxColumnCountMore: true
+        columnMismatch: { less: "pad", more: "truncate" }
       }) as any;
 
       // Note: row index is 0-based (data rows, excluding header row)
@@ -837,11 +818,11 @@ describe("relaxColumnCountLess / relaxColumnCountMore options", () => {
   });
 
   describe("CsvParserStream", () => {
-    it("should tolerate fewer columns in streaming mode", async () => {
+    it("should pad fewer columns in streaming mode", async () => {
       const csv = "name,age\nAlice\nBob,25";
       const stream = new CsvParserStream({
         headers: true,
-        relaxColumnCountLess: true
+        columnMismatch: { less: "pad", more: "error" }
       });
 
       const rows: any[] = [];
@@ -859,11 +840,11 @@ describe("relaxColumnCountLess / relaxColumnCountMore options", () => {
       ]);
     });
 
-    it("should tolerate more columns in streaming mode", async () => {
+    it("should truncate more columns in streaming mode", async () => {
       const csv = "name,age\nAlice,30,extra\nBob,25";
       const stream = new CsvParserStream({
         headers: true,
-        relaxColumnCountMore: true
+        columnMismatch: { less: "error", more: "truncate" }
       });
 
       const rows: any[] = [];

@@ -118,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### ⚠ BREAKING CHANGES
 
 - The main package entrypoints no longer re-export the internal stream utility surface. If you were importing stream helpers from the root package, migrate to standard Web Streams (ReadableStream/WritableStream) or pin to an older version.
-- **exports:** Browser build no longer exports the exceljs-compatible stream.xlsx namespace. Use top-level WorkbookWriter/WorkbookReader/WorksheetWriter/WorksheetReader exports instead.
+- **exports:** Use top-level WorkbookWriter/WorkbookReader/WorksheetWriter/WorksheetReader exports instead.
 
 ### Features
 

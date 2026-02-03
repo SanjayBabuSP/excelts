@@ -45,6 +45,8 @@ export interface ColumnValidationResult {
   reason?: string;
   /** Whether the row was modified (padded or trimmed) */
   modified: boolean;
+  /** Extra columns when columnMismatch.more is 'keep' */
+  extras?: string[];
 }
 
 /**
@@ -53,8 +55,6 @@ export interface ColumnValidationResult {
 export interface HeaderProcessOptions {
   /** Headers configuration: true, array, or function */
   headers: boolean | string[] | ((row: string[]) => (string | null | undefined)[]);
-  /** Whether to rename headers from first data row */
-  renameHeaders: boolean;
   /** Whether to group columns by name (affects originalHeaders computation) */
   groupColumnsByName?: boolean;
 }
@@ -63,14 +63,10 @@ export interface HeaderProcessOptions {
  * Options for column validation
  */
 export interface ColumnValidationOptions {
-  /** Whether to strictly validate column counts */
-  strictColumnHandling: boolean;
-  /** Whether to discard unmapped (extra) columns instead of erroring */
-  discardUnmappedColumns: boolean;
-  /** If true, preserve rows with fewer columns than expected (pads with empty strings) */
-  relaxColumnCountLess?: boolean;
-  /** If true, preserve rows with more columns than expected (discards extra columns) */
-  relaxColumnCountMore?: boolean;
+  /** Strategy for rows with fewer columns than expected */
+  columnLess: "error" | "pad";
+  /** Strategy for rows with more columns than expected */
+  columnMore: "error" | "truncate" | "keep";
 }
 
 // =============================================================================
@@ -91,10 +87,10 @@ export function processHeaders(
   options: HeaderProcessOptions,
   existingHeaders: HeaderArray | null
 ): HeaderProcessResult | null {
-  const { headers, renameHeaders, groupColumnsByName = false } = options;
+  const { headers, groupColumnsByName = false } = options;
 
-  // If we already have headers from array config and not renaming, no processing needed
-  if (existingHeaders !== null && Array.isArray(headers) && !renameHeaders) {
+  // If we already have headers from array config, no processing needed
+  if (existingHeaders !== null && Array.isArray(headers)) {
     return null;
   }
 
@@ -106,10 +102,9 @@ export function processHeaders(
     rawHeaders = headers(row);
     skipCurrentRow = true;
   } else if (Array.isArray(headers)) {
-    // Array: use provided headers
+    // Array: use provided headers, don't skip current row (it's data)
     rawHeaders = headers;
-    // Skip current row only if renaming (first row is data to be renamed)
-    skipCurrentRow = renameHeaders;
+    skipCurrentRow = false;
   } else if (headers === true) {
     // true: use first row as headers, skip it
     rawHeaders = row;
@@ -149,61 +144,48 @@ export function validateAndAdjustColumns(
   expectedCols: number,
   options: ColumnValidationOptions
 ): ColumnValidationResult {
-  const {
-    strictColumnHandling,
-    discardUnmappedColumns,
-    relaxColumnCountLess,
-    relaxColumnCountMore
-  } = options;
+  const { columnLess, columnMore } = options;
   const actualCols = row.length;
 
   if (actualCols === expectedCols) {
     return { isValid: true, modified: false };
   }
 
+  // Too many columns
   if (actualCols > expectedCols) {
-    // Too many columns
-    // relaxColumnCountMore takes precedence over strictColumnHandling
-    if (relaxColumnCountMore || discardUnmappedColumns) {
-      // Trim extra columns silently
-      row.length = expectedCols;
-      return { isValid: true, errorCode: "TooManyFields", modified: true };
+    switch (columnMore) {
+      case "error":
+        return {
+          isValid: false,
+          errorCode: "TooManyFields",
+          reason: `expected ${expectedCols} columns, got ${actualCols}`,
+          modified: false
+        };
+      case "truncate":
+        row.length = expectedCols;
+        return { isValid: true, errorCode: "TooManyFields", modified: true };
+      case "keep": {
+        const extras = row.splice(expectedCols);
+        return { isValid: true, errorCode: "TooManyFields", modified: true, extras };
+      }
     }
-    if (strictColumnHandling) {
-      return {
-        isValid: false,
-        errorCode: "TooManyFields",
-        reason: `column header mismatch expected: ${expectedCols} columns got: ${actualCols}`,
-        modified: false
-      };
-    }
-    // Default: trim extra columns
-    row.length = expectedCols;
-    return { isValid: true, errorCode: "TooManyFields", modified: true };
   }
 
   // Too few columns
-  // relaxColumnCountLess takes precedence over strictColumnHandling
-  if (relaxColumnCountLess) {
-    // Pad with empty strings silently
-    while (row.length < expectedCols) {
-      row.push("");
-    }
-    return { isValid: true, errorCode: "TooFewFields", modified: true };
+  switch (columnLess) {
+    case "error":
+      return {
+        isValid: false,
+        errorCode: "TooFewFields",
+        reason: `expected ${expectedCols} columns, got ${actualCols}`,
+        modified: false
+      };
+    case "pad":
+      while (row.length < expectedCols) {
+        row.push("");
+      }
+      return { isValid: true, errorCode: "TooFewFields", modified: true };
   }
-  if (strictColumnHandling) {
-    return {
-      isValid: false,
-      errorCode: "TooFewFields",
-      reason: `column header mismatch expected: ${expectedCols} columns got: ${actualCols}`,
-      modified: false
-    };
-  }
-  // Default: pad with empty strings
-  while (row.length < expectedCols) {
-    row.push("");
-  }
-  return { isValid: true, errorCode: "TooFewFields", modified: true };
 }
 
 /**

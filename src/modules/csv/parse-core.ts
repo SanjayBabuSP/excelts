@@ -106,6 +106,7 @@ export function parseCharacter(
 
   if (state.inQuotes && config.quoteEnabled) {
     // Inside quoted field
+    // Note: Streaming uses char-by-char raw tracking; batch mode overrides with slice
     if (config.rawOption) {
       state.currentRawRow += char;
     }
@@ -175,6 +176,7 @@ export function parseCharacter(
   }
 
   // Outside quoted field
+  // Note: Streaming uses char-by-char raw tracking; batch mode overrides with slice
   if (config.rawOption && char !== "\n" && char !== "\r") {
     state.currentRawRow += char;
   }
@@ -263,10 +265,8 @@ export interface ParseConfig {
   comment?: string;
   fastMode: boolean;
   relaxQuotes: boolean;
-  strictColumnHandling: boolean;
-  discardUnmappedColumns: boolean;
-  relaxColumnCountLess: boolean;
-  relaxColumnCountMore: boolean;
+  columnLess: "error" | "pad";
+  columnMore: "error" | "truncate" | "keep";
   groupColumnsByName: boolean;
   skipRecordsWithError: boolean;
   skipRecordsWithEmptyValues: boolean;
@@ -276,7 +276,6 @@ export interface ParseConfig {
   castDate: CsvParseOptions["castDate"];
   invokeOnSkip: ReturnType<typeof createOnSkipHandler>;
   headers: CsvParseOptions["headers"];
-  renameHeaders: boolean;
 }
 
 /**
@@ -315,6 +314,8 @@ export interface ParseState {
   currentFieldQuoted: boolean;
   currentRowQuoted: boolean[];
   currentRawRow: string;
+  /** Character position where current raw row starts (for slice-based raw extraction) */
+  currentRawRowStart: number;
 }
 
 /**
@@ -333,6 +334,8 @@ export interface RowProcessResult {
   error?: CsvParseError;
   /** Reason for skipping/invalidating the row */
   reason?: string;
+  /** Extra columns when columnMismatch.more is 'keep' */
+  extras?: string[];
 }
 
 // =============================================================================
@@ -394,16 +397,12 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     ltrim = false,
     rtrim = false,
     headers = false,
-    renameHeaders = false,
     comment,
     maxRows,
     toLine,
     skipLines = 0,
     skipRows = 0,
-    strictColumnHandling = false,
-    discardUnmappedColumns = false,
-    relaxColumnCountLess = false,
-    relaxColumnCountMore = false,
+    columnMismatch,
     groupColumnsByName = false,
     fastMode = false,
     dynamicTyping,
@@ -417,6 +416,10 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     onSkip,
     maxRowBytes
   } = options;
+
+  // Column mismatch defaults to strict (error on any mismatch)
+  const columnLess = columnMismatch?.less ?? "error";
+  const columnMore = columnMismatch?.more ?? "error";
 
   // Process input if provided (batch mode)
   let processedInput: string | undefined;
@@ -490,10 +493,8 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     comment,
     fastMode,
     relaxQuotes,
-    strictColumnHandling,
-    discardUnmappedColumns,
-    relaxColumnCountLess,
-    relaxColumnCountMore,
+    columnLess,
+    columnMore,
     groupColumnsByName,
     skipRecordsWithError,
     skipRecordsWithEmptyValues,
@@ -502,8 +503,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     dynamicTyping,
     castDate,
     invokeOnSkip: createOnSkipHandlerImpl(onSkip),
-    headers,
-    renameHeaders
+    headers
   };
 
   return { config, processedInput };
@@ -537,10 +537,7 @@ function makeTrimField(trim: boolean, ltrim: boolean, rtrim: boolean): (s: strin
  * Create initial parse state with optional header configuration
  */
 export function createParseState(
-  config: Pick<
-    ParseConfig,
-    "headers" | "renameHeaders" | "groupColumnsByName" | "infoOption" | "rawOption"
-  >
+  config: Pick<ParseConfig, "headers" | "groupColumnsByName" | "infoOption" | "rawOption">
 ): ParseState {
   const state: ParseState = {
     currentRow: [],
@@ -563,24 +560,23 @@ export function createParseState(
     currentRowStartBytes: 0,
     currentFieldQuoted: false,
     currentRowQuoted: [],
-    currentRawRow: ""
+    currentRawRow: "",
+    currentRawRowStart: 0
   };
 
   // Determine header mode
-  const { headers, renameHeaders, groupColumnsByName } = config;
+  const { headers, groupColumnsByName } = config;
   if (headers === true) {
     state.useHeaders = true;
   } else if (Array.isArray(headers)) {
-    const result = processHeaders([], { headers, renameHeaders, groupColumnsByName }, null);
+    const result = processHeaders([], { headers, groupColumnsByName }, null);
     if (result) {
       state.headerRow = result.headers;
       state.originalHeaders = result.originalHeaders;
       state.renamedHeadersForMeta = result.renamedHeaders;
     }
     state.useHeaders = true;
-    if (!renameHeaders) {
-      state.headerRowProcessed = true;
-    }
+    state.headerRowProcessed = true;
   } else if (typeof headers === "function") {
     state.useHeaders = true;
   }
@@ -712,13 +708,12 @@ export function addRowBytes(
 function processHeaderRow(
   row: string[],
   state: ParseState,
-  config: Pick<ParseConfig, "headers" | "renameHeaders" | "groupColumnsByName">
+  config: Pick<ParseConfig, "headers" | "groupColumnsByName">
 ): boolean {
   const result = processHeaders(
     row,
     {
       headers: config.headers as boolean | string[] | ((h: string[]) => HeaderArray),
-      renameHeaders: config.renameHeaders,
       groupColumnsByName: config.groupColumnsByName
     },
     state.headerRow
@@ -743,18 +738,13 @@ function processHeaderRow(
 function validateRowColumns(
   row: string[],
   state: ParseState,
-  config: Pick<
-    ParseConfig,
-    | "strictColumnHandling"
-    | "discardUnmappedColumns"
-    | "relaxColumnCountLess"
-    | "relaxColumnCountMore"
-  >
+  config: Pick<ParseConfig, "columnLess" | "columnMore">
 ): {
   errorCode: "TooManyFields" | "TooFewFields";
   message: string;
   isValid: boolean;
   reason?: string;
+  extras?: string[];
 } | null {
   if (!state.headerRow || state.headerRow.length === 0) {
     return null;
@@ -768,10 +758,8 @@ function validateRowColumns(
   }
 
   const validation = validateAndAdjustColumns(row, expectedCols, {
-    strictColumnHandling: config.strictColumnHandling,
-    discardUnmappedColumns: config.discardUnmappedColumns,
-    relaxColumnCountLess: config.relaxColumnCountLess,
-    relaxColumnCountMore: config.relaxColumnCountMore
+    columnLess: config.columnLess,
+    columnMore: config.columnMore
   });
 
   if (validation.errorCode) {
@@ -782,7 +770,8 @@ function validateRowColumns(
           ? `Too many fields: expected ${expectedCols}, found ${actualCols}`
           : `Too few fields: expected ${expectedCols}, found ${actualCols}`,
       isValid: validation.isValid,
-      reason: validation.reason
+      reason: validation.reason,
+      extras: validation.extras
     };
   }
 
@@ -864,6 +853,8 @@ export function processCompletedRow(
 
   // Column validation
   const validationError = validateRowColumns(row, state, config);
+  let extras: string[] | undefined;
+
   if (validationError) {
     const errorObj: CsvParseError = {
       code: validationError.errorCode,
@@ -881,17 +872,18 @@ export function processCompletedRow(
         );
         return { stop: false, skipped: true };
       }
-      if (config.strictColumnHandling) {
-        // Include row and reason for invalidRows collection
-        return {
-          stop: false,
-          skipped: true,
-          row,
-          error: errorObj,
-          reason: validationError.reason || "Column mismatch"
-        };
-      }
+      // Column mismatch with error strategy - return as invalid
+      return {
+        stop: false,
+        skipped: true,
+        row,
+        error: errorObj,
+        reason: validationError.reason || "Column mismatch"
+      };
     }
+
+    // Valid but had extras (columnMore: 'keep')
+    extras = validationError.extras;
   }
 
   // Skip records with all empty values
@@ -913,7 +905,7 @@ export function processCompletedRow(
     info = buildRecordInfo(state, state.dataRowCount - 1, config.rawOption);
   }
 
-  return { stop: false, skipped: false, row, info };
+  return { stop: false, skipped: false, row, info, extras };
 }
 
 /**
@@ -1063,6 +1055,8 @@ export function* parseStandardMode(
 ): Generator<RowProcessResult, void, undefined> {
   const len = input.length;
   let i = 0;
+  // Track row start position for slice-based raw extraction (avoids O(n²) char concat)
+  let rowStartPos = 0;
 
   if (config.infoOption) {
     state.currentRowStartLine = 1;
@@ -1081,6 +1075,8 @@ export function* parseStandardMode(
     // Check for row completion
     if (parseResult.action === CharParseAction.RowComplete) {
       const nextByteOffset = i;
+      // Calculate raw row end position: i minus line ending chars (1 for LF, 2 for CRLF already consumed)
+      const rawEndPos = i - 1 - parseResult.consumed;
 
       if (config.toLine !== undefined && state.lineNumber > config.toLine) {
         state.truncated = true;
@@ -1097,6 +1093,7 @@ export function* parseStandardMode(
           state.lineNumber + 1,
           nextByteOffset
         );
+        rowStartPos = i;
         continue;
       }
 
@@ -1110,6 +1107,7 @@ export function* parseStandardMode(
           state.lineNumber + 1,
           nextByteOffset
         );
+        rowStartPos = i;
         continue;
       }
 
@@ -1127,7 +1125,13 @@ export function* parseStandardMode(
           state.lineNumber + 1,
           nextByteOffset
         );
+        rowStartPos = i;
         continue;
+      }
+
+      // Extract raw row using slice (O(1) vs O(n²) char concat)
+      if (config.rawOption) {
+        state.currentRawRow = input.slice(rowStartPos, rawEndPos);
       }
 
       const result = processCompletedRow(state.currentRow, state, config, errors, state.lineNumber);
@@ -1148,6 +1152,7 @@ export function* parseStandardMode(
         state.lineNumber + 1,
         nextByteOffset
       );
+      rowStartPos = i;
     }
   }
 
@@ -1194,6 +1199,11 @@ export function* parseStandardMode(
 
     if (config.comment && state.currentRow[0]?.startsWith(config.comment)) {
       return;
+    }
+
+    // Extract raw row for last line (no trailing newline)
+    if (config.rawOption) {
+      state.currentRawRow = input.slice(rowStartPos);
     }
 
     const result = processCompletedRow(state.currentRow, state, config, errors, state.lineNumber);

@@ -846,15 +846,21 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       ]);
     });
 
-    it("should handle missing fields in data rows", () => {
+    it("should handle missing fields in data rows with pad option", () => {
       const input = "a,b,c\n1,2";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "pad", more: "error" }
+      }) as any;
       expect(result.rows).toEqual([{ a: "1", b: "2", c: "" }]);
     });
 
-    it("should handle extra fields in data rows", () => {
+    it("should handle extra fields in data rows with truncate option", () => {
       const input = "a,b\n1,2,3";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "error", more: "truncate" }
+      }) as any;
       expect(result.rows).toEqual([{ a: "1", b: "2" }]);
     });
   });
@@ -2009,143 +2015,101 @@ describe("CSV Core - Parser Options", () => {
   });
 
   // ===========================================================================
-  // renameHeaders
+  // columnMismatch
   // ===========================================================================
-  describe("renameHeaders option", () => {
-    it("should rename headers from first row", () => {
-      const input = "h1,h2,h3\na,b,c";
-      const result = parseCsv(input, {
-        headers: ["first", "second", "third"],
-        renameHeaders: true
-      }) as any;
-      expect(result.headers).toEqual(["first", "second", "third"]);
-      expect(result.rows).toEqual([{ first: "a", second: "b", third: "c" }]);
+  describe("columnMismatch option", () => {
+    describe("default behavior (strict)", () => {
+      it("should mark rows with too few columns as invalid by default", () => {
+        const input = "a,b,c\n1,2\n3,4,5";
+        const result = parseCsv(input, {
+          headers: true
+        }) as any;
+
+        expect(result.invalidRows).toBeDefined();
+        expect(result.invalidRows).toHaveLength(1);
+        expect(result.rows).toHaveLength(1);
+        expect(result.rows[0]).toEqual({ a: "3", b: "4", c: "5" });
+      });
+
+      it("should mark rows with too many columns as invalid by default", () => {
+        const input = "a,b\n1,2,3\n4,5";
+        const result = parseCsv(input, {
+          headers: true
+        }) as any;
+
+        expect(result.invalidRows).toBeDefined();
+        expect(result.invalidRows).toHaveLength(1);
+        expect(result.rows).toHaveLength(1);
+      });
+
+      it("should include reason for invalid rows", () => {
+        const input = "a,b\n1\n2,3";
+        const result = parseCsv(input, {
+          headers: true
+        }) as any;
+
+        expect(result.invalidRows![0].reason).toContain("column");
+      });
+
+      it("should not affect rows with correct column count", () => {
+        const input = "a,b\n1,2\n3,4";
+        const result = parseCsv(input, {
+          headers: true
+        }) as any;
+
+        expect(result.invalidRows).toBeUndefined();
+        expect(result.rows).toHaveLength(2);
+      });
     });
 
-    it("should discard original header row", () => {
-      const input = "old1,old2\nvalue1,value2";
-      const result = parseCsv(input, {
-        headers: ["new1", "new2"],
-        renameHeaders: true
-      }) as any;
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toEqual({ new1: "value1", new2: "value2" });
+    describe("less: 'pad'", () => {
+      it("should pad missing columns with empty strings", () => {
+        const input = "a,b,c\n1,2";
+        const result = parseCsv(input, {
+          headers: true,
+          columnMismatch: { less: "pad", more: "error" }
+        }) as any;
+
+        expect(result.rows[0]).toEqual({ a: "1", b: "2", c: "" });
+      });
     });
 
-    it("should work without renameHeaders (use first row as data)", () => {
-      const input = "a,b\n1,2";
-      const result = parseCsv(input, {
-        headers: ["col1", "col2"],
-        renameHeaders: false
-      }) as any;
-      expect(result.rows).toEqual([
-        { col1: "a", col2: "b" },
-        { col1: "1", col2: "2" }
-      ]);
-    });
-  });
+    describe("more: 'truncate'", () => {
+      it("should discard extra columns", () => {
+        const input = "a,b\n1,2,extra,data";
+        const result = parseCsv(input, {
+          headers: true,
+          columnMismatch: { less: "error", more: "truncate" }
+        }) as any;
 
-  // ===========================================================================
-  // strictColumnHandling
-  // ===========================================================================
-  describe("strictColumnHandling option", () => {
-    it("should mark rows with too few columns as invalid", () => {
-      const input = "a,b,c\n1,2\n3,4,5";
-      const result = parseCsv(input, {
-        headers: true,
-        strictColumnHandling: true
-      }) as any;
-
-      expect(result.invalidRows).toBeDefined();
-      expect(result.invalidRows).toHaveLength(1);
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toEqual({ a: "3", b: "4", c: "5" });
+        expect(result.rows[0]).toEqual({ a: "1", b: "2" });
+      });
     });
 
-    it("should mark rows with too many columns as invalid", () => {
-      const input = "a,b\n1,2,3\n4,5";
-      const result = parseCsv(input, {
-        headers: true,
-        strictColumnHandling: true
-      }) as any;
+    describe("more: 'keep'", () => {
+      it("should keep extra columns in _extra array", () => {
+        const input = "a,b\n1,2,extra,data";
+        const result = parseCsv(input, {
+          headers: true,
+          columnMismatch: { less: "error", more: "keep" }
+        }) as any;
 
-      expect(result.invalidRows).toBeDefined();
-      expect(result.invalidRows).toHaveLength(1);
-      expect(result.rows).toHaveLength(1);
+        expect(result.rows[0]).toEqual({ a: "1", b: "2", _extra: ["extra", "data"] });
+      });
     });
 
-    it("should include reason for invalid rows", () => {
-      const input = "a,b\n1\n2,3";
-      const result = parseCsv(input, {
-        headers: true,
-        strictColumnHandling: true
-      }) as any;
+    describe("combined lenient mode", () => {
+      it("should pad missing and truncate extra", () => {
+        const input = "a,b,c\n1,2\n3,4,5,6";
+        const result = parseCsv(input, {
+          headers: true,
+          columnMismatch: { less: "pad", more: "truncate" }
+        }) as any;
 
-      expect(result.invalidRows![0].reason).toContain("column");
-      expect(result.invalidRows![0].reason).toContain("mismatch");
-    });
-
-    it("should not affect rows with correct column count", () => {
-      const input = "a,b\n1,2\n3,4";
-      const result = parseCsv(input, {
-        headers: true,
-        strictColumnHandling: true
-      }) as any;
-
-      expect(result.invalidRows).toBeUndefined();
-      expect(result.rows).toHaveLength(2);
-    });
-
-    it("without strictColumnHandling, extra columns are silently discarded", () => {
-      const input = "a,b\n1,2,3\n4,5";
-      const result = parseCsv(input, { headers: true }) as any;
-
-      expect(result.rows).toHaveLength(2);
-      expect(result.rows[0]).toEqual({ a: "1", b: "2" });
-    });
-
-    it("without strictColumnHandling, missing columns are padded", () => {
-      const input = "a,b,c\n1,2";
-      const result = parseCsv(input, { headers: true }) as any;
-
-      expect(result.rows[0]).toEqual({ a: "1", b: "2", c: "" });
-    });
-  });
-
-  // ===========================================================================
-  // discardUnmappedColumns
-  // ===========================================================================
-  describe("discardUnmappedColumns option", () => {
-    it("should discard extra columns when discardUnmappedColumns is true", () => {
-      const input = "a,b\n1,2,extra,data";
-      const result = parseCsv(input, {
-        headers: true,
-        discardUnmappedColumns: true
-      }) as any;
-
-      expect(result.rows[0]).toEqual({ a: "1", b: "2" });
-    });
-
-    it("should work with strictColumnHandling=true (discard takes precedence)", () => {
-      const input = "a,b\n1,2,3\n4,5";
-      const result = parseCsv(input, {
-        headers: true,
-        strictColumnHandling: true,
-        discardUnmappedColumns: true
-      }) as any;
-
-      expect(result.rows).toHaveLength(2);
-      expect(result.rows[0]).toEqual({ a: "1", b: "2" });
-    });
-
-    it("should not affect rows with correct column count", () => {
-      const input = "a,b\n1,2";
-      const result = parseCsv(input, {
-        headers: true,
-        discardUnmappedColumns: true
-      }) as any;
-
-      expect(result.rows[0]).toEqual({ a: "1", b: "2" });
+        expect(result.rows).toHaveLength(2);
+        expect(result.rows[0]).toEqual({ a: "1", b: "2", c: "" });
+        expect(result.rows[1]).toEqual({ a: "3", b: "4", c: "5" });
+      });
     });
   });
 
@@ -4069,9 +4033,12 @@ describe("CSV Parsing Errors Collection", () => {
       });
     });
 
-    it("should trim extra fields by default", () => {
+    it("should trim extra fields when more: 'truncate'", () => {
       const input = "a,b\n1,2,3";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "error", more: "truncate" }
+      }) as any;
 
       // Extra field should be trimmed
       expect(result.rows[0]).toEqual({ a: "1", b: "2" });
@@ -4082,7 +4049,10 @@ describe("CSV Parsing Errors Collection", () => {
 
     it("should detect multiple rows with too many fields", () => {
       const input = "a,b\n1,2,3\n4,5,6";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "error", more: "truncate" }
+      }) as any;
 
       expect(result.errors.length).toBe(2);
       expect(result.errors[0].row).toBe(0);
@@ -4093,7 +4063,10 @@ describe("CSV Parsing Errors Collection", () => {
   describe("TooFewFields detection", () => {
     it("should detect row with too few fields", () => {
       const input = "a,b,c\n1,2";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "pad", more: "error" }
+      }) as any;
 
       expect(result.errors).toBeDefined();
       expect(result.errors.length).toBe(1);
@@ -4104,9 +4077,12 @@ describe("CSV Parsing Errors Collection", () => {
       });
     });
 
-    it("should pad missing fields with empty strings by default", () => {
+    it("should pad missing fields when less: 'pad'", () => {
       const input = "a,b,c\n1";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "pad", more: "error" }
+      }) as any;
 
       // Missing fields should be padded
       expect(result.rows[0]).toEqual({ a: "1", b: "", c: "" });
@@ -4117,7 +4093,10 @@ describe("CSV Parsing Errors Collection", () => {
 
     it("should detect multiple rows with too few fields", () => {
       const input = "a,b,c\n1\n2";
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "pad", more: "error" }
+      }) as any;
 
       expect(result.errors.length).toBe(2);
       expect(result.errors[0].row).toBe(0);
@@ -4128,7 +4107,10 @@ describe("CSV Parsing Errors Collection", () => {
   describe("Mixed errors", () => {
     it("should collect multiple error types", () => {
       const input = 'a,b\n1,2,3\n4\n5,"unterminated';
-      const result = parseCsv(input, { headers: true }) as any;
+      const result = parseCsv(input, {
+        headers: true,
+        columnMismatch: { less: "pad", more: "truncate" }
+      }) as any;
 
       expect(result.errors.length).toBe(3);
 
@@ -4152,12 +4134,12 @@ describe("CSV Parsing Errors Collection", () => {
     });
   });
 
-  describe("errors with strictColumnHandling", () => {
-    it("should still record errors when strictColumnHandling is true", () => {
+  describe("errors with columnMismatch defaults", () => {
+    it("should record errors when row has too many columns", () => {
       const input = "a,b\n1,2,3";
-      const result = parseCsv(input, { headers: true, strictColumnHandling: true }) as any;
+      const result = parseCsv(input, { headers: true }) as any;
 
-      // Row should be in invalidRows
+      // Row should be in invalidRows (default is strict)
       expect(result.invalidRows).toBeDefined();
       expect(result.invalidRows.length).toBe(1);
 

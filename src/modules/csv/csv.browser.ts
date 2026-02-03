@@ -57,7 +57,6 @@ type CsvOptionsParseFields = Pick<
   | "delimitersToGuess"
   | "newline"
   | "headers"
-  | "renameHeaders"
   | "skipEmptyLines"
   | "ignoreEmpty"
   | "trim"
@@ -68,10 +67,7 @@ type CsvOptionsParseFields = Pick<
   | "toLine"
   | "skipLines"
   | "skipRows"
-  | "strictColumnHandling"
-  | "discardUnmappedColumns"
-  | "relaxColumnCountLess"
-  | "relaxColumnCountMore"
+  | "columnMismatch"
   | "groupColumnsByName"
   | "relaxQuotes"
   | "fastMode"
@@ -367,7 +363,6 @@ class CSV {
       delimitersToGuess: options?.delimitersToGuess,
       newline: options?.newline,
       headers: options?.headers,
-      renameHeaders: options?.renameHeaders,
       skipEmptyLines: options?.skipEmptyLines,
       ignoreEmpty: options?.ignoreEmpty,
       trim: options?.trim,
@@ -378,10 +373,7 @@ class CSV {
       toLine: options?.toLine,
       skipLines: options?.skipLines,
       skipRows: options?.skipRows,
-      strictColumnHandling: options?.strictColumnHandling,
-      discardUnmappedColumns: options?.discardUnmappedColumns,
-      relaxColumnCountLess: options?.relaxColumnCountLess,
-      relaxColumnCountMore: options?.relaxColumnCountMore,
+      columnMismatch: options?.columnMismatch,
       groupColumnsByName: options?.groupColumnsByName,
       relaxQuotes: options?.relaxQuotes,
       fastMode: options?.fastMode,

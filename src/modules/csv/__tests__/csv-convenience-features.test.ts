@@ -786,17 +786,6 @@ describe("CSV Convenience Features", () => {
         });
       });
 
-      it("should handle provided array headers with duplicates", () => {
-        const csv = "x,y,z\n1,2,3";
-        const result = parseCsv(csv, {
-          headers: ["col", "col", "col"],
-          renameHeaders: true
-        }) as CsvParseResult<Record<string, string>>;
-
-        expect(result.headers).toEqual(["col", "col_1", "col_2"]);
-        expect(result.rows[0]).toEqual({ col: "1", col_1: "2", col_2: "3" });
-      });
-
       it("should work with dynamicTyping and duplicate headers", () => {
         const csv = "value,name,value\n42,test,100";
         const result = parseCsv(csv, {

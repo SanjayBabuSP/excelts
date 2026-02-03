@@ -199,7 +199,7 @@ export function parseCsv(
           processedRows.push(row);
         }
       } else if (result.row && result.skipped && result.error) {
-        // Handle invalid rows from strictColumnHandling
+        // Handle invalid rows from columnMismatch errors
         invalidRows.push({ row: result.row, reason: result.reason || result.error.message });
       }
       if (result.stop) {
@@ -256,6 +256,11 @@ export function parseCsv(
     if (result.row && !result.skipped) {
       // Convert to record immediately (single pass, no intermediate array)
       let record = rowToRecord(result.row, state, config);
+
+      // Add extras if columnMismatch.more: 'keep' was used
+      if (result.extras && result.extras.length > 0) {
+        record._extra = result.extras;
+      }
 
       // Apply transform if provided
       if (options.transform) {

@@ -428,7 +428,10 @@ describe("CSV Stream - CsvParserStream", () => {
     it("should handle missing fields in data rows", async () => {
       const input = "a,b,c\n1,2";
       const readable = Readable.from([input]);
-      const parser = new CsvParserStream({ headers: true });
+      const parser = new CsvParserStream({
+        headers: true,
+        columnMismatch: { less: "pad", more: "error" }
+      });
 
       const rows: Record<string, string>[] = [];
       for await (const row of readable.pipe(parser)) {
@@ -1292,18 +1295,6 @@ describe("CSV Stream - Parser Options", () => {
     ]);
   });
 
-  it("should support renameHeaders in streaming", async () => {
-    const input = "old1,old2\nval1,val2";
-    const rows: any[] = [];
-    for await (const row of parseCsvRows(input, {
-      headers: ["new1", "new2"],
-      renameHeaders: true
-    })) {
-      rows.push(row);
-    }
-    expect(rows).toEqual([{ new1: "val1", new2: "val2" }]);
-  });
-
   it("should support ignoreEmpty in streaming", async () => {
     const input = "a,b\n\n1,2\n\n3,4";
     const rows: any[] = [];
@@ -1317,24 +1308,24 @@ describe("CSV Stream - Parser Options", () => {
     ]);
   });
 
-  it("should support strictColumnHandling in streaming (skip invalid)", async () => {
+  it("should support columnMismatch error in streaming (skip invalid)", async () => {
     const input = "a,b\n1,2,3\n4,5";
     const rows: any[] = [];
     for await (const row of parseCsvRows(input, {
-      headers: true,
-      strictColumnHandling: true
+      headers: true
+      // columnMismatch defaults to { less: 'error', more: 'error' }
     })) {
       rows.push(row);
     }
     expect(rows).toEqual([{ a: "4", b: "5" }]);
   });
 
-  it("should support discardUnmappedColumns in streaming", async () => {
+  it("should support columnMismatch truncate in streaming", async () => {
     const input = "a,b\n1,2,extra";
     const rows: any[] = [];
     for await (const row of parseCsvRows(input, {
       headers: true,
-      discardUnmappedColumns: true
+      columnMismatch: { less: "error", more: "truncate" }
     })) {
       rows.push(row);
     }
@@ -1902,25 +1893,6 @@ describe("CSV Stream - Streaming Edge Cases", () => {
     await endPromise;
 
     expect(headers).toEqual(["col1", "col2"]);
-  });
-
-  it("should emit headers event with renameHeaders", async () => {
-    const parser = new CsvParserStream({
-      headers: ["newName", "newAge"],
-      renameHeaders: true
-    });
-    let headers: string[] | null = null;
-
-    parser.on("headers", (h: string[]) => {
-      headers = h;
-    });
-    parser.on("data", () => {});
-    const endPromise = new Promise<void>(resolve => parser.on("end", resolve));
-    parser.end("name,age\nAlice,30");
-
-    await endPromise;
-
-    expect(headers).toEqual(["newName", "newAge"]);
   });
 
   it("should handle formatter with no rows written and writeHeaders: false", async () => {
