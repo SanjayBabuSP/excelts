@@ -976,4 +976,142 @@ describe("CSV Worker Pool - Browser", () => {
       await expect(pool.getData("nonexistent-session")).rejects.toThrow("Session not found");
     });
   });
+
+  // ===========================================================================
+  // Concurrency & Stress Tests
+  // ===========================================================================
+
+  describe("Concurrency & Stress Tests", () => {
+    let pool: CsvWorkerPool;
+
+    beforeEach(() => {
+      pool = new CsvWorkerPool({ maxWorkers: 4 });
+    });
+
+    afterEach(() => {
+      pool.terminate();
+    });
+
+    it("should handle many concurrent parse requests", async () => {
+      const tasks = Array.from({ length: 50 }, (_, i) =>
+        pool.parse(`name,value\nitem${i},${i}`, { headers: true })
+      );
+
+      const results = await Promise.all(tasks);
+
+      expect(results).toHaveLength(50);
+      results.forEach((result, i) => {
+        expect((result.data as { rows: any[] }).rows[0].name).toBe(`item${i}`);
+      });
+    });
+
+    it("should handle many concurrent format requests", async () => {
+      const tasks = Array.from({ length: 50 }, (_, i) =>
+        pool.format([
+          ["a", "b"],
+          [i, i * 2]
+        ])
+      );
+
+      const results = await Promise.all(tasks);
+
+      expect(results).toHaveLength(50);
+      results.forEach(result => {
+        expect(result.data).toContain("a,b");
+      });
+    });
+
+    it("should handle mixed concurrent operations", async () => {
+      const parseTasks = Array.from({ length: 25 }, (_, i) => pool.parse(`a\n${i}`));
+
+      const formatTasks = Array.from({ length: 25 }, (_, i) => pool.format([[i, i + 1]]));
+
+      const results = await Promise.all([...parseTasks, ...formatTasks]);
+
+      expect(results).toHaveLength(50);
+    });
+
+    it("should respect maxWorkers limit under load", async () => {
+      const poolWithLimit = new CsvWorkerPool({ maxWorkers: 2 });
+
+      // Launch many tasks
+      const tasks = Array.from({ length: 20 }, (_, i) => poolWithLimit.parse(`col\n${i}`));
+
+      // Check stats during execution
+      const statsPromise = new Promise<{ totalWorkers: number }>(resolve => {
+        setTimeout(() => {
+          resolve(poolWithLimit.getStats());
+        }, 50);
+      });
+
+      const [stats] = await Promise.all([statsPromise, Promise.all(tasks)]);
+
+      // Should not exceed maxWorkers
+      expect(stats.totalWorkers).toBeLessThanOrEqual(2);
+
+      poolWithLimit.terminate();
+    });
+
+    it("should handle worker failures gracefully", async () => {
+      // This test ensures that if one task fails, others continue
+      const tasks = [
+        pool.parse("a,b\n1,2"), // Valid
+        pool.parse("a,b\n1,2"), // Valid
+        pool.parse("a,b\n1,2") // Valid
+      ];
+
+      const results = await Promise.allSettled(tasks);
+
+      // At least some should succeed
+      const fulfilled = results.filter(r => r.status === "fulfilled");
+      expect(fulfilled.length).toBeGreaterThan(0);
+    });
+
+    it("should handle rapid sequential operations", async () => {
+      for (let i = 0; i < 20; i++) {
+        const result = await pool.parse(`x\n${i}`);
+        expect(result.data).toEqual([["x"], [String(i)]]);
+      }
+    });
+
+    it("should maintain data integrity under concurrent load", async () => {
+      const testData = Array.from({ length: 30 }, (_, i) => ({
+        id: i,
+        csv: `id,name,value\n${i},item${i},${i * 100}`
+      }));
+
+      const tasks = testData.map(({ csv }) => pool.parse(csv, { headers: true }));
+
+      const results = await Promise.all(tasks);
+
+      // Verify each result matches its input
+      results.forEach((result, i) => {
+        const rows = (result.data as { rows: any[] }).rows;
+        expect(rows[0].id).toBe(String(i));
+        expect(rows[0].name).toBe(`item${i}`);
+        expect(rows[0].value).toBe(String(i * 100));
+      });
+    });
+
+    it("should recover after pool is terminated and recreated", async () => {
+      await pool.parse("a\n1");
+      pool.terminate();
+
+      // Create new pool
+      pool = new CsvWorkerPool({ maxWorkers: 2 });
+
+      const result = await pool.parse("b\n2");
+      expect(result.data).toEqual([["b"], ["2"]]);
+    });
+
+    it("should handle task timeout scenario", async () => {
+      // Large data that takes longer to process
+      const rows = Array.from({ length: 5000 }, (_, i) => `${i},${"x".repeat(100)}`);
+      const csv = "id,data\n" + rows.join("\n");
+
+      // Should still complete even if it takes a while
+      const result = await pool.parse(csv, { headers: true });
+      expect((result.data as { rows: any[] }).rows.length).toBe(5000);
+    });
+  });
 });

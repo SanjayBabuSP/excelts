@@ -672,84 +672,53 @@ describe("CSV Convenience Features", () => {
   });
 
   // ============================================================================
-  // BOM Stripping Tests
+  // BOM + Convenience Features Interaction Tests
+  // Note: Basic BOM handling is tested in csv-core.test.ts and csv-edge-cases.test.ts
+  // These tests focus on BOM interaction with convenience features like dynamicTyping
   // ============================================================================
-  describe("BOM stripping", () => {
-    // UTF-8 BOM character
+  describe("BOM with convenience features", () => {
     const BOM = "\ufeff";
 
-    describe("parseCsv with BOM", () => {
-      it("should strip BOM from the start of CSV", () => {
-        const csv = BOM + "name,age\nAlice,30";
-        const result = parseCsv(csv, { headers: true }) as CsvParseResult<Record<string, string>>;
+    it("should work with BOM and dynamicTyping", () => {
+      const csv = BOM + "name,value\nTest,42";
+      const result = parseCsv(csv, {
+        headers: true,
+        dynamicTyping: true
+      }) as CsvParseResult<Record<string, unknown>>;
 
-        expect(result.rows[0]).toEqual({ name: "Alice", age: "30" });
-        // Should not have BOM in header name
-        expect(result.rows[0]["name"]).toBe("Alice");
-        expect(result.rows[0][BOM + "name"]).toBeUndefined();
-      });
-
-      it("should handle CSV without BOM normally", () => {
-        const csv = "name,age\nBob,25";
-        const result = parseCsv(csv, { headers: true }) as CsvParseResult<Record<string, string>>;
-
-        expect(result.rows[0]).toEqual({ name: "Bob", age: "25" });
-      });
-
-      it("should strip BOM with array output (no headers)", () => {
-        const csv = BOM + "a,b,c\n1,2,3";
-        const result = parseCsv(csv) as string[][];
-
-        expect(result[0]).toEqual(["a", "b", "c"]);
-        expect(result[0][0]).toBe("a"); // Not BOM + "a"
-      });
-
-      it("should work with BOM and dynamicTyping", () => {
-        const csv = BOM + "name,value\nTest,42";
-        const result = parseCsv(csv, {
-          headers: true,
-          dynamicTyping: true
-        }) as CsvParseResult<Record<string, unknown>>;
-
-        expect(result.rows[0]).toEqual({ name: "Test", value: 42 });
-      });
-
-      it("should work with BOM and beforeFirstChunk", () => {
-        const csv = BOM + "name,age\nAlice,30";
-        let receivedChunk = "";
-        const result = parseCsv(csv, {
-          headers: true,
-          beforeFirstChunk: chunk => {
-            receivedChunk = chunk;
-            return chunk;
-          }
-        }) as CsvParseResult<Record<string, string>>;
-
-        // beforeFirstChunk receives original with BOM, but final result has it stripped
-        expect(receivedChunk).toBe(csv);
-        expect(result.rows[0]["name"]).toBe("Alice");
-      });
+      expect(result.rows[0]).toEqual({ name: "Test", value: 42 });
     });
 
-    describe("CsvParserStream with BOM", () => {
-      it("should strip BOM from streamed CSV", async () => {
-        const csv = BOM + "name,age\nAlice,30\nBob,25";
-        const parser = new CsvParserStream({ headers: true });
-        const rows = await parseStream<Record<string, string>>(csv, parser);
+    it("should work with BOM and beforeFirstChunk", () => {
+      const csv = BOM + "name,age\nAlice,30";
+      let receivedChunk = "";
+      const result = parseCsv(csv, {
+        headers: true,
+        beforeFirstChunk: chunk => {
+          receivedChunk = chunk;
+          return chunk;
+        }
+      }) as CsvParseResult<Record<string, string>>;
 
-        expect(rows).toHaveLength(2);
-        expect(rows[0]).toEqual({ name: "Alice", age: "30" });
-        expect(rows[0]["name"]).toBe("Alice");
-        expect(rows[0][BOM + "name"]).toBeUndefined();
+      // beforeFirstChunk receives original with BOM, but final result has it stripped
+      expect(receivedChunk).toBe(csv);
+      expect(result.rows[0]["name"]).toBe("Alice");
+    });
+
+    it("should work with BOM and chunk callback in stream", async () => {
+      const csv = BOM + "name,age\nAlice,30\nBob,25";
+      const chunks: unknown[][] = [];
+      const parser = new CsvParserStream({
+        headers: true,
+        chunkSize: 1,
+        chunk: data => {
+          chunks.push([...data]);
+        }
       });
+      await parseStream<Record<string, string>>(csv, parser);
 
-      it("should handle streamed CSV without BOM normally", async () => {
-        const csv = "name,age\nAlice,30";
-        const parser = new CsvParserStream({ headers: true });
-        const rows = await parseStream<Record<string, string>>(csv, parser);
-
-        expect(rows[0]).toEqual({ name: "Alice", age: "30" });
-      });
+      expect(chunks.length).toBe(2);
+      expect(chunks[0][0]).toEqual({ name: "Alice", age: "30" });
     });
   });
 

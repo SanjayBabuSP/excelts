@@ -1,7 +1,10 @@
 /**
- * CSV Browser Unit Tests - Worksheet Integration (Node.js)
+ * CSV Browser Module Tests - Worksheet Integration (Node.js Runtime)
  *
- * Runs shared CSV worksheet tests in Node.js environment.
+ * Tests the browser-compatible CSV module (csv.browser.ts) in Node.js environment.
+ * This ensures the browser bundle works correctly in Node.js as well.
+ *
+ * Note: For actual browser runtime tests, see browser/csv.test.ts
  */
 
 import { describe } from "vitest";
@@ -17,7 +20,7 @@ import {
   type CsvWorksheetModuleImportsGeneric
 } from "@csv/__tests__/csv-worksheet.shared";
 
-describe("CSV Browser - Worksheet Integration", () => {
+describe("CSV Browser Module - Worksheet Integration (Node.js)", () => {
   const imports = {
     Workbook,
     parseCsvToWorksheet,
