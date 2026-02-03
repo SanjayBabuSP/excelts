@@ -13,6 +13,8 @@
 
 import type {
   CsvParseOptions,
+  CsvParseArrayOptions,
+  CsvParseObjectOptions,
   CsvParseResult,
   CsvParseMeta,
   CsvParseError,
@@ -26,6 +28,7 @@ import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/uti
 type ReadableStreamLike = { getReader: () => any };
 type AsyncInput = AsyncIterable<string | Uint8Array>;
 type AnyAsyncInput = AsyncInput | ReadableStreamLike;
+type CsvAsyncInput = string | AnyAsyncInput;
 
 function isAsyncIterable(value: unknown): value is AsyncInput {
   return Boolean(value && typeof (value as any)[Symbol.asyncIterator] === "function");
@@ -109,8 +112,67 @@ async function collectText(
  * const result = await parseCsvAsync(createReadStream("data.csv"), { headers: true });
  * ```
  */
+
+// =============================================================================
+// Function Overloads for Better Type Inference
+// =============================================================================
+
+/**
+ * Parse CSV async - returns string[][] when no options provided.
+ */
+export function parseCsvAsync(input: CsvAsyncInput): Promise<string[][]>;
+
+/**
+ * Parse CSV async - returns string[][] when headers is false/undefined and no info option.
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseArrayOptions & { info?: false }
+): Promise<string[][]>;
+
+/**
+ * Parse CSV async - returns CsvParseResult with RecordWithInfo when info: true (array mode).
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseArrayOptions & { info: true }
+): Promise<CsvParseResult<RecordWithInfo<string[]>>>;
+
+/**
+ * Parse CSV async - returns CsvParseResult when headers are enabled.
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseObjectOptions & { info?: false }
+): Promise<CsvParseResult<Record<string, unknown>>>;
+
+/**
+ * Parse CSV async - returns CsvParseResult with RecordWithInfo when info: true (object mode).
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseObjectOptions & { info: true }
+): Promise<CsvParseResult<RecordWithInfo<Record<string, unknown>>>>;
+
+/**
+ * Parse CSV async - general overload for backward compatibility.
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseOptions
+): Promise<
+  | string[][]
+  | CsvParseResult<Record<string, string>>
+  | CsvParseResult<Record<string, unknown>>
+  | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+  | CsvParseResult<RecordWithInfo<string[]>>
+>;
+
+/**
+ * Parse CSV asynchronously (implementation).
+ */
 export async function parseCsvAsync(
-  input: string | AnyAsyncInput,
+  input: CsvAsyncInput,
   options: CsvParseOptions = {}
 ): Promise<
   | string[][]

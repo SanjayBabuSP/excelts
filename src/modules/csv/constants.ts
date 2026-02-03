@@ -21,3 +21,50 @@ export const DEFAULT_LINEBREAK_REGEX = /\r\n|\r|\n/;
  * Avoids creating new instances in hot paths.
  */
 export const sharedTextEncoder = new TextEncoder();
+
+/**
+ * Reusable buffer for encodeInto() to avoid allocations.
+ * Size 4 is enough for any single UTF-8 character (max 4 bytes).
+ */
+const singleCharBuffer = new Uint8Array(4);
+
+/**
+ * Get UTF-8 byte length of a string efficiently.
+ * Uses fast path for ASCII-only strings and encodeInto for mixed content.
+ *
+ * @param text - String to measure
+ * @returns UTF-8 byte length
+ */
+export function getUtf8ByteLength(text: string): number {
+  const len = text.length;
+  if (len === 0) {
+    return 0;
+  }
+
+  // Fast path for single character
+  if (len === 1) {
+    const code = text.charCodeAt(0);
+    if (code < 128) {
+      return 1;
+    } // ASCII
+    // Use encodeInto with reusable buffer to avoid allocation
+    return sharedTextEncoder.encodeInto(text, singleCharBuffer).written!;
+  }
+
+  // For longer strings, check if all ASCII first (very common for CSV)
+  let isAllAscii = true;
+  for (let i = 0; i < len; i++) {
+    if (text.charCodeAt(i) >= 128) {
+      isAllAscii = false;
+      break;
+    }
+  }
+
+  if (isAllAscii) {
+    return len; // ASCII: 1 byte per char
+  }
+
+  // Mixed content: must encode to get accurate byte count
+  // Note: encode() allocates, but this is rare path for non-ASCII content
+  return sharedTextEncoder.encode(text).length;
+}

@@ -12,7 +12,6 @@ import type {
   CsvParseResult,
   CsvParseMeta,
   CsvParseError,
-  RecordInfo,
   RecordWithInfo,
   DynamicTypingConfig,
   CastDateConfig
@@ -151,7 +150,6 @@ export function parseCsv(
   const state = createParseState(config);
   const errors: CsvParseError[] = [];
   const invalidRows: { row: string[]; reason: string }[] = [];
-  const rowInfos: RecordInfo[] = [];
 
   // Choose parser based on mode
   const parser = config.fastMode
@@ -162,9 +160,10 @@ export function parseCsv(
   // Single-pass processing: parse + transform + validate + dynamicTyping
   // ==========================================================================
 
-  // Simple array output (no headers) - Single pass processing
+  // Simple array output (no headers) - True single pass processing
   if (!state.useHeaders) {
-    const processedRows: (string[] | unknown[])[] = [];
+    // Use unified type for both info and non-info mode to avoid two-pass zipping
+    const processedRows: (string[] | unknown[] | RecordWithInfo<string[] | unknown[]>)[] = [];
 
     for (const result of parser) {
       if (result.row && !result.skipped) {
@@ -193,9 +192,11 @@ export function parseCsv(
           row = applyArrayTyping(row as string[], config.dynamicTyping, config.castDate);
         }
 
-        processedRows.push(row);
-        if (result.info) {
-          rowInfos.push(result.info);
+        // Push with or without info in single pass
+        if (config.infoOption && result.info) {
+          processedRows.push({ record: row, info: result.info });
+        } else {
+          processedRows.push(row);
         }
       } else if (result.row && result.skipped && result.error) {
         // Handle invalid rows from strictColumnHandling
@@ -219,15 +220,11 @@ export function parseCsv(
       renamedHeaders: state.renamedHeadersForMeta
     };
 
-    // If info option is enabled, wrap in result object with info
+    // If info option is enabled, rows are already wrapped
     if (config.infoOption) {
-      const arrayRowsWithInfo: RecordWithInfo<string[] | unknown[]>[] = [];
-      for (let idx = 0; idx < processedRows.length; idx++) {
-        arrayRowsWithInfo.push({ record: processedRows[idx], info: rowInfos[idx] });
-      }
       return {
         headers: undefined,
-        rows: arrayRowsWithInfo,
+        rows: processedRows as RecordWithInfo<string[] | unknown[]>[],
         invalidRows: optionalArray(invalidRows),
         errors: optionalArray(errors),
         meta
@@ -249,16 +246,41 @@ export function parseCsv(
   }
 
   // ==========================================================================
-  // Object mode (with headers) - Single pass processing
+  // Object mode (with headers) - True single-pass processing
   // ==========================================================================
 
-  // Collect rows first (parser handles header extraction)
-  const rows: string[][] = [];
+  // Process rows in single pass: parse + convert + transform + validate
+  const objectRows: (Record<string, unknown> | RecordWithInfo<Record<string, unknown>>)[] = [];
+
   for (const result of parser) {
     if (result.row && !result.skipped) {
-      rows.push(result.row);
-      if (result.info) {
-        rowInfos.push(result.info);
+      // Convert to record immediately (single pass, no intermediate array)
+      let record = rowToRecord(result.row, state, config);
+
+      // Apply transform if provided
+      if (options.transform) {
+        const transformed = options.transform(record as Record<string, string>);
+        if (transformed === null || transformed === undefined) {
+          continue;
+        }
+        record = transformed as Record<string, unknown>;
+      }
+
+      // Apply validate if provided
+      if (options.validate) {
+        const { isValid, reason } = normalizeValidateResult(
+          options.validate(record as Record<string, string>)
+        );
+        if (!isValid) {
+          invalidRows.push({ row: result.row, reason });
+          continue;
+        }
+      }
+
+      if (config.infoOption && result.info) {
+        objectRows.push({ record, info: result.info });
+      } else {
+        objectRows.push(record);
       }
     } else if (result.row && result.skipped && result.error) {
       invalidRows.push({ row: result.row, reason: result.reason || result.error.message });
@@ -280,39 +302,6 @@ export function parseCsv(
       : undefined,
     renamedHeaders: state.renamedHeadersForMeta
   };
-
-  // Single-pass: convert to record + transform + validate
-  const objectRows: (Record<string, unknown> | RecordWithInfo<Record<string, unknown>>)[] = [];
-  for (let idx = 0; idx < rows.length; idx++) {
-    const row = rows[idx];
-    let record = rowToRecord(row, state, config);
-
-    // Apply transform if provided
-    if (options.transform) {
-      const transformed = options.transform(record as Record<string, string>);
-      if (transformed === null || transformed === undefined) {
-        continue;
-      }
-      record = transformed as Record<string, unknown>;
-    }
-
-    // Apply validate if provided
-    if (options.validate) {
-      const { isValid, reason } = normalizeValidateResult(
-        options.validate(record as Record<string, string>)
-      );
-      if (!isValid) {
-        invalidRows.push({ row, reason });
-        continue;
-      }
-    }
-
-    if (config.infoOption) {
-      objectRows.push({ record, info: rowInfos[idx] });
-    } else {
-      objectRows.push(record);
-    }
-  }
 
   // Handle objname option
   const { objname } = options;

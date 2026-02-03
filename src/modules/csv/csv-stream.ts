@@ -34,13 +34,14 @@ import {
   type ParseConfig,
   type ParseState,
   DEFAULT_LINEBREAK_REGEX,
-  sharedTextEncoder,
+  getUtf8ByteLength,
   createParseConfig,
   createParseState,
   appendToField as appendToFieldCore,
   takeCurrentField as takeCurrentFieldCore,
   processCompletedRow as processCompletedRowCore,
-  shouldSkipRow as shouldSkipRowCore
+  shouldSkipRow as shouldSkipRowCore,
+  resetInfoState as resetInfoStateCore
 } from "./parse-core";
 
 /**
@@ -565,9 +566,9 @@ export class CsvParserStream extends Transform {
       return;
     }
 
-    // Track row bytes for maxRowBytes limit (use real UTF-8 byte count)
+    // Track row bytes for maxRowBytes limit (use optimized byte length calculation)
     if (this.maxRowBytes !== undefined) {
-      this.currentRowBytes += sharedTextEncoder.encode(text).length;
+      this.currentRowBytes += getUtf8ByteLength(text);
       if (this.currentRowBytes > this.maxRowBytes) {
         throw new Error(`Row exceeds the maximum size of ${this.maxRowBytes} bytes`);
       }
@@ -600,14 +601,13 @@ export class CsvParserStream extends Transform {
    * Reset info state for next row (used when skipping rows or after processing)
    */
   private resetInfoState(nextByteOffset: number): void {
-    if (this.infoOption) {
-      this.currentRowQuoted = [];
-      this.currentRowStartLine = this.lineNumber + 1;
-      this.currentRowStartBytes = nextByteOffset;
-    }
-    if (this.rawOption) {
-      this.currentRawRow = "";
-    }
+    resetInfoStateCore(
+      this.parseState,
+      this.infoOption,
+      this.rawOption,
+      this.lineNumber + 1,
+      nextByteOffset
+    );
   }
 
   /**

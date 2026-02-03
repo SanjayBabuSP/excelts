@@ -32,10 +32,15 @@ import {
 } from "./utils/detect";
 
 // Import shared constants from centralized location (avoids circular deps)
-import { LARGE_FIELD_THRESHOLD, DEFAULT_LINEBREAK_REGEX, sharedTextEncoder } from "./constants";
+import {
+  LARGE_FIELD_THRESHOLD,
+  DEFAULT_LINEBREAK_REGEX,
+  sharedTextEncoder,
+  getUtf8ByteLength
+} from "./constants";
 
 // Re-export for backward compatibility
-export { LARGE_FIELD_THRESHOLD, DEFAULT_LINEBREAK_REGEX, sharedTextEncoder };
+export { LARGE_FIELD_THRESHOLD, DEFAULT_LINEBREAK_REGEX, sharedTextEncoder, getUtf8ByteLength };
 
 // =============================================================================
 // Constants (module-specific)
@@ -502,21 +507,8 @@ export function resetInfoState(
 }
 
 /**
- * Get UTF-8 byte length of a single character.
- * Optimized: ASCII chars (code < 128) are always 1 byte.
- */
-function charByteLength(char: string): number {
-  const code = char.charCodeAt(0);
-  if (code < 128) {
-    return 1; // ASCII: 1 byte
-  }
-  // Non-ASCII: use TextEncoder for accurate count
-  return sharedTextEncoder.encode(char).length;
-}
-
-/**
  * Add bytes to row counter and check limit.
- * Uses real UTF-8 byte count for accuracy.
+ * Uses optimized getUtf8ByteLength for accurate byte counting.
  */
 export function addRowBytes(
   state: ParseState,
@@ -526,9 +518,7 @@ export function addRowBytes(
   if (maxRowBytes === undefined) {
     return; // No limit, skip tracking entirely
   }
-  // Calculate real byte length
-  const byteLen = text.length === 1 ? charByteLength(text) : sharedTextEncoder.encode(text).length;
-  state.currentRowBytes += byteLen;
+  state.currentRowBytes += getUtf8ByteLength(text);
   if (state.currentRowBytes > maxRowBytes) {
     throw new Error(`Row exceeds the maximum size of ${maxRowBytes} bytes`);
   }
@@ -662,7 +652,12 @@ export function rowToRecord(
     }
     return record;
   }
-  return row.reduce((acc, val, idx) => ({ ...acc, [idx]: val }), {});
+  // No headers: use numeric indices as keys (O(n) instead of O(n²) reduce)
+  const result: Record<number, string> = {};
+  for (let i = 0; i < row.length; i++) {
+    result[i] = row[i];
+  }
+  return result;
 }
 
 /**
@@ -813,9 +808,9 @@ export function* parseFastMode(
       continue;
     }
 
-    // Check maxRowBytes in fastMode using shared encoder
+    // Check maxRowBytes in fastMode using optimized byte length calculation
     if (config.maxRowBytes !== undefined) {
-      const lineBytes = sharedTextEncoder.encode(line).length;
+      const lineBytes = getUtf8ByteLength(line);
       if (lineBytes > config.maxRowBytes) {
         throw new Error(`Row exceeds the maximum size of ${config.maxRowBytes} bytes`);
       }

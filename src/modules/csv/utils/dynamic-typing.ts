@@ -64,6 +64,18 @@ export function shouldCastDate(
 // =============================================================================
 
 /**
+ * Check if a charCode matches a lowercase letter (case-insensitive).
+ * @param code - The charCode to check
+ * @param lowercaseCode - The lowercase letter's charCode to match against
+ * @returns true if code matches (case-insensitive)
+ */
+function isCharEqualIgnoreCase(code: number, lowercaseCode: number): boolean {
+  // Lowercase letters are 32 higher than uppercase in ASCII
+  // e.g., 'a' = 97, 'A' = 65, difference = 32
+  return code === lowercaseCode || code === lowercaseCode - 32;
+}
+
+/**
  * Convert a string value to its appropriate JavaScript type.
  * Used internally by dynamicTyping feature.
  *
@@ -90,19 +102,34 @@ export function convertValue(value: string): string | number | boolean | null {
   // Fast path: use charCodeAt for quick first-character checks
   const firstChar = value.charCodeAt(0);
 
-  // Boolean detection - check first char before toLowerCase
-  // 't' = 116, 'T' = 84, 'f' = 102, 'F' = 70, 'n' = 110, 'N' = 78
+  // Boolean/null detection using charCode comparison (avoids toLowerCase allocation)
+  // 't' = 116, 'T' = 84, 'r' = 114, 'R' = 82, 'u' = 117, 'U' = 85, 'e' = 101, 'E' = 69
+  // 'f' = 102, 'F' = 70, 'a' = 97, 'A' = 65, 'l' = 108, 'L' = 76, 's' = 115, 'S' = 83
+  // 'n' = 110, 'N' = 78
   if (len === 4) {
-    if ((firstChar === 116 || firstChar === 84) && value.toLowerCase() === "true") {
+    if (
+      (firstChar === 116 || firstChar === 84) && // t/T
+      isCharEqualIgnoreCase(value.charCodeAt(1), 114) && // r/R
+      isCharEqualIgnoreCase(value.charCodeAt(2), 117) && // u/U
+      isCharEqualIgnoreCase(value.charCodeAt(3), 101) // e/E
+    ) {
       return true;
     }
-    if ((firstChar === 110 || firstChar === 78) && value.toLowerCase() === "null") {
+    if (
+      (firstChar === 110 || firstChar === 78) && // n/N
+      isCharEqualIgnoreCase(value.charCodeAt(1), 117) && // u/U
+      isCharEqualIgnoreCase(value.charCodeAt(2), 108) && // l/L
+      isCharEqualIgnoreCase(value.charCodeAt(3), 108) // l/L
+    ) {
       return null;
     }
   } else if (
     len === 5 &&
-    (firstChar === 102 || firstChar === 70) &&
-    value.toLowerCase() === "false"
+    (firstChar === 102 || firstChar === 70) && // f/F
+    isCharEqualIgnoreCase(value.charCodeAt(1), 97) && // a/A
+    isCharEqualIgnoreCase(value.charCodeAt(2), 108) && // l/L
+    isCharEqualIgnoreCase(value.charCodeAt(3), 115) && // s/S
+    isCharEqualIgnoreCase(value.charCodeAt(4), 101) // e/E
   ) {
     return false;
   }
@@ -206,6 +233,62 @@ export function applyDynamicTyping(
   return convertValue(value);
 }
 
+// =============================================================================
+// Core Value Conversion Helper
+// =============================================================================
+
+/**
+ * Apply dynamic typing and/or date casting to a single value.
+ * Unified helper used by both object and array row processing.
+ *
+ * @param value - The string value to convert
+ * @param columnName - Column identifier (string for objects, can be used for per-column config)
+ * @param dynamicTyping - DynamicTyping configuration
+ * @param castDate - CastDate configuration
+ * @returns Converted value
+ */
+function convertSingleValue(
+  value: string,
+  columnName: string | undefined,
+  dynamicTyping: DynamicTypingConfig,
+  castDate: CastDateConfig | undefined
+): unknown {
+  // Try date parsing first if castDate is enabled for this column
+  if (shouldCastDate(castDate, columnName)) {
+    const dateValue = tryParseDate(value);
+    if (dateValue !== null) {
+      return dateValue;
+    }
+  }
+
+  // Apply dynamic typing based on config type
+  if (dynamicTyping === true) {
+    return convertValue(value);
+  }
+
+  if (dynamicTyping === false) {
+    return value;
+  }
+
+  // Per-column configuration
+  if (columnName === undefined) {
+    return value;
+  }
+
+  const config = (dynamicTyping as Record<string, boolean | ((value: string) => unknown)>)[
+    columnName
+  ];
+  if (config === undefined) {
+    return value;
+  }
+
+  return applyDynamicTyping(value, config);
+}
+
+// =============================================================================
+// Row Conversion Functions
+// =============================================================================
+
 /**
  * Apply dynamic typing to an entire row (object form)
  *
@@ -225,61 +308,11 @@ export function applyDynamicTypingToRow(
   }
 
   const result: Record<string, unknown> = {};
-
-  if (dynamicTyping === true) {
-    // Convert all columns - use for...in for better performance
-    for (const key in row) {
-      if (Object.hasOwn(row, key)) {
-        // Try date parsing first if castDate is enabled for this column
-        if (shouldCastDate(castDate, key)) {
-          const dateValue = tryParseDate(row[key]);
-          if (dateValue !== null) {
-            result[key] = dateValue;
-            continue;
-          }
-        }
-        result[key] = convertValue(row[key]);
-      }
-    }
-  } else if (dynamicTyping === false && castDate) {
-    // Only date conversion, no other dynamic typing
-    for (const key in row) {
-      if (Object.hasOwn(row, key)) {
-        if (shouldCastDate(castDate, key)) {
-          const dateValue = tryParseDate(row[key]);
-          if (dateValue !== null) {
-            result[key] = dateValue;
-            continue;
-          }
-        }
-        result[key] = row[key];
-      }
-    }
-  } else {
-    // Per-column configuration - use for...in for better performance
-    for (const key in row) {
-      if (Object.hasOwn(row, key)) {
-        // Try date parsing first if castDate is enabled for this column
-        if (shouldCastDate(castDate, key)) {
-          const dateValue = tryParseDate(row[key]);
-          if (dateValue !== null) {
-            result[key] = dateValue;
-            continue;
-          }
-        }
-        const config = (dynamicTyping as Record<string, boolean | ((value: string) => unknown)>)[
-          key
-        ];
-        if (config === undefined) {
-          // Column not in config → keep as string
-          result[key] = row[key];
-        } else {
-          result[key] = applyDynamicTyping(row[key], config);
-        }
-      }
+  for (const key in row) {
+    if (Object.hasOwn(row, key)) {
+      result[key] = convertSingleValue(row[key], key, dynamicTyping, castDate);
     }
   }
-
   return result;
 }
 
@@ -298,78 +331,18 @@ export function applyDynamicTypingToArrayRow(
   dynamicTyping: DynamicTypingConfig,
   castDate?: CastDateConfig
 ): unknown[] {
-  if (dynamicTyping === true) {
-    // Convert all columns
-    if (castDate === true) {
-      // Try date parsing for all columns first
-      return row.map(value => {
-        const dateValue = tryParseDate(value);
-        if (dateValue !== null) {
-          return dateValue;
-        }
-        return convertValue(value);
-      });
-    } else if (Array.isArray(castDate) && headers) {
-      // Try date parsing only for specified columns
-      return row.map((value, index) => {
-        const header = headers[index];
-        if (header && castDate.includes(header)) {
-          const dateValue = tryParseDate(value);
-          if (dateValue !== null) {
-            return dateValue;
-          }
-        }
-        return convertValue(value);
-      });
-    }
-    return row.map(convertValue);
-  }
-
-  if (dynamicTyping === false) {
-    // Only date conversion if castDate is enabled
-    if (!castDate) {
-      return row;
-    }
-    if (castDate === true) {
-      return row.map(value => {
-        const dateValue = tryParseDate(value);
-        return dateValue !== null ? dateValue : value;
-      });
-    }
-    if (Array.isArray(castDate) && headers) {
-      return row.map((value, index) => {
-        const header = headers[index];
-        if (header && castDate.includes(header)) {
-          const dateValue = tryParseDate(value);
-          if (dateValue !== null) {
-            return dateValue;
-          }
-        }
-        return value;
-      });
-    }
+  if (dynamicTyping === false && !castDate) {
+    // No conversion - return as-is (fast path)
     return row;
   }
 
-  // Per-column configuration - need headers to look up column names
-  if (!headers) {
-    // No headers available, can't use per-column config → no conversion
+  // Per-column config requires headers
+  if (dynamicTyping !== true && dynamicTyping !== false && !headers) {
     return row;
   }
 
   return row.map((value, index) => {
-    const header = headers[index];
-    // Try date parsing first if castDate is enabled for this column
-    if (shouldCastDate(castDate, header)) {
-      const dateValue = tryParseDate(value);
-      if (dateValue !== null) {
-        return dateValue;
-      }
-    }
-    const config = header ? dynamicTyping[header] : undefined;
-    if (config === undefined) {
-      return value;
-    }
-    return applyDynamicTyping(value, config);
+    const columnName = headers?.[index];
+    return convertSingleValue(value, columnName, dynamicTyping, castDate);
   });
 }
