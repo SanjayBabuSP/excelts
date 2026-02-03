@@ -55,10 +55,10 @@ export type BuiltinColumnType =
 export type GeneratorFn = (context: GeneratorContext) => unknown;
 
 /** Column definition */
-export type ColumnDef = BuiltinColumnType | GeneratorFn | ColumnConfig;
+export type ColumnDef = BuiltinColumnType | GeneratorFn | GeneratorColumnConfig;
 
 /** Detailed column configuration */
-export interface ColumnConfig {
+export interface GeneratorColumnConfig {
   /** Column type or custom generator */
   type: BuiltinColumnType | GeneratorFn;
   /** Column name (for header) */
@@ -630,7 +630,7 @@ class CsvGenerator {
     }
 
     // Handle config object
-    const config = colDef as ColumnConfig;
+    const config = colDef as GeneratorColumnConfig;
 
     // Check nullable
     if (config.nullable !== undefined && this.random() < config.nullable) {
@@ -652,7 +652,7 @@ class CsvGenerator {
 
   private generateBuiltinType(
     type: BuiltinColumnType,
-    config: Partial<ColumnConfig>,
+    config: Partial<GeneratorColumnConfig>,
     ctx: GeneratorContext
   ): unknown {
     switch (type) {

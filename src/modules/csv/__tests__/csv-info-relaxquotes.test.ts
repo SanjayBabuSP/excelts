@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, parseCsvStream, type RecordWithInfo, type CsvParseResult } from "@csv/index";
+import { parseCsv, parseCsvRows, type RecordWithInfo, type CsvParseResult } from "@csv/index";
 import { CsvParserStream } from "@csv/csv-stream";
 
 // ===========================================================================
@@ -153,14 +153,14 @@ describe("raw option", () => {
 });
 
 // ===========================================================================
-// parseCsvStream info/raw Option Tests
+// parseCsvRows info/raw Option Tests
 // ===========================================================================
-describe("parseCsvStream info/raw options", () => {
+describe("parseCsvRows info/raw options", () => {
   describe("info option", () => {
     it("should return record with info when info: true (array mode)", async () => {
       const csv = "Alice,30\nBob,25";
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(csv, { info: true })) {
+      for await (const row of parseCsvRows(csv, { info: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -178,7 +178,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should return record with info when info: true (headers mode)", async () => {
       const csv = "name,age\nAlice,30\nBob,25";
       const rows: RecordWithInfo<Record<string, unknown>>[] = [];
-      for await (const row of parseCsvStream(csv, { headers: true, info: true })) {
+      for await (const row of parseCsvRows(csv, { headers: true, info: true })) {
         rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
       }
 
@@ -194,7 +194,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should track quoted fields correctly", async () => {
       const csv = '"Alice",30\nBob,"25"';
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(csv, { info: true })) {
+      for await (const row of parseCsvRows(csv, { info: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -205,7 +205,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should track byte offset correctly", async () => {
       const csv = "a,b\n1,2\n3,4";
       const rows: RecordWithInfo<Record<string, unknown>>[] = [];
-      for await (const row of parseCsvStream(csv, { headers: true, info: true })) {
+      for await (const row of parseCsvRows(csv, { headers: true, info: true })) {
         rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
       }
 
@@ -218,7 +218,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should handle skipLines with info correctly", async () => {
       const csv = "# comment\nname,age\nAlice,30";
       const rows: RecordWithInfo<Record<string, unknown>>[] = [];
-      for await (const row of parseCsvStream(csv, { headers: true, info: true, skipLines: 1 })) {
+      for await (const row of parseCsvRows(csv, { headers: true, info: true, skipLines: 1 })) {
         rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
       }
 
@@ -233,7 +233,7 @@ describe("parseCsvStream info/raw options", () => {
         yield "ice,30";
       }
       const rows: RecordWithInfo<Record<string, unknown>>[] = [];
-      for await (const row of parseCsvStream(chunks(), { headers: true, info: true })) {
+      for await (const row of parseCsvRows(chunks(), { headers: true, info: true })) {
         rows.push(row as unknown as RecordWithInfo<Record<string, unknown>>);
       }
 
@@ -248,7 +248,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should include raw string when raw: true", async () => {
       const csv = '"Alice",30\nBob,"25"';
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(csv, { info: true, raw: true })) {
+      for await (const row of parseCsvRows(csv, { info: true, raw: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -259,7 +259,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should not include raw string when raw: false", async () => {
       const csv = "Alice,30";
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(csv, { info: true, raw: false })) {
+      for await (const row of parseCsvRows(csv, { info: true, raw: false })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -269,7 +269,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should capture raw string with embedded newlines in quoted fields", async () => {
       const csv = '"Hello\nWorld",test';
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(csv, { info: true, raw: true })) {
+      for await (const row of parseCsvRows(csv, { info: true, raw: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -281,7 +281,7 @@ describe("parseCsvStream info/raw options", () => {
     it("should handle CRLF line endings in raw", async () => {
       const csv = "a,b\r\n1,2";
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(csv, { info: true, raw: true })) {
+      for await (const row of parseCsvRows(csv, { info: true, raw: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -296,7 +296,7 @@ describe("parseCsvStream info/raw options", () => {
         yield "ld\ntest,data";
       }
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(chunks(), { info: true, raw: true })) {
+      for await (const row of parseCsvRows(chunks(), { info: true, raw: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 
@@ -316,7 +316,7 @@ describe("parseCsvStream info/raw options", () => {
       // Row 1 '"Hello",world' starts at byte 0
       // Row 2 'test,data' starts at byte 14 (after '"Hello",world\n')
       const rows: RecordWithInfo<string[]>[] = [];
-      for await (const row of parseCsvStream(chunks(), { info: true, raw: true })) {
+      for await (const row of parseCsvRows(chunks(), { info: true, raw: true })) {
         rows.push(row as unknown as RecordWithInfo<string[]>);
       }
 

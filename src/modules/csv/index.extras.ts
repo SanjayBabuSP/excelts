@@ -31,7 +31,7 @@ export {
   type CsvGenerateOptions,
   type CsvGenerateResult,
   type ColumnDef,
-  type ColumnConfig as GenerateColumnConfig,
+  type GeneratorColumnConfig,
   type BuiltinColumnType,
   type GeneratorFn,
   type GeneratorContext,

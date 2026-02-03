@@ -420,10 +420,10 @@ export function formatRowWithLookup(
 }
 
 // =============================================================================
-// Internal Config (for batch formatter)
+// Format Config (shared by batch formatter and CsvFormatterStream)
 // =============================================================================
 
-interface FormatConfig {
+export interface FormatConfig {
   delimiter: string;
   rowDelimiter: string;
   quoteAll: boolean;
@@ -438,7 +438,7 @@ interface FormatConfig {
   shouldQuoteHeader: QuoteLookupFn;
 }
 
-function createFormatConfig(options: CsvFormatOptions): FormatConfig {
+export function createFormatConfig(options: CsvFormatOptions): FormatConfig {
   const {
     delimiter = ",",
     rowDelimiter = "\n",

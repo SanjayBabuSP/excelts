@@ -119,8 +119,8 @@ export function parseCsv(
 
   // Choose parser based on mode
   const parser = config.fastMode
-    ? parseFastMode(processedInput, config, state, errors, invalidRows)
-    : parseStandardMode(processedInput, config, state, errors, invalidRows);
+    ? parseFastMode(processedInput, config, state, errors)
+    : parseStandardMode(processedInput, config, state, errors);
 
   // Collect all rows
   for (const result of parser) {

@@ -76,3 +76,50 @@ export function filter<T>(predicate: (chunk: T) => boolean | Promise<boolean>): 
     { objectMode: true }
   );
 }
+
+// =============================================================================
+// ReadableStream Conversion
+// =============================================================================
+
+/**
+ * Type guard for browser ReadableStream-like objects
+ */
+export function isReadableStreamLike(value: unknown): value is { getReader: () => any } {
+  return Boolean(value && typeof (value as any).getReader === "function");
+}
+
+/**
+ * Convert a browser ReadableStream to an AsyncIterable.
+ * This is useful for consuming fetch response bodies in a streaming fashion.
+ *
+ * @example
+ * ```ts
+ * const response = await fetch(url);
+ * for await (const chunk of readableStreamToAsyncIterable(response.body)) {
+ *   // process chunk
+ * }
+ * ```
+ */
+export async function* readableStreamToAsyncIterable<T = Uint8Array>(stream: {
+  getReader: () => any;
+}): AsyncGenerator<T, void, unknown> {
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result?.done) {
+        return;
+      }
+      if (result?.value) {
+        yield result.value as T;
+      }
+    }
+  } finally {
+    // Best-effort cleanup across environments.
+    try {
+      reader.releaseLock?.();
+    } catch {
+      // ignore
+    }
+  }
+}

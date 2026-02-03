@@ -18,11 +18,10 @@ import type { createOnSkipHandler } from "./utils/parse";
 import {
   processHeaders,
   validateAndAdjustColumns,
-  isEmptyRow,
-  hasAllEmptyValues,
   convertRowToObject,
   createOnSkipHandler as createOnSkipHandlerImpl
 } from "./utils/parse";
+import { isEmptyRow, hasAllEmptyValues } from "./utils/row";
 import { applyDynamicTypingToRow } from "./utils/dynamic-typing";
 import {
   normalizeQuoteOption,
@@ -32,31 +31,20 @@ import {
   stripBom
 } from "./utils/detect";
 
-// =============================================================================
-// Constants
-// =============================================================================
+// Import shared constants from centralized location (avoids circular deps)
+import { LARGE_FIELD_THRESHOLD, DEFAULT_LINEBREAK_REGEX, sharedTextEncoder } from "./constants";
 
-/**
- * Threshold for switching to array-based field building.
- * Avoids O(n²) string concat overhead for large fields.
- */
-export const LARGE_FIELD_THRESHOLD = 1024;
+// Re-export for backward compatibility
+export { LARGE_FIELD_THRESHOLD, DEFAULT_LINEBREAK_REGEX, sharedTextEncoder };
+
+// =============================================================================
+// Constants (module-specific)
+// =============================================================================
 
 /**
  * Threshold for flushing accumulated parts in array mode
  */
 const FIELD_PART_FLUSH_THRESHOLD = 512;
-
-/**
- * Pre-compiled regex for line splitting (matches CR, LF, or CRLF)
- */
-export const DEFAULT_LINEBREAK_REGEX = /\r\n|\r|\n/;
-
-/**
- * Shared TextEncoder instance for byte length calculations.
- * Avoids creating new instances in hot paths.
- */
-export const sharedTextEncoder = new TextEncoder();
 
 // =============================================================================
 // Types
@@ -66,7 +54,7 @@ export const sharedTextEncoder = new TextEncoder();
  * Minimal state required for field building operations.
  * Used by streaming parser which manages its own properties.
  */
-export interface FieldState {
+interface FieldState {
   currentField: string;
   currentFieldParts: string[] | null;
   currentFieldLength: number;
@@ -174,7 +162,7 @@ export interface RowProcessResult {
  * - For batch parsing: provide `input` for auto-detection and BOM stripping
  * - For streaming: omit `input` (will use defaults, detection handled separately)
  */
-export interface CreateParseConfigOptions {
+interface CreateParseConfigOptions {
   /** Raw input string (for batch parsing with auto-detection) */
   input?: string;
   /** CSV parse options */
@@ -186,7 +174,7 @@ export interface CreateParseConfigOptions {
 /**
  * Result of createParseConfig
  */
-export interface ParseConfigResult {
+interface ParseConfigResult {
   /** Resolved parse configuration */
   config: ParseConfig;
   /** Processed input with BOM stripped and beforeFirstChunk applied (if input was provided) */
@@ -346,11 +334,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
 /**
  * Create a trim function based on options
  */
-export function makeTrimField(
-  trim: boolean,
-  ltrim: boolean,
-  rtrim: boolean
-): (s: string) => string {
+function makeTrimField(trim: boolean, ltrim: boolean, rtrim: boolean): (s: string) => string {
   if (trim || (ltrim && rtrim)) {
     return (s: string) => s.trim();
   }
@@ -521,7 +505,7 @@ export function resetInfoState(
  * Get UTF-8 byte length of a single character.
  * Optimized: ASCII chars (code < 128) are always 1 byte.
  */
-export function charByteLength(char: string): number {
+function charByteLength(char: string): number {
   const code = char.charCodeAt(0);
   if (code < 128) {
     return 1; // ASCII: 1 byte
@@ -550,16 +534,6 @@ export function addRowBytes(
   }
 }
 
-/**
- * Check if row bytes exceed limit (legacy function for backward compatibility)
- * @deprecated Use addRowBytes instead for accurate byte counting
- */
-export function checkRowBytes(currentBytes: number, maxRowBytes: number | undefined): void {
-  if (maxRowBytes !== undefined && currentBytes > maxRowBytes) {
-    throw new Error(`Row exceeds the maximum size of ${maxRowBytes} bytes`);
-  }
-}
-
 // =============================================================================
 // Row Processing
 // =============================================================================
@@ -568,7 +542,7 @@ export function checkRowBytes(currentBytes: number, maxRowBytes: number | undefi
  * Process headers from a row (first data row or configured headers)
  * Returns true if the row should be skipped (was used as headers)
  */
-export function processHeaderRow(
+function processHeaderRow(
   row: string[],
   state: ParseState,
   config: Pick<ParseConfig, "headers" | "renameHeaders" | "groupColumnsByName">
@@ -599,7 +573,7 @@ export function processHeaderRow(
  * Validate row column count against headers
  * Returns error info if validation fails, null otherwise
  */
-export function validateRowColumns(
+function validateRowColumns(
   row: string[],
   state: ParseState,
   config: Pick<
@@ -651,11 +625,7 @@ export function validateRowColumns(
 /**
  * Build record info for a completed row
  */
-export function buildRecordInfo(
-  state: ParseState,
-  dataRowIndex: number,
-  includeRaw: boolean
-): RecordInfo {
+function buildRecordInfo(state: ParseState, dataRowIndex: number, includeRaw: boolean): RecordInfo {
   const info: RecordInfo = {
     index: dataRowIndex,
     line: state.currentRowStartLine,

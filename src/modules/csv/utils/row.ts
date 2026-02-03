@@ -248,21 +248,6 @@ export function isEmptyRow(row: string[], shouldSkipEmpty: boolean | "greedy"): 
 }
 
 /**
- * Check if a row is a comment line (first field starts with comment character).
- *
- * @param row - The row to check
- * @param commentChar - The comment character (e.g., "#")
- * @returns true if the row is a comment
- */
-export function isCommentRow(row: string[], commentChar: string | undefined): boolean {
-  if (!commentChar) {
-    return false;
-  }
-  const firstField = row[0] ?? "";
-  return firstField.startsWith(commentChar);
-}
-
-/**
  * Check if all values in a row are empty strings.
  * Used by skipRecordsWithEmptyValues option.
  *

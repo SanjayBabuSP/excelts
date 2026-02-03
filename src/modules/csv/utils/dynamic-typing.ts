@@ -6,29 +6,7 @@
  */
 
 import { DateParser } from "@utils/datetime";
-
-// =============================================================================
-// Types
-// =============================================================================
-
-/**
- * Dynamic typing configuration for automatic type conversion.
- *
- * - `true`: Convert all columns using built-in rules
- * - `false`: Keep all values as strings
- * - `Record<string, boolean>`: Enable/disable per column
- * - `Record<string, (value: string) => unknown>`: Custom converter per column
- */
-export type DynamicTypingConfig = boolean | Record<string, boolean | ((value: string) => unknown)>;
-
-/**
- * Cast date configuration for automatic date parsing.
- *
- * - `true`: Try to parse all string values as dates (ISO formats only)
- * - `false`: No date parsing
- * - `string[]`: Only parse specified columns as dates
- */
-export type CastDateConfig = boolean | string[];
+import type { DynamicTypingConfig, CastDateConfig } from "@csv/types";
 
 // Singleton date parser for ISO formats (created lazily)
 let isoDateParser: DateParser | null = null;

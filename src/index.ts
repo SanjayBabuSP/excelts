@@ -89,7 +89,7 @@ export {
   createCsvFormatterStream
 } from "@csv/csv-stream";
 export { parseCsv } from "@csv/parse";
-export { parseCsvAsync, parseCsvStream, parseCsvWithProgress } from "@csv/parse-async";
+export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "@csv/parse-async";
 export { formatCsv } from "@csv/format";
 
 // CSV Generator (extras)
@@ -102,7 +102,7 @@ export {
   type CsvGenerateOptions,
   type CsvGenerateResult,
   type ColumnDef,
-  type ColumnConfig as GenerateColumnConfig,
+  type GeneratorColumnConfig,
   type BuiltinColumnType,
   type GeneratorFn,
   type GeneratorContext,

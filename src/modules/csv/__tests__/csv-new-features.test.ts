@@ -6,7 +6,7 @@
  * - skipRecordsWithEmptyValues: Skip records where all values are empty strings
  */
 import { describe, it, expect, vi } from "vitest";
-import { parseCsv, parseCsvStream, type CsvSkipError } from "@csv/index";
+import { parseCsv, parseCsvRows, type CsvSkipError } from "@csv/index";
 import { CsvParserStream } from "@csv/csv-stream";
 
 // =============================================================================
@@ -138,12 +138,12 @@ describe("toLine option", () => {
     });
   });
 
-  describe("parseCsvStream (async generator)", () => {
+  describe("parseCsvRows (async generator)", () => {
     it("should stop at specified line number", async () => {
       const csv = "a,b\n1,2\n3,4\n5,6";
       const rows: string[][] = [];
 
-      for await (const row of parseCsvStream(csv, { toLine: 2 })) {
+      for await (const row of parseCsvRows(csv, { toLine: 2 })) {
         rows.push(row as string[]);
       }
 
@@ -291,12 +291,12 @@ describe("castDate option", () => {
     });
   });
 
-  describe("parseCsvStream (async generator)", () => {
+  describe("parseCsvRows (async generator)", () => {
     it("should parse dates in async generator mode", async () => {
       const csv = "date,value\n2024-01-15,100";
       const rows: Record<string, unknown>[] = [];
 
-      for await (const row of parseCsvStream(csv, { headers: true, castDate: true })) {
+      for await (const row of parseCsvRows(csv, { headers: true, castDate: true })) {
         rows.push(row as Record<string, unknown>);
       }
 
@@ -469,13 +469,13 @@ describe("skipRecordsWithError + onSkip", () => {
     });
   });
 
-  describe("parseCsvStream (async generator)", () => {
+  describe("parseCsvRows (async generator)", () => {
     it("should skip records with column mismatch and invoke onSkip", async () => {
       const csv = "a,b,c\n1,2\n3,4,5\n6,7";
       const skippedRecords: Array<{ code: string; line: number }> = [];
       const rows: Record<string, string>[] = [];
 
-      for await (const row of parseCsvStream(csv, {
+      for await (const row of parseCsvRows(csv, {
         headers: true,
         strictColumnHandling: true,
         skipRecordsWithError: true,
@@ -497,7 +497,7 @@ describe("skipRecordsWithError + onSkip", () => {
       const skippedRecords: Array<{ code: string; line: number }> = [];
       const rows: Record<string, string>[] = [];
 
-      for await (const row of parseCsvStream(csv, {
+      for await (const row of parseCsvRows(csv, {
         headers: true,
         strictColumnHandling: true,
         skipRecordsWithError: true,
@@ -517,7 +517,7 @@ describe("skipRecordsWithError + onSkip", () => {
       const csv = "a,b,c\n1,2\n3,4,5";
       const rows: Record<string, string>[] = [];
 
-      for await (const row of parseCsvStream(csv, {
+      for await (const row of parseCsvRows(csv, {
         headers: true,
         strictColumnHandling: true,
         skipRecordsWithError: true
@@ -721,12 +721,12 @@ describe("skipRecordsWithEmptyValues option", () => {
     });
   });
 
-  describe("parseCsvStream (async generator)", () => {
+  describe("parseCsvRows (async generator)", () => {
     it("should skip records with all empty values in async generator mode", async () => {
       const csv = "a,b\n1,2\n,\n3,4";
       const rows: Record<string, string>[] = [];
 
-      for await (const row of parseCsvStream(csv, {
+      for await (const row of parseCsvRows(csv, {
         headers: true,
         skipRecordsWithEmptyValues: true
       })) {
@@ -980,12 +980,12 @@ describe("groupColumnsByName option", () => {
     });
   });
 
-  describe("parseCsvStream (async generator)", () => {
+  describe("parseCsvRows (async generator)", () => {
     it("should group duplicate column names in async generator mode", async () => {
       const csv = "a,b,a\n1,2,3";
       const rows: any[] = [];
 
-      for await (const row of parseCsvStream(csv, {
+      for await (const row of parseCsvRows(csv, {
         headers: true,
         groupColumnsByName: true
       })) {

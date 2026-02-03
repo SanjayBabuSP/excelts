@@ -1253,13 +1253,13 @@ describe("CSV Stream - Backpressure", () => {
 // Additional Streaming Options Tests
 // =============================================================================
 
-import { parseCsvStream } from "@csv/index";
+import { parseCsvRows } from "@csv/index";
 
 describe("CSV Stream - Parser Options", () => {
   it("should support ltrim in streaming", async () => {
     const input = "  a,  b\n  1,  2";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, { ltrim: true })) {
+    for await (const row of parseCsvRows(input, { ltrim: true })) {
       rows.push(row);
     }
     expect(rows).toEqual([
@@ -1271,7 +1271,7 @@ describe("CSV Stream - Parser Options", () => {
   it("should support rtrim in streaming", async () => {
     const input = "a  ,b  \n1  ,2  ";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, { rtrim: true })) {
+    for await (const row of parseCsvRows(input, { rtrim: true })) {
       rows.push(row);
     }
     expect(rows).toEqual([
@@ -1283,7 +1283,7 @@ describe("CSV Stream - Parser Options", () => {
   it("should support skipRows in streaming", async () => {
     const input = "a,b\n1,2\n3,4\n5,6";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, { headers: true, skipRows: 1 })) {
+    for await (const row of parseCsvRows(input, { headers: true, skipRows: 1 })) {
       rows.push(row);
     }
     expect(rows).toEqual([
@@ -1295,7 +1295,7 @@ describe("CSV Stream - Parser Options", () => {
   it("should support renameHeaders in streaming", async () => {
     const input = "old1,old2\nval1,val2";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, {
+    for await (const row of parseCsvRows(input, {
       headers: ["new1", "new2"],
       renameHeaders: true
     })) {
@@ -1307,7 +1307,7 @@ describe("CSV Stream - Parser Options", () => {
   it("should support ignoreEmpty in streaming", async () => {
     const input = "a,b\n\n1,2\n\n3,4";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, { ignoreEmpty: true })) {
+    for await (const row of parseCsvRows(input, { ignoreEmpty: true })) {
       rows.push(row);
     }
     expect(rows).toEqual([
@@ -1320,7 +1320,7 @@ describe("CSV Stream - Parser Options", () => {
   it("should support strictColumnHandling in streaming (skip invalid)", async () => {
     const input = "a,b\n1,2,3\n4,5";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, {
+    for await (const row of parseCsvRows(input, {
       headers: true,
       strictColumnHandling: true
     })) {
@@ -1332,7 +1332,7 @@ describe("CSV Stream - Parser Options", () => {
   it("should support discardUnmappedColumns in streaming", async () => {
     const input = "a,b\n1,2,extra";
     const rows: any[] = [];
-    for await (const row of parseCsvStream(input, {
+    for await (const row of parseCsvRows(input, {
       headers: true,
       discardUnmappedColumns: true
     })) {

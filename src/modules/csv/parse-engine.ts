@@ -6,7 +6,7 @@
  */
 
 import type { CsvParseOptions, CsvParseError } from "./types";
-import { isEmptyRow } from "./utils/parse";
+import { isEmptyRow } from "./utils/row";
 
 // Import shared core functionality
 import {
@@ -14,7 +14,6 @@ import {
   type ParseState,
   type RowProcessResult,
   createParseConfig,
-  createParseState,
   appendToField,
   completeField,
   resetInfoState,
@@ -53,8 +52,7 @@ export function* parseFastMode(
   input: string,
   config: ParseConfig,
   state: ParseState,
-  errors: CsvParseError[],
-  invalidRows: { row: string[]; reason: string }[]
+  errors: CsvParseError[]
 ): Generator<RowProcessResult, void, undefined> {
   // Use pre-compiled linebreak regex from config
   const lines = input.split(config.linebreakRegex);
@@ -121,8 +119,7 @@ export function* parseStandardMode(
   input: string,
   config: ParseConfig,
   state: ParseState,
-  errors: CsvParseError[],
-  invalidRows: { row: string[]; reason: string }[]
+  errors: CsvParseError[]
 ): Generator<RowProcessResult, void, undefined> {
   const len = input.length;
   let i = 0;

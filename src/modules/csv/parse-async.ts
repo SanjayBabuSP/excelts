@@ -7,7 +7,7 @@
  *
  * Notes:
  * - parseCsvAsync() returns a full result and may buffer the entire input.
- * - parseCsvStream() is a true streaming async generator that yields rows
+ * - parseCsvRows() is a true streaming async generator that yields rows
  *   as the underlying stream parser emits them.
  */
 
@@ -20,6 +20,8 @@ import type {
 } from "./types";
 import { parseCsv } from "./parse";
 import { CsvParserStream } from "./csv-stream";
+import { sharedTextEncoder } from "./parse-core";
+import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils";
 
 type ReadableStreamLike = { getReader: () => any };
 type AsyncInput = AsyncIterable<string | Uint8Array>;
@@ -27,34 +29,6 @@ type AnyAsyncInput = AsyncInput | ReadableStreamLike;
 
 function isAsyncIterable(value: unknown): value is AsyncInput {
   return Boolean(value && typeof (value as any)[Symbol.asyncIterator] === "function");
-}
-
-function isReadableStreamLike(value: unknown): value is ReadableStreamLike {
-  return Boolean(value && typeof (value as any).getReader === "function");
-}
-
-async function* readableStreamToAsyncIterable(
-  stream: ReadableStreamLike
-): AsyncGenerator<Uint8Array, void, unknown> {
-  const reader = stream.getReader();
-  try {
-    while (true) {
-      const result = await reader.read();
-      if (result?.done) {
-        return;
-      }
-      if (result?.value) {
-        yield result.value as Uint8Array;
-      }
-    }
-  } finally {
-    // Best-effort cleanup across environments.
-    try {
-      reader.releaseLock?.();
-    } catch {
-      // ignore
-    }
-  }
 }
 
 function normalizeAsyncInput(input: unknown): AsyncInput {
@@ -144,12 +118,12 @@ export async function parseCsvAsync(
  * @example
  * ```ts
  * // Process large file row by row
- * for await (const row of parseCsvStream(fileStream, { headers: true })) {
+ * for await (const row of parseCsvRows(fileStream, { headers: true })) {
  *   console.log(row);
  * }
  *
  * // With validation
- * for await (const row of parseCsvStream(input, {
+ * for await (const row of parseCsvRows(input, {
  *   headers: true,
  *   validate: (row) => row.id !== ""
  * })) {
@@ -157,7 +131,7 @@ export async function parseCsvAsync(
  * }
  * ```
  */
-export async function* parseCsvStream(
+export async function* parseCsvRows(
   input: string | AnyAsyncInput,
   options: CsvParseOptions = {}
 ): AsyncGenerator<
@@ -172,7 +146,9 @@ export async function* parseCsvStream(
   // in a true streaming fashion. Fall back to buffered parsing.
   if (options.objname) {
     const content =
-      typeof input === "string" ? input : await collectAsyncInput(normalizeAsyncInput(input), options);
+      typeof input === "string"
+        ? input
+        : await collectAsyncInput(normalizeAsyncInput(input), options);
 
     const result = parseCsv(content, options);
 
@@ -327,18 +303,24 @@ export interface StreamParseMeta extends CsvParseMeta {
  * @param options - Parse options
  * @param onProgress - Called periodically with progress info
  */
-export async function parseCsvWithProgress<T = Record<string, unknown>>(
+export async function parseCsvWithProgress(
   input: string | AnyAsyncInput,
   options: CsvParseOptions = {},
   onProgress?: (info: { rowsProcessed: number; bytesProcessed?: number }) => void
-): Promise<CsvParseResult<T>> {
+): Promise<
+  | string[][]
+  | CsvParseResult<Record<string, string>>
+  | CsvParseResult<Record<string, unknown>>
+  | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+  | CsvParseResult<RecordWithInfo<string[]>>
+> {
   // Collect input and track bytes
   let content: string;
   let totalBytes = 0;
 
   if (typeof input === "string") {
     content = input;
-    totalBytes = new TextEncoder().encode(content).length;
+    totalBytes = sharedTextEncoder.encode(content).length;
   } else {
     const chunks: string[] = [];
     const decoder = new TextDecoder(options.encoding || "utf-8");
@@ -348,7 +330,7 @@ export async function parseCsvWithProgress<T = Record<string, unknown>>(
     for await (const chunk of asyncInput) {
       if (typeof chunk === "string") {
         chunks.push(chunk);
-        totalBytes += new TextEncoder().encode(chunk).length;
+        totalBytes += sharedTextEncoder.encode(chunk).length;
       } else {
         chunks.push(decoder.decode(chunk, { stream: true }));
         totalBytes += chunk.length;
@@ -373,11 +355,19 @@ export async function parseCsvWithProgress<T = Record<string, unknown>>(
 
   // Report final progress
   if (onProgress) {
-    const rowCount = Array.isArray(result)
-      ? result.length
-      : ((result as CsvParseResult<T>).rows?.length ?? 0);
+    let rowCount: number;
+    if (Array.isArray(result)) {
+      rowCount = result.length;
+    } else if (result.rows instanceof Map) {
+      // objname mode: rows is a Map
+      rowCount = result.rows.size;
+    } else if (Array.isArray(result.rows)) {
+      rowCount = result.rows.length;
+    } else {
+      rowCount = 0;
+    }
     onProgress({ rowsProcessed: rowCount, bytesProcessed: totalBytes });
   }
 
-  return result as CsvParseResult<T>;
+  return result;
 }

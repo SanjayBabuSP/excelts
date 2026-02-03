@@ -214,6 +214,30 @@ describe("Workbook", () => {
           expect(ws.getCell("B1").value).toBe("age");
         });
 
+        it("should support headers option with stream input", async () => {
+          const wb = new Workbook();
+          // Create a readable stream from string using async generator
+          const csvData = "name,age\nAlice,30\nBob,25";
+          const readable = {
+            async *[Symbol.asyncIterator]() {
+              // Split into chunks to simulate streaming
+              yield new TextEncoder().encode(csvData.slice(0, 10));
+              yield new TextEncoder().encode(csvData.slice(10));
+            }
+          };
+
+          const ws = await wb.csv.parse(readable as any, { headers: true });
+
+          // Verify headers row is written
+          expect(ws.getCell("A1").value).toBe("name");
+          expect(ws.getCell("B1").value).toBe("age");
+          // Verify data rows are converted from object to array correctly
+          expect(ws.getCell("A2").value).toBe("Alice");
+          expect(ws.getCell("B2").value).toBe(30);
+          expect(ws.getCell("A3").value).toBe("Bob");
+          expect(ws.getCell("B3").value).toBe(25);
+        });
+
         it("should support decimalSeparator option", async () => {
           const wb = new Workbook();
           await wb.csv.parse("value\n1,50\n2,75", {

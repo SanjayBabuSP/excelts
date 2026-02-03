@@ -18,21 +18,13 @@ import type {
   RowTransformCallback,
   RowValidateCallback,
   ChunkMeta,
-  TypeTransformMap,
   RecordInfo,
   HeaderArray,
   CsvParseError
 } from "./types";
 import { isSyncTransform, isSyncValidate } from "./types";
 import { detectDelimiter, stripBom } from "@csv/utils/detect";
-import {
-  createFormatRegex,
-  createQuoteLookup,
-  formatRowWithLookup,
-  type CsvFormatRegex,
-  type QuoteColumnConfig,
-  type QuoteLookupFn
-} from "@csv/format";
+import { createFormatConfig, formatRowWithLookup, type FormatConfig } from "@csv/format";
 import { extractRowValues, detectRowKeys, processColumns } from "@csv/utils/row";
 import { applyDynamicTypingToRow, applyDynamicTypingToArrayRow } from "@csv/utils/dynamic-typing";
 import { convertRowToObject, filterValidHeaders } from "@csv/utils/parse";
@@ -1187,32 +1179,6 @@ export class CsvParserStream extends Transform {
       callback(null, { row, isValid: true });
     }
   }
-
-  private emitRow(callback?: (error?: Error | null) => void): void {
-    const row = this.buildRow(this.currentRow);
-    this.transformAndValidateRow(row, (err, result) => {
-      if (err) {
-        if (callback) {
-          callback(err);
-        }
-        return;
-      }
-
-      if (result && result.isValid && result.row !== null) {
-        if (this.options.objectMode === false) {
-          this.push(JSON.stringify(result.row));
-        } else {
-          this.push(result.row);
-        }
-      } else if (result && !result.isValid) {
-        this.emit("data-invalid", result.row, result.reason);
-      }
-
-      if (callback) {
-        callback();
-      }
-    });
-  }
 }
 
 /**
@@ -1229,27 +1195,17 @@ export class CsvParserStream extends Transform {
  */
 export class CsvFormatterStream extends Transform {
   private options: CsvFormatOptions;
-  private delimiter: string;
-  private rowDelimiter: string;
-  private quoteAll: boolean;
-  private decimalSeparator: "." | ",";
-  private escapeFormulae: boolean;
+  /** Unified format configuration (shared with batch formatter) */
+  private formatConfig: FormatConfig;
   private headerWritten: boolean = false;
   /** Keys to access data from source objects */
   private keys: string[] | null = null;
   /** Headers to write to output (may differ from keys) */
   private displayHeaders: string[] | null = null;
-  private shouldWriteHeaders: boolean;
   /** Index of source row (before filtering), passed to transform.row */
   private sourceRowIndex: number = 0;
   /** Index of output data row (after filtering, excludes header), used for ctx.index */
   private outputRowIndex: number = 0;
-  private transform_: TypeTransformMap | null = null;
-  // Pre-compiled format regex using shared utility
-  private formatRegex: CsvFormatRegex;
-  // Pre-computed quote lookup functions for performance
-  private quoteColumnsLookup: QuoteLookupFn;
-  private quoteHeadersLookup: QuoteLookupFn;
 
   constructor(options: CsvFormatOptions = {}) {
     super({
@@ -1258,25 +1214,8 @@ export class CsvFormatterStream extends Transform {
     });
     this.options = options;
 
-    this.delimiter = options.delimiter ?? ",";
-    this.rowDelimiter = options.rowDelimiter ?? "\n";
-    // quoteColumns: true means quote all columns
-    this.quoteAll = options.quoteColumns === true;
-    this.decimalSeparator = options.decimalSeparator ?? ".";
-    this.escapeFormulae = options.escapeFormulae ?? false;
-    // writeHeaders defaults to true when headers is provided
-    this.shouldWriteHeaders = options.writeHeaders ?? true;
-
-    // Pre-compile regex for performance using shared utility
-    this.formatRegex = createFormatRegex({
-      quote: options.quote ?? '"',
-      delimiter: this.delimiter,
-      escape: options.escape
-    });
-
-    // Pre-compute quote lookup functions for performance
-    this.quoteColumnsLookup = createQuoteLookup(options.quoteColumns as QuoteColumnConfig);
-    this.quoteHeadersLookup = createQuoteLookup(options.quoteHeaders as QuoteColumnConfig);
+    // Use shared config factory (same as batch formatter)
+    this.formatConfig = createFormatConfig(options);
 
     // Process columns config (takes precedence over headers)
     const columnsConfig = processColumns(options.columns);
@@ -1286,11 +1225,6 @@ export class CsvFormatterStream extends Transform {
     } else if (Array.isArray(options.headers)) {
       this.keys = options.headers;
       this.displayHeaders = options.headers;
-    }
-
-    // Set up transform from options
-    if (options.transform) {
-      this.transform_ = options.transform;
     }
   }
 
@@ -1312,7 +1246,7 @@ export class CsvFormatterStream extends Transform {
   ): void {
     try {
       // Write BOM if first chunk
-      if (!this.headerWritten && this.options.bom) {
+      if (!this.headerWritten && this.formatConfig.bom) {
         this.push("\uFEFF");
       }
 
@@ -1324,7 +1258,7 @@ export class CsvFormatterStream extends Transform {
         }
 
         // Write headers if we should and have them
-        if (this.shouldWriteHeaders && this.displayHeaders) {
+        if (this.formatConfig.writeHeaders && this.displayHeaders) {
           this.push(this.formatRow(this.displayHeaders, true));
         }
         this.headerWritten = true;
@@ -1333,8 +1267,8 @@ export class CsvFormatterStream extends Transform {
       // Apply row-level transform if provided
       let processedChunk: Row | null = chunk;
       const sourceIndex = this.sourceRowIndex++;
-      if (this.transform_?.row) {
-        processedChunk = this.transform_.row(chunk, sourceIndex);
+      if (this.formatConfig.transform?.row) {
+        processedChunk = this.formatConfig.transform.row(chunk, sourceIndex);
         if (processedChunk === null) {
           callback();
           return;
@@ -1351,8 +1285,8 @@ export class CsvFormatterStream extends Transform {
 
   override _flush(callback: (error?: Error | null) => void): void {
     // Handle writeHeaders: true with no data - still write headers
-    if (!this.headerWritten && this.displayHeaders && this.shouldWriteHeaders) {
-      if (this.options.bom) {
+    if (!this.headerWritten && this.displayHeaders && this.formatConfig.writeHeaders) {
+      if (this.formatConfig.bom) {
         this.push("\uFEFF");
       }
       this.push(this.formatRow(this.displayHeaders, true));
@@ -1361,9 +1295,10 @@ export class CsvFormatterStream extends Transform {
 
     // Add trailing newline if trailingNewline is true
     // hasOutput = wrote header OR wrote any data row
-    const hasOutput = (this.shouldWriteHeaders && this.displayHeaders) || this.outputRowIndex > 0;
-    if (this.options.trailingNewline && hasOutput) {
-      this.push(this.rowDelimiter);
+    const hasOutput =
+      (this.formatConfig.writeHeaders && this.displayHeaders) || this.outputRowIndex > 0;
+    if (this.formatConfig.trailingNewline && hasOutput) {
+      this.push(this.formatConfig.rowDelimiter);
     }
 
     callback();
@@ -1375,26 +1310,27 @@ export class CsvFormatterStream extends Transform {
   }
 
   private formatRow(row: unknown[], isHeader: boolean = false): string {
+    const cfg = this.formatConfig;
     // Use pre-computed quote lookup for performance
-    const quoteLookup = isHeader ? this.quoteHeadersLookup : this.quoteColumnsLookup;
+    const quoteLookup = isHeader ? cfg.shouldQuoteHeader : cfg.shouldQuoteColumn;
 
-    const formattedRow = formatRowWithLookup(row, this.formatRegex, {
+    const formattedRow = formatRowWithLookup(row, cfg.regex, {
       quoteLookup,
-      delimiter: this.delimiter,
+      delimiter: cfg.delimiter,
       headers: this.displayHeaders ?? undefined,
       isHeader,
       outputRowIndex: this.outputRowIndex,
-      quoteAll: this.quoteAll,
-      escapeFormulae: this.escapeFormulae,
-      decimalSeparator: this.decimalSeparator,
-      transform: this.transform_ ?? undefined
+      quoteAll: cfg.quoteAll,
+      escapeFormulae: cfg.escapeFormulae,
+      decimalSeparator: cfg.decimalSeparator,
+      transform: cfg.transform
     });
 
     // Use row delimiter as prefix (except for first output)
     // First output = header row OR (no header AND first data row)
     const isFirstLine =
-      isHeader || (!(this.shouldWriteHeaders && this.displayHeaders) && this.outputRowIndex === 0);
-    return isFirstLine ? formattedRow : this.rowDelimiter + formattedRow;
+      isHeader || (!(cfg.writeHeaders && this.displayHeaders) && this.outputRowIndex === 0);
+    return isFirstLine ? formattedRow : cfg.rowDelimiter + formattedRow;
   }
 }
 

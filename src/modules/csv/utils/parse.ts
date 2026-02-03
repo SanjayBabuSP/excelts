@@ -5,19 +5,7 @@
  * and CsvParserStream (streaming) to avoid code duplication.
  */
 
-import {
-  deduplicateHeadersWithRenames,
-  isEmptyRow,
-  isCommentRow,
-  hasAllEmptyValues,
-  type HeaderArray
-} from "@csv/utils/row";
-
-// Re-export row utilities for backward compatibility
-export { isEmptyRow, isCommentRow, hasAllEmptyValues };
-
-// Re-export linebreak regex from parse-core (single source of truth)
-export { DEFAULT_LINEBREAK_REGEX as LINE_SPLIT_REGEX } from "@csv/parse-core";
+import { deduplicateHeadersWithRenames, type HeaderArray } from "@csv/utils/row";
 
 // =============================================================================
 // Types

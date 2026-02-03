@@ -76,7 +76,7 @@ export { isFormattedValue, quoted, unquoted } from "./types";
 export { parseCsv } from "./parse";
 
 // Async generator parser
-export { parseCsvAsync, parseCsvStream, parseCsvWithProgress } from "./parse-async";
+export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "./parse-async";
 export type { StreamParseMeta } from "./parse-async";
 
 // Formatter

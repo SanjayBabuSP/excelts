@@ -13,6 +13,7 @@ import { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "@csv/utils/number";
 import { CsvDownloadError, CsvNotSupportedError, CsvFileError } from "@csv/errors";
 import { pipeline } from "@stream";
+import { readableStreamToAsyncIterable } from "@stream/utils";
 import type { IReadable, IWritable } from "@stream/types";
 import type { Workbook } from "@excel/workbook";
 import type { Worksheet } from "@excel/worksheet";
@@ -45,89 +46,62 @@ export type CsvInput =
   | IReadable<any>; // Readable stream
 
 /**
- * Unified CSV options for both parsing and formatting
+ * Parse options from CsvParseOptions that are exposed in CsvOptions.
+ * Internal fields like objectMode, transform, validate, chunk, etc. are excluded.
  */
-export interface CsvOptions {
+type CsvOptionsParseFields = Pick<
+  CsvParseOptions,
+  | "delimiter"
+  | "quote"
+  | "escape"
+  | "delimitersToGuess"
+  | "newline"
+  | "headers"
+  | "renameHeaders"
+  | "skipEmptyLines"
+  | "ignoreEmpty"
+  | "trim"
+  | "ltrim"
+  | "rtrim"
+  | "comment"
+  | "maxRows"
+  | "toLine"
+  | "skipLines"
+  | "skipRows"
+  | "strictColumnHandling"
+  | "discardUnmappedColumns"
+  | "relaxColumnCountLess"
+  | "relaxColumnCountMore"
+  | "groupColumnsByName"
+  | "relaxQuotes"
+  | "fastMode"
+  | "info"
+  | "raw"
+  | "skipRecordsWithError"
+  | "skipRecordsWithEmptyValues"
+  | "onSkip"
+>;
+
+/**
+ * Format options from CsvFormatOptions that are exposed in CsvOptions.
+ */
+type CsvOptionsFormatFields = Pick<
+  CsvFormatOptions,
+  | "rowDelimiter"
+  | "decimalSeparator"
+  | "quoteColumns"
+  | "quoteHeaders"
+  | "writeHeaders"
+  | "escapeFormulae"
+>;
+
+/**
+ * CsvOptions-specific fields not present in CsvParseOptions or CsvFormatOptions.
+ */
+interface CsvOptionsExtras {
   // === Worksheet ===
   sheetName?: string;
   sheetId?: number;
-
-  // === Parse options (unified with CsvParseOptions) ===
-  /** Field delimiter (default: ","). Set to "" to auto-detect. */
-  delimiter?: string;
-  /** Quote character (default: '"'), set to false/null to disable */
-  quote?: string | false | null;
-  /** Escape character (default: same as quote), set to false/null to disable */
-  escape?: string | false | null;
-  /** Delimiters to try during auto-detection (when delimiter is "") */
-  delimitersToGuess?: string[];
-  /** Line terminator (default: auto-detect) */
-  newline?: string;
-  /** Header handling (first row headers, custom array, or transform function) */
-  headers?: CsvParseOptions["headers"];
-  /** Rename/discard first row and use provided headers */
-  renameHeaders?: boolean;
-  /** Skip empty lines */
-  skipEmptyLines?: CsvParseOptions["skipEmptyLines"];
-  /** Alias for skipEmptyLines */
-  ignoreEmpty?: boolean;
-  /** Trim whitespace from both sides */
-  trim?: boolean;
-  /** Left trim only */
-  ltrim?: boolean;
-  /** Right trim only */
-  rtrim?: boolean;
-  /** Comment character */
-  comment?: string;
-  /** Maximum rows to parse */
-  maxRows?: number;
-  /** Stop parsing at this line number (1-based, inclusive) */
-  toLine?: number;
-  /** Number of lines to skip at the beginning */
-  skipLines?: number;
-  /** Number of data rows to skip (after header) */
-  skipRows?: number;
-  /** Strict column handling */
-  strictColumnHandling?: boolean;
-  /** Discard extra columns beyond header count */
-  discardUnmappedColumns?: boolean;
-  /** Tolerate rows with fewer fields than expected */
-  relaxColumnCountLess?: boolean;
-  /** Tolerate rows with more fields than expected */
-  relaxColumnCountMore?: boolean;
-  /** Group columns with same name into arrays */
-  groupColumnsByName?: boolean;
-  /** Allow unescaped quotes mid-field */
-  relaxQuotes?: boolean;
-  /** Fast parsing mode - skips quote detection for simple data */
-  fastMode?: boolean;
-  /** Include record info */
-  info?: boolean;
-  /** Include raw string in info (requires info: true) */
-  raw?: boolean;
-  /** Skip malformed records instead of throwing */
-  skipRecordsWithError?: boolean;
-  /** Skip records where all values are empty */
-  skipRecordsWithEmptyValues?: boolean;
-  /** Callback when record is skipped due to error */
-  onSkip?: CsvParseOptions["onSkip"];
-
-  // === Format options (subset of CsvFormatOptions) ===
-  rowDelimiter?: string;
-  /** Decimal separator for number formatting (default: ".") */
-  decimalSeparator?: DecimalSeparator;
-  /** Quote specific columns */
-  quoteColumns?: CsvFormatOptions["quoteColumns"];
-  /** Quote header fields */
-  quoteHeaders?: CsvFormatOptions["quoteHeaders"];
-  /** Whether to write a header row (used by append mode) */
-  writeHeaders?: boolean;
-  /**
-   * Escape formulae to prevent CSV injection attacks.
-   * Fields starting with =, +, -, @, or tab are prefixed with a tab character.
-   * @see https://owasp.org/www-community/attacks/CSV_Injection
-   */
-  escapeFormulae?: boolean;
 
   // === File write options ===
   /**
@@ -159,6 +133,12 @@ export interface CsvOptions {
   stream?: boolean;
   highWaterMark?: number;
 }
+
+/**
+ * Unified CSV options for both parsing and formatting
+ */
+export interface CsvOptions
+  extends CsvOptionsParseFields, CsvOptionsFormatFields, CsvOptionsExtras {}
 
 export interface DefaultValueMapperOptions {
   decimalSeparator?: DecimalSeparator;
@@ -452,9 +432,30 @@ class CSV {
     const decimalSeparator = options?.decimalSeparator;
     const map = options?.map || createDefaultValueMapper(dateFormats, { decimalSeparator });
     const parser = new CsvParserStream(this._buildParserOptions(options));
+    const useHeaders = !!options?.headers;
+    let headerRow: string[] | null = null;
 
     return new Promise((resolve, reject) => {
-      parser.on("data", (row: string[]) => worksheet.addRow(row.map(map)));
+      // When headers option is enabled, listen for headers event to write header row first
+      if (useHeaders) {
+        parser.on("headers", (headers: string[]) => {
+          headerRow = headers;
+          worksheet.addRow(headers);
+        });
+      }
+
+      parser.on("data", (row: unknown) => {
+        // When headers: true, CsvParserStream emits objects; otherwise arrays
+        if (useHeaders && headerRow && row && typeof row === "object" && !Array.isArray(row)) {
+          // Convert object row to array using header order
+          const rowObj = row as Record<string, unknown>;
+          const rowArray = headerRow.map(h => rowObj[h]);
+          worksheet.addRow(rowArray.map(map));
+        } else if (Array.isArray(row)) {
+          worksheet.addRow(row.map(map));
+        }
+      });
+
       pipeline(stream, parser)
         .then(() => resolve(worksheet))
         .catch(reject);
@@ -476,21 +477,8 @@ class CSV {
     }
 
     if (options?.stream && response.body) {
-      const reader = response.body.getReader();
-      const readable: IReadable<Uint8Array> = {
-        [Symbol.asyncIterator]: async function* () {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
-            }
-            if (value) {
-              yield value;
-            }
-          }
-        }
-      } as any;
-      return this._parseStream(readable, options);
+      const readable = readableStreamToAsyncIterable<Uint8Array>(response.body);
+      return this._parseStream(readable as any, options);
     }
 
     const text = await response.text();
@@ -503,22 +491,8 @@ class CSV {
       (options?.stream || file.size > LARGE_FILE_THRESHOLD) &&
       typeof file.stream === "function"
     ) {
-      const fileStream = file.stream();
-      const reader = fileStream.getReader();
-      const readable: IReadable<Uint8Array> = {
-        [Symbol.asyncIterator]: async function* () {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
-            }
-            if (value) {
-              yield value;
-            }
-          }
-        }
-      } as any;
-      return this._parseStream(readable, options);
+      const readable = readableStreamToAsyncIterable<Uint8Array>(file.stream());
+      return this._parseStream(readable as any, options);
     }
 
     return new Promise<Worksheet>((resolve, reject) => {
@@ -642,7 +616,29 @@ class CSV {
     const decimalSeparator = options?.decimalSeparator;
     const map = options?.map || createDefaultValueMapper(dateFormats, { decimalSeparator });
     const parser = new CsvParserStream(this._buildParserOptions(options));
-    parser.on("data", (row: string[]) => worksheet.addRow(row.map(map)));
+    const useHeaders = !!options?.headers;
+    let headerRow: string[] | null = null;
+
+    // When headers option is enabled, listen for headers event to write header row first
+    if (useHeaders) {
+      parser.on("headers", (headers: string[]) => {
+        headerRow = headers;
+        worksheet.addRow(headers);
+      });
+    }
+
+    parser.on("data", (row: unknown) => {
+      // When headers: true, CsvParserStream emits objects; otherwise arrays
+      if (useHeaders && headerRow && row && typeof row === "object" && !Array.isArray(row)) {
+        // Convert object row to array using header order
+        const rowObj = row as Record<string, unknown>;
+        const rowArray = headerRow.map(h => rowObj[h]);
+        worksheet.addRow(rowArray.map(map));
+      } else if (Array.isArray(row)) {
+        worksheet.addRow((row as unknown[]).map(map));
+      }
+    });
+
     return parser;
   }
 

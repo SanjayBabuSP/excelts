@@ -17,7 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseCsv,
   formatCsv,
-  parseCsvStream,
+  parseCsvRows,
   detectDelimiter,
   detectLinebreak,
   stripBom,
@@ -487,11 +487,11 @@ describe("Delimiter Auto-Detection", () => {
     });
   });
 
-  describe("parseCsvStream with auto-detect delimiter", () => {
+  describe("parseCsvRows with auto-detect delimiter", () => {
     it("should auto-detect delimiter in streaming mode", async () => {
       const input = "a;b;c\n1;2;3\n4;5;6";
       const rows: any[] = [];
-      for await (const row of parseCsvStream(input, { delimiter: "" })) {
+      for await (const row of parseCsvRows(input, { delimiter: "" })) {
         rows.push(row);
       }
       expect(rows).toEqual([
@@ -504,7 +504,7 @@ describe("Delimiter Auto-Detection", () => {
     it("should ignore comment lines when auto-detecting delimiter in streaming mode", async () => {
       const input = "# comment\na;b;c\n1;2;3\n4;5;6";
       const rows: any[] = [];
-      for await (const row of parseCsvStream(input, { delimiter: "", comment: "#" })) {
+      for await (const row of parseCsvRows(input, { delimiter: "", comment: "#" })) {
         rows.push(row);
       }
       expect(rows).toEqual([
@@ -521,7 +521,7 @@ describe("Delimiter Auto-Detection", () => {
         yield "4;5;6";
       }
       const rows: any[] = [];
-      for await (const row of parseCsvStream(generateChunks(), { delimiter: "" })) {
+      for await (const row of parseCsvRows(generateChunks(), { delimiter: "" })) {
         rows.push(row);
       }
       expect(rows).toEqual([
@@ -540,7 +540,7 @@ describe("Delimiter Auto-Detection", () => {
       }
 
       const rows: any[] = [];
-      for await (const row of parseCsvStream(generateChunks(), { delimiter: "", comment: "#" })) {
+      for await (const row of parseCsvRows(generateChunks(), { delimiter: "", comment: "#" })) {
         rows.push(row);
       }
       expect(rows).toEqual([
@@ -1355,11 +1355,11 @@ describe("CSV Core - RFC 4180 Compliance", () => {
   // ===========================================================================
   // Section 17: Streaming Parser
   // ===========================================================================
-  describe("parseCsvStream - Streaming Parser", () => {
+  describe("parseCsvRows - Streaming Parser", () => {
     it("should stream parse simple CSV", async () => {
       const input = "a,b,c\n1,2,3\n4,5,6";
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input)) {
+      for await (const row of parseCsvRows(input)) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1372,7 +1372,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should stream parse with headers", async () => {
       const input = "name,age\nAlice,30\nBob,25";
       const rows: Record<string, string>[] = [];
-      for await (const row of parseCsvStream(input, { headers: true })) {
+      for await (const row of parseCsvRows(input, { headers: true })) {
         rows.push(row as Record<string, string>);
       }
       expect(rows).toEqual([
@@ -1384,7 +1384,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should stream parse with maxRows limit", async () => {
       const input = "a,b\n1,2\n3,4\n5,6";
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input, { maxRows: 2 })) {
+      for await (const row of parseCsvRows(input, { maxRows: 2 })) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1397,7 +1397,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
       const input = "short\nthis_is_a_very_long_row_that_exceeds_limit";
 
       await expect(async () => {
-        for await (const _ of parseCsvStream(input, { maxRowBytes: 20 })) {
+        for await (const _ of parseCsvRows(input, { maxRowBytes: 20 })) {
           // Consume the stream
         }
       }).rejects.toThrow("Row exceeds the maximum size of 20 bytes");
@@ -1406,7 +1406,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should stream parse with maxRowBytes limit - allows under limit", async () => {
       const input = "a,b,c\n1,2,3\n4,5,6";
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input, { maxRowBytes: 100 })) {
+      for await (const row of parseCsvRows(input, { maxRowBytes: 100 })) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1419,7 +1419,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should stream parse quoted fields", async () => {
       const input = '"hello, world",test\n"line1\nline2",value';
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input)) {
+      for await (const row of parseCsvRows(input)) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1434,7 +1434,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "c\n1,2,3";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1450,7 +1450,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "ld\n";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([["hello", "world"]]);
@@ -1462,7 +1462,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield 'world",test\n';
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([["hello, world", "test"]]);
@@ -1474,7 +1474,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield 'world""",test\n';
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([['hello "world"', "test"]]);
@@ -1487,7 +1487,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "4,5,6";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1503,7 +1503,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "b,c\n1,2,3";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1520,7 +1520,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "e,f";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1538,7 +1538,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "e,f";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1557,7 +1557,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "1;2;3";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks(), { delimiter: "", comment: "#" })) {
+      for await (const row of parseCsvRows(chunks(), { delimiter: "", comment: "#" })) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1574,7 +1574,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
         yield "c,d,e";
       }
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(chunks())) {
+      for await (const row of parseCsvRows(chunks())) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1586,7 +1586,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should handle dynamicTyping with streaming", async () => {
       const input = "name,age,active\nAlice,30,true\nBob,25,false";
       const rows: Record<string, unknown>[] = [];
-      for await (const row of parseCsvStream(input, {
+      for await (const row of parseCsvRows(input, {
         headers: true,
         dynamicTyping: true
       })) {
@@ -1601,7 +1601,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should handle skipRows with streaming", async () => {
       const input = "header1,header2\nskip1,skip2\na,b\nc,d";
       const rows: Record<string, string>[] = [];
-      for await (const row of parseCsvStream(input, {
+      for await (const row of parseCsvRows(input, {
         headers: true,
         skipRows: 1
       })) {
@@ -1616,7 +1616,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should handle comment lines with streaming", async () => {
       const input = "a,b\n# comment\n1,2\n# another\n3,4";
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input, { comment: "#" })) {
+      for await (const row of parseCsvRows(input, { comment: "#" })) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1628,7 +1628,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
 
     it("should handle empty input", async () => {
       const rows: string[][] = [];
-      for await (const row of parseCsvStream("")) {
+      for await (const row of parseCsvRows("")) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([]);
@@ -1636,7 +1636,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
 
     it("should handle single row without newline", async () => {
       const rows: string[][] = [];
-      for await (const row of parseCsvStream("a,b,c")) {
+      for await (const row of parseCsvRows("a,b,c")) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([["a", "b", "c"]]);
@@ -1645,7 +1645,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should handle multiline quoted field in stream", async () => {
       const input = '"line1\nline2\nline3",value\nnormal,row';
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input)) {
+      for await (const row of parseCsvRows(input)) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1658,7 +1658,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should handle skipEmptyLines greedy mode with streaming", async () => {
       const input = "a,b\n   \t  \nc,d\n\ne,f";
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input, { skipEmptyLines: "greedy" })) {
+      for await (const row of parseCsvRows(input, { skipEmptyLines: "greedy" })) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
@@ -1732,7 +1732,7 @@ describe("CSV Core - RFC 4180 Compliance", () => {
     it("should handle maxRowBytes in streaming mode exactly at limit", async () => {
       const input = "abc,def\n123,456";
       const rows: string[][] = [];
-      for await (const row of parseCsvStream(input, { maxRowBytes: 7 })) {
+      for await (const row of parseCsvRows(input, { maxRowBytes: 7 })) {
         rows.push(row as string[]);
       }
       expect(rows).toEqual([
