@@ -129,8 +129,9 @@ class CsvWorkerPool {
   private _terminated = false;
   private _completedTasks = 0;
   private _failedTasks = 0;
-  private readonly _workerUrl: string;
+  private _workerUrl: string | null = null;
   private readonly _useCustomUrl: boolean;
+  private _initPromise: Promise<void> | null = null;
 
   constructor(options?: CsvWorkerPoolOptions) {
     this._options = { ...DEFAULT_OPTIONS, ...options };
@@ -139,13 +140,41 @@ class CsvWorkerPool {
       this._workerUrl = this._options.workerUrl;
       this._useCustomUrl = true;
     } else {
-      this._workerUrl = getWorkerBlobUrl();
       this._useCustomUrl = false;
     }
+  }
 
-    for (let i = 0; i < this._options.minWorkers; i++) {
-      this._createWorker();
+  /**
+   * Create and initialize a worker pool.
+   * This is the recommended way to create a pool for immediate use.
+   */
+  static async create(options?: CsvWorkerPoolOptions): Promise<CsvWorkerPool> {
+    const pool = new CsvWorkerPool(options);
+    await pool._ensureInitialized();
+    return pool;
+  }
+
+  /**
+   * Ensure the pool is initialized (worker URL loaded).
+   * Called automatically before first task execution.
+   */
+  private async _ensureInitialized(): Promise<void> {
+    if (this._workerUrl) {
+      return;
     }
+    if (this._initPromise) {
+      return this._initPromise;
+    }
+
+    this._initPromise = getWorkerBlobUrl().then(url => {
+      this._workerUrl = url;
+      // Create min workers after URL is ready
+      for (let i = 0; i < this._options.minWorkers; i++) {
+        this._createWorker();
+      }
+    });
+
+    return this._initPromise;
   }
 
   // ---------------------------------------------------------------------------
@@ -334,13 +363,16 @@ class CsvWorkerPool {
     return { ...result.data, duration: result.duration } as T;
   }
 
-  private _execute<T>(
+  private async _execute<T>(
     message: CsvWorkerRequestMessage,
     taskOptions?: CsvTaskOptions
   ): Promise<CsvTaskResult<T>> {
     if (this._terminated) {
       return Promise.reject(new Error("Worker pool has been terminated"));
     }
+
+    // Ensure pool is initialized (lazy load worker script)
+    await this._ensureInitialized();
 
     const { priority = "normal", signal } = taskOptions ?? {};
 
@@ -394,7 +426,7 @@ class CsvWorkerPool {
   }
 
   private _processQueue(): void {
-    if (this._terminated || this._taskQueue.length === 0) {
+    if (this._terminated || this._taskQueue.length === 0 || !this._workerUrl) {
       return;
     }
 
@@ -417,6 +449,10 @@ class CsvWorkerPool {
   }
 
   private _createWorker(): PoolWorker {
+    if (!this._workerUrl) {
+      throw new Error("Worker pool not initialized. Call _ensureInitialized() first.");
+    }
+
     const id = this._nextWorkerId++;
     const worker = new Worker(this._workerUrl);
 
@@ -561,7 +597,7 @@ let sessionIdCounter = 0;
  *
  * @example
  * ```ts
- * const session = new CsvWorkerSession();
+ * const session = await CsvWorkerSession.create();
  *
  * // Load data
  * await session.load(csvString, { headers: true });
@@ -590,9 +626,16 @@ export class CsvWorkerSession {
   private _headers: string[] = [];
   private _rowCount = 0;
 
-  constructor(pool?: CsvWorkerPool) {
+  /** Use CsvWorkerSession.create() instead for lazy pool initialization */
+  constructor(pool: CsvWorkerPool) {
     this._sessionId = `session_${++sessionIdCounter}_${Date.now()}`;
-    this._pool = pool ?? getDefaultWorkerPool();
+    this._pool = pool;
+  }
+
+  /** Create a new session with optional pool */
+  static async create(pool?: CsvWorkerPool): Promise<CsvWorkerSession> {
+    const resolvedPool = pool ?? (await getDefaultWorkerPool());
+    return new CsvWorkerSession(resolvedPool);
   }
 
   get sessionId(): string {
@@ -692,19 +735,27 @@ export class CsvWorkerSession {
 // =============================================================================
 
 let defaultPool: CsvWorkerPool | null = null;
+let defaultPoolPromise: Promise<CsvWorkerPool> | null = null;
 
-/** @internal */
-export function getDefaultWorkerPool(): CsvWorkerPool {
-  if (!defaultPool) {
-    defaultPool = new CsvWorkerPool();
+/** Get or create the default worker pool (with lazy initialization) */
+export async function getDefaultWorkerPool(): Promise<CsvWorkerPool> {
+  if (defaultPool) {
+    return defaultPool;
   }
-  return defaultPool;
+  if (!defaultPoolPromise) {
+    defaultPoolPromise = CsvWorkerPool.create().then(pool => {
+      defaultPool = pool;
+      return pool;
+    });
+  }
+  return defaultPoolPromise;
 }
 
 export function terminateDefaultWorkerPool(): void {
   if (defaultPool) {
     defaultPool.terminate();
     defaultPool = null;
+    defaultPoolPromise = null;
   }
 }
 
@@ -714,7 +765,8 @@ export async function parseWithPool(
   options?: CsvParseOptions,
   taskOptions?: CsvTaskOptions
 ): Promise<CsvTaskResult<string[][] | CsvParseResult<Record<string, string>>>> {
-  return getDefaultWorkerPool().parse(data, options, taskOptions);
+  const pool = await getDefaultWorkerPool();
+  return pool.parse(data, options, taskOptions);
 }
 
 /** Format data to CSV using worker pool */
@@ -723,7 +775,8 @@ export async function formatWithPool(
   options?: CsvFormatOptions,
   taskOptions?: CsvTaskOptions
 ): Promise<CsvTaskResult<string>> {
-  return getDefaultWorkerPool().format(data, options, taskOptions);
+  const pool = await getDefaultWorkerPool();
+  return pool.format(data, options, taskOptions);
 }
 
 // =============================================================================

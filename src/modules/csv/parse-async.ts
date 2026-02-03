@@ -41,22 +41,42 @@ function normalizeAsyncInput(input: unknown): AsyncInput {
   throw new TypeError("input must be an AsyncIterable or a ReadableStream");
 }
 
+/** Result from collectText with optional byte tracking */
+interface CollectResult {
+  content: string;
+  totalBytes: number;
+}
+
 /**
- * Convert AsyncIterable<string|Uint8Array> to a complete string.
- * This buffers the entire input in memory.
+ * Collect AsyncIterable<string|Uint8Array> to a complete string.
+ * Unified helper for both collectAsyncInput and parseCsvWithProgress.
+ *
+ * @param input - Async iterable of chunks
+ * @param encoding - Text encoding (default: utf-8)
+ * @param onChunk - Optional callback for each chunk (for progress reporting)
  */
-async function collectAsyncInput(
+async function collectText(
   input: AsyncIterable<string | Uint8Array>,
-  options: CsvParseOptions
-): Promise<string> {
+  encoding?: BufferEncoding,
+  onChunk?: (bytesProcessed: number) => void
+): Promise<CollectResult> {
   const chunks: string[] = [];
-  const decoder = new TextDecoder(options.encoding || "utf-8");
+  const decoder = new TextDecoder(encoding || "utf-8");
+  let totalBytes = 0;
 
   for await (const chunk of input) {
     if (typeof chunk === "string") {
       chunks.push(chunk);
+      if (onChunk) {
+        totalBytes += sharedTextEncoder.encode(chunk).length;
+      }
     } else {
       chunks.push(decoder.decode(chunk, { stream: true }));
+      totalBytes += chunk.length;
+    }
+
+    if (onChunk) {
+      onChunk(totalBytes);
     }
   }
 
@@ -66,7 +86,7 @@ async function collectAsyncInput(
     chunks.push(final);
   }
 
-  return chunks.join("");
+  return { content: chunks.join(""), totalBytes };
 }
 
 /**
@@ -105,9 +125,7 @@ export async function parseCsvAsync(
   }
 
   const asyncInput = normalizeAsyncInput(input);
-
-  // For AsyncIterable, collect all chunks and parse
-  const content = await collectAsyncInput(asyncInput, options);
+  const { content } = await collectText(asyncInput, options.encoding);
   return parseCsv(content, options);
 }
 
@@ -148,7 +166,7 @@ export async function* parseCsvRows(
     const content =
       typeof input === "string"
         ? input
-        : await collectAsyncInput(normalizeAsyncInput(input), options);
+        : (await collectText(normalizeAsyncInput(input), options.encoding)).content;
 
     const result = parseCsv(content, options);
 
@@ -322,32 +340,14 @@ export async function parseCsvWithProgress(
     content = input;
     totalBytes = sharedTextEncoder.encode(content).length;
   } else {
-    const chunks: string[] = [];
-    const decoder = new TextDecoder(options.encoding || "utf-8");
-
     const asyncInput = normalizeAsyncInput(input);
-
-    for await (const chunk of asyncInput) {
-      if (typeof chunk === "string") {
-        chunks.push(chunk);
-        totalBytes += sharedTextEncoder.encode(chunk).length;
-      } else {
-        chunks.push(decoder.decode(chunk, { stream: true }));
-        totalBytes += chunk.length;
-      }
-
-      // Report progress during collection
-      if (onProgress) {
-        onProgress({ rowsProcessed: 0, bytesProcessed: totalBytes });
-      }
-    }
-
-    const final = decoder.decode();
-    if (final) {
-      chunks.push(final);
-    }
-
-    content = chunks.join("");
+    const result = await collectText(
+      asyncInput,
+      options.encoding,
+      onProgress ? bytes => onProgress({ rowsProcessed: 0, bytesProcessed: bytes }) : undefined
+    );
+    content = result.content;
+    totalBytes = result.totalBytes;
   }
 
   // Parse

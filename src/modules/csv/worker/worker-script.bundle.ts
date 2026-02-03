@@ -1,29 +1,38 @@
 /**
- * CSV Worker Script - Generated Bundle Wrapper
+ * CSV Worker Script - Lazy Loading Bundle
  *
- * This module exposes the same public API as the old inline generator
- * (`getWorkerBlobUrl` / `releaseWorkerBlobUrl`), but sources the worker
- * script from a build-generated bundle to prevent logic drift.
+ * Uses dynamic import to avoid bundling the 80KB+ worker script
+ * into applications that don't use the worker pool functionality.
  */
 
-import { CSV_WORKER_SCRIPT } from "./worker-script.generated";
-
 // =============================================================================
-// Blob URL Management
+// Blob URL Management (Lazy Loading)
 // =============================================================================
 
 let workerBlobUrl: string | null = null;
 let workerBlobRefCount = 0;
+let workerScriptPromise: Promise<string> | null = null;
+
+/**
+ * Lazily load the worker script.
+ * Uses dynamic import to avoid bundling when not needed.
+ */
+function loadWorkerScript(): Promise<string> {
+  if (!workerScriptPromise) {
+    workerScriptPromise = import("./worker-script.generated").then(m => m.CSV_WORKER_SCRIPT);
+  }
+  return workerScriptPromise;
+}
 
 /** Generate the complete worker script code */
-export function generateWorkerScript(): string {
-  return CSV_WORKER_SCRIPT;
+export function generateWorkerScript(): Promise<string> {
+  return loadWorkerScript();
 }
 
 /** Get or create the worker blob URL */
-export function getWorkerBlobUrl(): string {
+export async function getWorkerBlobUrl(): Promise<string> {
   if (!workerBlobUrl) {
-    const script = generateWorkerScript();
+    const script = await loadWorkerScript();
     const blob = new Blob([script], { type: "application/javascript" });
     workerBlobUrl = URL.createObjectURL(blob);
   }

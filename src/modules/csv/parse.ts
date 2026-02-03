@@ -2,7 +2,7 @@
  * CSV Parser - Synchronous
  *
  * RFC 4180 compliant CSV parser.
- * Uses the shared parse-engine for core parsing logic.
+ * Uses the shared parse-core for core parsing logic.
  */
 
 import type {
@@ -13,7 +13,9 @@ import type {
   CsvParseMeta,
   CsvParseError,
   RecordInfo,
-  RecordWithInfo
+  RecordWithInfo,
+  DynamicTypingConfig,
+  CastDateConfig
 } from "./types";
 import {
   resolveParseConfig,
@@ -21,8 +23,43 @@ import {
   parseFastMode,
   parseStandardMode,
   rowToRecord
-} from "./parse-engine";
+} from "./parse-core";
 import { applyDynamicTypingToArrayRow } from "./utils/dynamic-typing";
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/**
+ * Normalize validate result to { isValid, reason } form
+ */
+function normalizeValidateResult(result: boolean | { isValid: boolean; reason?: string }): {
+  isValid: boolean;
+  reason: string;
+} {
+  if (typeof result === "boolean") {
+    return { isValid: result, reason: "Validation failed" };
+  }
+  return { isValid: result.isValid, reason: result.reason || "Validation failed" };
+}
+
+/**
+ * Apply dynamic typing to an array row (wrapper to reduce code duplication)
+ */
+function applyArrayTyping(
+  row: string[],
+  dynamicTyping: DynamicTypingConfig | undefined,
+  castDate: CastDateConfig | undefined
+): unknown[] {
+  return applyDynamicTypingToArrayRow(row, null, dynamicTyping || false, castDate);
+}
+
+/**
+ * Return array only if non-empty, otherwise undefined
+ */
+function optionalArray<T>(arr: T[]): T[] | undefined {
+  return arr.length > 0 ? arr : undefined;
+}
 
 // =============================================================================
 // Function Overloads for Better Type Inference
@@ -114,7 +151,6 @@ export function parseCsv(
   const state = createParseState(config);
   const errors: CsvParseError[] = [];
   const invalidRows: { row: string[]; reason: string }[] = [];
-  const rows: string[][] = [];
   const rowInfos: RecordInfo[] = [];
 
   // Choose parser based on mode
@@ -122,28 +158,117 @@ export function parseCsv(
     ? parseFastMode(processedInput, config, state, errors)
     : parseStandardMode(processedInput, config, state, errors);
 
-  // Collect all rows
-  for (const result of parser) {
-    if (result.row) {
-      // Only add to rows if not skipped due to validation error
-      if (!result.skipped) {
-        rows.push(result.row);
+  // ==========================================================================
+  // Single-pass processing: parse + transform + validate + dynamicTyping
+  // ==========================================================================
+
+  // Simple array output (no headers) - Single pass processing
+  if (!state.useHeaders) {
+    const processedRows: (string[] | unknown[])[] = [];
+
+    for (const result of parser) {
+      if (result.row && !result.skipped) {
+        let row: string[] | unknown[] = result.row;
+
+        // Apply transform if provided
+        if (options.transform) {
+          const transformed = options.transform(row as string[]);
+          if (transformed === null || transformed === undefined) {
+            continue;
+          }
+          row = transformed as string[] | unknown[];
+        }
+
+        // Apply validate if provided
+        if (options.validate) {
+          const { isValid, reason } = normalizeValidateResult(options.validate(row as string[]));
+          if (!isValid) {
+            invalidRows.push({ row: row as string[], reason });
+            continue;
+          }
+        }
+
+        // Apply dynamicTyping/castDate if configured
+        if (config.dynamicTyping || config.castDate) {
+          row = applyArrayTyping(row as string[], config.dynamicTyping, config.castDate);
+        }
+
+        processedRows.push(row);
         if (result.info) {
           rowInfos.push(result.info);
         }
-      } else if (result.error) {
+      } else if (result.row && result.skipped && result.error) {
         // Handle invalid rows from strictColumnHandling
         invalidRows.push({ row: result.row, reason: result.reason || result.error.message });
       }
+      if (result.stop) {
+        break;
+      }
+    }
+
+    // Build metadata
+    const meta: CsvParseMeta = {
+      delimiter: config.delimiter,
+      linebreak: config.linebreak,
+      aborted: false,
+      truncated: state.truncated,
+      cursor: state.dataRowCount,
+      fields: state.headerRow
+        ? state.headerRow.filter((h): h is string => h !== null && h !== undefined)
+        : undefined,
+      renamedHeaders: state.renamedHeadersForMeta
+    };
+
+    // If info option is enabled, wrap in result object with info
+    if (config.infoOption) {
+      const arrayRowsWithInfo: RecordWithInfo<string[] | unknown[]>[] = [];
+      for (let idx = 0; idx < processedRows.length; idx++) {
+        arrayRowsWithInfo.push({ record: processedRows[idx], info: rowInfos[idx] });
+      }
+      return {
+        headers: undefined,
+        rows: arrayRowsWithInfo,
+        invalidRows: optionalArray(invalidRows),
+        errors: optionalArray(errors),
+        meta
+      } as CsvParseResult<RecordWithInfo<string[]>>;
+    }
+
+    // If validate was used AND there are invalidRows or errors, return result object
+    if (options.validate && (invalidRows.length > 0 || errors.length > 0)) {
+      return {
+        headers: undefined,
+        rows: processedRows,
+        invalidRows: optionalArray(invalidRows),
+        errors: optionalArray(errors),
+        meta
+      } as unknown as CsvParseResult<Record<string, unknown>>;
+    }
+
+    return processedRows as string[][];
+  }
+
+  // ==========================================================================
+  // Object mode (with headers) - Single pass processing
+  // ==========================================================================
+
+  // Collect rows first (parser handles header extraction)
+  const rows: string[][] = [];
+  for (const result of parser) {
+    if (result.row && !result.skipped) {
+      rows.push(result.row);
+      if (result.info) {
+        rowInfos.push(result.info);
+      }
+    } else if (result.row && result.skipped && result.error) {
+      invalidRows.push({ row: result.row, reason: result.reason || result.error.message });
     }
     if (result.stop) {
       break;
     }
   }
 
-  // ==========================================================================
-  // Build Result
-  // ==========================================================================
+  // Build metadata
   const meta: CsvParseMeta = {
     delimiter: config.delimiter,
     linebreak: config.linebreak,
@@ -156,171 +281,37 @@ export function parseCsv(
     renamedHeaders: state.renamedHeadersForMeta
   };
 
-  // Simple array output (no headers)
-  if (!state.useHeaders) {
-    // Apply transform if provided (in array mode, transform operates on string[])
-    let processedRows: (string[] | unknown[])[] = rows;
-    if (options.transform) {
-      const transformedRows: (string[] | unknown[])[] = [];
-      for (const row of rows) {
-        const transformed = options.transform(row as string[]);
-        if (transformed !== null && transformed !== undefined) {
-          transformedRows.push(transformed as string[] | unknown[]);
-        }
-      }
-      processedRows = transformedRows;
-    }
-
-    // Apply validate if provided (in array mode, validate operates on string[])
-    if (options.validate) {
-      const validatedRows: (string[] | unknown[])[] = [];
-      for (let i = 0; i < processedRows.length; i++) {
-        const row = processedRows[i];
-        const validateResult = options.validate(row as string[]);
-        const { isValid, reason } =
-          typeof validateResult === "boolean"
-            ? { isValid: validateResult, reason: "Validation failed" }
-            : {
-                isValid: validateResult.isValid,
-                reason: validateResult.reason || "Validation failed"
-              };
-
-        if (isValid) {
-          validatedRows.push(row);
-        } else {
-          invalidRows.push({ row: row as string[], reason });
-        }
-      }
-      processedRows = validatedRows;
-    }
-
-    // If info option is enabled, wrap in result object with info
-    if (config.infoOption) {
-      const arrayRowsWithInfo: RecordWithInfo<string[] | unknown[]>[] = [];
-      for (let idx = 0; idx < processedRows.length; idx++) {
-        let row: string[] | unknown[] = processedRows[idx];
-        // Apply dynamicTyping/castDate in array mode if configured
-        if (config.dynamicTyping || config.castDate) {
-          row = applyDynamicTypingToArrayRow(
-            row as string[],
-            null,
-            config.dynamicTyping || false,
-            config.castDate
-          );
-        }
-        arrayRowsWithInfo.push({ record: row, info: rowInfos[idx] });
-      }
-      return {
-        headers: undefined,
-        rows: arrayRowsWithInfo,
-        invalidRows: invalidRows.length > 0 ? invalidRows : undefined,
-        errors: errors.length > 0 ? errors : undefined,
-        meta
-      } as CsvParseResult<RecordWithInfo<string[]>>;
-    }
-
-    // If validate was used AND there are invalidRows or errors, return result object
-    // Otherwise, return plain array (backward compatible behavior)
-    if (options.validate && (invalidRows.length > 0 || errors.length > 0)) {
-      // Apply dynamicTyping/castDate if configured
-      if (config.dynamicTyping || config.castDate) {
-        processedRows = processedRows.map(row =>
-          applyDynamicTypingToArrayRow(
-            row as string[],
-            null,
-            config.dynamicTyping || false,
-            config.castDate
-          )
-        );
-      }
-      return {
-        headers: undefined,
-        rows: processedRows,
-        invalidRows: invalidRows.length > 0 ? invalidRows : undefined,
-        errors: errors.length > 0 ? errors : undefined,
-        meta
-      } as unknown as CsvParseResult<Record<string, unknown>>;
-    }
-
-    // Apply dynamicTyping/castDate in array mode if configured
-    if (config.dynamicTyping || config.castDate) {
-      return processedRows.map(row =>
-        applyDynamicTypingToArrayRow(
-          row as string[],
-          null,
-          config.dynamicTyping || false,
-          config.castDate
-        )
-      ) as string[][];
-    }
-    return processedRows as string[][];
-  }
-
-  // Build object rows
-  let objectRows: (Record<string, unknown> | RecordWithInfo<Record<string, unknown>>)[] = [];
+  // Single-pass: convert to record + transform + validate
+  const objectRows: (Record<string, unknown> | RecordWithInfo<Record<string, unknown>>)[] = [];
   for (let idx = 0; idx < rows.length; idx++) {
     const row = rows[idx];
-    const record = rowToRecord(row, state, config);
+    let record = rowToRecord(row, state, config);
+
+    // Apply transform if provided
+    if (options.transform) {
+      const transformed = options.transform(record as Record<string, string>);
+      if (transformed === null || transformed === undefined) {
+        continue;
+      }
+      record = transformed as Record<string, unknown>;
+    }
+
+    // Apply validate if provided
+    if (options.validate) {
+      const { isValid, reason } = normalizeValidateResult(
+        options.validate(record as Record<string, string>)
+      );
+      if (!isValid) {
+        invalidRows.push({ row, reason });
+        continue;
+      }
+    }
 
     if (config.infoOption) {
       objectRows.push({ record, info: rowInfos[idx] });
     } else {
       objectRows.push(record);
     }
-  }
-
-  // Apply transform if provided (operates on object records)
-  if (options.transform) {
-    const transformedRows: (Record<string, unknown> | RecordWithInfo<Record<string, unknown>>)[] =
-      [];
-    for (const item of objectRows) {
-      const record = config.infoOption
-        ? (item as RecordWithInfo<Record<string, unknown>>).record
-        : (item as Record<string, unknown>);
-      const transformed = options.transform(record as Record<string, string>);
-      if (transformed === null || transformed === undefined) {
-        continue;
-      }
-      if (config.infoOption) {
-        transformedRows.push({
-          record: transformed as Record<string, unknown>,
-          info: (item as RecordWithInfo<Record<string, unknown>>).info
-        });
-      } else {
-        transformedRows.push(transformed as Record<string, unknown>);
-      }
-    }
-    objectRows = transformedRows;
-  }
-
-  // Apply validate if provided (operates on object records)
-  if (options.validate) {
-    const validatedRows: typeof objectRows = [];
-    for (let i = 0; i < objectRows.length; i++) {
-      const item = objectRows[i];
-      const record = config.infoOption
-        ? (item as RecordWithInfo<Record<string, unknown>>).record
-        : (item as Record<string, unknown>);
-      // Pass the record to validate (it can be an object or array depending on mode)
-      const validateResult = options.validate(record as Record<string, string>);
-      const { isValid, reason } =
-        typeof validateResult === "boolean"
-          ? { isValid: validateResult, reason: "Validation failed" }
-          : {
-              isValid: validateResult.isValid,
-              reason: validateResult.reason || "Validation failed"
-            };
-
-      if (isValid) {
-        validatedRows.push(item);
-      } else {
-        // Get the original row for invalidRows
-        if (i < rows.length) {
-          invalidRows.push({ row: rows[i], reason });
-        }
-      }
-    }
-    objectRows = validatedRows;
   }
 
   // Handle objname option
@@ -342,8 +333,8 @@ export function parseCsv(
     return {
       headers: meta.fields,
       rows: objResult as unknown as Record<string, unknown>[],
-      invalidRows: invalidRows.length > 0 ? invalidRows : undefined,
-      errors: errors.length > 0 ? errors : undefined,
+      invalidRows: optionalArray(invalidRows),
+      errors: optionalArray(errors),
       meta
     } as CsvParseResult<Record<string, unknown>>;
   }
@@ -351,8 +342,8 @@ export function parseCsv(
   return {
     headers: meta.fields,
     rows: objectRows,
-    invalidRows: invalidRows.length > 0 ? invalidRows : undefined,
-    errors: errors.length > 0 ? errors : undefined,
+    invalidRows: optionalArray(invalidRows),
+    errors: optionalArray(errors),
     meta
   } as CsvParseResult<Record<string, unknown>>;
 }

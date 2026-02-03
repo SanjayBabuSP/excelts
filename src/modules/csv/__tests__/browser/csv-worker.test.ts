@@ -54,8 +54,8 @@ describe("CSV Worker Pool - Browser", () => {
     });
 
     describe("constructor options", () => {
-      it("should create minWorkers on initialization", () => {
-        const poolWithMin = new CsvWorkerPool({ minWorkers: 2, maxWorkers: 4 });
+      it("should create minWorkers on initialization", async () => {
+        const poolWithMin = await CsvWorkerPool.create({ minWorkers: 2, maxWorkers: 4 });
         const stats = poolWithMin.getStats();
         expect(stats.totalWorkers).toBe(2);
         poolWithMin.terminate();
@@ -234,8 +234,8 @@ describe("CSV Worker Pool - Browser", () => {
   describe("CsvWorkerSession", () => {
     let session: CsvWorkerSession;
 
-    beforeEach(() => {
-      session = new CsvWorkerSession();
+    beforeEach(async () => {
+      session = await CsvWorkerSession.create();
     });
 
     afterEach(async () => {
@@ -244,8 +244,8 @@ describe("CSV Worker Pool - Browser", () => {
     });
 
     describe("properties", () => {
-      it("should have unique sessionId", () => {
-        const session2 = new CsvWorkerSession();
+      it("should have unique sessionId", async () => {
+        const session2 = await CsvWorkerSession.create();
         expect(session.sessionId).toBeTruthy();
         expect(session2.sessionId).toBeTruthy();
         expect(session.sessionId).not.toBe(session2.sessionId);
@@ -786,18 +786,18 @@ describe("CSV Worker Pool - Browser", () => {
     });
 
     describe("getDefaultWorkerPool", () => {
-      it("should return same instance", () => {
-        const pool1 = getDefaultWorkerPool();
-        const pool2 = getDefaultWorkerPool();
+      it("should return same instance", async () => {
+        const pool1 = await getDefaultWorkerPool();
+        const pool2 = await getDefaultWorkerPool();
         expect(pool1).toBe(pool2);
       });
     });
 
     describe("terminateDefaultWorkerPool", () => {
-      it("should terminate and reset pool", () => {
-        const pool1 = getDefaultWorkerPool();
+      it("should terminate and reset pool", async () => {
+        const pool1 = await getDefaultWorkerPool();
         terminateDefaultWorkerPool();
-        const pool2 = getDefaultWorkerPool();
+        const pool2 = await getDefaultWorkerPool();
         expect(pool2).not.toBe(pool1);
       });
 
