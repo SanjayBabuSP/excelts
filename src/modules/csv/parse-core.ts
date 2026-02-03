@@ -52,6 +52,183 @@ export { LARGE_FIELD_THRESHOLD, DEFAULT_LINEBREAK_REGEX, sharedTextEncoder, getU
 const FIELD_PART_FLUSH_THRESHOLD = 512;
 
 // =============================================================================
+// Character Parsing Result Types
+// =============================================================================
+
+/**
+ * Result of parsing a single character.
+ * Used by both streaming and batch parsers for unified behavior.
+ */
+export const enum CharParseAction {
+  /** Continue to next character */
+  Continue = 0,
+  /** Row is complete, process it */
+  RowComplete = 1,
+  /** Need more data (streaming only - at buffer boundary) */
+  NeedMoreData = 2,
+  /** Skip ahead (consumed extra characters like CRLF or escape sequence) */
+  SkipNext = 3
+}
+
+/**
+ * Result from parseCharacter function
+ */
+export interface CharParseResult {
+  /** Action to take after parsing this character */
+  action: CharParseAction;
+  /** Number of extra characters consumed (for escape sequences, CRLF, etc.) */
+  consumed: number;
+}
+
+// Reusable result object to avoid allocations in hot path
+const charParseResult: CharParseResult = { action: CharParseAction.Continue, consumed: 0 };
+
+/**
+ * Parse a single character in standard RFC 4180 mode.
+ * This is the unified character-level parser used by both batch and streaming parsers.
+ *
+ * @param char - Current character
+ * @param nextChar - Next character (undefined if at end)
+ * @param state - Parse state (will be mutated)
+ * @param config - Parse configuration
+ * @param isLastChar - Whether this is the last character in the buffer (streaming boundary)
+ * @returns Parse result indicating action to take
+ */
+export function parseCharacter(
+  char: string,
+  nextChar: string | undefined,
+  state: ParseState,
+  config: ParseConfig,
+  isLastChar: boolean
+): CharParseResult {
+  charParseResult.action = CharParseAction.Continue;
+  charParseResult.consumed = 0;
+
+  if (state.inQuotes && config.quoteEnabled) {
+    // Inside quoted field
+    if (config.rawOption) {
+      state.currentRawRow += char;
+    }
+
+    // Check for escape sequence (e.g., "" for escaped quote)
+    if (config.escape && char === config.escape && nextChar === config.quote) {
+      appendToField(state, config.quote);
+      addRowBytes(state, config.quote, config.maxRowBytes);
+      if (config.rawOption) {
+        state.currentRawRow += nextChar;
+      }
+      charParseResult.consumed = 1; // consumed the next char too
+      return charParseResult;
+    }
+
+    // Check for closing quote
+    if (char === config.quote) {
+      if (
+        config.relaxQuotes &&
+        nextChar !== undefined &&
+        nextChar !== config.delimiter &&
+        nextChar !== "\n" &&
+        nextChar !== "\r"
+      ) {
+        // relaxQuotes: quote mid-field, treat as literal
+        appendToField(state, char);
+        addRowBytes(state, char, config.maxRowBytes);
+      } else {
+        // End of quoted field
+        state.inQuotes = false;
+      }
+      return charParseResult;
+    }
+
+    // At buffer boundary inside quotes - need more data
+    if (isLastChar) {
+      // Remove the char we added to raw since it will be re-processed
+      if (config.rawOption && state.currentRawRow.length > 0) {
+        state.currentRawRow = state.currentRawRow.slice(0, -1);
+      }
+      charParseResult.action = CharParseAction.NeedMoreData;
+      return charParseResult;
+    }
+
+    // Handle CR inside quoted field
+    if (char === "\r") {
+      if (nextChar === "\n") {
+        // CRLF - add normalized LF to field and skip both chars
+        appendToField(state, "\n");
+        addRowBytes(state, "\n", config.maxRowBytes);
+        if (config.rawOption) {
+          state.currentRawRow += nextChar;
+        }
+        charParseResult.consumed = 1;
+      } else {
+        // Standalone CR - convert to LF
+        appendToField(state, "\n");
+        addRowBytes(state, "\n", config.maxRowBytes);
+      }
+      return charParseResult;
+    }
+
+    // Regular character inside quoted field
+    appendToField(state, char);
+    addRowBytes(state, char, config.maxRowBytes);
+    return charParseResult;
+  }
+
+  // Outside quoted field
+  if (config.rawOption && char !== "\n" && char !== "\r") {
+    state.currentRawRow += char;
+  }
+
+  // Check for opening quote (only at start of field)
+  if (config.quoteEnabled && char === config.quote && state.currentFieldLength === 0) {
+    state.inQuotes = true;
+    if (config.infoOption) {
+      state.currentFieldQuoted = true;
+    }
+    return charParseResult;
+  }
+
+  // Check for quote mid-field with relaxQuotes
+  if (config.quoteEnabled && char === config.quote && config.relaxQuotes) {
+    appendToField(state, char);
+    addRowBytes(state, char, config.maxRowBytes);
+    return charParseResult;
+  }
+
+  // Check for delimiter
+  if (char === config.delimiter) {
+    state.currentRow.push(completeField(state, config.trimField, config.infoOption));
+    addRowBytes(state, config.delimiter, config.maxRowBytes);
+    return charParseResult;
+  }
+
+  // Check for newline
+  if (char === "\n" || char === "\r") {
+    // Handle CRLF boundary at end of buffer (streaming only)
+    if (char === "\r" && isLastChar) {
+      charParseResult.action = CharParseAction.NeedMoreData;
+      return charParseResult;
+    }
+
+    // Handle CRLF
+    if (char === "\r" && nextChar === "\n") {
+      charParseResult.consumed = 1;
+    }
+
+    // Complete the current field and row
+    state.currentRow.push(completeField(state, config.trimField, config.infoOption));
+    state.lineNumber++;
+    charParseResult.action = CharParseAction.RowComplete;
+    return charParseResult;
+  }
+
+  // Regular character
+  appendToField(state, char);
+  addRowBytes(state, char, config.maxRowBytes);
+  return charParseResult;
+}
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -794,17 +971,37 @@ export function* parseFastMode(
   // Use pre-compiled linebreak regex from config
   const lines = input.split(config.linebreakRegex);
 
+  // Track byte offset for info.bytes
+  let currentByteOffset = 0;
+  // We need to also track position in original input to detect line ending length
+  let posInInput = 0;
+
   for (const line of lines) {
+    // Calculate actual line ending length by looking at what follows the line in input
+    const lineEndPos = posInInput + line.length;
+    let lineEndingLength = 0;
+    if (lineEndPos < input.length) {
+      if (input[lineEndPos] === "\r") {
+        lineEndingLength = input[lineEndPos + 1] === "\n" ? 2 : 1;
+      } else if (input[lineEndPos] === "\n") {
+        lineEndingLength = 1;
+      }
+    }
+    const lineByteLength = line.length + lineEndingLength;
+
     state.lineNumber++;
+    posInInput += lineByteLength;
 
     if (config.toLine !== undefined && state.lineNumber > config.toLine) {
       state.truncated = true;
       break;
     }
     if (state.lineNumber <= config.skipLines) {
+      currentByteOffset += lineByteLength;
       continue;
     }
     if (line === "") {
+      currentByteOffset += lineByteLength;
       continue;
     }
 
@@ -818,6 +1015,7 @@ export function* parseFastMode(
 
     if (config.infoOption) {
       state.currentRowStartLine = state.lineNumber;
+      state.currentRowStartBytes = currentByteOffset;
     }
     if (config.rawOption) {
       state.currentRawRow = line;
@@ -830,13 +1028,17 @@ export function* parseFastMode(
     }
 
     if (config.comment && row[0]?.startsWith(config.comment)) {
+      currentByteOffset += lineByteLength;
       continue;
     }
     if (config.shouldSkipEmpty && isEmptyRow(row, config.shouldSkipEmpty)) {
+      currentByteOffset += lineByteLength;
       continue;
     }
 
     const result = processCompletedRow(row, state, config, errors, state.lineNumber);
+    currentByteOffset += lineByteLength;
+
     if (result.stop) {
       yield result;
       return;
@@ -850,7 +1052,8 @@ export function* parseFastMode(
 }
 
 /**
- * Parse input using standard RFC 4180 mode
+ * Parse input using standard RFC 4180 mode.
+ * Uses the unified parseCharacter function for consistent behavior with streaming parser.
  */
 export function* parseStandardMode(
   input: string,
@@ -868,146 +1071,23 @@ export function* parseStandardMode(
 
   while (i < len) {
     const char = input[i];
+    const nextChar = input[i + 1];
+    // Batch mode never needs to wait for more data
+    const parseResult = parseCharacter(char, nextChar, state, config, false);
 
-    if (state.inQuotes && config.quoteEnabled) {
-      if (config.rawOption) {
-        state.currentRawRow += char;
+    // Handle consumed characters (escape sequences, CRLF)
+    i += 1 + parseResult.consumed;
+
+    // Check for row completion
+    if (parseResult.action === CharParseAction.RowComplete) {
+      const nextByteOffset = i;
+
+      if (config.toLine !== undefined && state.lineNumber > config.toLine) {
+        state.truncated = true;
+        break;
       }
 
-      if (config.escape && char === config.escape && input[i + 1] === config.quote) {
-        appendToField(state, config.quote);
-        addRowBytes(state, config.quote, config.maxRowBytes);
-        if (config.rawOption) {
-          state.currentRawRow += input[i + 1];
-        }
-        i += 2;
-      } else if (char === config.quote) {
-        const nextChar = input[i + 1];
-        if (
-          config.relaxQuotes &&
-          nextChar !== undefined &&
-          nextChar !== config.delimiter &&
-          nextChar !== "\n" &&
-          nextChar !== "\r"
-        ) {
-          appendToField(state, char);
-          addRowBytes(state, char, config.maxRowBytes);
-          i++;
-        } else {
-          state.inQuotes = false;
-          i++;
-        }
-      } else if (char === "\r") {
-        if (input[i + 1] === "\n") {
-          if (config.rawOption) {
-            state.currentRawRow += input[i + 1];
-          }
-          i++;
-        } else {
-          appendToField(state, "\n");
-          addRowBytes(state, "\n", config.maxRowBytes);
-          i++;
-        }
-      } else {
-        appendToField(state, char);
-        addRowBytes(state, char, config.maxRowBytes);
-        i++;
-      }
-    } else {
-      if (config.rawOption && char !== "\n" && char !== "\r") {
-        state.currentRawRow += char;
-      }
-
-      if (config.quoteEnabled && char === config.quote && state.currentFieldLength === 0) {
-        state.inQuotes = true;
-        if (config.infoOption) {
-          state.currentFieldQuoted = true;
-        }
-        i++;
-      } else if (config.quoteEnabled && char === config.quote && config.relaxQuotes) {
-        appendToField(state, char);
-        addRowBytes(state, char, config.maxRowBytes);
-        i++;
-      } else if (char === config.delimiter) {
-        state.currentRow.push(completeField(state, config.trimField, config.infoOption));
-        addRowBytes(state, config.delimiter, config.maxRowBytes);
-        i++;
-      } else if (char === "\n" || char === "\r") {
-        if (char === "\r" && input[i + 1] === "\n") {
-          i++;
-        }
-
-        state.currentRow.push(completeField(state, config.trimField, config.infoOption));
-        state.lineNumber++;
-        const nextByteOffset = i + 1;
-
-        if (config.toLine !== undefined && state.lineNumber > config.toLine) {
-          state.truncated = true;
-          break;
-        }
-
-        if (state.lineNumber <= config.skipLines) {
-          state.currentRow = [];
-          state.currentRowBytes = 0;
-          resetInfoState(
-            state,
-            config.infoOption,
-            config.rawOption,
-            state.lineNumber + 1,
-            nextByteOffset
-          );
-          i++;
-          continue;
-        }
-
-        if (config.comment && state.currentRow[0]?.startsWith(config.comment)) {
-          state.currentRow = [];
-          state.currentRowBytes = 0;
-          resetInfoState(
-            state,
-            config.infoOption,
-            config.rawOption,
-            state.lineNumber + 1,
-            nextByteOffset
-          );
-          i++;
-          continue;
-        }
-
-        const isEmpty = state.currentRow.length === 1 && state.currentRow[0] === "";
-        if (
-          config.shouldSkipEmpty &&
-          (isEmpty || (config.shouldSkipEmpty === "greedy" && isEmptyRow(state.currentRow, true)))
-        ) {
-          state.currentRow = [];
-          state.currentRowBytes = 0;
-          resetInfoState(
-            state,
-            config.infoOption,
-            config.rawOption,
-            state.lineNumber + 1,
-            nextByteOffset
-          );
-          i++;
-          continue;
-        }
-
-        const result = processCompletedRow(
-          state.currentRow,
-          state,
-          config,
-          errors,
-          state.lineNumber
-        );
-        if (result.stop) {
-          yield result;
-          return;
-        }
-        // Yield if not skipped, OR if skipped with an error (for invalidRows collection)
-        if (!result.skipped || result.error) {
-          yield result;
-        }
-
+      if (state.lineNumber <= config.skipLines) {
         state.currentRow = [];
         state.currentRowBytes = 0;
         resetInfoState(
@@ -1017,12 +1097,57 @@ export function* parseStandardMode(
           state.lineNumber + 1,
           nextByteOffset
         );
-        i++;
-      } else {
-        appendToField(state, char);
-        addRowBytes(state, char, config.maxRowBytes);
-        i++;
+        continue;
       }
+
+      if (config.comment && state.currentRow[0]?.startsWith(config.comment)) {
+        state.currentRow = [];
+        state.currentRowBytes = 0;
+        resetInfoState(
+          state,
+          config.infoOption,
+          config.rawOption,
+          state.lineNumber + 1,
+          nextByteOffset
+        );
+        continue;
+      }
+
+      const isEmpty = state.currentRow.length === 1 && state.currentRow[0] === "";
+      if (
+        config.shouldSkipEmpty &&
+        (isEmpty || (config.shouldSkipEmpty === "greedy" && isEmptyRow(state.currentRow, true)))
+      ) {
+        state.currentRow = [];
+        state.currentRowBytes = 0;
+        resetInfoState(
+          state,
+          config.infoOption,
+          config.rawOption,
+          state.lineNumber + 1,
+          nextByteOffset
+        );
+        continue;
+      }
+
+      const result = processCompletedRow(state.currentRow, state, config, errors, state.lineNumber);
+      if (result.stop) {
+        yield result;
+        return;
+      }
+      if (!result.skipped || result.error) {
+        yield result;
+      }
+
+      state.currentRow = [];
+      state.currentRowBytes = 0;
+      resetInfoState(
+        state,
+        config.infoOption,
+        config.rawOption,
+        state.lineNumber + 1,
+        nextByteOffset
+      );
     }
   }
 
@@ -1037,7 +1162,6 @@ export function* parseStandardMode(
       };
       errors.push(errorObj);
 
-      // If skipRecordsWithError is enabled, skip this row and invoke onSkip
       if (config.skipRecordsWithError) {
         config.invokeOnSkip?.(
           { code: "MissingQuotes", message: "Quoted field unterminated" },
@@ -1051,7 +1175,6 @@ export function* parseStandardMode(
     state.currentRow.push(completeField(state, config.trimField, config.infoOption));
     state.lineNumber++;
 
-    // Check toLine limit - if exceeded, mark as truncated and skip
     if (config.toLine !== undefined && state.lineNumber > config.toLine) {
       state.truncated = true;
       return;
@@ -1074,7 +1197,6 @@ export function* parseStandardMode(
     }
 
     const result = processCompletedRow(state.currentRow, state, config, errors, state.lineNumber);
-    // Yield if not skipped, OR if skipped with an error (for invalidRows collection)
     if (!result.skipped || result.error) {
       yield result;
     }

@@ -2,9 +2,16 @@
  * CSV Row Utilities
  *
  * Helper functions for working with different row formats:
- * - RowHashArray (array of [key, value] tuples)
- * - RowMap (Record<string, any>)
- * - RowArray (string[])
+ * - RowHashArray: Array of [key, value] tuples, e.g., [["name", "John"], ["age", "30"]]
+ * - RowMap: Record<string, any> object format
+ * - RowArray: Simple string[] array format
+ *
+ * Key functions:
+ * - isRowHashArray(): Type guard for RowHashArray detection
+ * - rowHashArrayToHeaders(): Extract headers from RowHashArray
+ * - convertRowToObject(): Transform array row to keyed object
+ * - deduplicateHeaders(): Handle duplicate column names
+ * - filterValidHeaders(): Remove null/undefined from header arrays
  */
 
 // Re-export types from central types.ts to avoid duplication

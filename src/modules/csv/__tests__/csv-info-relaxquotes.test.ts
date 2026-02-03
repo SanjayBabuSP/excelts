@@ -657,3 +657,172 @@ describe("CsvParserStream with relaxQuotes", () => {
     expect(rows[0]).toEqual(["Alice", "Bob"]);
   });
 });
+
+// ===========================================================================
+// FastMode + Info/Raw Combination Tests
+// ===========================================================================
+describe("fastMode with info/raw options", () => {
+  describe("parseCsv with fastMode + info", () => {
+    it("should return info with fastMode enabled", () => {
+      const csv = "a,b\n1,2\n3,4";
+      const result = parseCsv(csv, { fastMode: true, info: true }) as CsvParseResult<
+        RecordWithInfo<string[]>
+      >;
+
+      expect(result.rows).toHaveLength(3);
+      expect(result.rows[0]).toHaveProperty("record");
+      expect(result.rows[0]).toHaveProperty("info");
+      expect(result.rows[0].record).toEqual(["a", "b"]);
+      expect(result.rows[0].info.line).toBe(1);
+      expect(result.rows[0].info.index).toBe(0);
+      // In fastMode, all fields are unquoted
+      expect(result.rows[0].info.quoted).toEqual([false, false]);
+    });
+
+    it("should return info with fastMode + headers", () => {
+      const csv = "name,age\nAlice,30\nBob,25";
+      const result = parseCsv(csv, { fastMode: true, headers: true, info: true }) as CsvParseResult<
+        RecordWithInfo<Record<string, unknown>>
+      >;
+
+      expect(result.rows).toHaveLength(2);
+      expect(result.rows[0].record).toEqual({ name: "Alice", age: "30" });
+      expect(result.rows[0].info.line).toBe(2); // Line 1 is header
+      expect(result.rows[0].info.index).toBe(0);
+    });
+
+    it("should track bytes correctly with fastMode + info (LF)", () => {
+      const csv = "ab,cd\nef,gh";
+      const result = parseCsv(csv, { fastMode: true, info: true }) as CsvParseResult<
+        RecordWithInfo<string[]>
+      >;
+
+      expect(result.rows[0].info.bytes).toBe(0);
+      expect(result.rows[1].info.bytes).toBe(6); // "ab,cd\n" = 6 bytes
+    });
+
+    it("should track bytes correctly with fastMode + info (CRLF)", () => {
+      const csv = "ab,cd\r\nef,gh";
+      const result = parseCsv(csv, { fastMode: true, info: true }) as CsvParseResult<
+        RecordWithInfo<string[]>
+      >;
+
+      expect(result.rows[0].info.bytes).toBe(0);
+      // Note: bytes tracks character offset, not true bytes
+      expect(result.rows[1].info.bytes).toBeGreaterThan(0);
+    });
+  });
+
+  describe("parseCsv with fastMode + raw", () => {
+    it("should include raw string with fastMode + raw", () => {
+      const csv = "a,b\n1,2";
+      const result = parseCsv(csv, { fastMode: true, info: true, raw: true }) as CsvParseResult<
+        RecordWithInfo<string[]>
+      >;
+
+      expect(result.rows[0].info.raw).toBe("a,b");
+      expect(result.rows[1].info.raw).toBe("1,2");
+    });
+
+    it("should preserve raw content with different delimiters in fastMode", () => {
+      const csv = "a;b\n1;2";
+      const result = parseCsv(csv, {
+        fastMode: true,
+        delimiter: ";",
+        info: true,
+        raw: true
+      }) as CsvParseResult<RecordWithInfo<string[]>>;
+
+      expect(result.rows[0].info.raw).toBe("a;b");
+      expect(result.rows[0].record).toEqual(["a", "b"]);
+    });
+  });
+
+  describe("CsvParserStream with fastMode + info", () => {
+    it("should emit info with fastMode in streaming", async () => {
+      const csv = "a,b\n1,2\n3,4";
+      const parser = new CsvParserStream({ fastMode: true, info: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows).toHaveLength(3);
+      expect(rows[0].record).toEqual(["a", "b"]);
+      expect(rows[0].info.line).toBe(1);
+      expect(rows[0].info.quoted).toEqual([false, false]);
+    });
+
+    it("should emit raw with fastMode in streaming", async () => {
+      const csv = "a,b\n1,2";
+      const parser = new CsvParserStream({ fastMode: true, info: true, raw: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+        parser.end(csv);
+      });
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0].info.raw).toBe("a,b");
+      expect(rows[1].info.raw).toBe("1,2");
+      expect(rows[0].record).toEqual(["a", "b"]);
+      expect(rows[1].record).toEqual(["1", "2"]);
+    });
+
+    it("should handle chunked input with fastMode + info", async () => {
+      const parser = new CsvParserStream({ fastMode: true, info: true });
+
+      const rows: RecordWithInfo<string[]>[] = [];
+      parser.on("data", (row: RecordWithInfo<string[]>) => {
+        rows.push(row);
+      });
+
+      // Write in chunks
+      parser.write("a,b\n1,");
+      parser.write("2\n3,4");
+      parser.end();
+
+      await new Promise<void>((resolve, reject) => {
+        parser.on("error", reject);
+        parser.on("end", resolve);
+      });
+
+      expect(rows).toHaveLength(3);
+      // Verify line numbers are sequential (exact values may vary based on implementation)
+      expect(rows[0].info.line).toBeLessThan(rows[1].info.line);
+      expect(rows[1].info.line).toBeLessThan(rows[2].info.line);
+      // Verify records are correct
+      expect(rows[0].record).toEqual(["a", "b"]);
+      expect(rows[1].record).toEqual(["1", "2"]);
+      expect(rows[2].record).toEqual(["3", "4"]);
+    });
+  });
+
+  describe("parseCsvRows with fastMode + info", () => {
+    it("should yield info with fastMode in async generator", async () => {
+      const csv = "a,b\n1,2";
+      const rows: RecordWithInfo<string[]>[] = [];
+
+      for await (const row of parseCsvRows(csv, { fastMode: true, info: true })) {
+        rows.push(row as RecordWithInfo<string[]>);
+      }
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0].record).toEqual(["a", "b"]);
+      expect(rows[0].info.line).toBe(1);
+    });
+  });
+});

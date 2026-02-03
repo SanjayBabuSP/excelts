@@ -2035,3 +2035,116 @@ describe("CSV Stream - Streaming Edge Cases", () => {
     expect(chunks.join("")).toBe("a,b\r\n1,2");
   });
 });
+
+// ===========================================================================
+// FastMode CRLF Edge Cases
+// ===========================================================================
+describe("CSV Stream - FastMode CRLF Edge Cases", () => {
+  it("should handle CRLF split across chunks in fastMode", async () => {
+    // Test case: CRLF (\r\n) is split so \r is at end of first chunk
+    const chunks = ["a,b\r", "\nc,d"];
+    const readable = Readable.from(chunks);
+    const parser = new CsvParserStream({ fastMode: true });
+
+    const rows: string[][] = [];
+    for await (const row of readable.pipe(parser)) {
+      rows.push(row as string[]);
+    }
+
+    expect(rows).toEqual([
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle multiple CRLF rows in fastMode", async () => {
+    const input = "a,b\r\nc,d\r\ne,f";
+    const readable = Readable.from([input]);
+    const parser = new CsvParserStream({ fastMode: true });
+
+    const rows: string[][] = [];
+    for await (const row of readable.pipe(parser)) {
+      rows.push(row as string[]);
+    }
+
+    expect(rows).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+      ["e", "f"]
+    ]);
+  });
+
+  it("should handle CRLF at very end of chunk in fastMode", async () => {
+    // When \r is the very last character, we should wait for more data
+    // to see if \n follows (could be split CRLF)
+    const chunks = ["row1,data\r", "\nrow2,data"];
+    const readable = Readable.from(chunks);
+    const parser = new CsvParserStream({ fastMode: true });
+
+    const rows: string[][] = [];
+    for await (const row of readable.pipe(parser)) {
+      rows.push(row as string[]);
+    }
+
+    expect(rows).toEqual([
+      ["row1", "data"],
+      ["row2", "data"]
+    ]);
+  });
+
+  it("should handle standalone CR (not CRLF) in fastMode", async () => {
+    // Standalone \r (old Mac style) should work as line ending
+    const input = "a,b\rc,d\re,f";
+    const readable = Readable.from([input]);
+    const parser = new CsvParserStream({ fastMode: true });
+
+    const rows: string[][] = [];
+    for await (const row of readable.pipe(parser)) {
+      rows.push(row as string[]);
+    }
+
+    expect(rows).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+      ["e", "f"]
+    ]);
+  });
+
+  it("should handle mixed line endings in fastMode", async () => {
+    // Mix of LF, CR, and CRLF
+    const input = "a,b\nc,d\re,f\r\ng,h";
+    const readable = Readable.from([input]);
+    const parser = new CsvParserStream({ fastMode: true });
+
+    const rows: string[][] = [];
+    for await (const row of readable.pipe(parser)) {
+      rows.push(row as string[]);
+    }
+
+    expect(rows).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+      ["e", "f"],
+      ["g", "h"]
+    ]);
+  });
+
+  it("should not incorrectly split CRLF when \\r is at end of buffer in fastMode", async () => {
+    // This is the specific bug case: if buffer ends with \r\n,
+    // lastCR points to \r which would incorrectly be used as split point
+    // leaving \n in the next buffer
+    const chunks = ["line1,a\r\n", "line2,b\r\n"];
+    const readable = Readable.from(chunks);
+    const parser = new CsvParserStream({ fastMode: true });
+
+    const rows: string[][] = [];
+    for await (const row of readable.pipe(parser)) {
+      rows.push(row as string[]);
+    }
+
+    expect(rows).toEqual([
+      ["line1", "a"],
+      ["line2", "b"]
+    ]);
+  });
+});

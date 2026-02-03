@@ -1,8 +1,16 @@
 /**
  * CSV Parse Utilities
  *
- * Shared logic for CSV parsing used by both parseCsv (batch)
- * and CsvParserStream (streaming) to avoid code duplication.
+ * Shared parsing helpers used by both sync (parseCsv) and streaming (CsvParserStream)
+ * parsers to ensure consistent behavior:
+ *
+ * - Header processing: Handle headers option (true/array/transform)
+ * - Column validation: Check row length against expected column count
+ * - Row-to-object conversion: Transform string[] to Record<string, any>
+ * - Dynamic typing: Apply type coercion based on configuration
+ *
+ * These utilities are extracted to avoid code duplication between
+ * the batch parser (parse.ts) and the streaming parser (csv-stream.ts).
  */
 
 import { deduplicateHeadersWithRenames, type HeaderArray } from "@csv/utils/row";

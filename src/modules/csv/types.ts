@@ -198,9 +198,18 @@ export interface CsvParseOptions extends CsvBaseOptions {
   renameHeaders?: boolean;
   /** Comment character - lines starting with this are ignored */
   comment?: string;
-  /** Maximum number of data rows to parse */
+  /**
+   * Maximum number of data rows to parse (excludes header row).
+   * Counts only actual data rows that pass validation.
+   * Example: maxRows: 10 returns at most 10 data rows.
+   */
   maxRows?: number;
-  /** Stop parsing at this line number (1-based, inclusive) */
+  /**
+   * Stop parsing at this line number (1-based, inclusive).
+   * Counts all lines in the file including skipped lines, comments, and headers.
+   * Example: toLine: 100 stops after processing line 100 of the source file.
+   * Use maxRows for row-count limits; use toLine for file position limits.
+   */
   toLine?: number;
   /** Number of lines to skip at the beginning */
   skipLines?: number;
@@ -344,11 +353,21 @@ export interface CsvParseError {
  * Additional information about a parsed record
  */
 export interface RecordInfo {
+  /** Zero-based index of this data row (excluding headers and skipped rows) */
   index: number;
+  /** 1-based line number where this record starts in the input */
   line: number;
+  /**
+   * Character offset (not byte offset) where this record starts in the input.
+   * For ASCII-only content this equals the byte offset, but for multi-byte
+   * UTF-8 characters the actual byte position will differ.
+   */
   bytes: number;
+  /** Whether each field in the record was quoted */
   quoted: boolean[];
+  /** Raw unparsed line content (only present when `raw: true` option is set) */
   raw?: string;
+  /** Length of invalid field (internal use) */
   invalid_field_length?: number;
 }
 

@@ -4,11 +4,18 @@
  * Provides async CSV parsing supporting:
  * - String input (delegates to sync parser)
  * - AsyncIterable<string|Uint8Array> inputs
+ * - ReadableStream inputs (WHATWG streams)
  *
- * Notes:
- * - parseCsvAsync() returns a full result and may buffer the entire input.
- * - parseCsvRows() is a true streaming async generator that yields rows
- *   as the underlying stream parser emits them.
+ * API Semantics:
+ * - parseCsvAsync(): Collects all rows into memory, returns full CsvParseResult.
+ *   Best for small-to-medium files where you need complete data at once.
+ *
+ * - parseCsvRows(): True streaming async generator that yields rows one at a time.
+ *   Best for large files or when processing rows incrementally.
+ *   Memory-efficient as it doesn't buffer the entire result.
+ *
+ * Note: Both functions are async but have different memory characteristics.
+ * parseCsvAsync buffers the entire input; parseCsvRows streams progressively.
  */
 
 import type {
@@ -70,9 +77,8 @@ async function collectText(
   for await (const chunk of input) {
     if (typeof chunk === "string") {
       chunks.push(chunk);
-      if (onChunk) {
-        totalBytes += sharedTextEncoder.encode(chunk).length;
-      }
+      // Always track bytes for consistent semantics
+      totalBytes += sharedTextEncoder.encode(chunk).length;
     } else {
       chunks.push(decoder.decode(chunk, { stream: true }));
       totalBytes += chunk.length;

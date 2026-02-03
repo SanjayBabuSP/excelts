@@ -1,7 +1,19 @@
 /**
  * CSV Detection Utilities
  *
- * Functions for detecting CSV characteristics like delimiter and line endings.
+ * Auto-detection of CSV characteristics:
+ * - Delimiter detection (comma, tab, semicolon, pipe, etc.)
+ * - Line ending detection (LF, CRLF, CR)
+ * - Quote character normalization
+ *
+ * This module is part of the csv/utils subsystem:
+ * - detect.ts: Auto-detection of CSV format
+ * - row.ts: Row format conversions (RowHashArray, headers)
+ * - parse.ts: Shared parsing helpers (header processing, column validation)
+ * - dynamic-typing.ts: Type coercion (string -> number/boolean/date)
+ * - number.ts: Number parsing utilities
+ * - formatted-value.ts: FormattedValue wrapper for format control
+ * - generate.ts: Test data generation
  */
 
 // =============================================================================
