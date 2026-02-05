@@ -6,8 +6,8 @@
  */
 
 import type { CsvParseOptions } from "../types";
-import type { createOnSkipHandler } from "../utils/parse";
-import { createOnSkipHandler as createOnSkipHandlerImpl } from "../utils/parse";
+import type { createOnSkipHandler } from "./helpers";
+import { createOnSkipHandler as createOnSkipHandlerImpl } from "./helpers";
 import {
   normalizeQuoteOption,
   normalizeEscapeOption,
@@ -16,6 +16,7 @@ import {
   stripBom
 } from "../utils/detect";
 import { DEFAULT_LINEBREAK_REGEX } from "../constants";
+import { CsvError } from "../errors";
 
 // =============================================================================
 // Types
@@ -33,6 +34,8 @@ export interface ParseConfig {
   escape: string;
   quoteEnabled: boolean;
   trimField: (s: string) => string;
+  /** Whether trimField is an identity function (no actual trimming) - cached for performance */
+  trimFieldIsIdentity: boolean;
   shouldSkipEmpty: boolean | "greedy";
   skipLines: number;
   skipRows: number;
@@ -105,11 +108,10 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
   const {
     delimiter: delimiterOption = ",",
     delimitersToGuess,
-    newline: newlineOption = "",
+    lineEnding: lineEndingOption = "",
     quote: quoteOption = '"',
     escape: escapeOption = '"',
     skipEmptyLines = false,
-    ignoreEmpty = false,
     trim = false,
     ltrim = false,
     rtrim = false,
@@ -148,6 +150,11 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
       const result = beforeFirstChunk(processedInput);
       if (typeof result === "string") {
         processedInput = result;
+      } else if (result !== undefined && result !== null) {
+        // Validate return type - must be string or void/undefined
+        throw new CsvError(
+          `beforeFirstChunk must return a string or undefined, got ${typeof result}`
+        );
       }
     }
 
@@ -155,7 +162,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     processedInput = stripBom(processedInput);
   }
 
-  const shouldSkipEmpty = skipEmptyLines || ignoreEmpty;
+  const shouldSkipEmpty = skipEmptyLines;
 
   // Normalize quote/escape
   const { enabled: quoteEnabled, char: quote } = normalizeQuoteOption(quoteOption);
@@ -185,7 +192,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
 
   // Determine linebreak
   const linebreak =
-    newlineOption || (processedInput !== undefined ? detectLinebreak(processedInput) : "\n");
+    lineEndingOption || (processedInput !== undefined ? detectLinebreak(processedInput) : "\n");
 
   // Pre-compile linebreak regex for fast mode
   const linebreakRegex =
@@ -201,6 +208,8 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     escape,
     quoteEnabled,
     trimField: makeTrimField(trim, ltrim, rtrim),
+    // Cache whether trimField is identity to avoid per-row checking
+    trimFieldIsIdentity: !trim && !ltrim && !rtrim,
     shouldSkipEmpty,
     skipLines,
     skipRows,

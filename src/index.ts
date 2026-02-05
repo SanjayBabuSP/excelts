@@ -77,10 +77,10 @@ export type {
 // Node.js Only: Streaming writer types
 export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "@excel/stream/workbook-writer";
 
-// Node.js CSV types and stream classes (native implementation)
-export type { CsvOptions } from "@csv/csv";
-export { CSV } from "@csv/csv";
-export { createDefaultValueMapper, createDefaultWriteMapper } from "@csv/csv.browser";
+// Node.js CSV types (from workbook)
+export type { CsvOptions, CsvInput } from "@excel/workbook";
+
+// CSV stream classes
 export {
   CsvParserStream,
   CsvFormatterStream,
@@ -114,3 +114,29 @@ export {
 // =============================================================================
 
 export * from "@excel/utils/sheet-utils";
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+export {
+  ExcelError,
+  isExcelError,
+  ExcelFileError,
+  ExcelDownloadError,
+  ExcelNotSupportedError,
+  ExcelStreamStateError,
+  InvalidAddressError,
+  ColumnOutOfBoundsError,
+  RowOutOfBoundsError,
+  MergeConflictError,
+  InvalidValueTypeError,
+  XmlParseError,
+  WorksheetNameError,
+  PivotTableError,
+  TableError,
+  ImageError,
+  MaxItemsExceededError
+} from "@excel/errors";
+
+export { CsvError, CsvWorkerError } from "@csv/errors";

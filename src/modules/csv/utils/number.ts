@@ -27,9 +27,8 @@ export function formatNumberForCsv(value: number, decimalSeparator: DecimalSepar
   if (decimalSeparator !== ",") {
     return String(value);
   }
-  // Keep JS numeric string form but replace the decimal point.
-  // Use split/join for broad runtime compatibility.
-  return String(value).split(".").join(",");
+  // Replace decimal point with comma - faster than split().join()
+  return String(value).replace(".", ",");
 }
 
 /**

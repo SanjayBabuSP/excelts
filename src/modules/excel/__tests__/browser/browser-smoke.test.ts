@@ -60,7 +60,7 @@ describe("ExcelTS Browser Tests", () => {
     ws.getCell("A2").value = 7;
     ws.getCell("B2").value = "12pm";
 
-    const buffer = await wb.csv.toBuffer();
+    const buffer = await wb.writeCsvBuffer();
 
     // In browser, buffer is Uint8Array; use TextDecoder to convert to string
     const content = new TextDecoder().decode(buffer);
@@ -108,7 +108,7 @@ describe("ExcelTS Browser Tests", () => {
       const wb = new Workbook();
       const csvContent = "Name,Age,City\nAlice,30,New York\nBob,25,Los Angeles";
 
-      const ws = await wb.csv.parse(csvContent);
+      const ws = await wb.readCsv(csvContent);
 
       expect(ws.getCell("A1").value).toBe("Name");
       expect(ws.getCell("B1").value).toBe("Age");
@@ -126,7 +126,7 @@ describe("ExcelTS Browser Tests", () => {
       const csvContent = "Col1,Col2\nA,B\nC,D";
       const buffer = new TextEncoder().encode(csvContent);
 
-      const ws = await wb.csv.parse(buffer);
+      const ws = await wb.readCsv(buffer);
 
       expect(ws.getCell("A1").value).toBe("Col1");
       expect(ws.getCell("B2").value).toBe("B");
@@ -137,7 +137,7 @@ describe("ExcelTS Browser Tests", () => {
       const wb = new Workbook();
       const csvContent = 'Name,Address\n"Smith, John","123 Main St, Apt 4"';
 
-      const ws = await wb.csv.parse(csvContent);
+      const ws = await wb.readCsv(csvContent);
 
       expect(ws.getCell("A2").value).toBe("Smith, John");
       expect(ws.getCell("B2").value).toBe("123 Main St, Apt 4");
@@ -148,7 +148,7 @@ describe("ExcelTS Browser Tests", () => {
       const wb = new Workbook();
       const csvContent = 'Description\n"Line 1\nLine 2\nLine 3"';
 
-      const ws = await wb.csv.parse(csvContent);
+      const ws = await wb.readCsv(csvContent);
 
       expect(ws.getCell("A2").value).toBe("Line 1\nLine 2\nLine 3");
     });
@@ -158,7 +158,7 @@ describe("ExcelTS Browser Tests", () => {
       const wb = new Workbook();
       const csvContent = 'Quote\n"He said ""Hello"""';
 
-      const ws = await wb.csv.parse(csvContent);
+      const ws = await wb.readCsv(csvContent);
 
       expect(ws.getCell("A2").value).toBe('He said "Hello"');
     });
@@ -173,7 +173,7 @@ describe("ExcelTS Browser Tests", () => {
       ws.getCell("A2").value = "Smith, John";
       ws.getCell("B2").value = 'He said "Hi"';
 
-      const content = wb.csv.stringify();
+      const content = wb.writeCsv();
 
       expect(content).toContain('"Smith, John"');
       expect(content).toContain('"He said ""Hi"""');
@@ -187,7 +187,7 @@ describe("ExcelTS Browser Tests", () => {
       ws.getCell("A1").value = "Test";
       ws.getCell("B1").value = "Data";
 
-      const buffer = await wb.csv.toBuffer();
+      const buffer = await wb.writeCsvBuffer();
 
       expect(buffer).toBeInstanceOf(Uint8Array);
       const content = new TextDecoder().decode(buffer);
@@ -205,7 +205,7 @@ describe("ExcelTS Browser Tests", () => {
       ws.getCell("B2").value = "B";
 
       // Write with tab delimiter
-      const output = wb.csv.stringify({
+      const output = wb.writeCsv({
         sheetName: ws.name,
         delimiter: "\t"
       });
@@ -217,12 +217,12 @@ describe("ExcelTS Browser Tests", () => {
       const wb = new Workbook();
       const originalCsv = 'Name,Value\nTest,123\n"Quoted, Value",456';
 
-      const ws = await wb.csv.parse(originalCsv);
-      const outputCsv = wb.csv.stringify({ sheetName: ws.name });
+      const ws = await wb.readCsv(originalCsv);
+      const outputCsv = wb.writeCsv({ sheetName: ws.name });
 
       // Load the output back and verify
       const wb2 = new Workbook();
-      const ws2 = await wb2.csv.parse(outputCsv);
+      const ws2 = await wb2.readCsv(outputCsv);
 
       expect(ws2.getCell("A1").value).toBe("Name");
       expect(ws2.getCell("B1").value).toBe("Value");

@@ -135,8 +135,8 @@ export interface CsvGenerateOptions {
   headers?: boolean | string[];
   /** Field delimiter */
   delimiter?: string;
-  /** Row delimiter */
-  rowDelimiter?: string;
+  /** Row delimiter (line ending) */
+  lineEnding?: string;
   /**
    * Append string at end of output (e.g., "\n" for trailing newline).
    * Only applies to csvGenerate(), not iterators.
@@ -550,7 +550,7 @@ class CsvGenerator {
     Pick<
       CsvGenerateOptions,
       | "delimiter"
-      | "rowDelimiter"
+      | "lineEnding"
       | "stringLength"
       | "intMin"
       | "intMax"
@@ -565,7 +565,7 @@ class CsvGenerator {
     this.random = seed !== undefined ? createSeededRandom(seed) : Math.random;
     this.options = {
       delimiter: options?.delimiter ?? ",",
-      rowDelimiter: options?.rowDelimiter ?? "\n",
+      lineEnding: options?.lineEnding ?? "\n",
       stringLength: options?.stringLength ?? 10,
       intMin: options?.intMin ?? 0,
       intMax: options?.intMax ?? 10000,
@@ -1051,8 +1051,8 @@ export function csvGenerate(options: CsvGenerateOptions = {}): CsvGenerateResult
     lines.push(generator.formatRow(row));
   }
 
-  const rowDelimiter = options.rowDelimiter ?? "\n";
-  let csv = lines.join(rowDelimiter);
+  const lineEnding = options.lineEnding ?? "\n";
+  let csv = lines.join(lineEnding);
 
   // Prepend BOM if specified
   if (bom) {

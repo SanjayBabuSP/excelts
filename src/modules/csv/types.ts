@@ -5,7 +5,7 @@
  * This file contains all interfaces, types, and type utilities.
  */
 
-import type { FormattedValue as FormattedValueImpl } from "./utils/formatted-value";
+import type { FormattedValue as FormattedValueImpl } from "./format/formatted-value";
 
 // =============================================================================
 // Row Types
@@ -179,23 +179,26 @@ export interface ColumnMismatchConfig {
 }
 
 // =============================================================================
-// Skip Error Types
+// Error Types
 // =============================================================================
 
-/** Error codes for skipped records */
-export type CsvSkipErrorCode = "TooManyFields" | "TooFewFields" | "MissingQuotes" | "ParseError";
+/** CSV error codes for parse errors and skipped records */
+export type CsvErrorCode = "TooManyFields" | "TooFewFields" | "MissingQuotes" | "ParseError";
 
 /**
- * Error object passed to onSkip callback
+ * CSV record error - used for both parse errors and skipped records.
  */
-export interface CsvSkipError {
-  code: CsvSkipErrorCode;
+export interface CsvRecordError {
+  code: CsvErrorCode;
   message: string;
+  /** 1-based line number where the error occurred */
+  line: number;
+  /** Raw unparsed line content (when available) */
   raw?: string;
 }
 
-/** OnSkip callback type */
-export type OnSkipCallback = (error: CsvSkipError, record: string[] | null, line: number) => void;
+/** OnSkip callback type - called when a record is skipped due to error */
+export type OnSkipCallback = (error: CsvRecordError, record: string[] | null) => void;
 
 // =============================================================================
 // Parse Options
@@ -219,12 +222,10 @@ export interface CsvBaseOptions {
 export interface CsvParseOptions extends CsvBaseOptions {
   /** Delimiters to try during auto-detection (when delimiter is "") */
   delimitersToGuess?: string[];
-  /** Line terminator (default: auto-detect) */
-  newline?: string;
+  /** Line ending character(s) (default: auto-detect) */
+  lineEnding?: string;
   /** Skip empty lines: true, false, or "greedy" (also skips whitespace-only) */
   skipEmptyLines?: boolean | "greedy";
-  /** Alias for skipEmptyLines */
-  ignoreEmpty?: boolean;
   /** Trim whitespace from both sides */
   trim?: boolean;
   /** Left trim only */
@@ -269,8 +270,8 @@ export interface CsvParseOptions extends CsvBaseOptions {
   objname?: string;
   /** Character encoding (Node.js streams) */
   encoding?: BufferEncoding;
-  /** Synchronous transform function */
-  transform?: (row: Row) => Row | null | undefined;
+  /** Synchronous row transform function */
+  rowTransform?: (row: Row) => Row | null | undefined;
   /** Synchronous validate function */
   validate?: (row: Row) => boolean | { isValid: boolean; reason?: string };
   /** Fast parsing mode (no quote detection) */
@@ -303,8 +304,8 @@ export interface CsvParseOptions extends CsvBaseOptions {
  * CSV formatting options
  */
 export interface CsvFormatOptions extends CsvBaseOptions {
-  /** Row delimiter (default: "\n") */
-  rowDelimiter?: string;
+  /** Line ending character(s) (default: "\n") */
+  lineEnding?: string;
   /** Decimal separator for numbers (default: ".") */
   decimalSeparator?: "." | ",";
   /**
@@ -341,7 +342,7 @@ export interface CsvFormatOptions extends CsvBaseOptions {
   /** Escape formula characters (CSV injection protection) */
   escapeFormulae?: boolean;
   /** Type-based transform configuration */
-  transform?: TypeTransformMap;
+  typeTransform?: TypeTransformMap;
 }
 
 // =============================================================================
@@ -375,16 +376,28 @@ export interface CsvParseMeta {
   renamedHeaders?: Record<string, string> | null;
 }
 
-/** Parse error codes */
-export type CsvParseErrorCode = "MissingQuotes" | "TooManyFields" | "TooFewFields" | "ParseError";
+/**
+ * Parse result with metadata
+ */
+export interface CsvParseResult<T = string[]> {
+  headers?: string[];
+  rows: T[];
+  invalidRows?: { row: string[]; reason: string }[];
+  errors?: CsvRecordError[];
+  meta: CsvParseMeta;
+}
 
 /**
- * Parse error (non-fatal)
+ * Parse result when objname option is used.
+ * Note: rows is an object keyed by the objname column value, not an array.
  */
-export interface CsvParseError {
-  code: CsvParseErrorCode;
-  message: string;
-  row: number;
+export interface CsvParseResultWithObjname<T = Record<string, unknown>> {
+  headers?: string[];
+  /** Object mapping objname column values to records */
+  rows: Record<string, T | RecordWithInfo<T>>;
+  invalidRows?: { row: string[]; reason: string }[];
+  errors?: CsvRecordError[];
+  meta: CsvParseMeta;
 }
 
 /**
@@ -400,7 +413,7 @@ export interface RecordInfo {
    * For ASCII-only content this equals the byte offset, but for multi-byte
    * UTF-8 characters the actual byte position will differ.
    */
-  bytes: number;
+  offset: number;
   /** Whether each field in the record was quoted */
   quoted: boolean[];
   /** Raw unparsed line content (only present when `raw: true` option is set) */
@@ -415,17 +428,6 @@ export interface RecordInfo {
 export interface RecordWithInfo<T = Record<string, unknown>> {
   record: T;
   info: RecordInfo;
-}
-
-/**
- * Parse result with metadata
- */
-export interface CsvParseResult<T = string[]> {
-  headers?: string[];
-  rows: T[];
-  invalidRows?: { row: string[]; reason: string }[];
-  errors?: CsvParseError[];
-  meta: CsvParseMeta;
 }
 
 // =============================================================================
@@ -457,10 +459,32 @@ export interface CsvParseObjectOptions extends CsvParseOptions {
 // =============================================================================
 
 // Re-export from formatted-value for compatibility
-export { isFormattedValue, quoted, unquoted } from "./utils/formatted-value";
+export { isFormattedValue, quoted, unquoted } from "./format/formatted-value";
 
 /**
- * Check if transform function is synchronous (1 argument)
+ * Check if transform function is synchronous.
+ *
+ * This uses Function.length (the number of declared parameters) to distinguish
+ * sync from async transforms:
+ * - Sync transforms: `(row) => transformedRow` (1 parameter)
+ * - Async transforms: `(row, callback) => void` (2 parameters)
+ *
+ * **Important**: This heuristic relies on the function having the expected
+ * number of parameters. Functions with optional parameters or rest parameters
+ * may not work correctly with this check.
+ *
+ * @example
+ * ```ts
+ * // Sync transform - detected correctly
+ * const syncFn = (row: Row) => ({ ...row, processed: true });
+ * isSyncTransform(syncFn); // true
+ *
+ * // Async transform - detected correctly
+ * const asyncFn = (row: Row, cb: RowTransformCallback) => {
+ *   setTimeout(() => cb(null, row), 100);
+ * };
+ * isSyncTransform(asyncFn); // false
+ * ```
  */
 export function isSyncTransform<I, O>(
   transform: RowTransformFunction<I, O>
@@ -469,7 +493,29 @@ export function isSyncTransform<I, O>(
 }
 
 /**
- * Check if validate function is synchronous (1 argument)
+ * Check if validate function is synchronous.
+ *
+ * This uses Function.length (the number of declared parameters) to distinguish
+ * sync from async validators:
+ * - Sync validators: `(row) => boolean | { isValid, reason }` (1 parameter)
+ * - Async validators: `(row, callback) => void` (2 parameters)
+ *
+ * **Important**: This heuristic relies on the function having the expected
+ * number of parameters. Functions with optional parameters or rest parameters
+ * may not work correctly with this check.
+ *
+ * @example
+ * ```ts
+ * // Sync validator - detected correctly
+ * const syncFn = (row: Row) => row.name !== "";
+ * isSyncValidate(syncFn); // true
+ *
+ * // Async validator - detected correctly
+ * const asyncFn = (row: Row, cb: RowValidateCallback) => {
+ *   setTimeout(() => cb(null, true), 100);
+ * };
+ * isSyncValidate(asyncFn); // false
+ * ```
  */
 export function isSyncValidate<T>(
   validate: RowValidateFunction<T>

@@ -5,10 +5,10 @@
  * Handles header processing, column validation, and row completion.
  */
 
-import type { CsvParseError, HeaderArray, RecordInfo } from "../types";
+import type { CsvRecordError, HeaderArray, RecordInfo } from "../types";
 import type { ParseConfig } from "./config";
 import type { ParseState } from "./state";
-import { processHeaders, validateAndAdjustColumns, convertRowToObject } from "../utils/parse";
+import { processHeaders, validateAndAdjustColumns, convertRowToObject } from "./helpers";
 import { isEmptyRow, hasAllEmptyValues } from "../utils/row";
 import { applyDynamicTypingToRow } from "../utils/dynamic-typing";
 
@@ -29,7 +29,7 @@ export interface RowProcessResult {
   /** Record info (if info option enabled) */
   info?: RecordInfo;
   /** Error that occurred (if any) */
-  error?: CsvParseError;
+  error?: CsvRecordError;
   /** Reason for skipping/invalidating the row */
   reason?: string;
   /** Extra columns when columnMismatch.more is 'keep' */
@@ -136,7 +136,7 @@ export function buildRecordInfo(
   const info: RecordInfo = {
     index: dataRowIndex,
     line: state.currentRowStartLine,
-    bytes: state.currentRowStartBytes,
+    offset: state.currentRowStartOffset,
     quoted: [...state.currentRowQuoted]
   };
   if (includeRaw) {
@@ -194,8 +194,9 @@ export function shouldSkipRow(
   shouldSkipEmpty: boolean | "greedy",
   skipRecordsWithEmptyValues: boolean
 ): boolean {
-  // Comment line check
-  if (comment && row[0]?.startsWith(comment)) {
+  // Comment line check - trim first field before checking for comment prefix
+  // to handle lines like " # comment" with leading whitespace
+  if (comment && row[0]?.trimStart().startsWith(comment)) {
     return true;
   }
   // Empty row check
@@ -221,7 +222,7 @@ export function processCompletedRow(
   row: string[],
   state: ParseState,
   config: ParseConfig,
-  errors: CsvParseError[],
+  errors: CsvRecordError[],
   lineNumber: number
 ): RowProcessResult {
   // Header handling
@@ -243,19 +244,22 @@ export function processCompletedRow(
   let extras: string[] | undefined;
 
   if (validationError) {
-    const errorObj: CsvParseError = {
+    const errorObj: CsvRecordError = {
       code: validationError.errorCode,
       message: validationError.message,
-      row: state.dataRowCount
+      line: lineNumber
     };
     errors.push(errorObj);
 
     if (!validationError.isValid) {
       if (config.skipRecordsWithError) {
         config.invokeOnSkip?.(
-          { code: validationError.errorCode, message: validationError.reason || "Column mismatch" },
-          row,
-          lineNumber
+          {
+            code: validationError.errorCode,
+            message: validationError.reason || "Column mismatch",
+            line: lineNumber
+          },
+          row
         );
         return { stop: false, skipped: true };
       }

@@ -8,6 +8,17 @@
 import { DateParser } from "@utils/datetime";
 import type { DynamicTypingConfig, CastDateConfig } from "@csv/types";
 
+// =============================================================================
+// Pre-compiled Regex Constants
+// =============================================================================
+
+/**
+ * Pre-compiled regex for valid number format detection.
+ * Matches integers, decimals, and scientific notation.
+ * Pre-compiling avoids regex compilation overhead in the hot path.
+ */
+const NUMERIC_REGEX = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 // Singleton date parser for ISO formats (created lazily)
 let isoDateParser: DateParser | null = null;
 
@@ -181,7 +192,7 @@ export function convertValue(value: string): string | number | boolean | null {
     }
 
     // Check for valid number format (avoid converting "123abc" or "1.2.3")
-    if (/^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) {
+    if (NUMERIC_REGEX.test(value)) {
       const num = Number(value);
       if (!isNaN(num)) {
         return num;
@@ -290,12 +301,15 @@ function convertSingleValue(
 // =============================================================================
 
 /**
- * Apply dynamic typing to an entire row (object form)
+ * Apply dynamic typing to an entire row (object form).
  *
- * @param row - Row object with string values
+ * Performance: Converts values IN PLACE to avoid allocating a new object.
+ * The input object is mutated and returned with converted values.
+ *
+ * @param row - Row object with string values (will be mutated)
  * @param dynamicTyping - DynamicTyping configuration
  * @param castDate - CastDate configuration for date parsing
- * @returns New row object with converted values
+ * @returns The same row object with converted values
  */
 export function applyDynamicTypingToRow(
   row: Record<string, string>,
@@ -307,13 +321,18 @@ export function applyDynamicTypingToRow(
     return row;
   }
 
-  const result: Record<string, unknown> = {};
+  // Convert in place - mutate the input object directly
   for (const key in row) {
     if (Object.hasOwn(row, key)) {
-      result[key] = convertSingleValue(row[key], key, dynamicTyping, castDate);
+      (row as Record<string, unknown>)[key] = convertSingleValue(
+        row[key],
+        key,
+        dynamicTyping,
+        castDate
+      );
     }
   }
-  return result;
+  return row as Record<string, unknown>;
 }
 
 /**

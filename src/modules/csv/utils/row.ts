@@ -158,16 +158,32 @@ export function deduplicateHeadersWithRenames(headers: HeaderArray): {
   const renamedHeaders: Record<string, string> = {};
 
   let hasRenames = false;
+  let emptyHeaderCount = 0;
 
   for (const header of headers) {
-    if (header !== null && header !== undefined) {
+    if (header !== null && header !== undefined && header !== "") {
       reservedHeaders.add(header);
     }
   }
 
-  for (const header of headers) {
+  for (let i = 0; i < headers.length; i++) {
+    const header = headers[i];
     if (header === null || header === undefined) {
       result.push(header);
+      continue;
+    }
+
+    // Handle empty string headers by generating placeholder names
+    if (header === "") {
+      let placeholder = `_column_${i}`;
+      // Ensure placeholder doesn't collide with existing headers
+      while (usedHeaders.has(placeholder) || reservedHeaders.has(placeholder)) {
+        placeholder = `_column_${i}_${emptyHeaderCount++}`;
+      }
+      usedHeaders.add(placeholder);
+      result.push(placeholder);
+      renamedHeaders[placeholder] = "";
+      hasRenames = true;
       continue;
     }
 

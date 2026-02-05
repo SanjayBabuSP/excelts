@@ -47,6 +47,15 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
   };
 
   let state = createScannerState();
+  // Track the global offset of the buffer start for zero-copy raw row extraction
+  let bufferStartOffset = 0;
+
+  // Reusable arrays for streaming mode (S3 optimization)
+  // Safe to reuse because:
+  // - fields: CsvParserStream always uses .map() which creates new array
+  // - quoted: buildRecordInfo copies the array before exposing to user
+  const reuseFields: string[] = [];
+  const reuseQuoted: boolean[] = [];
 
   return {
     get config() {
@@ -54,6 +63,7 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
     },
 
     scanRow(input: string, offset = 0, isEof = false): RowScanResult {
+      // Sync mode: don't reuse arrays (caller may store results)
       return scanRowImpl(input, offset, resolvedConfig, isEof);
     },
 
@@ -67,7 +77,15 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
         return null;
       }
 
-      const result = scanRowImpl(state.buffer, state.position, resolvedConfig, false);
+      // Streaming mode: reuse arrays for reduced allocations
+      const result = scanRowImpl(
+        state.buffer,
+        state.position,
+        resolvedConfig,
+        false,
+        reuseFields,
+        reuseQuoted
+      );
 
       if (result.needMore) {
         // Not enough data for a complete row
@@ -76,10 +94,20 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
       }
 
       if (result.complete) {
+        // Extract raw row BEFORE potentially compacting the buffer
+        // This enables zero-copy raw row extraction in streaming mode
+        result.raw = state.buffer.slice(result.rawStart, result.rawEnd);
+
         state.position = result.endPos;
 
-        // Compact buffer if we've consumed a lot
-        if (state.position > 65536) {
+        // Compact buffer when:
+        // 1. We've consumed more than 64KB of data, OR
+        // 2. We've consumed more than 50% of the buffer (prevents unbounded growth)
+        const consumedBytes = state.position;
+        const bufferLength = state.buffer.length;
+        if (consumedBytes > 65536 || (consumedBytes > bufferLength / 2 && consumedBytes > 4096)) {
+          // Update global offset before compacting
+          bufferStartOffset += state.position;
           state.buffer = state.buffer.slice(state.position);
           state.position = 0;
         }
@@ -96,12 +124,22 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
         return null;
       }
 
-      // At EOF, scan remaining data as complete
-      const result = scanRowImpl(state.buffer, state.position, resolvedConfig, true);
+      // At EOF, scan remaining data as complete (reuse arrays)
+      const result = scanRowImpl(
+        state.buffer,
+        state.position,
+        resolvedConfig,
+        true,
+        reuseFields,
+        reuseQuoted
+      );
 
       if (result.fields.length === 0 && result.endPos === state.position) {
         return null;
       }
+
+      // Extract raw row for streaming mode
+      result.raw = state.buffer.slice(result.rawStart, result.rawEnd);
 
       state.position = result.endPos;
       return result;
@@ -109,10 +147,19 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
 
     reset(): void {
       state = createScannerState();
+      bufferStartOffset = 0;
+      // Clear reusable arrays
+      reuseFields.length = 0;
+      reuseQuoted.length = 0;
     },
 
     getBuffer(): string {
       return state.buffer.slice(state.position);
+    },
+
+    getBufferOffset(): number {
+      // Return the global offset where current buffer position starts
+      return bufferStartOffset + state.position;
     }
   };
 }

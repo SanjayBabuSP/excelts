@@ -1,14 +1,17 @@
 /**
- * CSV Scanner Unit Tests
+ * CSV Scanner Tests
  *
- * Tests the high-performance field scanner for correctness.
- * These tests cover:
+ * Tests the high-performance field scanner and parseWithScanner function.
+ * Consolidated from scanner.test.ts and scanner-integration.test.ts.
+ *
+ * Coverage:
  * - Basic field parsing (quoted and unquoted)
  * - Multi-character delimiters
- * - Escape sequences (RFC 4180 and backslash)
+ * - Escape sequences (RFC 4180)
  * - Newline handling (LF, CR, CRLF)
  * - Streaming with chunk boundaries
- * - Edge cases
+ * - Low-level scanner functions
+ * - parseWithScanner integration
  */
 
 import { describe, it, expect } from "vitest";
@@ -20,11 +23,39 @@ import {
   scanQuotedField,
   scanUnquotedField,
   DEFAULT_SCANNER_CONFIG
-} from "../scanner";
-import type { ScannerConfig, RowScanResult } from "../scanner";
+} from "@csv/parse/scanner";
+import type { ScannerConfig, RowScanResult } from "@csv/parse/scanner";
+import {
+  parseWithScanner,
+  createParseConfig,
+  createParseState,
+  type RowProcessResult
+} from "@csv/parse/index";
+import type { CsvParseOptions, CsvRecordError } from "@csv/types";
 
 // =============================================================================
-// Basic Parsing Tests
+// Test Helpers
+// =============================================================================
+
+function parseWithScanner_(
+  input: string,
+  options: CsvParseOptions = {}
+): { results: RowProcessResult[]; errors: CsvRecordError[] } {
+  const { config, processedInput } = createParseConfig({ input, options });
+  const state = createParseState(config);
+  const errors: CsvRecordError[] = [];
+  const results = [...parseWithScanner(processedInput!, config, state, errors)];
+  return { results, errors };
+}
+
+function expectRow(input: string, options: CsvParseOptions, expectedRows: string[][]): void {
+  const { results } = parseWithScanner_(input, options);
+  const actualRows = results.filter(r => !r.skipped && r.row).map(r => r.row);
+  expect(actualRows).toEqual(expectedRows);
+}
+
+// =============================================================================
+// Scanner - Basic Parsing
 // =============================================================================
 
 describe("Scanner - Basic Parsing", () => {
@@ -73,7 +104,7 @@ describe("Scanner - Basic Parsing", () => {
 });
 
 // =============================================================================
-// Quoted Field Tests
+// Scanner - Quoted Fields
 // =============================================================================
 
 describe("Scanner - Quoted Fields", () => {
@@ -113,10 +144,25 @@ describe("Scanner - Quoted Fields", () => {
     expect(rows[0].fields).toEqual(["a", "b", "c"]);
     expect(rows[0].quoted).toEqual([true, true, true]);
   });
+
+  it("should handle quoted field with only quotes", () => {
+    const rows = scanAllRows('""""\n');
+    expect(rows[0].fields).toEqual(['"']);
+  });
+
+  it("should handle consecutive escaped quotes", () => {
+    const rows = scanAllRows('"a""""b"\n');
+    expect(rows[0].fields).toEqual(['a""b']);
+  });
+
+  it("should handle field ending with escaped quote", () => {
+    const rows = scanAllRows('"test"""\n');
+    expect(rows[0].fields).toEqual(['test"']);
+  });
 });
 
 // =============================================================================
-// Multi-character Delimiter Tests
+// Scanner - Multi-character Delimiters
 // =============================================================================
 
 describe("Scanner - Multi-character Delimiters", () => {
@@ -142,7 +188,7 @@ describe("Scanner - Multi-character Delimiters", () => {
 });
 
 // =============================================================================
-// Newline Handling Tests
+// Scanner - Newline Handling
 // =============================================================================
 
 describe("Scanner - Newline Handling", () => {
@@ -175,7 +221,7 @@ describe("Scanner - Newline Handling", () => {
 });
 
 // =============================================================================
-// relaxQuotes Mode Tests
+// Scanner - relaxQuotes Mode
 // =============================================================================
 
 describe("Scanner - relaxQuotes Mode", () => {
@@ -193,7 +239,7 @@ describe("Scanner - relaxQuotes Mode", () => {
 });
 
 // =============================================================================
-// Disabled Quoting Tests
+// Scanner - Disabled Quoting
 // =============================================================================
 
 describe("Scanner - Disabled Quoting", () => {
@@ -209,7 +255,7 @@ describe("Scanner - Disabled Quoting", () => {
 });
 
 // =============================================================================
-// Streaming Tests
+// Scanner - Streaming
 // =============================================================================
 
 describe("Scanner - Streaming", () => {
@@ -274,16 +320,17 @@ describe("Scanner - Streaming", () => {
     const scanner = createScanner();
     scanner.feed("a,b\nc,d\ne,f\n");
 
-    const rows: RowScanResult[] = [];
+    // Note: Scanner reuses internal arrays for performance, so we must copy fields
+    const rows: string[][] = [];
     let row;
     while ((row = scanner.nextRow()) !== null) {
-      rows.push(row);
+      rows.push([...row.fields]);
     }
 
     expect(rows).toHaveLength(3);
-    expect(rows[0].fields).toEqual(["a", "b"]);
-    expect(rows[1].fields).toEqual(["c", "d"]);
-    expect(rows[2].fields).toEqual(["e", "f"]);
+    expect(rows[0]).toEqual(["a", "b"]);
+    expect(rows[1]).toEqual(["c", "d"]);
+    expect(rows[2]).toEqual(["e", "f"]);
   });
 
   it("should reset scanner state", () => {
@@ -301,7 +348,7 @@ describe("Scanner - Streaming", () => {
 });
 
 // =============================================================================
-// Async Iterator Tests
+// Scanner - Async Iterator
 // =============================================================================
 
 describe("Scanner - Async Iterator", () => {
@@ -311,14 +358,15 @@ describe("Scanner - Async Iterator", () => {
       yield "1,2,3\n";
     }
 
-    const rows: RowScanResult[] = [];
+    // Note: Scanner reuses internal arrays for performance, so we must copy fields
+    const rows: string[][] = [];
     for await (const row of scanRowsAsync(chunks())) {
-      rows.push(row);
+      rows.push([...row.fields]);
     }
 
     expect(rows).toHaveLength(2);
-    expect(rows[0].fields).toEqual(["a", "b", "c"]);
-    expect(rows[1].fields).toEqual(["1", "2", "3"]);
+    expect(rows[0]).toEqual(["a", "b", "c"]);
+    expect(rows[1]).toEqual(["1", "2", "3"]);
   });
 
   it("should handle row spanning async chunks", async () => {
@@ -353,7 +401,7 @@ describe("Scanner - Async Iterator", () => {
 });
 
 // =============================================================================
-// Edge Cases
+// Scanner - Edge Cases
 // =============================================================================
 
 describe("Scanner - Edge Cases", () => {
@@ -387,25 +435,10 @@ describe("Scanner - Edge Cases", () => {
     expect(rows[0].fields[0]).toBe("col0");
     expect(rows[0].fields[999]).toBe("col999");
   });
-
-  it("should handle quoted field with only quotes", () => {
-    const rows = scanAllRows('""""\n');
-    expect(rows[0].fields).toEqual(['"']);
-  });
-
-  it("should handle consecutive escaped quotes", () => {
-    const rows = scanAllRows('"a""""b"\n');
-    expect(rows[0].fields).toEqual(['a""b']);
-  });
-
-  it("should handle field ending with escaped quote", () => {
-    const rows = scanAllRows('"test"""\n');
-    expect(rows[0].fields).toEqual(['test"']);
-  });
 });
 
 // =============================================================================
-// Low-Level Function Tests
+// Low-Level Scanner Functions
 // =============================================================================
 
 describe("scanQuotedField", () => {
@@ -491,5 +524,242 @@ describe("scanRow", () => {
     const result = scanRow("a,b,c", 0, config, false);
     expect(result.needMore).toBe(true);
     expect(result.complete).toBe(false);
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Basic Parsing
+// =============================================================================
+
+describe("parseWithScanner - Basic Parsing", () => {
+  it("should parse simple rows", () => {
+    expectRow("a,b,c\n", {}, [["a", "b", "c"]]);
+    expectRow("a,b,c\n1,2,3\n", {}, [
+      ["a", "b", "c"],
+      ["1", "2", "3"]
+    ]);
+    expectRow("hello,world\n", {}, [["hello", "world"]]);
+  });
+
+  it("should handle empty fields", () => {
+    expectRow(",b,\n", {}, [["", "b", ""]]);
+    expectRow(",,\n", {}, [["", "", ""]]);
+    expectRow("a,,c\n", {}, [["a", "", "c"]]);
+  });
+
+  it("should handle row without trailing newline", () => {
+    expectRow("a,b,c", {}, [["a", "b", "c"]]);
+    expectRow("hello", {}, [["hello"]]);
+  });
+
+  it("should handle empty input", () => {
+    expectRow("", {}, []);
+  });
+
+  it("should handle single field", () => {
+    expectRow("hello\n", {}, [["hello"]]);
+    expectRow("hello", {}, [["hello"]]);
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Quoted Fields
+// =============================================================================
+
+describe("parseWithScanner - Quoted Fields", () => {
+  it("should parse quoted fields", () => {
+    expectRow('"hello",world\n', {}, [["hello", "world"]]);
+    expectRow('"a,b",c\n', {}, [["a,b", "c"]]);
+    expectRow('"line1\nline2",b\n', {}, [["line1\nline2", "b"]]);
+  });
+
+  it("should handle escaped quotes", () => {
+    expectRow('"say ""hello""",b\n', {}, [['say "hello"', "b"]]);
+    expectRow('""""\n', {}, [['"']]);
+    expectRow('"a""""b"\n', {}, [['a""b']]);
+  });
+
+  it("should handle empty quoted fields", () => {
+    expectRow('"",b\n', {}, [["", "b"]]);
+    expectRow('"",""\n', {}, [["", ""]]);
+  });
+
+  it("should handle CRLF inside quotes (normalized to LF)", () => {
+    expectRow('"line1\r\nline2",b\n', {}, [["line1\nline2", "b"]]);
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Newlines
+// =============================================================================
+
+describe("parseWithScanner - Newlines", () => {
+  it("should handle LF line endings", () => {
+    expectRow("a,b\nc,d\n", {}, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle CRLF line endings", () => {
+    expectRow("a,b\r\nc,d\r\n", {}, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle CR line endings", () => {
+    expectRow("a,b\rc,d\r", {}, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle mixed line endings", () => {
+    expectRow("a,b\nc,d\r\ne,f\r", {}, [
+      ["a", "b"],
+      ["c", "d"],
+      ["e", "f"]
+    ]);
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Options
+// =============================================================================
+
+describe("parseWithScanner - Options", () => {
+  it("should handle trim option", () => {
+    expectRow("  a  ,  b  \n", { trim: true }, [["a", "b"]]);
+    expectRow("  a  ,  b  \n", { ltrim: true }, [["a  ", "b  "]]);
+    expectRow("  a  ,  b  \n", { rtrim: true }, [["  a", "  b"]]);
+  });
+
+  it("should handle skipEmptyLines", () => {
+    expectRow("a,b\n\nc,d\n", { skipEmptyLines: true }, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle comment lines", () => {
+    expectRow("a,b\n#comment\nc,d\n", { comment: "#" }, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle skipLines", () => {
+    expectRow("skip1\nskip2\na,b\n", { skipLines: 2 }, [["a", "b"]]);
+  });
+
+  it("should handle maxRows", () => {
+    expectRow("a,b\nc,d\ne,f\n", { maxRows: 2 }, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle toLine", () => {
+    expectRow("a,b\nc,d\ne,f\n", { toLine: 2 }, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+
+  it("should handle info option", () => {
+    const { results } = parseWithScanner_("a,b\nc,d\n", { info: true });
+    expect(results[0].info).toBeDefined();
+    expect(results[0].info?.line).toBe(1);
+  });
+
+  it("should handle raw option", () => {
+    const { results } = parseWithScanner_("a,b\nc,d\n", { info: true, raw: true });
+    expect(results[0].info?.raw).toBe("a,b");
+    expect(results[1].info?.raw).toBe("c,d");
+  });
+
+  it("should handle relaxQuotes", () => {
+    expectRow('a"b,c\n', { relaxQuotes: true }, [['a"b', "c"]]);
+  });
+
+  it("should handle skipRecordsWithEmptyValues", () => {
+    expectRow("a,b\n,,\nc,d\n", { skipRecordsWithEmptyValues: true }, [
+      ["a", "b"],
+      ["c", "d"]
+    ]);
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Multi-char Delimiters
+// =============================================================================
+
+describe("parseWithScanner - Multi-char Delimiters", () => {
+  it("should handle || delimiter", () => {
+    expectRow("a||b||c\n", { delimiter: "||" }, [["a", "b", "c"]]);
+  });
+
+  it("should handle tab-tab delimiter", () => {
+    expectRow("a\t\tb\t\tc\n", { delimiter: "\t\t" }, [["a", "b", "c"]]);
+  });
+
+  it("should handle quoted field with multi-char delimiter inside", () => {
+    expectRow('"a||b"||c\n', { delimiter: "||" }, [["a||b", "c"]]);
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Column Mismatch
+// =============================================================================
+
+describe("parseWithScanner - Column Mismatch", () => {
+  it("should handle too many fields with truncate", () => {
+    const { results } = parseWithScanner_("a,b\n1,2,3\n", {
+      headers: true,
+      columnMismatch: { less: "error", more: "truncate" }
+    });
+    const dataRows = results.filter(r => !r.skipped && r.row);
+    expect(dataRows[0].row).toEqual(["1", "2"]); // truncated from ["1","2","3"]
+  });
+
+  it("should handle too few fields with pad", () => {
+    const { results } = parseWithScanner_("a,b,c\n1,2\n", {
+      headers: true,
+      columnMismatch: { less: "pad", more: "error" }
+    });
+    const dataRows = results.filter(r => !r.skipped && r.row);
+    expect(dataRows[0].row).toEqual(["1", "2", ""]); // padded from ["1","2"]
+  });
+});
+
+// =============================================================================
+// parseWithScanner Integration - Edge Cases
+// =============================================================================
+
+describe("parseWithScanner - Edge Cases", () => {
+  it("should handle large number of columns", () => {
+    const cols = Array.from({ length: 100 }, (_, i) => `col${i}`);
+    const { results } = parseWithScanner_(cols.join(",") + "\n", {});
+    expect(results[0].row).toHaveLength(100);
+  });
+
+  it("should handle long field values", () => {
+    const longValue = "x".repeat(10000);
+    expectRow(`${longValue},b\n`, {}, [[longValue, "b"]]);
+  });
+
+  it("should handle many consecutive empty fields", () => {
+    expectRow(",,,,,,,,,,\n", {}, [["", "", "", "", "", "", "", "", "", "", ""]]);
+  });
+
+  it("should handle field with only quotes", () => {
+    expectRow('""""\n', {}, [['"']]);
+  });
+
+  it("should handle consecutive rows", () => {
+    const rows = Array.from({ length: 100 }, (_, i) => `a${i},b${i},c${i}`);
+    const { results } = parseWithScanner_(rows.join("\n") + "\n", {});
+    expect(results).toHaveLength(100);
   });
 });

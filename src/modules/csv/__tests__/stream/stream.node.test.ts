@@ -13,7 +13,7 @@ let CsvFormatterStream: any;
 
 beforeAll(async () => {
   // Dynamic imports for Node.js environment
-  const csvModule = await import("@csv/csv");
+  const csvModule = await import("@csv/index");
   CsvParserStream = csvModule.CsvParserStream;
   CsvFormatterStream = csvModule.CsvFormatterStream;
 });

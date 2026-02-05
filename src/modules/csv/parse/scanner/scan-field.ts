@@ -77,6 +77,10 @@ function findDelimiter(input: string, start: number, delimiter: string): number 
  * - CRLF normalization inside quoted fields (CRLF -> LF)
  * - relaxQuotes mode (allow unescaped quotes mid-field)
  *
+ * Performance optimization: Uses array to collect segments instead of
+ * string concatenation to avoid O(n²) string building in fields with
+ * many escaped quotes or embedded newlines.
+ *
  * @param input - Input string
  * @param start - Position of opening quote
  * @param config - Scanner configuration
@@ -94,8 +98,17 @@ export function scanQuotedField(
 
   // Skip opening quote
   let pos = start + 1;
-  let value = "";
+  // Use array to collect segments for O(n) string building instead of O(n²) concatenation
+  const segments: string[] = [];
   let segmentStart = pos;
+
+  // Helper to build final value from segments
+  const buildValue = (endPos: number): string => {
+    if (endPos > segmentStart) {
+      segments.push(input.slice(segmentStart, endPos));
+    }
+    return segments.length === 0 ? "" : segments.length === 1 ? segments[0] : segments.join("");
+  };
 
   while (pos < len) {
     const char = input[pos];
@@ -105,7 +118,10 @@ export function scanQuotedField(
       // Look ahead for escaped quote
       if (pos + 1 < len && input[pos + 1] === quote) {
         // Escaped quote: add segment up to escape, then add the quote char
-        value += input.slice(segmentStart, pos) + quote;
+        if (pos > segmentStart) {
+          segments.push(input.slice(segmentStart, pos));
+        }
+        segments.push(quote);
         pos += 2; // Skip escape + quote
         segmentStart = pos;
         continue;
@@ -118,7 +134,7 @@ export function scanQuotedField(
           // At buffer boundary - need more data
           if (!isEof) {
             return {
-              value: value + input.slice(segmentStart, pos),
+              value: buildValue(pos),
               quoted: true,
               endPos: pos,
               needMore: true,
@@ -126,9 +142,8 @@ export function scanQuotedField(
             };
           }
           // At EOF with quote at end - treat as closing quote
-          value += input.slice(segmentStart, pos);
           return {
-            value,
+            value: buildValue(pos),
             quoted: true,
             endPos: pos + 1, // After closing quote
             needMore: false
@@ -145,9 +160,8 @@ export function scanQuotedField(
           (delimiter.length > 1 && isAtDelimiter(input, pos + 1, delimiter))
         ) {
           // Closing quote - add segment and return
-          value += input.slice(segmentStart, pos);
           return {
-            value,
+            value: buildValue(pos),
             quoted: true,
             endPos: pos + 1, // Position after the closing quote
             needMore: false
@@ -162,9 +176,8 @@ export function scanQuotedField(
 
         // Strict mode: this is a closing quote, anything after is an error
         // but we'll let the caller handle malformed data
-        value += input.slice(segmentStart, pos);
         return {
-          value,
+          value: buildValue(pos),
           quoted: true,
           endPos: pos + 1,
           needMore: false
@@ -178,7 +191,7 @@ export function scanQuotedField(
       if (pos + 1 >= len) {
         if (!isEof) {
           return {
-            value: value + input.slice(segmentStart, pos),
+            value: buildValue(pos),
             quoted: true,
             endPos: pos,
             needMore: true,
@@ -186,9 +199,8 @@ export function scanQuotedField(
           };
         }
         // EOF: closing quote
-        value += input.slice(segmentStart, pos);
         return {
-          value,
+          value: buildValue(pos),
           quoted: true,
           endPos: pos + 1,
           needMore: false
@@ -202,9 +214,8 @@ export function scanQuotedField(
         nextChar === "\r" ||
         (delimiter.length > 1 && isAtDelimiter(input, pos + 1, delimiter))
       ) {
-        value += input.slice(segmentStart, pos);
         return {
-          value,
+          value: buildValue(pos),
           quoted: true,
           endPos: pos + 1,
           needMore: false
@@ -218,27 +229,45 @@ export function scanQuotedField(
       }
 
       // Closing quote with trailing garbage
-      value += input.slice(segmentStart, pos);
       return {
-        value,
+        value: buildValue(pos),
         quoted: true,
         endPos: pos + 1,
         needMore: false
       };
     }
 
-    // Handle CRLF inside quoted field (normalize to LF)
+    // ==========================================================================
+    // CR/CRLF Handling in Quoted Fields
+    // ==========================================================================
+    // RFC 4180 allows CRLF within quoted fields, and different platforms may use
+    // different line endings (LF on Unix, CRLF on Windows, CR on old Mac).
+    //
+    // Our normalization strategy:
+    // 1. CRLF (\r\n) -> LF (\n)  - Windows line ending normalized to Unix
+    // 2. CR (\r) alone -> LF (\n) - Old Mac line ending normalized to Unix
+    // 3. LF (\n) alone -> kept as-is
+    //
+    // This ensures consistent output regardless of input line ending style,
+    // matching the behavior of most modern CSV libraries.
+    // ==========================================================================
     if (char === "\r") {
       if (pos + 1 < len) {
         if (input[pos + 1] === "\n") {
           // CRLF -> LF
-          value += input.slice(segmentStart, pos) + "\n";
+          if (pos > segmentStart) {
+            segments.push(input.slice(segmentStart, pos));
+          }
+          segments.push("\n");
           pos += 2;
           segmentStart = pos;
           continue;
         }
         // Standalone CR -> LF
-        value += input.slice(segmentStart, pos) + "\n";
+        if (pos > segmentStart) {
+          segments.push(input.slice(segmentStart, pos));
+        }
+        segments.push("\n");
         pos++;
         segmentStart = pos;
         continue;
@@ -246,7 +275,7 @@ export function scanQuotedField(
       // CR at buffer end - need more data to determine CRLF
       if (!isEof) {
         return {
-          value: value + input.slice(segmentStart, pos),
+          value: buildValue(pos),
           quoted: true,
           endPos: pos,
           needMore: true,
@@ -254,7 +283,10 @@ export function scanQuotedField(
         };
       }
       // EOF: treat as LF
-      value += input.slice(segmentStart, pos) + "\n";
+      if (pos > segmentStart) {
+        segments.push(input.slice(segmentStart, pos));
+      }
+      segments.push("\n");
       pos++;
       segmentStart = pos;
       continue;
@@ -266,7 +298,7 @@ export function scanQuotedField(
   // Reached end of input while inside quoted field
   if (!isEof) {
     return {
-      value: value + input.slice(segmentStart, pos),
+      value: buildValue(pos),
       quoted: true,
       endPos: pos,
       needMore: true,
@@ -275,9 +307,8 @@ export function scanQuotedField(
   }
 
   // EOF with unterminated quote - return what we have
-  value += input.slice(segmentStart, pos);
   return {
-    value,
+    value: buildValue(pos),
     quoted: true,
     endPos: pos,
     needMore: false,
@@ -390,22 +421,39 @@ export function scanUnquotedField(
  * @param start - Starting position
  * @param config - Scanner configuration
  * @param isEof - Whether this is the end of input
- * @returns Row scan result
+ * @param outFields - Optional reusable array for fields (will be cleared)
+ * @param outQuoted - Optional reusable array for quoted flags (will be cleared)
+ * @returns Row scan result with rawStart/rawEnd for zero-copy raw row extraction
  */
 export function scanRow(
   input: string,
   start: number,
   config: ScannerConfig,
-  isEof: boolean
+  isEof: boolean,
+  outFields?: string[],
+  outQuoted?: boolean[]
 ): RowScanResult {
   const { delimiter, quote, quoteEnabled } = config;
   const delimLen = delimiter.length;
   const len = input.length;
 
-  const fields: string[] = [];
-  const quoted: boolean[] = [];
+  // Reuse provided arrays or create new ones
+  const fields: string[] = outFields ?? [];
+  const quoted: boolean[] = outQuoted ?? [];
+
+  // Clear arrays if reusing
+  if (outFields) {
+    outFields.length = 0;
+  }
+  if (outQuoted) {
+    outQuoted.length = 0;
+  }
+
   let pos = start;
   let hasUnterminatedQuote = false;
+
+  // Track raw row boundaries for zero-copy extraction
+  const rawStart = start;
 
   while (pos < len) {
     const char = input[pos];
@@ -421,7 +469,9 @@ export function scanRow(
           endPos: pos,
           complete: false,
           needMore: true,
-          resumePos: result.resumePos ?? start
+          resumePos: result.resumePos ?? start,
+          rawStart,
+          rawEnd: pos
         };
       }
 
@@ -455,7 +505,9 @@ export function scanRow(
             endPos: pos + 1,
             complete: true,
             needMore: false,
-            newline: "\n"
+            newline: "\n",
+            rawStart,
+            rawEnd: pos
           };
         }
         if (nextChar === "\r") {
@@ -467,7 +519,9 @@ export function scanRow(
                 endPos: pos + 2,
                 complete: true,
                 needMore: false,
-                newline: "\r\n"
+                newline: "\r\n",
+                rawStart,
+                rawEnd: pos
               };
             }
             return {
@@ -476,7 +530,9 @@ export function scanRow(
               endPos: pos + 1,
               complete: true,
               needMore: false,
-              newline: "\r"
+              newline: "\r",
+              rawStart,
+              rawEnd: pos
             };
           }
           // CR at buffer end
@@ -487,7 +543,9 @@ export function scanRow(
               endPos: pos,
               complete: false,
               needMore: true,
-              resumePos: start
+              resumePos: start,
+              rawStart,
+              rawEnd: pos
             };
           }
           return {
@@ -496,7 +554,9 @@ export function scanRow(
             endPos: pos + 1,
             complete: true,
             needMore: false,
-            newline: "\r"
+            newline: "\r",
+            rawStart,
+            rawEnd: pos
           };
         }
 
@@ -535,7 +595,9 @@ export function scanRow(
         endPos: result.endPos,
         complete: false,
         needMore: true,
-        resumePos: result.resumePos ?? start
+        resumePos: result.resumePos ?? start,
+        rawStart,
+        rawEnd: result.endPos
       };
     }
 
@@ -564,7 +626,9 @@ export function scanRow(
           endPos: pos + 1,
           complete: true,
           needMore: false,
-          newline: "\n"
+          newline: "\n",
+          rawStart,
+          rawEnd: pos
         };
       }
       if (char === "\r") {
@@ -575,7 +639,9 @@ export function scanRow(
             endPos: pos + 2,
             complete: true,
             needMore: false,
-            newline: "\r\n"
+            newline: "\r\n",
+            rawStart,
+            rawEnd: pos
           };
         }
         // Standalone CR or at buffer end handled in scanUnquotedField
@@ -585,7 +651,9 @@ export function scanRow(
           endPos: pos + 1,
           complete: true,
           needMore: false,
-          newline: "\r"
+          newline: "\r",
+          rawStart,
+          rawEnd: pos
         };
       }
     }
@@ -601,7 +669,9 @@ export function scanRow(
         endPos: pos,
         complete: true,
         needMore: false,
-        unterminatedQuote: hasUnterminatedQuote || undefined
+        unterminatedQuote: hasUnterminatedQuote || undefined,
+        rawStart,
+        rawEnd: pos
       };
     }
   }
@@ -614,6 +684,8 @@ export function scanRow(
     complete: false,
     needMore: !isEof,
     resumePos: start,
-    unterminatedQuote: hasUnterminatedQuote || undefined
+    unterminatedQuote: hasUnterminatedQuote || undefined,
+    rawStart,
+    rawEnd: pos
   };
 }

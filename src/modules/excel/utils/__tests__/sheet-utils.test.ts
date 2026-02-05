@@ -11,7 +11,6 @@ import {
   jsonToSheet,
   sheetAddJson,
   sheetToJson,
-  sheetToCsv,
   aoaToSheet,
   sheetAddAoa,
   sheetToAoa,
@@ -507,55 +506,6 @@ describe("sheet-utils", () => {
 
       expect(result[0]).toEqual(["Name", "Age"]);
       expect(result[1]).toEqual(["Alice", 30]);
-    });
-  });
-
-  // ===========================================================================
-  // CSV Functions
-  // ===========================================================================
-
-  describe("sheetToCsv", () => {
-    it("should convert worksheet to CSV string", () => {
-      const ws = aoaToSheet([
-        ["name", "age"],
-        ["Alice", 30]
-      ]);
-
-      const csv = sheetToCsv(ws);
-
-      expect(csv).toBe("name,age\nAlice,30");
-    });
-
-    it("should use custom field separator", () => {
-      const ws = aoaToSheet([["a", "b"]]);
-
-      const csv = sheetToCsv(ws, { FS: ";" });
-
-      expect(csv).toBe("a;b");
-    });
-
-    it("should use custom record separator", () => {
-      const ws = aoaToSheet([["a"], ["b"]]);
-
-      const csv = sheetToCsv(ws, { RS: "\r\n" });
-
-      expect(csv).toBe("a\r\nb");
-    });
-
-    it("should quote values containing separator", () => {
-      const ws = aoaToSheet([["hello,world"]]);
-
-      const csv = sheetToCsv(ws);
-
-      expect(csv).toBe('"hello,world"');
-    });
-
-    it("should escape quotes", () => {
-      const ws = aoaToSheet([['say "hello"']]);
-
-      const csv = sheetToCsv(ws);
-
-      expect(csv).toBe('"say ""hello"""');
     });
   });
 });

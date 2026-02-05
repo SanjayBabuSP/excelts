@@ -1,31 +1,32 @@
 /**
- * CSV Error Recovery & Robustness Tests
+ * CSV Error Handling & Recovery Tests
  *
  * Tests for:
  * - Recovery from malformed input
  * - Meaningful error messages with line numbers
  * - Graceful handling of edge cases that could cause crashes
  * - Error event handling in streams
+ * - Callback safety
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, parseCsvRows, type CsvSkipError } from "@csv/index";
+import { parseCsv, parseCsvRows, type CsvRecordError } from "@csv/index";
 import { CsvParserStream } from "@csv/stream";
 import { generateMalformedCsv, parseStreamCsv } from "./csv-test-utils";
 
 // =============================================================================
 // Malformed Input Recovery Tests
 // =============================================================================
-describe("malformed input recovery", () => {
+describe("Malformed Input Recovery", () => {
   describe("unclosed quotes", () => {
     it("recovers with skipRecordsWithError", () => {
       const csv = generateMalformedCsv("unclosed-quote");
-      const skipped: { error: CsvSkipError; line: number }[] = [];
+      const skipped: { error: CsvRecordError; line: number }[] = [];
 
       const result = parseCsv(csv, {
         skipRecordsWithError: true,
-        onSkip: (error, _record, line) => {
-          skipped.push({ error, line });
+        onSkip: (error, _record) => {
+          skipped.push({ error, line: error.line });
         }
       });
 
@@ -35,7 +36,7 @@ describe("malformed input recovery", () => {
 
     it("provides error details", () => {
       const csv = 'a,b\n"unclosed';
-      const errors: CsvSkipError[] = [];
+      const errors: CsvRecordError[] = [];
 
       parseCsv(csv, {
         skipRecordsWithError: true,
@@ -82,8 +83,8 @@ describe("malformed input recovery", () => {
       const result = parseCsv(csv, {
         headers: true,
         skipRecordsWithError: true,
-        onSkip: (_error, _record, line) => {
-          skipped.push(line);
+        onSkip: (error, _record) => {
+          skipped.push(error.line);
         }
       }) as { rows: Record<string, string>[] };
 
@@ -124,24 +125,22 @@ describe("malformed input recovery", () => {
 // =============================================================================
 // Error Message Quality Tests
 // =============================================================================
-describe("error messages", () => {
+describe("Error Messages", () => {
   it("reports line number for TooFewFields", () => {
     const csv = "a,b,c\n1,2,3\n4,5\n6,7,8";
-    let capturedError: CsvSkipError | null = null;
-    let capturedLine = 0;
+    let capturedError: CsvRecordError | null = null;
 
     parseCsv(csv, {
       headers: true,
       skipRecordsWithError: true,
-      onSkip: (error, _record, line) => {
+      onSkip: (error, _record) => {
         capturedError = error;
-        capturedLine = line;
       }
     });
 
     expect(capturedError).not.toBeNull();
     expect(capturedError!.code).toBe("TooFewFields");
-    expect(capturedLine).toBe(3); // Line 3 has "4,5"
+    expect(capturedError!.line).toBe(3); // Line 3 has "4,5"
   });
 
   it("reports line number for TooManyFields", () => {
@@ -152,9 +151,9 @@ describe("error messages", () => {
     parseCsv(csv, {
       headers: true,
       skipRecordsWithError: true,
-      onSkip: (error, _record, line) => {
+      onSkip: (error, _record) => {
         capturedCode = error.code;
-        capturedLine = line;
+        capturedLine = error.line;
       }
     });
 
@@ -181,7 +180,7 @@ describe("error messages", () => {
 // =============================================================================
 // Stream Error Handling Tests
 // =============================================================================
-describe("stream errors", () => {
+describe("Stream Errors", () => {
   it("emits data-invalid for invalid rows", async () => {
     const csv = "a,b,c\n1,2\n3,4,5";
     const invalidRows: string[][] = [];
@@ -219,8 +218,8 @@ describe("stream errors", () => {
     const parser = new CsvParserStream({
       headers: true,
       skipRecordsWithError: true,
-      onSkip: (error, _record, line) => {
-        skipped.push({ code: error.code, line });
+      onSkip: (error, _record) => {
+        skipped.push({ code: error.code, line: error.line });
       }
     });
 
@@ -269,7 +268,7 @@ describe("stream errors", () => {
 // =============================================================================
 // Async Generator Error Handling
 // =============================================================================
-describe("parseCsvRows errors", () => {
+describe("parseCsvRows Errors", () => {
   it("skips invalid rows", async () => {
     const csv = "a,b,c\n1,2\n3,4,5\n6,7\n8,9,10";
     const skipped: number[] = [];
@@ -278,8 +277,8 @@ describe("parseCsvRows errors", () => {
     for await (const row of parseCsvRows(csv, {
       headers: true,
       skipRecordsWithError: true,
-      onSkip: (_error, _record, line) => {
-        skipped.push(line);
+      onSkip: (error, _record) => {
+        skipped.push(error.line);
       }
     })) {
       rows.push(row as Record<string, string>);
@@ -317,7 +316,7 @@ describe("parseCsvRows errors", () => {
 // =============================================================================
 // Edge Case Recovery
 // =============================================================================
-describe("edge cases", () => {
+describe("Edge Case Recovery", () => {
   it("handles empty quoted field", () => {
     const csv = 'a,b\n"",c\n1,2';
     const result = parseCsv(csv) as string[][];
@@ -371,12 +370,12 @@ describe("edge cases", () => {
 // =============================================================================
 // Callback Safety Tests
 // =============================================================================
-describe("callback safety", () => {
+describe("Callback Safety", () => {
   it("handles null from transform", () => {
     const csv = "a,b\n1,2\n3,4";
     const result = parseCsv(csv, {
       headers: true,
-      transform: row => {
+      rowTransform: row => {
         const r = row as Record<string, string>;
         return r.a === "1" ? null : row;
       }
@@ -407,7 +406,7 @@ describe("callback safety", () => {
     try {
       parseCsv(csv, {
         headers: true,
-        transform: () => {
+        rowTransform: () => {
           throw new Error("Transform error");
         }
       });

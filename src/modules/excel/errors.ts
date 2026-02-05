@@ -6,21 +6,6 @@
 
 import { BaseError, type BaseErrorOptions } from "@utils/errors";
 
-// Re-export common utilities from base
-export {
-  AbortError,
-  createAbortError,
-  isAbortError,
-  throwIfAborted,
-  createLinkedAbortController,
-  toError,
-  asError,
-  errorToJSON,
-  getErrorChain,
-  getRootCause,
-  type BaseErrorOptions
-} from "@utils/errors";
-
 /**
  * Base class for all Excel-related errors.
  */
@@ -190,6 +175,22 @@ export class ExcelStreamStateError extends ExcelError {
     options?: BaseErrorOptions
   ) {
     super(`Cannot ${operation}: ${state}`, options);
+  }
+}
+
+/**
+ * Error thrown when an HTTP download fails.
+ */
+export class ExcelDownloadError extends ExcelError {
+  override name = "ExcelDownloadError";
+
+  constructor(
+    public readonly url: string,
+    public readonly status: number,
+    public readonly statusText: string,
+    options?: BaseErrorOptions
+  ) {
+    super(`Failed to download from "${url}": HTTP ${status} ${statusText}`, options);
   }
 }
 

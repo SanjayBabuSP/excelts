@@ -7,7 +7,7 @@
 
 import type { HeaderArray } from "../types";
 import type { ParseConfig } from "./config";
-import { processHeaders } from "../utils/parse";
+import { processHeaders } from "./helpers";
 
 // =============================================================================
 // Types
@@ -55,9 +55,10 @@ export interface ParseState {
 
   // Info tracking (for info/raw options)
   currentRowStartLine: number;
-  currentRowStartBytes: number;
+  currentRowStartOffset: number;
   currentFieldQuoted: boolean;
-  currentRowQuoted: boolean[];
+  /** Quoted status per field. May be a shared readonly array - copy before modifying. */
+  currentRowQuoted: readonly boolean[];
   currentRawRow: string;
   /** Character position where current raw row starts (for slice-based raw extraction) */
   currentRawRowStart: number;
@@ -91,7 +92,7 @@ export function createParseState(
     headerRowProcessed: false,
     renamedHeadersForMeta: null,
     currentRowStartLine: config.infoOption ? 1 : 0,
-    currentRowStartBytes: 0,
+    currentRowStartOffset: 0,
     currentFieldQuoted: false,
     currentRowQuoted: [],
     currentRawRow: "",
@@ -130,14 +131,50 @@ export function resetInfoState(
   trackInfo: boolean,
   trackRaw: boolean,
   nextLine: number,
-  nextBytes: number
+  nextOffset: number
 ): void {
   if (trackInfo) {
     state.currentRowQuoted = [];
     state.currentRowStartLine = nextLine;
-    state.currentRowStartBytes = nextBytes;
+    state.currentRowStartOffset = nextOffset;
   }
   if (trackRaw) {
     state.currentRawRow = "";
   }
+}
+
+// =============================================================================
+// Performance Optimization: Shared False Array for Fast Mode
+// =============================================================================
+
+/**
+ * Pre-allocated frozen array of false values for fast mode quoted tracking.
+ * In fast mode (no quote detection), all fields are unquoted, so we can
+ * return a shared reference instead of allocating per row.
+ *
+ * IMPORTANT: This array is frozen and must NOT be modified.
+ * Callers should copy if they need to store/modify the values.
+ */
+const SHARED_FALSE_ARRAY_SIZE = 256;
+const SHARED_FALSE_ARRAY: readonly boolean[] = Object.freeze(
+  new Array(SHARED_FALSE_ARRAY_SIZE).fill(false) as boolean[]
+);
+
+/**
+ * Get a shared array of false values for unquoted field tracking.
+ * Returns a frozen shared reference for common cases to avoid per-row allocation.
+ *
+ * IMPORTANT: The returned array must NOT be modified. If you need to store
+ * the values, make a copy: `[...getUnquotedArray(n)]` or `.slice(0, n)`.
+ *
+ * @param length - Number of fields in the row
+ * @returns Shared frozen array (for length <= 256) or new array (for larger rows)
+ */
+export function getUnquotedArray(length: number): readonly boolean[] {
+  if (length <= SHARED_FALSE_ARRAY_SIZE) {
+    // Return shared reference - caller must not modify
+    return SHARED_FALSE_ARRAY;
+  }
+  // Fall back to creating new array for very wide rows
+  return new Array(length).fill(false);
 }

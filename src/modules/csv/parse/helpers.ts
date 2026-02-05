@@ -13,8 +13,9 @@
  * the batch parser (parse.ts) and the streaming parser (csv-stream.ts).
  */
 
-import { deduplicateHeadersWithRenames, type HeaderArray } from "@csv/utils/row";
-import type { CsvSkipError, OnSkipCallback } from "@csv/types";
+import { deduplicateHeadersWithRenames, type HeaderArray } from "../utils/row";
+import type { CsvRecordError, OnSkipCallback } from "../types";
+import { CsvError } from "../errors";
 
 // =============================================================================
 // Types
@@ -101,6 +102,13 @@ export function processHeaders(
   if (typeof headers === "function") {
     // Function: call with row, skip current row
     rawHeaders = headers(row);
+    // Validate returned array length matches the row
+    if (rawHeaders.length !== row.length) {
+      throw new CsvError(
+        `Header function returned ${rawHeaders.length} headers but row has ${row.length} columns. ` +
+          `The header function must return an array with the same length as the input row.`
+      );
+    }
     skipCurrentRow = true;
   } else if (Array.isArray(headers)) {
     // Array: use provided headers, don't skip current row (it's data)
@@ -190,38 +198,30 @@ export function validateAndAdjustColumns(
 }
 
 /**
- * Type guard to filter out null/undefined values from headers.
- * Useful for extracting only valid string headers from a HeaderArray.
- */
-function isValidHeader(h: string | null | undefined): h is string {
-  return h !== null && h !== undefined;
-}
-
-/**
- * Filter headers to only include valid (non-null/undefined) string values.
- */
-export function filterValidHeaders(headers: HeaderArray): string[] {
-  return headers.filter(isValidHeader);
-}
-
-/**
- * Creates a wrapped onSkip handler that safely invokes the callback,
- * ignoring any errors thrown by the callback itself.
+ * Create a safe onSkip handler that catches errors from user callback.
  *
- * @param onSkip - The user-provided onSkip callback (or undefined)
- * @returns A safe invoker function, or null if no callback provided
+ * The onSkip callback is user-provided and may throw errors. We wrap it
+ * to prevent callback errors from interrupting parsing. Errors in the
+ * callback are silently ignored since there's no good way to surface them
+ * in the sync parsing context.
+ *
+ * For better error visibility in async/streaming contexts, consider
+ * emitting a warning event on the stream instead.
  */
 export function createOnSkipHandler(
   onSkip: OnSkipCallback | undefined
-): ((error: CsvSkipError, record: string[] | null, line: number) => void) | null {
+): ((error: CsvRecordError, record: string[] | null) => void) | null {
   if (!onSkip) {
     return null;
   }
-  return (error: CsvSkipError, record: string[] | null, line: number) => {
+  return (error: CsvRecordError, record: string[] | null) => {
     try {
-      onSkip(error, record, line);
-    } catch {
-      // Ignore errors in onSkip callback
+      onSkip(error, record);
+    } catch (callbackError) {
+      // Silently ignore errors in onSkip callback to prevent
+      // callback bugs from interrupting CSV parsing.
+      // In production, consider logging: console.warn('onSkip callback error:', callbackError);
+      void callbackError;
     }
   };
 }
@@ -290,4 +290,15 @@ function rowToObjectGrouped(
     }
   }
   return obj;
+}
+
+/**
+ * Filter out null/undefined values from a header array.
+ * Returns only the valid string headers.
+ *
+ * @param headers - Header array that may contain null/undefined values
+ * @returns Array of valid string headers (null/undefined removed)
+ */
+export function filterValidHeaders(headers: HeaderArray): string[] {
+  return headers.filter((h): h is string => h !== null && h !== undefined);
 }

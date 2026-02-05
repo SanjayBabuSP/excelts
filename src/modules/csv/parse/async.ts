@@ -24,12 +24,13 @@ import type {
   CsvParseObjectOptions,
   CsvParseResult,
   CsvParseMeta,
-  CsvParseError,
+  CsvRecordError,
   RecordWithInfo
 } from "../types";
 import { parseCsv } from "./sync";
 import { CsvParserStream } from "../stream/parser";
 import { sharedTextEncoder } from "../constants";
+import { CsvError } from "../errors";
 import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils";
 
 type ReadableStreamLike = { getReader: () => any };
@@ -231,12 +232,22 @@ export async function* parseCsvRows(
   // objname produces a map output in the sync parser, which cannot be produced
   // in a true streaming fashion. Fall back to buffered parsing.
   if (options.objname) {
-    const content =
-      typeof input === "string"
-        ? input
-        : (await collectText(normalizeAsyncInput(input), options.encoding)).content;
+    let content: string;
+    try {
+      content =
+        typeof input === "string"
+          ? input
+          : (await collectText(normalizeAsyncInput(input), options.encoding)).content;
+    } catch (error) {
+      throw new CsvError("Failed to read input for objname parsing", { cause: error });
+    }
 
-    const result = parseCsv(content, options);
+    let result: ReturnType<typeof parseCsv>;
+    try {
+      result = parseCsv(content, options);
+    } catch (error) {
+      throw new CsvError("Failed to parse CSV with objname option", { cause: error });
+    }
 
     if (Array.isArray(result)) {
       for (const row of result) {
@@ -377,7 +388,7 @@ export async function* parseCsvRows(
  */
 export interface StreamParseMeta extends CsvParseMeta {
   /** Errors encountered during streaming parse */
-  errors?: CsvParseError[];
+  errors?: CsvRecordError[];
   /** Invalid rows (if validation was used) */
   invalidRows?: Array<{ row: string[]; reason: string }>;
 }

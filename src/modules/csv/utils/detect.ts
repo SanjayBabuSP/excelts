@@ -127,10 +127,10 @@ export function startsWithFormulaChar(str: string): boolean {
 
 /**
  * Detect the line terminator used in a string.
- * Uses fast detection without quote handling since the result is only
- * informational for meta - the parser handles all line ending types.
+ * Uses quote-aware detection to avoid detecting newlines inside quoted fields.
  *
  * @param input - String to analyze
+ * @param quote - Quote character (default: '"')
  * @returns Detected line terminator or '\n' as default
  *
  * @example
@@ -138,29 +138,40 @@ export function startsWithFormulaChar(str: string): boolean {
  * detectLinebreak('a,b\nc,d') // '\n'
  * detectLinebreak('a,b\rc,d') // '\r'
  * detectLinebreak('a,b,c') // '\n' (default)
+ * detectLinebreak('"a\nb",c\r\nd') // '\r\n' (ignores newline in quotes)
  */
-export function detectLinebreak(input: string): string {
-  // Fast path: find first newline character
-  const crIndex = input.indexOf("\r");
-  const lfIndex = input.indexOf("\n");
+export function detectLinebreak(input: string, quote = '"'): string {
+  let inQuote = false;
 
-  // No newline found
-  if (crIndex === -1 && lfIndex === -1) {
-    return "\n";
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+
+    // Handle quote toggle (including escaped quotes "")
+    if (char === quote) {
+      // Check for escaped quote (two consecutive quotes)
+      if (inQuote && input[i + 1] === quote) {
+        i++; // Skip the escaped quote
+        continue;
+      }
+      inQuote = !inQuote;
+      continue;
+    }
+
+    // Skip characters inside quotes
+    if (inQuote) {
+      continue;
+    }
+
+    // Detect line ending outside of quotes
+    if (char === "\r") {
+      return input[i + 1] === "\n" ? "\r\n" : "\r";
+    }
+    if (char === "\n") {
+      return "\n";
+    }
   }
 
-  // Only LF found
-  if (crIndex === -1) {
-    return "\n";
-  }
-
-  // Only CR found, or CR comes before LF (could be CRLF or standalone CR)
-  if (lfIndex === -1 || crIndex < lfIndex) {
-    // Check if CRLF
-    return input[crIndex + 1] === "\n" ? "\r\n" : "\r";
-  }
-
-  // LF comes before CR
+  // No line ending found outside quotes, default to \n
   return "\n";
 }
 
@@ -178,6 +189,12 @@ export function detectLinebreak(input: string): string {
  *    - Check consistency: all lines should have the same count
  *    - Higher count = more fields = better delimiter candidate
  * 3. Choose the delimiter with highest consistent field count
+ *
+ * Tie-breaking rules (in priority order):
+ * 1. Lowest delta (variance) wins - more consistent field counts across lines
+ * 2. On delta tie, highest avgFieldCount wins - more fields per row
+ * 3. On complete tie, array order wins - first delimiter in delimitersToGuess
+ *    (default order: comma, semicolon, tab, pipe)
  *
  * @param input - CSV string to analyze
  * @param quote - Quote character (default: '"')

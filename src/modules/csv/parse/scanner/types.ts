@@ -111,6 +111,25 @@ export interface RowScanResult {
 
   /** Whether there was an unterminated quoted field (EOF inside quotes) */
   unterminatedQuote?: boolean;
+
+  /**
+   * Start position of the raw row in the input string.
+   * Used for zero-copy raw row extraction: `input.slice(rawStart, rawEnd)`.
+   */
+  rawStart: number;
+
+  /**
+   * End position of the raw row (excluding newline).
+   * Used for zero-copy raw row extraction: `input.slice(rawStart, rawEnd)`.
+   */
+  rawEnd: number;
+
+  /**
+   * The raw row string (original input without parsing).
+   * Only populated by streaming scanner's nextRow()/flush() methods.
+   * In sync mode, use input.slice(rawStart, rawEnd) instead.
+   */
+  raw?: string;
 }
 
 // =============================================================================
@@ -119,6 +138,8 @@ export interface RowScanResult {
 
 /**
  * Internal state for streaming scanner.
+ * Note: The current implementation uses a simple buffer + position model.
+ * Complex cross-chunk state (partial fields, etc.) is handled by scanRow's resumePos.
  */
 export interface ScannerState {
   /** Buffered input data */
@@ -126,18 +147,6 @@ export interface ScannerState {
 
   /** Current position in buffer */
   position: number;
-
-  /** Partial field from previous chunk (when needMore was true) */
-  partialField: string;
-
-  /** Whether we're in the middle of a quoted field */
-  inQuotedField: boolean;
-
-  /** Accumulated fields for current row (when spanning chunks) */
-  partialRow: string[];
-
-  /** Quoted flags for partial row */
-  partialRowQuoted: boolean[];
 }
 
 /**
@@ -146,11 +155,7 @@ export interface ScannerState {
 export function createScannerState(): ScannerState {
   return {
     buffer: "",
-    position: 0,
-    partialField: "",
-    inQuotedField: false,
-    partialRow: [],
-    partialRowQuoted: []
+    position: 0
   };
 }
 
@@ -205,6 +210,13 @@ export interface Scanner {
   /**
    * Get the next complete row from the buffer.
    *
+   * **Important**: The returned `fields` and `quoted` arrays are reused internally
+   * for performance. If you need to store the result, copy the arrays:
+   * ```ts
+   * const result = scanner.nextRow();
+   * const fieldsCopy = [...result.fields];
+   * ```
+   *
    * @returns Row result, or null if no complete row is available
    */
   nextRow(): RowScanResult | null;
@@ -212,6 +224,9 @@ export interface Scanner {
   /**
    * Flush remaining data at end of input.
    * Call this when there's no more data to feed.
+   *
+   * **Important**: The returned `fields` and `quoted` arrays are reused internally.
+   * Copy them if you need to store the result.
    *
    * @returns Final row result, or null if buffer is empty
    */
@@ -227,4 +242,23 @@ export interface Scanner {
    * Useful for error recovery or debugging.
    */
   getBuffer(): string;
+
+  /**
+   * Get the current buffer's start offset in the global input.
+   * Used for zero-copy raw row extraction in streaming mode.
+   *
+   * The returned offset indicates where the current buffer starts
+   * relative to all data that has been fed to the scanner.
+   *
+   * To extract raw row from streaming scanner:
+   * ```ts
+   * const result = scanner.nextRow();
+   * const bufferOffset = scanner.getBufferOffset();
+   * const rawRow = scanner.getBuffer().slice(
+   *   result.rawStart - bufferOffset,
+   *   result.rawEnd - bufferOffset
+   * );
+   * ```
+   */
+  getBufferOffset(): number;
 }

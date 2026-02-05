@@ -96,8 +96,8 @@ export class CsvFormatterStream extends Transform {
       // Apply row-level transform if provided
       let processedChunk: Row | null = chunk;
       const sourceIndex = this.sourceRowIndex++;
-      if (this.formatConfig.transform?.row) {
-        processedChunk = this.formatConfig.transform.row(chunk, sourceIndex);
+      if (this.formatConfig.typeTransform?.row) {
+        processedChunk = this.formatConfig.typeTransform.row(chunk, sourceIndex);
         if (processedChunk === null) {
           callback();
           return;
@@ -127,7 +127,7 @@ export class CsvFormatterStream extends Transform {
     const hasOutput =
       (this.formatConfig.writeHeaders && this.displayHeaders) || this.outputRowIndex > 0;
     if (this.formatConfig.trailingNewline && hasOutput) {
-      this.push(this.formatConfig.rowDelimiter);
+      this.push(this.formatConfig.lineEnding);
     }
 
     callback();
@@ -152,14 +152,14 @@ export class CsvFormatterStream extends Transform {
       quoteAll: cfg.quoteAll,
       escapeFormulae: cfg.escapeFormulae,
       decimalSeparator: cfg.decimalSeparator,
-      transform: cfg.transform
+      transform: cfg.typeTransform
     });
 
     // Use row delimiter as prefix (except for first output)
     // First output = header row OR (no header AND first data row)
     const isFirstLine =
       isHeader || (!(cfg.writeHeaders && this.displayHeaders) && this.outputRowIndex === 0);
-    return isFirstLine ? formattedRow : cfg.rowDelimiter + formattedRow;
+    return isFirstLine ? formattedRow : cfg.lineEnding + formattedRow;
   }
 }
 

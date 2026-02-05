@@ -69,10 +69,11 @@ export { WorkbookWriter, WorkbookReader, WorksheetWriter, WorksheetReader };
 // =============================================================================
 
 // =============================================================================
-// CSV support (using native RFC 4180 implementation)
+// CSV support (from workbook)
 // =============================================================================
-export type { CsvOptions } from "@csv/csv.browser";
-export { CSV, createDefaultValueMapper, createDefaultWriteMapper } from "@csv/csv.browser";
+export type { CsvOptions, CsvInput } from "@excel/workbook";
+
+// CSV stream classes
 export {
   CsvParserStream,
   CsvFormatterStream,
@@ -105,6 +106,32 @@ export {
 // Utilities
 // =============================================================================
 export * from "@excel/utils/sheet-utils";
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+export {
+  ExcelError,
+  isExcelError,
+  ExcelFileError,
+  ExcelDownloadError,
+  ExcelNotSupportedError,
+  ExcelStreamStateError,
+  InvalidAddressError,
+  ColumnOutOfBoundsError,
+  RowOutOfBoundsError,
+  MergeConflictError,
+  InvalidValueTypeError,
+  XmlParseError,
+  WorksheetNameError,
+  PivotTableError,
+  TableError,
+  ImageError,
+  MaxItemsExceededError
+} from "@excel/errors";
+
+export { CsvError, CsvWorkerError } from "@csv/errors";
 
 // =============================================================================
 // Archive (ZIP) support (Browser-compatible)

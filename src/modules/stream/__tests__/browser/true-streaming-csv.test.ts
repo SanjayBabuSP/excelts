@@ -5,7 +5,7 @@
  */
 
 import { createTrueStreamingCsvTests } from "@stream/__tests__/streaming/true-streaming-csv-tests";
-import { CsvParserStream, CsvFormatterStream } from "@csv/csv.browser";
+import { CsvParserStream, CsvFormatterStream } from "@csv/index";
 
 // ============================================================================
 // Browser-Specific Test Context

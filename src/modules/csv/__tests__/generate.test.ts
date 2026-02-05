@@ -430,7 +430,7 @@ describe("csvGenerate", () => {
       const { csv } = csvGenerate({
         columns: 2,
         rows: 2,
-        rowDelimiter: "\r\n"
+        lineEnding: "\r\n"
       });
       expect(csv.split("\r\n")).toHaveLength(3);
     });

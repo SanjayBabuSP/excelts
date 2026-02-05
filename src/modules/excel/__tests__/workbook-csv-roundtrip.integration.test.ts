@@ -50,11 +50,11 @@ describe("Workbook", () => {
       ws.getCell("C10").value = "<a>";
       ws.getCell("D10").value = "><";
 
-      await wb.csv.writeFile(csvFile, { dateFormat: "DD/MM/YYYY HH:mm:ss" });
+      await wb.writeCsvFile(csvFile, { dateFormat: "DD/MM/YYYY HH:mm:ss" });
 
       // Read it back (mirrors former src/examples/testCsvIn.ts)
       const wb2 = new Workbook();
-      await wb2.csv.readFile(csvFile, { dateFormats: ["DD/MM/YYYY HH:mm:ss"] });
+      await wb2.readCsvFile(csvFile, { dateFormats: ["DD/MM/YYYY HH:mm:ss"] });
 
       const ws2 = wb2.getWorksheet();
       expect(ws2).toBeTruthy();

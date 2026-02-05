@@ -2,15 +2,17 @@
  * CSV Encoding & Character Set Tests
  *
  * Tests for:
- * - Various BOM types (UTF-8, UTF-16 LE/BE)
+ * - BOM handling (UTF-8)
+ * - Line ending detection (LF, CRLF, CR)
  * - Unicode character handling
  * - Multi-byte character edge cases
  * - Right-to-left text
  * - Combining characters and diacritics
+ * - Roundtrip encoding preservation
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, formatCsv, stripBom } from "@csv/index";
+import { parseCsv, formatCsv, stripBom, detectLinebreak } from "@csv/index";
 import { CsvParserStream } from "@csv/stream";
 import { parseStreamCsv } from "./csv-test-utils";
 
@@ -58,6 +60,11 @@ describe("BOM", () => {
       expect(stripBom("")).toBe("");
       expect(stripBom(UTF8_BOM)).toBe("");
     });
+
+    it("only strips BOM at start, not in middle", () => {
+      const bomInMiddle = "Hello\ufeffWorld";
+      expect(stripBom(bomInMiddle)).toBe("Hello\ufeffWorld");
+    });
   });
 
   describe("edge cases", () => {
@@ -78,9 +85,75 @@ describe("BOM", () => {
 });
 
 // =============================================================================
+// Line Ending Detection Tests
+// =============================================================================
+describe("Line Ending Detection", () => {
+  describe("detectLinebreak", () => {
+    it("should detect LF (Unix) line ending", () => {
+      expect(detectLinebreak("a,b\nc,d\ne,f")).toBe("\n");
+    });
+
+    it("should detect CRLF (Windows) line ending", () => {
+      expect(detectLinebreak("a,b\r\nc,d\r\ne,f")).toBe("\r\n");
+    });
+
+    it("should detect CR (old Mac) line ending", () => {
+      expect(detectLinebreak("a,b\rc,d\re,f")).toBe("\r");
+    });
+
+    it("should default to LF when no newline found", () => {
+      expect(detectLinebreak("a,b,c")).toBe("\n");
+    });
+
+    it("should handle empty string", () => {
+      expect(detectLinebreak("")).toBe("\n");
+    });
+
+    it("should detect first newline type when mixed", () => {
+      // LF comes first
+      expect(detectLinebreak("a\nb\r\nc")).toBe("\n");
+      // CRLF comes first
+      expect(detectLinebreak("a\r\nb\nc")).toBe("\r\n");
+    });
+  });
+
+  describe("parsing with different line endings", () => {
+    it("parses LF line endings", () => {
+      const csv = "a,b\n1,2\n3,4";
+      const result = parseCsv(csv) as string[][];
+      expect(result).toHaveLength(3);
+    });
+
+    it("parses CRLF line endings", () => {
+      const csv = "a,b\r\n1,2\r\n3,4";
+      const result = parseCsv(csv) as string[][];
+      expect(result).toHaveLength(3);
+    });
+
+    it("parses CR line endings", () => {
+      const csv = "a,b\r1,2\r3,4";
+      const result = parseCsv(csv) as string[][];
+      expect(result).toHaveLength(3);
+    });
+
+    it("parses mixed line endings", () => {
+      const csv = "a,b\n1,2\r\n3,4\r5,6";
+      const result = parseCsv(csv) as string[][];
+      expect(result).toHaveLength(4);
+    });
+
+    it("handles trailing newline variations", () => {
+      expect(parseCsv("a,b\n")).toEqual([["a", "b"]]);
+      expect(parseCsv("a,b\r\n")).toEqual([["a", "b"]]);
+      expect(parseCsv("a,b\r")).toEqual([["a", "b"]]);
+    });
+  });
+});
+
+// =============================================================================
 // Unicode Content Tests
 // =============================================================================
-describe("unicode", () => {
+describe("Unicode", () => {
   describe("CJK", () => {
     it("parses Chinese", () => {
       const csv = "姓名,年龄,城市\n张三,25,北京\n李四,30,上海";
@@ -112,7 +185,7 @@ describe("unicode", () => {
     });
   });
 
-  describe("emoji", () => {
+  describe("Emoji", () => {
     it("parses basic emoji", () => {
       const csv = "emoji,text\n😀,happy\n😢,sad\n🎉,party";
       const result = parseCsv(csv, { headers: true }) as { rows: Record<string, string>[] };
@@ -152,7 +225,7 @@ describe("unicode", () => {
     });
   });
 
-  describe("special chars", () => {
+  describe("Special Characters", () => {
     it("handles zero-width", () => {
       // Zero-width space (U+200B)
       const csv = "a\u200Bb,c\n1,2";
@@ -209,7 +282,7 @@ describe("unicode", () => {
 // =============================================================================
 // Format & Roundtrip Tests
 // =============================================================================
-describe("roundtrip", () => {
+describe("Roundtrip", () => {
   it("roundtrips Chinese", () => {
     const original = [
       ["姓名", "城市"],
@@ -255,7 +328,7 @@ describe("roundtrip", () => {
 // =============================================================================
 // Streaming Unicode Tests
 // =============================================================================
-describe("streaming unicode", () => {
+describe("Streaming Unicode", () => {
   it("handles cross-chunk splits", async () => {
     // Multi-byte characters might be split across chunks
     const csv = "name,value\n张三,100\n李四,200";
@@ -285,9 +358,9 @@ describe("streaming unicode", () => {
 });
 
 // =============================================================================
-// Edge Cases
+// Unicode Edge Cases
 // =============================================================================
-describe("edge cases", () => {
+describe("Unicode Edge Cases", () => {
   it("handles surrogate pairs", () => {
     // Characters outside BMP (emoji, rare CJK)
     const csv = "char\n𠀀\n𝕳";
@@ -348,7 +421,7 @@ describe("edge cases", () => {
 // =============================================================================
 // fastMode with Unicode
 // =============================================================================
-describe("fastMode unicode", () => {
+describe("fastMode Unicode", () => {
   it("parses unicode", () => {
     const csv = "名前,年齢\nテスト,25";
     const result = parseCsv(csv, { fastMode: true }) as string[][];

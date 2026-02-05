@@ -10,8 +10,9 @@ import type {
   CsvParseArrayOptions,
   CsvParseObjectOptions,
   CsvParseResult,
+  CsvParseResultWithObjname,
   CsvParseMeta,
-  CsvParseError,
+  CsvRecordError,
   RecordWithInfo,
   DynamicTypingConfig,
   CastDateConfig
@@ -20,12 +21,12 @@ import type { ParseConfig } from "./config";
 import type { ParseState } from "./state";
 import type { RowProcessResult } from "./row-processor";
 import { resolveParseConfig } from "./config";
-import { createParseState, resetInfoState } from "./state";
+import { createParseState, resetInfoState, getUnquotedArray } from "./state";
 import { processCompletedRow, rowToRecord } from "./row-processor";
 import { applyDynamicTypingToArrayRow } from "../utils/dynamic-typing";
 import { isEmptyRow } from "../utils/row";
 import { getUtf8ByteLength } from "../constants";
-import { scanRow as scanRowImpl, type ScannerConfig } from "../scanner";
+import { scanRow as scanRowImpl, type ScannerConfig } from "./scanner";
 
 // =============================================================================
 // Helper Functions
@@ -76,14 +77,15 @@ function toScannerConfig(config: ParseConfig): ScannerConfig {
 }
 
 /**
- * Apply trim function to all fields in a row
+ * Apply trim function to all fields in a row.
+ * Uses cached trimFieldIsIdentity from config to avoid per-row checking.
  */
-function trimFields(fields: string[], trimField: (s: string) => string): string[] {
-  // Fast path: check if trim is identity
-  if (trimField("x") === "x" && trimField(" x ") === " x ") {
+function trimFields(fields: string[], config: ParseConfig): string[] {
+  // Fast path: if trim is identity function, return fields as-is
+  if (config.trimFieldIsIdentity) {
     return fields;
   }
-  return fields.map(trimField);
+  return fields.map(config.trimField);
 }
 
 // =============================================================================
@@ -97,13 +99,18 @@ export function* parseFastMode(
   input: string,
   config: ParseConfig,
   state: ParseState,
-  errors: CsvParseError[]
+  errors: CsvRecordError[]
 ): Generator<RowProcessResult, void, undefined> {
+  // Handle empty input - no rows to produce
+  if (input === "") {
+    return;
+  }
+
   // Use pre-compiled linebreak regex from config
   const lines = input.split(config.linebreakRegex);
 
-  // Track byte offset for info.bytes
-  let currentByteOffset = 0;
+  // Track character offset for info.offset
+  let currentCharOffset = 0;
   // We need to also track position in original input to detect line ending length
   let posInInput = 0;
 
@@ -128,11 +135,12 @@ export function* parseFastMode(
       break;
     }
     if (state.lineNumber <= config.skipLines) {
-      currentByteOffset += lineByteLength;
+      currentCharOffset += lineByteLength;
       continue;
     }
-    if (line === "") {
-      currentByteOffset += lineByteLength;
+    // Only skip empty lines if skipEmptyLines option is enabled
+    if (line === "" && config.shouldSkipEmpty) {
+      currentCharOffset += lineByteLength;
       continue;
     }
 
@@ -146,7 +154,7 @@ export function* parseFastMode(
 
     if (config.infoOption) {
       state.currentRowStartLine = state.lineNumber;
-      state.currentRowStartBytes = currentByteOffset;
+      state.currentRowStartOffset = currentCharOffset;
     }
     if (config.rawOption) {
       state.currentRawRow = line;
@@ -155,20 +163,20 @@ export function* parseFastMode(
     const row = line.split(config.delimiter).map(config.trimField);
 
     if (config.infoOption) {
-      state.currentRowQuoted = new Array(row.length).fill(false);
+      state.currentRowQuoted = getUnquotedArray(row.length);
     }
 
     if (config.comment && row[0]?.startsWith(config.comment)) {
-      currentByteOffset += lineByteLength;
+      currentCharOffset += lineByteLength;
       continue;
     }
     if (config.shouldSkipEmpty && isEmptyRow(row, config.shouldSkipEmpty)) {
-      currentByteOffset += lineByteLength;
+      currentCharOffset += lineByteLength;
       continue;
     }
 
     const result = processCompletedRow(row, state, config, errors, state.lineNumber);
-    currentByteOffset += lineByteLength;
+    currentCharOffset += lineByteLength;
 
     if (result.stop) {
       yield result;
@@ -200,16 +208,15 @@ export function* parseWithScanner(
   input: string,
   config: ParseConfig,
   state: ParseState,
-  errors: CsvParseError[]
+  errors: CsvRecordError[]
 ): Generator<RowProcessResult, void, undefined> {
   const scannerConfig = toScannerConfig(config);
   const len = input.length;
   let pos = 0;
-  let rowStartPos = 0;
 
   if (config.infoOption) {
     state.currentRowStartLine = 1;
-    state.currentRowStartBytes = 0;
+    state.currentRowStartOffset = 0;
   }
 
   while (pos < len) {
@@ -222,7 +229,7 @@ export function* parseWithScanner(
     }
 
     // Apply trim to fields
-    const row = trimFields(scanResult.fields, config.trimField);
+    const row = trimFields(scanResult.fields, config);
 
     // Update line number
     state.lineNumber++;
@@ -235,14 +242,12 @@ export function* parseWithScanner(
 
     // Calculate positions for raw/info tracking
     const nextByteOffset = scanResult.endPos;
-    // Raw row is from rowStartPos to just before the newline
-    const rawEndPos = scanResult.newline
-      ? scanResult.endPos - scanResult.newline.length
-      : scanResult.endPos;
+    // Use rawEnd directly from scan result (position before newline)
+    const rawEndPos = scanResult.rawEnd;
 
     // Check maxRowBytes limit
     if (config.maxRowBytes !== undefined) {
-      const rawRow = input.slice(rowStartPos, rawEndPos);
+      const rawRow = input.slice(scanResult.rawStart, rawEndPos);
       const rowBytes = getUtf8ByteLength(rawRow);
       if (rowBytes > config.maxRowBytes) {
         throw new Error(`Row exceeds the maximum size of ${config.maxRowBytes} bytes`);
@@ -252,14 +257,12 @@ export function* parseWithScanner(
     // Skip lines at beginning
     if (state.lineNumber <= config.skipLines) {
       pos = scanResult.endPos;
-      rowStartPos = pos;
       continue;
     }
 
     // Skip comment lines
     if (config.comment && row[0]?.startsWith(config.comment)) {
       pos = scanResult.endPos;
-      rowStartPos = pos;
       continue;
     }
 
@@ -270,20 +273,19 @@ export function* parseWithScanner(
       (isEmpty || (config.shouldSkipEmpty === "greedy" && isEmptyRow(row, true)))
     ) {
       pos = scanResult.endPos;
-      rowStartPos = pos;
       continue;
     }
 
     // Set up info tracking
     if (config.infoOption) {
       state.currentRowStartLine = state.lineNumber;
-      state.currentRowStartBytes = rowStartPos;
+      state.currentRowStartOffset = scanResult.rawStart;
       state.currentRowQuoted = scanResult.quoted;
     }
 
-    // Extract raw row
+    // Extract raw row using zero-copy from scan result
     if (config.rawOption) {
-      state.currentRawRow = input.slice(rowStartPos, rawEndPos);
+      state.currentRawRow = input.slice(scanResult.rawStart, rawEndPos);
     }
 
     // Populate state.currentRow for processCompletedRow
@@ -291,14 +293,11 @@ export function* parseWithScanner(
 
     // Check for unterminated quotes and report error
     if (scanResult.unterminatedQuote) {
-      // Row number for error is 0-indexed data row (after headers and skipLines)
-      const errorRow = state.headerRowProcessed
-        ? state.lineNumber - config.skipLines - 2
-        : state.lineNumber - config.skipLines - 1;
+      // Line number for error is 1-based
       errors.push({
         code: "MissingQuotes",
         message: "Quoted field unterminated",
-        row: errorRow
+        line: state.lineNumber
       });
     }
 
@@ -316,11 +315,10 @@ export function* parseWithScanner(
     // Reset for next row
     state.currentRow = [];
     pos = scanResult.endPos;
-    rowStartPos = pos;
 
     if (config.infoOption) {
       state.currentRowStartLine = state.lineNumber + 1;
-      state.currentRowStartBytes = nextByteOffset;
+      state.currentRowStartOffset = nextByteOffset;
     }
   }
 }
@@ -407,13 +405,14 @@ export function parseCsv(
   | CsvParseResult<Record<string, string>>
   | CsvParseResult<Record<string, unknown>>
   | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
-  | CsvParseResult<RecordWithInfo<string[]>> {
+  | CsvParseResult<RecordWithInfo<string[]>>
+  | CsvParseResultWithObjname<Record<string, unknown>> {
   // Resolve config and preprocess input
   const { config, processedInput } = resolveParseConfig(input, options);
 
   // Initialize state
   const state = createParseState(config);
-  const errors: CsvParseError[] = [];
+  const errors: CsvRecordError[] = [];
   const invalidRows: { row: string[]; reason: string }[] = [];
 
   // Choose parser based on mode
@@ -434,9 +433,9 @@ export function parseCsv(
       if (result.row && !result.skipped) {
         let row: string[] | unknown[] = result.row;
 
-        // Apply transform if provided
-        if (options.transform) {
-          const transformed = options.transform(row as string[]);
+        // Apply rowTransform if provided
+        if (options.rowTransform) {
+          const transformed = options.rowTransform(row as string[]);
           if (transformed === null || transformed === undefined) {
             continue;
           }
@@ -496,8 +495,9 @@ export function parseCsv(
       } as CsvParseResult<RecordWithInfo<string[]>>;
     }
 
-    // If validate was used AND there are invalidRows or errors, return result object
-    if (options.validate && (invalidRows.length > 0 || errors.length > 0)) {
+    // If validate was used, always return result object for consistent API
+    // This allows users to check invalidRows even when all rows pass validation
+    if (options.validate) {
       return {
         headers: undefined,
         rows: processedRows,
@@ -527,9 +527,9 @@ export function parseCsv(
         record._extra = result.extras;
       }
 
-      // Apply transform if provided
-      if (options.transform) {
-        const transformed = options.transform(record as Record<string, string>);
+      // Apply rowTransform if provided
+      if (options.rowTransform) {
+        const transformed = options.rowTransform(record as Record<string, string>);
         if (transformed === null || transformed === undefined) {
           continue;
         }
@@ -591,11 +591,11 @@ export function parseCsv(
     }
     return {
       headers: meta.fields,
-      rows: objResult as unknown as Record<string, unknown>[],
+      rows: objResult,
       invalidRows: optionalArray(invalidRows),
       errors: optionalArray(errors),
       meta
-    } as CsvParseResult<Record<string, unknown>>;
+    } as CsvParseResultWithObjname<Record<string, unknown>>;
   }
 
   return {

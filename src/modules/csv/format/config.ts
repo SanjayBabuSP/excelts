@@ -103,14 +103,14 @@ export interface FormatRowOptions {
  */
 export interface FormatConfig {
   delimiter: string;
-  rowDelimiter: string;
+  lineEnding: string;
   quoteAll: boolean;
   escapeFormulae: boolean;
   decimalSeparator: DecimalSeparator;
   writeHeaders: boolean;
   bom: boolean;
   trailingNewline: boolean;
-  transform?: TypeTransformMap;
+  typeTransform?: TypeTransformMap;
   regex: CsvFormatRegex;
   shouldQuoteColumn: QuoteLookupFn;
   shouldQuoteHeader: QuoteLookupFn;
@@ -198,7 +198,7 @@ export function createQuoteLookup(quoteConfig: QuoteColumnConfig | undefined): Q
 export function createFormatConfig(options: CsvFormatOptions): FormatConfig {
   const {
     delimiter = ",",
-    rowDelimiter = "\n",
+    lineEnding = "\n",
     quote: quoteOption = '"',
     escape: escapeOption,
     quoteColumns = false,
@@ -208,8 +208,13 @@ export function createFormatConfig(options: CsvFormatOptions): FormatConfig {
     trailingNewline = false,
     escapeFormulae = false,
     decimalSeparator = ".",
-    transform
+    typeTransform
   } = options;
+
+  // Validate decimalSeparator - only "." or "," are valid
+  if (decimalSeparator !== "." && decimalSeparator !== ",") {
+    throw new Error(`Invalid decimalSeparator: "${decimalSeparator}". Must be "." or ",".`);
+  }
 
   const regex = createFormatRegex({
     quote: quoteOption,
@@ -221,14 +226,14 @@ export function createFormatConfig(options: CsvFormatOptions): FormatConfig {
 
   return {
     delimiter,
-    rowDelimiter,
+    lineEnding,
     quoteAll,
     escapeFormulae,
-    decimalSeparator: decimalSeparator as DecimalSeparator,
+    decimalSeparator,
     writeHeaders: writeHeadersOption ?? true,
     bom,
     trailingNewline,
-    transform,
+    typeTransform,
     regex,
     shouldQuoteColumn: createQuoteLookup(quoteColumns),
     shouldQuoteHeader: createQuoteLookup(quoteHeaders)

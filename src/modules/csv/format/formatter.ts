@@ -36,7 +36,7 @@ import {
 } from "../utils/row";
 import { startsWithFormulaChar } from "../utils/detect";
 import { formatNumberForCsv, type DecimalSeparator } from "../utils/number";
-import { isFormattedValue } from "../utils/formatted-value";
+import { isFormattedValue } from "./formatted-value";
 import type { CsvFormatRegex, FormatFieldContext, FormatRowOptions, FormatConfig } from "./config";
 import { createFormatConfig } from "./config";
 
@@ -104,7 +104,12 @@ export function defaultToString(value: any, decimalSeparator: DecimalSeparator):
     return value ? "true" : "false";
   }
   if (typeof value === "object") {
-    return JSON.stringify(value);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      // Handle circular references or other JSON.stringify errors
+      return "[object Object]";
+    }
   }
   return String(value);
 }
@@ -125,12 +130,6 @@ function needsQuoteFast(str: string, delimiter: string, quote: string): boolean 
     str.indexOf("\r") !== -1
   );
 }
-
-/**
- * Reusable TransformContext object to avoid GC pressure.
- * Only used within formatField - not exported.
- */
-const reusableTransformCtx: TransformContext = { column: 0, index: 0 };
 
 /**
  * Format a single field value to CSV string
@@ -158,10 +157,9 @@ export function formatField(
   let transformQuoteHint: boolean | undefined;
 
   if (!isHeader && transform) {
-    // Reuse TransformContext object to reduce GC pressure
-    reusableTransformCtx.column = header ?? index;
-    reusableTransformCtx.index = outputRowIndex;
-    const transformed = applyTypeTransform(value, transform, reusableTransformCtx);
+    // Create fresh context for each call to ensure safety if user stores reference
+    const transformCtx: TransformContext = { column: header ?? index, index: outputRowIndex };
+    const transformed = applyTypeTransform(value, transform, transformCtx);
 
     if (transformed === undefined || transformed === null) {
       str = defaultToString(value, decimalSeparator);
@@ -177,9 +175,10 @@ export function formatField(
   }
 
   // Escape formulae to prevent CSV injection (OWASP recommendation)
-  // Prefix dangerous characters with tab to neutralize them in spreadsheet apps
+  // Prefix dangerous characters with single quote to neutralize them in spreadsheet apps
+  // Using single quote (') as recommended by OWASP, which Excel interprets as a text prefix
   if (escapeFormulae && startsWithFormulaChar(str)) {
-    str = "\t" + str;
+    str = "'" + str;
   }
 
   // If quoting is disabled, return raw string
@@ -215,7 +214,11 @@ export function formatField(
 // =============================================================================
 
 /**
- * Format an entire row to CSV string
+ * Format an entire row to CSV string.
+ *
+ * Performance optimizations:
+ * - Uses for loop with direct string building instead of map().join()
+ * - Reuses a single mutable context object instead of creating one per field
  */
 export function formatRowWithLookup(
   row: unknown[],
@@ -234,22 +237,36 @@ export function formatRowWithLookup(
     transform
   } = options;
 
-  return row
-    .map((value, index) => {
-      const header = headers?.[index];
-      return formatField(value, regex, {
-        index,
-        header,
-        isHeader,
-        outputRowIndex,
-        forceQuote: quoteLookup(index, header),
-        quoteAll,
-        escapeFormulae,
-        decimalSeparator,
-        transform
-      });
-    })
-    .join(delimiter);
+  const len = row.length;
+  if (len === 0) {
+    return "";
+  }
+
+  // Reusable context object - mutate index/header/forceQuote per field
+  // This avoids creating a new object for every field
+  const ctx: FormatFieldContext = {
+    index: 0,
+    header: headers?.[0],
+    isHeader,
+    outputRowIndex,
+    forceQuote: quoteLookup(0, headers?.[0]),
+    quoteAll,
+    escapeFormulae,
+    decimalSeparator,
+    transform
+  };
+
+  // Build string directly without intermediate array from map()
+  let result = formatField(row[0], regex, ctx);
+
+  for (let i = 1; i < len; i++) {
+    ctx.index = i;
+    ctx.header = headers?.[i];
+    ctx.forceQuote = quoteLookup(i, ctx.header);
+    result += delimiter + formatField(row[i], regex, ctx);
+  }
+
+  return result;
 }
 
 // =============================================================================
@@ -279,7 +296,7 @@ function formatFieldLocal(
     quoteAll: cfg.quoteAll,
     escapeFormulae: cfg.escapeFormulae,
     decimalSeparator: cfg.decimalSeparator,
-    transform: isHeaderRow ? undefined : cfg.transform
+    transform: isHeaderRow ? undefined : cfg.typeTransform
   };
   return formatField(value, cfg.regex, ctx);
 }
@@ -328,8 +345,8 @@ function normalizeInput(
     for (let i = 0; i < data.length; i++) {
       let row = data[i];
 
-      if (cfg.transform?.row) {
-        const transformed = cfg.transform.row(row as Row, i);
+      if (cfg.typeTransform?.row) {
+        const transformed = cfg.typeTransform.row(row as Row, i);
         if (transformed === null) {
           continue;
         }
@@ -368,8 +385,8 @@ function normalizeInput(
     for (let i = 0; i < hashArrays.length; i++) {
       let row = hashArrays[i];
 
-      if (cfg.transform?.row) {
-        const transformed = cfg.transform.row(row as Row, i);
+      if (cfg.typeTransform?.row) {
+        const transformed = cfg.typeTransform.row(row as Row, i);
         if (transformed === null) {
           continue;
         }
@@ -401,8 +418,8 @@ function normalizeInput(
     for (let i = 0; i < objects.length; i++) {
       let obj = objects[i];
 
-      if (cfg.transform?.row) {
-        const transformed = cfg.transform.row(obj as Row, i);
+      if (cfg.typeTransform?.row) {
+        const transformed = cfg.typeTransform.row(obj as Row, i);
         if (transformed === null) {
           continue;
         }
@@ -424,8 +441,8 @@ function normalizeInput(
   for (let i = 0; i < arrays.length; i++) {
     let row = arrays[i];
 
-    if (cfg.transform?.row) {
-      const transformed = cfg.transform.row(row as Row, i);
+    if (cfg.typeTransform?.row) {
+      const transformed = cfg.typeTransform.row(row as Row, i);
       if (transformed === null) {
         continue;
       }
@@ -443,7 +460,43 @@ function normalizeInput(
 // =============================================================================
 
 /**
+ * Format a header row directly to string (no intermediate array).
+ */
+function formatHeaderRowDirect(headers: string[], cfg: FormatConfig): string {
+  if (headers.length === 0) {
+    return "";
+  }
+  let line = formatFieldLocal(headers[0], cfg, 0, headers[0], true, 0);
+  for (let i = 1; i < headers.length; i++) {
+    line += cfg.regex.delimiter + formatFieldLocal(headers[i], cfg, i, headers[i], true, 0);
+  }
+  return line;
+}
+
+/**
+ * Format a data row directly to string (no intermediate array).
+ */
+function formatDataRowDirect(
+  values: unknown[],
+  headers: string[] | null,
+  cfg: FormatConfig,
+  rowIdx: number
+): string {
+  if (values.length === 0) {
+    return "";
+  }
+  let line = formatFieldLocal(values[0], cfg, 0, headers?.[0], false, rowIdx);
+  for (let i = 1; i < values.length; i++) {
+    line += cfg.regex.delimiter + formatFieldLocal(values[i], cfg, i, headers?.[i], false, rowIdx);
+  }
+  return line;
+}
+
+/**
  * Format data as CSV string.
+ *
+ * Performance optimization: Builds result string directly without
+ * intermediate arrays from map().join() operations.
  *
  * @example
  * ```ts
@@ -471,36 +524,29 @@ export function formatCsv(
   const cfg = createFormatConfig(options);
   const { displayHeaders, rows } = normalizeInput(data, options, cfg);
 
-  const lines: string[] = [];
+  // Build result directly without intermediate lines array
+  let result = cfg.bom ? "\uFEFF" : "";
+  let needsLineEnding = false;
 
   // Header row
   if (displayHeaders && cfg.writeHeaders) {
     const deduped = deduplicateHeaders(displayHeaders);
-    const headerLine = deduped
-      .map((h, i) => formatFieldLocal(h, cfg, i, h, true, 0))
-      .join(cfg.regex.delimiter);
-    lines.push(headerLine);
+    result += formatHeaderRowDirect(deduped, cfg);
+    needsLineEnding = true;
   }
 
-  // Data rows
+  // Data rows - direct string concatenation
   for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
-    const values = rows[rowIdx];
-    const line = values
-      .map((v, i) => formatFieldLocal(v, cfg, i, displayHeaders?.[i], false, rowIdx))
-      .join(cfg.regex.delimiter);
-    lines.push(line);
+    if (needsLineEnding) {
+      result += cfg.lineEnding;
+    }
+    result += formatDataRowDirect(rows[rowIdx], displayHeaders, cfg, rowIdx);
+    needsLineEnding = true;
   }
-
-  let result = lines.join(cfg.rowDelimiter);
 
   // Trailing newline
   if (result.length > 0 && cfg.trailingNewline) {
-    result += cfg.rowDelimiter;
-  }
-
-  // BOM for UTF-8
-  if (cfg.bom) {
-    result = "\uFEFF" + result;
+    result += cfg.lineEnding;
   }
 
   return result;
