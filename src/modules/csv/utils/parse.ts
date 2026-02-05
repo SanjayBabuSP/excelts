@@ -14,29 +14,36 @@
  */
 
 import { deduplicateHeadersWithRenames, type HeaderArray } from "@csv/utils/row";
+import type { CsvSkipError, OnSkipCallback } from "@csv/types";
 
 // =============================================================================
 // Types
 // =============================================================================
 
 /**
- * Result of processing headers
+ * Options for header processing
  */
-export interface HeaderProcessResult {
-  /** The processed (deduplicated) headers */
-  headers: HeaderArray;
-  /** The original (non-deduplicated) headers, for groupColumnsByName support. Null when groupColumnsByName is false. */
-  originalHeaders: HeaderArray | null;
-  /** Map of renamed headers (new name -> original name) */
-  renamedHeaders: Record<string, string> | null;
-  /** Whether the current row should be skipped (was used as headers) */
-  skipCurrentRow: boolean;
+interface HeaderProcessOptions {
+  /** Headers configuration: true, array, or function */
+  headers: boolean | string[] | ((row: string[]) => (string | null | undefined)[]);
+  /** Whether to group columns by name (affects originalHeaders computation) */
+  groupColumnsByName?: boolean;
+}
+
+/**
+ * Options for column validation
+ */
+interface ColumnValidationOptions {
+  /** Strategy for rows with fewer columns than expected */
+  columnLess: "error" | "pad";
+  /** Strategy for rows with more columns than expected */
+  columnMore: "error" | "truncate" | "keep";
 }
 
 /**
  * Column validation result
  */
-export interface ColumnValidationResult {
+interface ColumnValidationResult {
   /** Whether the row is valid */
   isValid: boolean;
   /** Error code if invalid: 'TooManyFields' or 'TooFewFields' */
@@ -50,23 +57,17 @@ export interface ColumnValidationResult {
 }
 
 /**
- * Options for header processing
+ * Result of processing headers
  */
-export interface HeaderProcessOptions {
-  /** Headers configuration: true, array, or function */
-  headers: boolean | string[] | ((row: string[]) => (string | null | undefined)[]);
-  /** Whether to group columns by name (affects originalHeaders computation) */
-  groupColumnsByName?: boolean;
-}
-
-/**
- * Options for column validation
- */
-export interface ColumnValidationOptions {
-  /** Strategy for rows with fewer columns than expected */
-  columnLess: "error" | "pad";
-  /** Strategy for rows with more columns than expected */
-  columnMore: "error" | "truncate" | "keep";
+interface HeaderProcessResult {
+  /** The processed (deduplicated) headers */
+  headers: HeaderArray;
+  /** The original (non-deduplicated) headers, for groupColumnsByName support. Null when groupColumnsByName is false. */
+  originalHeaders: HeaderArray | null;
+  /** Map of renamed headers (new name -> original name) */
+  renamedHeaders: Record<string, string> | null;
+  /** Whether the current row should be skipped (was used as headers) */
+  skipCurrentRow: boolean;
 }
 
 // =============================================================================
@@ -189,17 +190,10 @@ export function validateAndAdjustColumns(
 }
 
 /**
- * Get the effective header count (excluding null/undefined headers)
- */
-export function getEffectiveHeaderCount(headers: HeaderArray): number {
-  return headers.filter(h => h !== null && h !== undefined).length;
-}
-
-/**
  * Type guard to filter out null/undefined values from headers.
  * Useful for extracting only valid string headers from a HeaderArray.
  */
-export function isValidHeader(h: string | null | undefined): h is string {
+function isValidHeader(h: string | null | undefined): h is string {
   return h !== null && h !== undefined;
 }
 
@@ -209,10 +203,6 @@ export function isValidHeader(h: string | null | undefined): h is string {
 export function filterValidHeaders(headers: HeaderArray): string[] {
   return headers.filter(isValidHeader);
 }
-
-// Re-export types from central types.ts to avoid duplication
-import type { CsvSkipError, OnSkipCallback } from "@csv/types";
-export type { CsvSkipError, OnSkipCallback } from "@csv/types";
 
 /**
  * Creates a wrapped onSkip handler that safely invokes the callback,

@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseCsv, parseCsvRows, type CsvSkipError } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 import { generateMalformedCsv, parseStreamCsv } from "./csv-test-utils";
 
 // =============================================================================

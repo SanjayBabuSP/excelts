@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseCsv, parseCsvRows, type RecordWithInfo, type CsvParseResult } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 
 // ===========================================================================
 // Empty / Single Row / Single Field Edge Cases
@@ -989,12 +989,13 @@ describe("custom delimiter edge cases with info/raw", () => {
 
   it("should work with multi-char delimiter and info", () => {
     const csv = "a::b\n1::2";
-    // Note: Multi-char delimiters require quote parsing mode, not fastMode
+    // Multi-char delimiters are now supported with the new scanner-based parser
     const result = parseCsv(csv, { delimiter: "::", info: true, raw: true }) as CsvParseResult<
       RecordWithInfo<string[]>
     >;
-    // With standard mode, multi-char delimiter is supported
-    expect(result.rows[0].record).toHaveLength(1); // Single field "a::b" - multi-char not supported in batch
+    // With new scanner, multi-char delimiter is properly supported
+    expect(result.rows[0].record).toHaveLength(2); // Two fields ["a", "b"]
+    expect(result.rows[0].record).toEqual(["a", "b"]);
     expect(result.rows[0].info.raw).toBe("a::b");
   });
 

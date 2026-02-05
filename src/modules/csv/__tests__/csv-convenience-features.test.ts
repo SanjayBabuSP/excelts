@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseCsv, type CsvParseResult, type ChunkMeta } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 import { Readable } from "node:stream";
 
 /**

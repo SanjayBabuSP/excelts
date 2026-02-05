@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
 import { Readable, Writable, pipeline } from "@stream";
-import { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
+import { CsvParserStream, CsvFormatterStream } from "@csv/stream";
 import { Workbook } from "@excel/workbook";
 import { testOutDir } from "@test/utils";
 

@@ -76,12 +76,11 @@ export { CSV, createDefaultValueMapper, createDefaultWriteMapper } from "@csv/cs
 export {
   CsvParserStream,
   CsvFormatterStream,
-  createCsvReadableStream,
   createCsvParserStream,
   createCsvFormatterStream
-} from "@csv/csv-stream";
+} from "@csv/stream";
 export { parseCsv } from "@csv/parse";
-export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "@csv/parse-async";
+export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "@csv/parse";
 export { formatCsv } from "@csv/format";
 
 // CSV Generator (extras)

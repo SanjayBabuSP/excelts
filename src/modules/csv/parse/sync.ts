@@ -2,7 +2,7 @@
  * CSV Parser - Synchronous
  *
  * RFC 4180 compliant CSV parser.
- * Uses the shared parse-core for core parsing logic.
+ * Provides parseCsv function and low-level parsing generators.
  */
 
 import type {
@@ -15,15 +15,17 @@ import type {
   RecordWithInfo,
   DynamicTypingConfig,
   CastDateConfig
-} from "./types";
-import {
-  resolveParseConfig,
-  createParseState,
-  parseFastMode,
-  parseStandardMode,
-  rowToRecord
-} from "./parse-core";
-import { applyDynamicTypingToArrayRow } from "./utils/dynamic-typing";
+} from "../types";
+import type { ParseConfig } from "./config";
+import type { ParseState } from "./state";
+import type { RowProcessResult } from "./row-processor";
+import { resolveParseConfig } from "./config";
+import { createParseState, resetInfoState } from "./state";
+import { processCompletedRow, rowToRecord } from "./row-processor";
+import { applyDynamicTypingToArrayRow } from "../utils/dynamic-typing";
+import { isEmptyRow } from "../utils/row";
+import { getUtf8ByteLength } from "../constants";
+import { scanRow as scanRowImpl, type ScannerConfig } from "../scanner";
 
 // =============================================================================
 // Helper Functions
@@ -58,6 +60,269 @@ function applyArrayTyping(
  */
 function optionalArray<T>(arr: T[]): T[] | undefined {
   return arr.length > 0 ? arr : undefined;
+}
+
+/**
+ * Convert ParseConfig to ScannerConfig
+ */
+function toScannerConfig(config: ParseConfig): ScannerConfig {
+  return {
+    delimiter: config.delimiter,
+    quote: config.quote,
+    escape: config.escape,
+    quoteEnabled: config.quoteEnabled,
+    relaxQuotes: config.relaxQuotes
+  };
+}
+
+/**
+ * Apply trim function to all fields in a row
+ */
+function trimFields(fields: string[], trimField: (s: string) => string): string[] {
+  // Fast path: check if trim is identity
+  if (trimField("x") === "x" && trimField(" x ") === " x ") {
+    return fields;
+  }
+  return fields.map(trimField);
+}
+
+// =============================================================================
+// Fast Mode Parser (No Quote Detection)
+// =============================================================================
+
+/**
+ * Parse input using fast mode (no quote detection)
+ */
+export function* parseFastMode(
+  input: string,
+  config: ParseConfig,
+  state: ParseState,
+  errors: CsvParseError[]
+): Generator<RowProcessResult, void, undefined> {
+  // Use pre-compiled linebreak regex from config
+  const lines = input.split(config.linebreakRegex);
+
+  // Track byte offset for info.bytes
+  let currentByteOffset = 0;
+  // We need to also track position in original input to detect line ending length
+  let posInInput = 0;
+
+  for (const line of lines) {
+    // Calculate actual line ending length by looking at what follows the line in input
+    const lineEndPos = posInInput + line.length;
+    let lineEndingLength = 0;
+    if (lineEndPos < input.length) {
+      if (input[lineEndPos] === "\r") {
+        lineEndingLength = input[lineEndPos + 1] === "\n" ? 2 : 1;
+      } else if (input[lineEndPos] === "\n") {
+        lineEndingLength = 1;
+      }
+    }
+    const lineByteLength = line.length + lineEndingLength;
+
+    state.lineNumber++;
+    posInInput += lineByteLength;
+
+    if (config.toLine !== undefined && state.lineNumber > config.toLine) {
+      state.truncated = true;
+      break;
+    }
+    if (state.lineNumber <= config.skipLines) {
+      currentByteOffset += lineByteLength;
+      continue;
+    }
+    if (line === "") {
+      currentByteOffset += lineByteLength;
+      continue;
+    }
+
+    // Check maxRowBytes in fastMode using optimized byte length calculation
+    if (config.maxRowBytes !== undefined) {
+      const lineBytes = getUtf8ByteLength(line);
+      if (lineBytes > config.maxRowBytes) {
+        throw new Error(`Row exceeds the maximum size of ${config.maxRowBytes} bytes`);
+      }
+    }
+
+    if (config.infoOption) {
+      state.currentRowStartLine = state.lineNumber;
+      state.currentRowStartBytes = currentByteOffset;
+    }
+    if (config.rawOption) {
+      state.currentRawRow = line;
+    }
+
+    const row = line.split(config.delimiter).map(config.trimField);
+
+    if (config.infoOption) {
+      state.currentRowQuoted = new Array(row.length).fill(false);
+    }
+
+    if (config.comment && row[0]?.startsWith(config.comment)) {
+      currentByteOffset += lineByteLength;
+      continue;
+    }
+    if (config.shouldSkipEmpty && isEmptyRow(row, config.shouldSkipEmpty)) {
+      currentByteOffset += lineByteLength;
+      continue;
+    }
+
+    const result = processCompletedRow(row, state, config, errors, state.lineNumber);
+    currentByteOffset += lineByteLength;
+
+    if (result.stop) {
+      yield result;
+      return;
+    }
+    // Yield if not skipped, OR if skipped with an error (for invalidRows collection)
+    if (!result.skipped || result.error) {
+      yield result;
+    }
+    resetInfoState(state, config.infoOption, config.rawOption, state.lineNumber + 1, 0);
+  }
+}
+
+// =============================================================================
+// Scanner-based Parser (High-Performance)
+// =============================================================================
+
+/**
+ * Parse input using Scanner-based batch scanning.
+ * This is a high-performance alternative that uses indexOf-based field scanning
+ * instead of character-by-character parsing.
+ *
+ * Key optimizations:
+ * 1. Uses indexOf to find delimiters/quotes/newlines in bulk
+ * 2. Uses slice for field extraction (avoids string concatenation)
+ * 3. Processes entire rows at once instead of character-by-character
+ */
+export function* parseWithScanner(
+  input: string,
+  config: ParseConfig,
+  state: ParseState,
+  errors: CsvParseError[]
+): Generator<RowProcessResult, void, undefined> {
+  const scannerConfig = toScannerConfig(config);
+  const len = input.length;
+  let pos = 0;
+  let rowStartPos = 0;
+
+  if (config.infoOption) {
+    state.currentRowStartLine = 1;
+    state.currentRowStartBytes = 0;
+  }
+
+  while (pos < len) {
+    // Scan one row at a time
+    const scanResult = scanRowImpl(input, pos, scannerConfig, true);
+
+    // No fields and no progress - should not happen with isEof=true
+    if (scanResult.fields.length === 0 && scanResult.endPos === pos) {
+      break;
+    }
+
+    // Apply trim to fields
+    const row = trimFields(scanResult.fields, config.trimField);
+
+    // Update line number
+    state.lineNumber++;
+
+    // Check toLine limit
+    if (config.toLine !== undefined && state.lineNumber > config.toLine) {
+      state.truncated = true;
+      break;
+    }
+
+    // Calculate positions for raw/info tracking
+    const nextByteOffset = scanResult.endPos;
+    // Raw row is from rowStartPos to just before the newline
+    const rawEndPos = scanResult.newline
+      ? scanResult.endPos - scanResult.newline.length
+      : scanResult.endPos;
+
+    // Check maxRowBytes limit
+    if (config.maxRowBytes !== undefined) {
+      const rawRow = input.slice(rowStartPos, rawEndPos);
+      const rowBytes = getUtf8ByteLength(rawRow);
+      if (rowBytes > config.maxRowBytes) {
+        throw new Error(`Row exceeds the maximum size of ${config.maxRowBytes} bytes`);
+      }
+    }
+
+    // Skip lines at beginning
+    if (state.lineNumber <= config.skipLines) {
+      pos = scanResult.endPos;
+      rowStartPos = pos;
+      continue;
+    }
+
+    // Skip comment lines
+    if (config.comment && row[0]?.startsWith(config.comment)) {
+      pos = scanResult.endPos;
+      rowStartPos = pos;
+      continue;
+    }
+
+    // Skip empty lines
+    const isEmpty = row.length === 1 && row[0] === "";
+    if (
+      config.shouldSkipEmpty &&
+      (isEmpty || (config.shouldSkipEmpty === "greedy" && isEmptyRow(row, true)))
+    ) {
+      pos = scanResult.endPos;
+      rowStartPos = pos;
+      continue;
+    }
+
+    // Set up info tracking
+    if (config.infoOption) {
+      state.currentRowStartLine = state.lineNumber;
+      state.currentRowStartBytes = rowStartPos;
+      state.currentRowQuoted = scanResult.quoted;
+    }
+
+    // Extract raw row
+    if (config.rawOption) {
+      state.currentRawRow = input.slice(rowStartPos, rawEndPos);
+    }
+
+    // Populate state.currentRow for processCompletedRow
+    state.currentRow = row;
+
+    // Check for unterminated quotes and report error
+    if (scanResult.unterminatedQuote) {
+      // Row number for error is 0-indexed data row (after headers and skipLines)
+      const errorRow = state.headerRowProcessed
+        ? state.lineNumber - config.skipLines - 2
+        : state.lineNumber - config.skipLines - 1;
+      errors.push({
+        code: "MissingQuotes",
+        message: "Quoted field unterminated",
+        row: errorRow
+      });
+    }
+
+    const result = processCompletedRow(row, state, config, errors, state.lineNumber);
+
+    if (result.stop) {
+      yield result;
+      return;
+    }
+
+    if (!result.skipped || result.error) {
+      yield result;
+    }
+
+    // Reset for next row
+    state.currentRow = [];
+    pos = scanResult.endPos;
+    rowStartPos = pos;
+
+    if (config.infoOption) {
+      state.currentRowStartLine = state.lineNumber + 1;
+      state.currentRowStartBytes = nextByteOffset;
+    }
+  }
 }
 
 // =============================================================================
@@ -154,7 +419,7 @@ export function parseCsv(
   // Choose parser based on mode
   const parser = config.fastMode
     ? parseFastMode(processedInput, config, state, errors)
-    : parseStandardMode(processedInput, config, state, errors);
+    : parseWithScanner(processedInput, config, state, errors);
 
   // ==========================================================================
   // Single-pass processing: parse + transform + validate + dynamicTyping

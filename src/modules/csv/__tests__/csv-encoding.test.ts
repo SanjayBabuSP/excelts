@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseCsv, formatCsv, stripBom } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 import { parseStreamCsv } from "./csv-test-utils";
 
 // =============================================================================

@@ -1,0 +1,143 @@
+/**
+ * CSV Parse State
+ *
+ * Defines the ParseState type and factory function for creating
+ * mutable parsing state. Also includes field building operations.
+ */
+
+import type { HeaderArray } from "../types";
+import type { ParseConfig } from "./config";
+import { processHeaders } from "../utils/parse";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+/**
+ * Minimal state required for field building operations.
+ * Used by streaming parser which manages its own properties.
+ */
+export interface FieldState {
+  currentField: string;
+  currentFieldParts: string[] | null;
+  currentFieldLength: number;
+}
+
+/**
+ * Mutable parsing state - shared between sync and streaming parsers
+ */
+export interface ParseState {
+  // Field/row building
+  currentRow: string[];
+  currentField: string;
+  /** For large fields, we accumulate parts to avoid string concat overhead */
+  currentFieldParts: string[] | null;
+  /** Track current field length for threshold check */
+  currentFieldLength: number;
+  inQuotes: boolean;
+  currentRowBytes: number;
+
+  // Position tracking
+  lineNumber: number;
+  position: number;
+
+  // Data row tracking
+  dataRowCount: number;
+  skippedDataRows: number;
+  truncated: boolean;
+
+  // Header state
+  headerRow: HeaderArray | null;
+  originalHeaders: HeaderArray | null;
+  useHeaders: boolean;
+  headerRowProcessed: boolean;
+  renamedHeadersForMeta: Record<string, string> | null;
+
+  // Info tracking (for info/raw options)
+  currentRowStartLine: number;
+  currentRowStartBytes: number;
+  currentFieldQuoted: boolean;
+  currentRowQuoted: boolean[];
+  currentRawRow: string;
+  /** Character position where current raw row starts (for slice-based raw extraction) */
+  currentRawRowStart: number;
+}
+
+// =============================================================================
+// State Factory
+// =============================================================================
+
+/**
+ * Create initial parse state with optional header configuration
+ */
+export function createParseState(
+  config: Pick<ParseConfig, "headers" | "groupColumnsByName" | "infoOption" | "rawOption">
+): ParseState {
+  const state: ParseState = {
+    currentRow: [],
+    currentField: "",
+    currentFieldParts: null,
+    currentFieldLength: 0,
+    inQuotes: false,
+    currentRowBytes: 0,
+    lineNumber: 0,
+    position: 0,
+    dataRowCount: 0,
+    skippedDataRows: 0,
+    truncated: false,
+    headerRow: null,
+    originalHeaders: null,
+    useHeaders: false,
+    headerRowProcessed: false,
+    renamedHeadersForMeta: null,
+    currentRowStartLine: config.infoOption ? 1 : 0,
+    currentRowStartBytes: 0,
+    currentFieldQuoted: false,
+    currentRowQuoted: [],
+    currentRawRow: "",
+    currentRawRowStart: 0
+  };
+
+  // Determine header mode
+  const { headers, groupColumnsByName } = config;
+  if (headers === true) {
+    state.useHeaders = true;
+  } else if (Array.isArray(headers)) {
+    const result = processHeaders([], { headers, groupColumnsByName }, null);
+    if (result) {
+      state.headerRow = result.headers;
+      state.originalHeaders = result.originalHeaders;
+      state.renamedHeadersForMeta = result.renamedHeaders;
+    }
+    state.useHeaders = true;
+    state.headerRowProcessed = true;
+  } else if (typeof headers === "function") {
+    state.useHeaders = true;
+  }
+
+  return state;
+}
+
+// =============================================================================
+// Info State Management
+// =============================================================================
+
+/**
+ * Reset info state for next row
+ */
+export function resetInfoState(
+  state: ParseState,
+  trackInfo: boolean,
+  trackRaw: boolean,
+  nextLine: number,
+  nextBytes: number
+): void {
+  if (trackInfo) {
+    state.currentRowQuoted = [];
+    state.currentRowStartLine = nextLine;
+    state.currentRowStartBytes = nextBytes;
+  }
+  if (trackRaw) {
+    state.currentRawRow = "";
+  }
+}

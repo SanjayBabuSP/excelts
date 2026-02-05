@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseCsv, parseCsvRows, type RecordWithInfo, type CsvParseResult } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 
 // ===========================================================================
 // Info Option Tests

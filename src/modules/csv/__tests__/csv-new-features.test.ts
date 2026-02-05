@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { parseCsv, parseCsvRows, type CsvSkipError } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 
 // =============================================================================
 // toLine Tests

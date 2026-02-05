@@ -24,11 +24,6 @@ function loadWorkerScript(): Promise<string> {
   return workerScriptPromise;
 }
 
-/** Generate the complete worker script code */
-export function generateWorkerScript(): Promise<string> {
-  return loadWorkerScript();
-}
-
 /** Get or create the worker blob URL */
 export async function getWorkerBlobUrl(): Promise<string> {
   if (!workerBlobUrl) {

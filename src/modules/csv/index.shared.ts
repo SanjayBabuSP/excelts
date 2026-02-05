@@ -73,26 +73,24 @@ export { isFormattedValue, quoted, unquoted } from "./types";
 // =============================================================================
 
 // Synchronous parser
-export { parseCsv } from "./parse";
+export { parseCsv } from "./parse/index";
 
-// Async generator parser
-export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "./parse-async";
-export type { StreamParseMeta } from "./parse-async";
+// Async parser
+export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "./parse/index";
 
 // Formatter
-export { formatCsv } from "./format";
+export { formatCsv } from "./format/index";
 
 // =============================================================================
-// Stream Classes (from csv-stream.ts)
+// Stream Classes
 // =============================================================================
 
 export {
   CsvParserStream,
   CsvFormatterStream,
-  createCsvReadableStream,
   createCsvParserStream,
   createCsvFormatterStream
-} from "./csv-stream";
+} from "./stream/index";
 
 // =============================================================================
 // Detection Utilities (commonly needed by users)

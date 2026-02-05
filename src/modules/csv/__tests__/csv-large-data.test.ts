@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseCsv, parseCsvRows, formatCsv } from "@csv/index";
-import { CsvParserStream } from "@csv/csv-stream";
+import { CsvParserStream } from "@csv/stream";
 import {
   generateLargeCsv,
   generateEdgeCaseCsv,

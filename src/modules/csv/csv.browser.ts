@@ -9,7 +9,7 @@ import { DateParser, DateFormatter, type DateFormat } from "@utils/datetime";
 import { parseCsv } from "@csv/parse";
 import { formatCsv } from "@csv/format";
 import type { CsvParseOptions, CsvFormatOptions } from "@csv/types";
-import { CsvParserStream, CsvFormatterStream } from "@csv/csv-stream";
+import { CsvParserStream, CsvFormatterStream } from "@csv/stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "@csv/utils/number";
 import { CsvDownloadError, CsvNotSupportedError, CsvFileError } from "@csv/errors";
 import { pipeline } from "@stream";
@@ -680,4 +680,4 @@ export function formatWorksheetToCsv(
 export { CSV };
 
 // Re-export stream classes for convenience (used by tests and consumers)
-export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
+export { CsvParserStream, CsvFormatterStream } from "./stream";

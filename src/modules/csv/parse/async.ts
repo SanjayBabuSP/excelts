@@ -26,10 +26,10 @@ import type {
   CsvParseMeta,
   CsvParseError,
   RecordWithInfo
-} from "./types";
-import { parseCsv } from "./parse";
-import { CsvParserStream } from "./csv-stream";
-import { sharedTextEncoder } from "./parse-core";
+} from "../types";
+import { parseCsv } from "./sync";
+import { CsvParserStream } from "../stream/parser";
+import { sharedTextEncoder } from "../constants";
 import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils";
 
 type ReadableStreamLike = { getReader: () => any };

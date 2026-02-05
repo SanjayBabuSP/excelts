@@ -32,13 +32,6 @@ export class CsvError extends BaseError {
 }
 
 /**
- * Check if an error is a CSV error.
- */
-export function isCsvError(err: unknown): err is CsvError {
-  return err instanceof CsvError;
-}
-
-/**
  * Error thrown when an HTTP download fails.
  */
 export class CsvDownloadError extends CsvError {

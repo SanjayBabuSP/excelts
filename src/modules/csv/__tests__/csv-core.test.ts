@@ -2613,7 +2613,7 @@ describe("CSV Core - Formatter Options", () => {
     });
 
     it("should work with streaming formatter", async () => {
-      const { CsvFormatterStream } = await import("@csv/csv-stream");
+      const { CsvFormatterStream } = await import("@csv/stream");
       const formatter = new CsvFormatterStream({
         escapeFormulae: true
       });
@@ -2825,7 +2825,7 @@ describe("CSV Core - Formatter Options", () => {
     });
 
     it("should work with streaming parser", async () => {
-      const { CsvParserStream } = await import("@csv/csv-stream");
+      const { CsvParserStream } = await import("@csv/stream");
       const parser = new CsvParserStream({ fastMode: true });
 
       const rows: any[] = [];
@@ -2845,7 +2845,7 @@ describe("CSV Core - Formatter Options", () => {
     });
 
     it("should work with streaming parser and headers", async () => {
-      const { CsvParserStream } = await import("@csv/csv-stream");
+      const { CsvParserStream } = await import("@csv/stream");
       const parser = new CsvParserStream({ fastMode: true, headers: true });
 
       const rows: any[] = [];

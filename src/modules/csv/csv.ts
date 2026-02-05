@@ -50,4 +50,4 @@ export { CSV };
 export type { CsvOptions, CsvInput, DefaultValueMapperOptions } from "./csv.browser";
 
 // Re-export stream classes for convenience (used by tests and consumers)
-export { CsvParserStream, CsvFormatterStream } from "./csv-stream";
+export { CsvParserStream, CsvFormatterStream } from "./stream";
