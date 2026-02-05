@@ -87,7 +87,7 @@ class ColXform extends BaseXform {
 
   reconcile(model: ColModel, options: any): void {
     // reconcile column styles
-    if (model.styleId) {
+    if (model.styleId !== undefined) {
       model.style = options.styles.getStyleModel(model.styleId);
     }
   }
