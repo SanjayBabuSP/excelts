@@ -11,16 +11,16 @@
 import { describe, it, expect } from "vitest";
 import {
   isRowHashArray,
-  rowHashArrayToMap,
   rowHashArrayToValues,
   rowHashArrayToHeaders,
   rowHashArrayMapByHeaders,
-  rowHashArrayGet,
   deduplicateHeaders,
   deduplicateHeadersWithRenames,
   quoted,
   unquoted
 } from "@csv/index";
+// Internal helpers - not part of public API
+import { rowHashArrayToMap, rowHashArrayGet } from "@csv/utils/row";
 import { isFormattedValue } from "@csv/format/formatted-value";
 
 // =============================================================================

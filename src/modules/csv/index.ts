@@ -102,10 +102,8 @@ export { detectDelimiter, detectLinebreak, stripBom } from "./utils/detect";
 
 export {
   isRowHashArray,
-  rowHashArrayToMap,
   rowHashArrayToValues,
   rowHashArrayToHeaders,
-  rowHashArrayGet,
   rowHashArrayMapByHeaders,
   processColumns,
   deduplicateHeaders,
@@ -117,14 +115,7 @@ export {
 // =============================================================================
 
 // Dynamic Typing utilities
-export {
-  convertValue,
-  tryParseDate,
-  shouldCastDate,
-  applyDynamicTyping,
-  applyDynamicTypingToRow,
-  applyDynamicTypingToArrayRow
-} from "./utils/dynamic-typing";
+export { applyDynamicTyping, applyDynamicTypingToRow } from "./utils/dynamic-typing";
 
 // CSV Generator utilities
 export {

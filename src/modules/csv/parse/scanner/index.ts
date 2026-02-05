@@ -2,42 +2,23 @@
  * CSV Scanner Module
  *
  * High-performance CSV field scanner using indexOf-based batch scanning.
- *
- * @example Basic usage
- * ```ts
- * import { createScanner, scanAllRows } from './scanner';
- *
- * // One-shot parsing
- * const rows = scanAllRows('a,b,c\n1,2,3\n');
- *
- * // Or use scanner instance
- * const scanner = createScanner({ delimiter: '\t' });
- * const result = scanner.scanRow('a\tb\tc\n');
- * ```
- *
- * @example Streaming usage
- * ```ts
- * import { scanRowsAsync } from './scanner';
- *
- * async function* readChunks() {
- *   yield 'a,b,c\n';
- *   yield '1,2,3\n';
- * }
- *
- * for await (const row of scanRowsAsync(readChunks())) {
- *   console.log(row.fields);
- * }
- * ```
+ * Re-exports all scanner functionality from scanner.ts.
  */
 
 // Types
-export type { ScannerConfig, FieldScanResult, RowScanResult, ScannerState, Scanner } from "./types";
+export type {
+  ScannerConfig,
+  FieldScanResult,
+  RowScanResult,
+  ScannerState,
+  Scanner
+} from "./scanner";
 
 // Constants and state factory
-export { DEFAULT_SCANNER_CONFIG, createScannerState } from "./types";
+export { DEFAULT_SCANNER_CONFIG, createScannerState } from "./scanner";
 
 // Core scanning functions
-export { scanQuotedField, scanUnquotedField, scanRow } from "./scan-field";
+export { scanQuotedField, scanUnquotedField, scanRow } from "./scanner";
 
 // Scanner factory and utilities
 export { createScanner, scanAllRows, scanRowsAsync } from "./scanner";
