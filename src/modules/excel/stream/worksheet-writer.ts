@@ -460,7 +460,7 @@ class WorksheetWriter {
       }
     } else {
       this._rows!.forEach(row => {
-        if (row.hasValues) {
+        if (row && row.hasValues) {
           callback!(row, row.number);
         }
       });

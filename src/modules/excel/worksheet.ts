@@ -506,6 +506,21 @@ class Worksheet {
 
     // account for defined names
     this.workbook.definedNames.spliceColumns(this.name, start, count, inserts.length);
+
+    // account for images
+    if (nExpand !== 0) {
+      for (const image of this._media) {
+        if (image.type === "image" && image.range) {
+          const { tl, br } = image.range;
+          if (tl && tl.nativeCol >= start - 1) {
+            tl.nativeCol = Math.max(0, tl.nativeCol + nExpand);
+          }
+          if (br && br.nativeCol >= start - 1) {
+            br.nativeCol = Math.max(0, br.nativeCol + nExpand);
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -781,6 +796,21 @@ class Worksheet {
 
     // account for defined names
     this.workbook.definedNames.spliceRows(this.name, start, count, nInserts);
+
+    // account for images
+    if (nExpand !== 0) {
+      for (const image of this._media) {
+        if (image.type === "image" && image.range) {
+          const { tl, br } = image.range;
+          if (tl && tl.nativeRow >= start - 1) {
+            tl.nativeRow = Math.max(0, tl.nativeRow + nExpand);
+          }
+          if (br && br.nativeRow >= start - 1) {
+            br.nativeRow = Math.max(0, br.nativeRow + nExpand);
+          }
+        }
+      }
+    }
   }
 
   /**

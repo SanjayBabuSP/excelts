@@ -446,7 +446,8 @@ class CellXform extends BaseXform {
   }
 
   reconcile(model, options) {
-    const style = model.styleId && options.styles && options.styles.getStyleModel(model.styleId);
+    const style =
+      model.styleId !== undefined && options.styles && options.styles.getStyleModel(model.styleId);
     if (style) {
       model.style = style;
     }

@@ -184,7 +184,7 @@ class RowXform extends BaseXform {
   }
 
   reconcile(model: RowModel, options: any): void {
-    model.style = model.styleId ? options.styles.getStyleModel(model.styleId) : {};
+    model.style = model.styleId !== undefined ? options.styles.getStyleModel(model.styleId) : {};
     if (model.styleId !== undefined) {
       model.styleId = undefined;
     }

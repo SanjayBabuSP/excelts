@@ -270,7 +270,7 @@ class WorksheetReader extends EventEmitter {
                   if (node.attributes.ht) {
                     row.height = parseFloat(node.attributes.ht);
                   }
-                  if (node.attributes.s) {
+                  if (node.attributes.s !== undefined) {
                     const styleId = parseInt(node.attributes.s, 10);
                     const style = styles.getStyleModel(styleId);
                     if (style) {
@@ -284,7 +284,7 @@ class WorksheetReader extends EventEmitter {
                   const styleAttr = node.attributes.s;
                   c = {
                     ref: node.attributes.r,
-                    s: styleAttr ? parseInt(styleAttr, 10) : 0,
+                    s: styleAttr !== undefined ? parseInt(styleAttr, 10) : undefined,
                     t: node.attributes.t
                   };
                 }
@@ -367,7 +367,7 @@ class WorksheetReader extends EventEmitter {
                 if (row && c) {
                   const address = colCache.decodeAddress(c.ref);
                   const cell = row.getCell(address.col);
-                  if (c.s) {
+                  if (c.s !== undefined) {
                     const style = styles.getStyleModel(c.s);
                     if (style) {
                       cell.style = style;
