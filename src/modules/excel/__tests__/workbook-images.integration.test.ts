@@ -294,5 +294,134 @@ describe("Workbook", () => {
           expect(Buffer.compare(imageData, image2.buffer)).toBe(0);
         });
     });
+
+    describe("image range updates on row/column splice", () => {
+      it("updates image range after insertRow", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, "B2:D4");
+
+        // Insert a row before the image
+        ws.insertRow(1, []);
+
+        const images = ws.getImages();
+        expect(images.length).toBe(1);
+        const img = images[0];
+        // Image should shift down by 1 row (B2:D4 -> B3:D5)
+        // nativeRow is 0-based: row 2 -> nativeRow 1, after insert -> nativeRow 2
+        expect(img.range!.tl.nativeRow).toBe(2);
+        expect(img.range!.tl.nativeCol).toBe(1);
+        expect(img.range!.br!.nativeRow).toBe(5);
+        expect(img.range!.br!.nativeCol).toBe(4);
+      });
+
+      it("does not update image range when inserting row after the image", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, "A1:B2");
+
+        // Insert a row after the image
+        ws.insertRow(5, []);
+
+        const images = ws.getImages();
+        const img = images[0];
+        // Image should not move (A1:B2 stays the same)
+        // nativeRow for A1 with string range uses offset -1: row=1 -> nativeRow=0
+        expect(img.range!.tl.nativeRow).toBe(0);
+        expect(img.range!.tl.nativeCol).toBe(0);
+        expect(img.range!.br!.nativeRow).toBe(2);
+        expect(img.range!.br!.nativeCol).toBe(2);
+      });
+
+      it("updates image range after spliceRows with remove", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, "A3:B4");
+
+        // Remove 1 row at row 1
+        ws.spliceRows(1, 1);
+
+        const images = ws.getImages();
+        const img = images[0];
+        // Image should shift up by 1 row (A3:B4 -> A2:B3)
+        // nativeRow: row 3 -> nativeRow 2, after remove -> nativeRow 1
+        expect(img.range!.tl.nativeRow).toBe(1);
+        expect(img.range!.br!.nativeRow).toBe(3);
+      });
+
+      it("updates image range after spliceColumns with insert", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, "B1:C2");
+
+        // Insert a column before column B
+        ws.spliceColumns(1, 0, []);
+
+        const images = ws.getImages();
+        const img = images[0];
+        // Image should shift right by 1 column (B1:C2 -> C1:D2)
+        // tl: col=2 with offset -1 -> nativeCol=1, after insert -> nativeCol=2
+        // br: col=3 with offset 0 -> nativeCol=3, after insert -> nativeCol=4
+        expect(img.range!.tl.nativeCol).toBe(2);
+        expect(img.range!.br!.nativeCol).toBe(4);
+      });
+
+      it("handles multiple images correctly during row splice", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId1 = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        const imgId2 = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId1, "A1:A1");
+        ws.addImage(imgId2, "A3:B4");
+
+        // Insert 2 rows at row 2
+        ws.spliceRows(2, 0, [], []);
+
+        const images = ws.getImages();
+        // First image at A1 should not move (nativeRow 0 < start-1 = 1)
+        expect(images[0].range!.tl.nativeRow).toBe(0);
+        // Second image at A3 should shift down by 2 (nativeRow 2 >= start-1 = 1)
+        expect(images[1].range!.tl.nativeRow).toBe(4);
+        expect(images[1].range!.br!.nativeRow).toBe(6);
+      });
+
+      it("does not update background images during splice", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addBackgroundImage(imgId);
+
+        // Should not throw
+        ws.insertRow(1, []);
+
+        // Background image should still exist
+        expect(ws.getBackgroundImageId()).toBeDefined();
+      });
+    });
   });
 });
