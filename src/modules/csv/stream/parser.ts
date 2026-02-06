@@ -22,16 +22,13 @@ import { detectDelimiter, stripBom } from "../utils/detect";
 import { applyDynamicTypingToRow, applyDynamicTypingToArrayRow } from "../utils/dynamic-typing";
 import { convertRowToObject, filterValidHeaders } from "../parse/helpers";
 import { DEFAULT_LINEBREAK_REGEX, getUtf8ByteLength } from "../constants";
+import { splitLinesWithEndings } from "../parse/lines";
 
 // Import shared core functionality from parse/
 import type { ParseConfig } from "../parse/config";
 import type { ParseState } from "../parse/state";
 import { createParseConfig } from "../parse/config";
-import {
-  createParseState,
-  resetInfoState as resetInfoStateCore,
-  getUnquotedArray
-} from "../parse/state";
+import { createParseState, getUnquotedArray } from "../parse/state";
 import {
   processCompletedRow as processCompletedRowCore,
   shouldSkipRow as shouldSkipRowCore
@@ -85,7 +82,7 @@ export class CsvParserStream extends Transform {
   // Stream control
   private toLineReached: boolean = false;
   private headersEmitted: boolean = false;
-  private totalBytesProcessed: number = 0;
+  private totalCharsProcessed: number = 0;
 
   // Backpressure handling
   private backpressure: boolean = false;
@@ -373,8 +370,11 @@ export class CsvParserStream extends Transform {
       return;
     }
 
-    // Apply trim to fields
-    const row = scanResult.fields.map(this.parseConfig.trimField);
+    // Apply trim to fields.
+    // Note: scanResult.fields is reused by the streaming scanner; we must copy even when trim is identity.
+    const row = this.parseConfig.trimFieldIsIdentity
+      ? scanResult.fields.slice()
+      : scanResult.fields.map(this.parseConfig.trimField);
 
     // Check toLine for the final row
     const { toLine } = this.options;
@@ -397,7 +397,7 @@ export class CsvParserStream extends Transform {
     // Set up info tracking state
     if (this.parseConfig.infoOption) {
       this.parseState.currentRowStartLine = this.parseState.lineNumber;
-      this.parseState.currentRowStartOffset = this.totalBytesProcessed;
+      this.parseState.currentRowStartOffset = this.totalCharsProcessed;
       this.parseState.currentRowQuoted = scanResult.quoted;
     }
 
@@ -473,24 +473,27 @@ export class CsvParserStream extends Transform {
     }
 
     const pendingRows: Row[] = [];
-    const row = line.split(this.parseConfig.delimiter).map(this.parseConfig.trimField);
+    const row = line.split(this.parseConfig.delimiter);
+    const trimmedRow = this.parseConfig.trimFieldIsIdentity
+      ? row
+      : row.map(this.parseConfig.trimField);
 
     // Set up info tracking state before processing row (same as in parseFastMode)
     if (this.parseConfig.infoOption) {
       this.parseState.currentRowStartLine = this.parseState.lineNumber;
-      this.parseState.currentRowStartOffset = this.totalBytesProcessed;
-      this.parseState.currentRowQuoted = getUnquotedArray(row.length);
+      this.parseState.currentRowStartOffset = this.totalCharsProcessed;
+      this.parseState.currentRowQuoted = getUnquotedArray(trimmedRow.length);
     }
     if (this.parseConfig.rawOption) {
       this.parseState.currentRawRow = line;
     }
 
-    if (this.shouldSkipRow(row, shouldSkipEmpty)) {
+    if (this.shouldSkipRow(trimmedRow, shouldSkipEmpty)) {
       callback();
       return;
     }
 
-    if (!this.processCompletedRow(row, pendingRows)) {
+    if (!this.processCompletedRow(trimmedRow, pendingRows)) {
       this.processPendingRows(pendingRows, callback);
       return;
     }
@@ -579,16 +582,6 @@ export class CsvParserStream extends Transform {
   /**
    * Reset info state for next row (used when skipping rows or after processing)
    */
-  private resetInfoState(nextByteOffset: number): void {
-    resetInfoStateCore(
-      this.parseState,
-      this.parseConfig.infoOption,
-      this.parseConfig.rawOption,
-      this.parseState.lineNumber + 1,
-      nextByteOffset
-    );
-  }
-
   private processBuffer(callback: (error?: Error | null) => void): void {
     const { skipEmptyLines = false, skipLines = 0 } = this.options;
     const shouldSkipEmpty = skipEmptyLines;
@@ -618,13 +611,14 @@ export class CsvParserStream extends Transform {
       // Only need raw row for maxRowBytes check or rawOption
       const needRawRow = this.parseConfig.maxRowBytes !== undefined || this.parseConfig.rawOption;
       let rawRow: string | undefined;
-      let rowByteLength: number;
+      let rowCharLength: number;
 
       if (needRawRow) {
         // Use zero-copy raw row from scanner (already extracted before buffer compaction)
         rawRow = scanResult.raw;
         const rawRowBytes = getUtf8ByteLength(rawRow!);
-        rowByteLength = rawRowBytes + getUtf8ByteLength(scanResult.newline || "");
+
+        rowCharLength = (rawRow?.length ?? 0) + (scanResult.newline?.length ?? 0);
 
         // Check maxRowBytes limit (rawRowBytes excludes newline, consistent with sync parser)
         if (
@@ -637,21 +631,14 @@ export class CsvParserStream extends Transform {
           return;
         }
       } else {
-        // Fast path: use character length for position tracking (no UTF-8 calculation needed)
-        rowByteLength =
-          scanResult.fields.reduce((sum, f, i) => {
-            let fieldLen = f.length;
-            if (scanResult.quoted[i]) {
-              fieldLen += 2; // quotes
-            }
-            return sum + fieldLen;
-          }, 0) +
-          (scanResult.fields.length - 1) * this.parseConfig.delimiter.length +
-          (scanResult.newline?.length || 0);
+        rowCharLength = (scanResult.raw?.length ?? 0) + (scanResult.newline?.length ?? 0);
       }
 
-      // Apply trim to fields
-      const row = scanResult.fields.map(this.parseConfig.trimField);
+      // Apply trim to fields.
+      // Note: scanResult.fields is reused by the streaming scanner; we must copy even when trim is identity.
+      const row = this.parseConfig.trimFieldIsIdentity
+        ? scanResult.fields.slice()
+        : scanResult.fields.map(this.parseConfig.trimField);
 
       this.parseState.lineNumber++;
 
@@ -659,26 +646,26 @@ export class CsvParserStream extends Transform {
       const { toLine } = this.options;
       if (toLine !== undefined && this.parseState.lineNumber > toLine) {
         this.toLineReached = true;
-        this.totalBytesProcessed += rowByteLength;
+        this.totalCharsProcessed += rowCharLength;
         this.processPendingRows(pendingRows, callback);
         return;
       }
 
       // Skip lines at beginning
       if (this.parseState.lineNumber <= skipLines) {
-        this.totalBytesProcessed += rowByteLength;
+        this.totalCharsProcessed += rowCharLength;
         continue;
       }
 
       // Set up info tracking state
       if (this.parseConfig.infoOption) {
         this.parseState.currentRowStartLine = this.parseState.lineNumber;
-        this.parseState.currentRowStartOffset = this.totalBytesProcessed;
+        this.parseState.currentRowStartOffset = this.totalCharsProcessed;
         this.parseState.currentRowQuoted = scanResult.quoted;
       }
 
-      // Update bytes processed for this row
-      this.totalBytesProcessed += rowByteLength;
+      // Update char offset for this row (RecordInfo.offset is character offset)
+      this.totalCharsProcessed += rowCharLength;
 
       // Skip comment/empty lines
       if (this.shouldSkipRow(row, shouldSkipEmpty)) {
@@ -703,6 +690,62 @@ export class CsvParserStream extends Transform {
     this.processPendingRows(pendingRows, callback);
   }
 
+  private getFastModeCompleteDataEnd(buffer: string): number {
+    const { linebreakRegex } = this.parseConfig;
+
+    if (typeof linebreakRegex === "string") {
+      const sep = linebreakRegex;
+      if (sep === "") {
+        return -1;
+      }
+      const maxStart = buffer.length - sep.length;
+      if (maxStart < 0) {
+        return -1;
+      }
+      const idx = buffer.lastIndexOf(sep, maxStart);
+      if (idx === -1) {
+        return -1;
+      }
+      return idx + sep.length;
+    }
+
+    // Fast path for default newline detection with CRLF chunk-boundary handling.
+    if (linebreakRegex === DEFAULT_LINEBREAK_REGEX) {
+      const lastLF = buffer.lastIndexOf("\n");
+      const lastCR = buffer.lastIndexOf("\r");
+      let lastNewlineIndex: number;
+
+      if (lastCR > lastLF) {
+        // CR comes after LF - check if this is part of a CRLF at end of buffer.
+        // If \r is the last char, we need to wait for more data to see if \n follows.
+        if (lastCR === buffer.length - 1) {
+          lastNewlineIndex = lastLF;
+        } else {
+          lastNewlineIndex = lastCR;
+        }
+      } else {
+        lastNewlineIndex = lastLF;
+      }
+
+      if (lastNewlineIndex === -1) {
+        return -1;
+      }
+
+      return lastNewlineIndex + 1;
+    }
+
+    const re = new RegExp(linebreakRegex.source, `${linebreakRegex.flags}g`);
+    let lastEnd = -1;
+    for (let match = re.exec(buffer); match; match = re.exec(buffer)) {
+      lastEnd = match.index + match[0].length;
+      // Safety: avoid infinite loops for zero-length matches.
+      if (match[0].length === 0) {
+        re.lastIndex++;
+      }
+    }
+    return lastEnd;
+  }
+
   /**
    * Fast mode buffer processing - skips quote detection, splits directly by delimiter
    */
@@ -712,121 +755,84 @@ export class CsvParserStream extends Transform {
   ): void {
     const { skipLines = 0 } = this.options;
     const pendingRows: Row[] = [];
-    const startByteOffset = this.totalBytesProcessed;
+    const startCharOffset = this.totalCharsProcessed;
 
-    // Find last complete line in buffer
-    // Fix CRLF handling: if \r is found, check if followed by \n
-    const lastLF = this.buffer.lastIndexOf("\n");
-    const lastCR = this.buffer.lastIndexOf("\r");
-    let lastNewlineIndex: number;
-
-    if (lastCR > lastLF) {
-      // CR comes after LF - check if this is part of a CRLF at end of buffer
-      // If \r is the last char, we need to wait for more data to see if \n follows
-      if (lastCR === this.buffer.length - 1) {
-        // \r is at very end - could be start of CRLF split across chunks
-        // Use the LF position instead, or -1 if no LF
-        lastNewlineIndex = lastLF;
-      } else {
-        lastNewlineIndex = lastCR;
-      }
-    } else {
-      lastNewlineIndex = lastLF;
-    }
-
+    const completeEnd = this.getFastModeCompleteDataEnd(this.buffer);
     // If no complete line, wait for more data
-    if (lastNewlineIndex === -1) {
+    if (completeEnd === -1) {
       callback();
       return;
     }
 
     // Process complete lines
-    const completeData = this.buffer.slice(0, lastNewlineIndex + 1);
-    this.buffer = this.buffer.slice(lastNewlineIndex + 1);
+    const completeData = this.buffer.slice(0, completeEnd);
+    this.buffer = this.buffer.slice(completeEnd);
 
-    // Split by lines using pre-compiled regex for all line endings
-    const lines = completeData.split(DEFAULT_LINEBREAK_REGEX);
+    let currentCharOffset = startCharOffset;
 
-    let currentByteOffset = startByteOffset;
-    let posInCompleteData = 0; // Track position in completeData for line ending detection
-
-    for (const line of lines) {
-      // Calculate actual line ending length by looking at what follows the line
-      const lineEndPos = posInCompleteData + line.length;
-      let lineEndingLength = 0;
-      if (lineEndPos < completeData.length) {
-        if (completeData[lineEndPos] === "\r") {
-          lineEndingLength = completeData[lineEndPos + 1] === "\n" ? 2 : 1;
-        } else if (completeData[lineEndPos] === "\n") {
-          lineEndingLength = 1;
-        }
-      }
-
-      const lineByteLength = line.length + lineEndingLength;
-      posInCompleteData += lineByteLength;
-
-      // Skip empty lines that result from split (e.g., trailing newline produces empty string)
-      // Don't increment lineNumber for trailing split artifacts
-      if (line === "" && lineEndingLength === 0) {
-        continue; // Split artifact at end, skip without counting
-      }
-
+    for (const { line, lineLengthWithEnding: lineCharLength } of splitLinesWithEndings(
+      completeData,
+      this.parseConfig.linebreakRegex
+    )) {
       this.parseState.lineNumber++;
 
       // Check toLine - stop parsing at specified line number
       const { toLine } = this.options;
       if (toLine !== undefined && this.parseState.lineNumber > toLine) {
         this.toLineReached = true;
-        this.totalBytesProcessed = currentByteOffset;
+        this.totalCharsProcessed = currentCharOffset;
         this.processPendingRows(pendingRows, callback);
         return;
       }
 
       // Skip lines at beginning
       if (this.parseState.lineNumber <= skipLines) {
-        currentByteOffset += lineByteLength;
+        currentCharOffset += lineCharLength;
         continue;
       }
 
       // FastMode: only skip empty lines if skipEmptyLines option is enabled
       if (line === "" && shouldSkipEmpty) {
-        currentByteOffset += lineByteLength;
+        currentCharOffset += lineCharLength;
         continue;
       }
 
       // Set up info tracking state before processing row
       if (this.parseConfig.infoOption) {
         this.parseState.currentRowStartLine = this.parseState.lineNumber;
-        this.parseState.currentRowStartOffset = currentByteOffset;
+        this.parseState.currentRowStartOffset = currentCharOffset;
       }
       if (this.parseConfig.rawOption) {
         this.parseState.currentRawRow = line;
       }
 
       // Split by delimiter (fast path - no quote detection)
-      const row = line.split(this.parseConfig.delimiter).map(this.parseConfig.trimField);
+      const row = line.split(this.parseConfig.delimiter);
+      const trimmedRow = this.parseConfig.trimFieldIsIdentity
+        ? row
+        : row.map(this.parseConfig.trimField);
 
       // In fast mode, no fields are quoted
       if (this.parseConfig.infoOption) {
-        this.parseState.currentRowQuoted = getUnquotedArray(row.length);
+        this.parseState.currentRowQuoted = getUnquotedArray(trimmedRow.length);
       }
 
-      if (this.shouldSkipRow(row, shouldSkipEmpty)) {
-        currentByteOffset += lineByteLength;
+      if (this.shouldSkipRow(trimmedRow, shouldSkipEmpty)) {
+        currentCharOffset += lineCharLength;
         continue;
       }
 
       // Process completed row (handles headers, skipRows, column validation, maxRows)
-      if (!this.processCompletedRow(row, pendingRows)) {
-        this.totalBytesProcessed = currentByteOffset + lineByteLength;
+      if (!this.processCompletedRow(trimmedRow, pendingRows)) {
+        this.totalCharsProcessed = currentCharOffset + lineCharLength;
         this.processPendingRows(pendingRows, callback);
         return;
       }
 
-      currentByteOffset += lineByteLength;
+      currentCharOffset += lineCharLength;
     }
 
-    this.totalBytesProcessed = startByteOffset + completeData.length;
+    this.totalCharsProcessed = currentCharOffset;
     this.processPendingRows(pendingRows, callback);
   }
 

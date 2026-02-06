@@ -25,12 +25,10 @@ import {
   DEFAULT_SCANNER_CONFIG
 } from "@csv/parse/scanner";
 import type { ScannerConfig, RowScanResult } from "@csv/parse/scanner";
-import {
-  parseWithScanner,
-  createParseConfig,
-  createParseState,
-  type RowProcessResult
-} from "@csv/parse/index";
+import { parseWithScanner } from "@csv/parse/sync";
+import { createParseConfig } from "@csv/parse/config";
+import { createParseState } from "@csv/parse/state";
+import type { RowProcessResult } from "@csv/parse/row-processor";
 import type { CsvParseOptions, CsvRecordError } from "@csv/types";
 
 // =============================================================================

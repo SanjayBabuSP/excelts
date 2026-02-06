@@ -27,6 +27,7 @@ import { applyDynamicTypingToArrayRow } from "../utils/dynamic-typing";
 import { isEmptyRow } from "../utils/row";
 import { getUtf8ByteLength } from "../constants";
 import { scanRow as scanRowImpl, type ScannerConfig } from "./scanner";
+import { splitLinesWithEndings } from "./lines";
 
 // =============================================================================
 // Helper Functions
@@ -106,29 +107,14 @@ export function* parseFastMode(
     return;
   }
 
-  // Use pre-compiled linebreak regex from config
-  const lines = input.split(config.linebreakRegex);
-
   // Track character offset for info.offset
   let currentCharOffset = 0;
-  // We need to also track position in original input to detect line ending length
-  let posInInput = 0;
 
-  for (const line of lines) {
-    // Calculate actual line ending length by looking at what follows the line in input
-    const lineEndPos = posInInput + line.length;
-    let lineEndingLength = 0;
-    if (lineEndPos < input.length) {
-      if (input[lineEndPos] === "\r") {
-        lineEndingLength = input[lineEndPos + 1] === "\n" ? 2 : 1;
-      } else if (input[lineEndPos] === "\n") {
-        lineEndingLength = 1;
-      }
-    }
-    const lineByteLength = line.length + lineEndingLength;
-
+  for (const { line, lineLengthWithEnding: lineByteLength } of splitLinesWithEndings(
+    input,
+    config.linebreakRegex
+  )) {
     state.lineNumber++;
-    posInInput += lineByteLength;
 
     if (config.toLine !== undefined && state.lineNumber > config.toLine) {
       state.truncated = true;
@@ -160,22 +146,23 @@ export function* parseFastMode(
       state.currentRawRow = line;
     }
 
-    const row = line.split(config.delimiter).map(config.trimField);
+    const row = line.split(config.delimiter);
+    const trimmedRow = config.trimFieldIsIdentity ? row : row.map(config.trimField);
 
     if (config.infoOption) {
-      state.currentRowQuoted = getUnquotedArray(row.length);
+      state.currentRowQuoted = getUnquotedArray(trimmedRow.length);
     }
 
-    if (config.comment && row[0]?.startsWith(config.comment)) {
+    if (config.comment && trimmedRow[0]?.startsWith(config.comment)) {
       currentCharOffset += lineByteLength;
       continue;
     }
-    if (config.shouldSkipEmpty && isEmptyRow(row, config.shouldSkipEmpty)) {
+    if (config.shouldSkipEmpty && isEmptyRow(trimmedRow, config.shouldSkipEmpty)) {
       currentCharOffset += lineByteLength;
       continue;
     }
 
-    const result = processCompletedRow(row, state, config, errors, state.lineNumber);
+    const result = processCompletedRow(trimmedRow, state, config, errors, state.lineNumber);
     currentCharOffset += lineByteLength;
 
     if (result.stop) {

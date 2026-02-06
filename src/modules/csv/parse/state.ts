@@ -19,8 +19,6 @@ import { processHeaders } from "./helpers";
  */
 export interface FieldState {
   currentField: string;
-  currentFieldParts: string[] | null;
-  currentFieldLength: number;
 }
 
 /**
@@ -30,16 +28,9 @@ export interface ParseState {
   // Field/row building
   currentRow: string[];
   currentField: string;
-  /** For large fields, we accumulate parts to avoid string concat overhead */
-  currentFieldParts: string[] | null;
-  /** Track current field length for threshold check */
-  currentFieldLength: number;
-  inQuotes: boolean;
-  currentRowBytes: number;
 
   // Position tracking
   lineNumber: number;
-  position: number;
 
   // Data row tracking
   dataRowCount: number;
@@ -56,12 +47,9 @@ export interface ParseState {
   // Info tracking (for info/raw options)
   currentRowStartLine: number;
   currentRowStartOffset: number;
-  currentFieldQuoted: boolean;
   /** Quoted status per field. May be a shared readonly array - copy before modifying. */
   currentRowQuoted: readonly boolean[];
   currentRawRow: string;
-  /** Character position where current raw row starts (for slice-based raw extraction) */
-  currentRawRowStart: number;
 }
 
 // =============================================================================
@@ -77,12 +65,7 @@ export function createParseState(
   const state: ParseState = {
     currentRow: [],
     currentField: "",
-    currentFieldParts: null,
-    currentFieldLength: 0,
-    inQuotes: false,
-    currentRowBytes: 0,
     lineNumber: 0,
-    position: 0,
     dataRowCount: 0,
     skippedDataRows: 0,
     truncated: false,
@@ -93,10 +76,8 @@ export function createParseState(
     renamedHeadersForMeta: null,
     currentRowStartLine: config.infoOption ? 1 : 0,
     currentRowStartOffset: 0,
-    currentFieldQuoted: false,
     currentRowQuoted: [],
-    currentRawRow: "",
-    currentRawRowStart: 0
+    currentRawRow: ""
   };
 
   // Determine header mode

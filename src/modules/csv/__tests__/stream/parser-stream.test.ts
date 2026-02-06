@@ -845,3 +845,37 @@ describe("parseCsvRows - Async Iterable Input", () => {
     ]);
   });
 });
+
+// =============================================================================
+// info.offset Semantics (Streaming)
+// =============================================================================
+
+describe("CsvParserStream - info.offset", () => {
+  it("should track character offset (not UTF-8 byte offset)", async () => {
+    // "a,€\n" is 4 JS characters but 6 UTF-8 bytes.
+    const input = "a,€\n1,2\n";
+    const rows: any[] = [];
+    for await (const row of parseCsvRows(input, { info: true })) {
+      rows.push(row);
+    }
+    expect(rows[0].info.offset).toBe(0);
+    expect(rows[1].info.offset).toBe(4);
+  });
+
+  it("should account for custom lineEnding in fastMode", async () => {
+    const input = "a,b||1,2||3,4";
+    const rows: any[] = [];
+    for await (const row of parseCsvRows(input, { info: true, fastMode: true, lineEnding: "||" })) {
+      rows.push(row);
+    }
+    expect(rows.map(r => r.record)).toEqual([
+      ["a", "b"],
+      ["1", "2"],
+      ["3", "4"]
+    ]);
+    // Offsets should advance by line length + custom line ending length (2 chars).
+    expect(rows[0].info.offset).toBe(0);
+    expect(rows[1].info.offset).toBe(5); // "a,b||" = 5 characters
+    expect(rows[2].info.offset).toBe(10); // "a,b||1,2||" = 10 characters
+  });
+});
