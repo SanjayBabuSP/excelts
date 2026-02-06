@@ -95,4 +95,34 @@ describe("xlsx styles roundtrip", () => {
       vertical: "top"
     });
   });
+
+  // Regression test for https://github.com/exceljs/exceljs/issues/2600
+  // This tests that styled cells retain their style after roundtrip
+  it("styled cells retain style after roundtrip", async () => {
+    const filename = getUniqueTestFilePath(import.meta.url);
+
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Sheet1");
+
+    ws.getCell("A1").value = "Plain text";
+
+    ws.getCell("B1").value = "Styled text";
+    ws.getCell("B1").font = { bold: true };
+
+    await wb.xlsx.writeFile(filename);
+
+    const wb2 = new Workbook();
+    await wb2.xlsx.readFile(filename);
+
+    const ws2 = wb2.getWorksheet("Sheet1");
+    expect(ws2).toBeTruthy();
+
+    // B1 should retain its bold style
+    expect(ws2.getCell("B1").font).toMatchObject({ bold: true });
+
+    // A1 has no explicit style, so it may or may not have style info
+    // (depending on whether the file format includes s="0" for default style)
+    const a1Value = ws2.getCell("A1").value;
+    expect(a1Value).toBe("Plain text");
+  });
 });
