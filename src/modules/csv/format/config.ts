@@ -8,6 +8,7 @@
 import type { CsvFormatOptions, TypeTransformMap } from "../types";
 import { escapeRegex, normalizeQuoteOption, normalizeEscapeOption } from "../utils/detect";
 import type { DecimalSeparator } from "../utils/number";
+import { CsvError } from "../errors";
 
 // =============================================================================
 // Types
@@ -24,7 +25,7 @@ export type QuoteColumnConfig = boolean | boolean[] | Record<string, boolean>;
 export interface CsvFormatRegex {
   /** Regex to check if a field needs quoting (contains delimiter, quote, or newline) */
   needsQuoteRegex: RegExp | null;
-  /** Regex to find quote characters for escaping */
+  /** Regex to find quote/escape characters for escaping */
   escapeQuoteRegex: RegExp | null;
   /** The escaped quote sequence (escape + quote) */
   escapedQuote: string;
@@ -32,6 +33,8 @@ export interface CsvFormatRegex {
   quoteEnabled: boolean;
   /** The quote character */
   quote: string;
+  /** The escape character */
+  escape: string;
   /** The delimiter character (for fast path) */
   delimiter: string;
   /** Whether we can use fast string.includes() check */
@@ -137,6 +140,7 @@ export function createFormatRegex(options: FormatRegexOptions): CsvFormatRegex {
       escapedQuote: "",
       quoteEnabled: false,
       quote: "",
+      escape: "",
       delimiter,
       useFastCheck: false
     };
@@ -147,17 +151,29 @@ export function createFormatRegex(options: FormatRegexOptions): CsvFormatRegex {
   // This ensures internal quotes are always properly escaped as "" rather than producing invalid CSV.
   const escape = escapeNormalized.char || quote;
 
-  // Use fast string.includes() check for single-char delimiter and quote
-  const useFastCheck = delimiter.length === 1 && quote.length === 1;
+  // Use fast string.includes() check for single-char delimiter, quote, and escape
+  const useFastCheck = delimiter.length === 1 && quote.length === 1 && escape.length === 1;
 
   return {
     needsQuoteRegex: useFastCheck
       ? null // Will use fast check instead
-      : new RegExp(`[${escapeRegex(delimiter)}${escapeRegex(quote)}\r\n]`),
-    escapeQuoteRegex: new RegExp(escapeRegex(quote), "g"),
+      : (() => {
+          // Build character class content, ensuring '-' is escaped for use inside [...]
+          const classContent =
+            `${escapeRegex(delimiter)}${escapeRegex(quote)}${escape !== quote ? escapeRegex(escape) : ""}\r\n`.replace(
+              /-/g,
+              "\\-"
+            );
+          return new RegExp(`[${classContent}]`);
+        })(),
+    escapeQuoteRegex:
+      escape !== quote
+        ? new RegExp(`${escapeRegex(quote)}|${escapeRegex(escape)}`, "g")
+        : new RegExp(escapeRegex(quote), "g"),
     escapedQuote: escape + quote,
     quoteEnabled: true,
     quote,
+    escape,
     delimiter,
     useFastCheck
   };
@@ -213,7 +229,12 @@ export function createFormatConfig(options: CsvFormatOptions): FormatConfig {
 
   // Validate decimalSeparator - only "." or "," are valid
   if (decimalSeparator !== "." && decimalSeparator !== ",") {
-    throw new Error(`Invalid decimalSeparator: "${decimalSeparator}". Must be "." or ",".`);
+    throw new CsvError(`Invalid decimalSeparator: "${decimalSeparator}". Must be "." or ",".`);
+  }
+
+  // Prevent silent data corruption when decimalSeparator matches delimiter
+  if (decimalSeparator === delimiter) {
+    throw new CsvError("decimalSeparator cannot be the same as delimiter");
   }
 
   const regex = createFormatRegex({

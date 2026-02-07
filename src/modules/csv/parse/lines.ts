@@ -15,6 +15,21 @@ export interface SplitLine {
 }
 
 /**
+ * Cache for global-flag versions of RegExp objects.
+ * Avoids re-creating `new RegExp(..., 'g')` on every call to splitLinesWithEndings.
+ */
+const globalRegexCache = new WeakMap<RegExp, RegExp>();
+
+function getCachedGlobalRegex(re: RegExp): RegExp {
+  let cached = globalRegexCache.get(re);
+  if (!cached) {
+    cached = new RegExp(re.source, `${re.flags.replace(/g/g, "")}g`);
+    globalRegexCache.set(re, cached);
+  }
+  return cached;
+}
+
+/**
  * Split input into lines using the given linebreak regex and yield per-line
  * metadata including the actual line ending length.
  *
@@ -57,9 +72,7 @@ export function* splitLinesWithEndings(
     }
   }
 
-  const re = linebreakRegex.global
-    ? linebreakRegex
-    : new RegExp(linebreakRegex.source, `${linebreakRegex.flags}g`);
+  const re = linebreakRegex.global ? linebreakRegex : getCachedGlobalRegex(linebreakRegex);
 
   let pos = 0;
   re.lastIndex = 0;

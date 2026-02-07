@@ -12,7 +12,7 @@
  * - Cross-platform (Node.js and Browser)
  */
 
-import { uuidV4 } from "../../../utils/uuid";
+import { uuidV4 } from "@utils/uuid";
 
 // =============================================================================
 // Types
@@ -546,6 +546,7 @@ function normalizeColumns(columns: number | ColumnDef[]): ColumnDef[] {
 
 class CsvGenerator {
   private random: () => number;
+  private seeded: boolean;
   private options: Required<
     Pick<
       CsvGenerateOptions,
@@ -562,7 +563,8 @@ class CsvGenerator {
   >;
 
   constructor(seed?: number, options?: CsvGenerateOptions) {
-    this.random = seed !== undefined ? createSeededRandom(seed) : Math.random;
+    this.seeded = seed !== undefined;
+    this.random = this.seeded ? createSeededRandom(seed!) : Math.random;
     this.options = {
       delimiter: options?.delimiter ?? ",",
       lineEnding: options?.lineEnding ?? "\n",
@@ -670,7 +672,7 @@ class CsvGenerator {
         );
 
       case "bool":
-        return this.random() > 0.5;
+        return this.randomBool();
 
       case "date": {
         const from = config.dateFrom ?? new Date(2020, 0, 1);
@@ -687,7 +689,7 @@ class CsvGenerator {
 
       case "uuid":
         // Use seeded random for UUID when seeded
-        if (this.random !== Math.random) {
+        if (this.seeded) {
           const bytes = new Uint8Array(16);
           for (let i = 0; i < 16; i++) {
             bytes[i] = Math.floor(this.random() * 256);
@@ -807,8 +809,11 @@ class CsvGenerator {
       case "percent":
         return this.randomFloat(config.min ?? 0, config.max ?? 100, 1) + "%";
 
-      case "timestamp":
-        return Date.now() + this.randomInt(0, config.max ?? 86400000);
+      case "timestamp": {
+        // Use a fixed base when seeded for reproducible output
+        const base = this.seeded ? 1704067200000 : Date.now(); // 2024-01-01T00:00:00Z when seeded
+        return base + this.randomInt(0, config.max ?? 86400000);
+      }
 
       case "city":
         return this.randomPick(CITIES);
@@ -921,26 +926,13 @@ class CsvGenerator {
     }
 
     // Auto mode - quote only when necessary
-    // Quick check: if string is short and contains no special chars, skip regex
-    if (str.length < 50) {
-      const hasSpecial =
-        str.includes(this.options.delimiter) ||
-        str.includes('"') ||
-        str.includes("\n") ||
-        str.includes("\r");
-      if (!hasSpecial) {
-        return str;
-      }
-    } else {
-      // For longer strings, check if quoting is needed
-      if (
-        !str.includes(this.options.delimiter) &&
-        !str.includes('"') &&
-        !str.includes("\n") &&
-        !str.includes("\r")
-      ) {
-        return str;
-      }
+    if (
+      !str.includes(this.options.delimiter) &&
+      !str.includes('"') &&
+      !str.includes("\n") &&
+      !str.includes("\r")
+    ) {
+      return str;
     }
 
     return '"' + str.replace(/"/g, '""') + '"';
@@ -1158,7 +1150,7 @@ export function* csvGenerateRows(
 export async function* csvGenerateAsync(
   options: CsvGenerateOptions & { delay?: number } = {}
 ): AsyncGenerator<string, void, undefined> {
-  const { columns = 5, seed, headers, delay = 0, transform } = options;
+  const { columns = 5, seed, headers, delay = 0, transform, skipRows = 0 } = options;
 
   const generator = new CsvGenerator(seed, options);
   const shouldStop = createStopChecker(options);
@@ -1176,9 +1168,10 @@ export async function* csvGenerateAsync(
 
   // Yield data rows using helper
   let rowIdx = 0;
+  let yieldedCount = 0;
   while (true) {
     const stopCtx: StopContext = {
-      rowCount: rowIdx,
+      rowCount: yieldedCount,
       elapsed: Date.now() - startTime,
       startTime
     };
@@ -1188,8 +1181,15 @@ export async function* csvGenerateAsync(
     }
 
     const row = generator.generateRow(colDefs, rowIdx, headerNames, transform);
-    yield generator.formatRow(row);
     rowIdx++;
+
+    // Skip first N rows if specified
+    if (rowIdx <= skipRows) {
+      continue;
+    }
+
+    yield generator.formatRow(row);
+    yieldedCount++;
 
     if (delay > 0) {
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -1221,29 +1221,43 @@ export function csvGenerateData<T extends CsvGenerateOptions>(
   options?: T
 ): T extends { objectMode: true } ? Record<string, unknown>[] : unknown[][] {
   const opts = options ?? ({} as T);
-  const { columns = 5, rows = 10, seed, objectMode, transform } = opts;
+  const { columns = 5, rows = 10, seed, objectMode, transform, skipRows = 0 } = opts;
+
+  // Prevent infinite generation in sync API
+  if (rows === -1 || rows === Infinity) {
+    throw new Error(
+      "Unlimited generation (rows: -1 or Infinity) is not supported in csvGenerateData(). " +
+        "Use csvGenerateRows() iterator instead."
+    );
+  }
 
   const generator = new CsvGenerator(seed, opts);
   const colDefs = normalizeColumns(columns);
   const headerNames = generateHeaderNames(colDefs, opts.headers);
+  const totalRows = rows + skipRows;
 
   // Generate data using helper
   if (objectMode) {
     const data: Record<string, unknown>[] = [];
-    for (let rowIdx = 0; rowIdx < rows; rowIdx++) {
+    for (let rowIdx = 0; rowIdx < totalRows; rowIdx++) {
       const row = generator.generateRow(colDefs, rowIdx, headerNames, transform);
-      const obj: Record<string, unknown> = {};
-      for (let i = 0; i < headerNames.length; i++) {
-        obj[headerNames[i]] = row[i];
+      if (rowIdx >= skipRows) {
+        const obj: Record<string, unknown> = {};
+        for (let i = 0; i < headerNames.length; i++) {
+          obj[headerNames[i]] = row[i];
+        }
+        data.push(obj);
       }
-      data.push(obj);
     }
     return data as T extends { objectMode: true } ? Record<string, unknown>[] : unknown[][];
   }
 
   const data: unknown[][] = [];
-  for (let rowIdx = 0; rowIdx < rows; rowIdx++) {
-    data.push(generator.generateRow(colDefs, rowIdx, headerNames, transform));
+  for (let rowIdx = 0; rowIdx < totalRows; rowIdx++) {
+    const row = generator.generateRow(colDefs, rowIdx, headerNames, transform);
+    if (rowIdx >= skipRows) {
+      data.push(row);
+    }
   }
   return data as T extends { objectMode: true } ? Record<string, unknown>[] : unknown[][];
 }

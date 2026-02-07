@@ -14,21 +14,9 @@ import { processHeaders } from "./helpers";
 // =============================================================================
 
 /**
- * Minimal state required for field building operations.
- * Used by streaming parser which manages its own properties.
- */
-export interface FieldState {
-  currentField: string;
-}
-
-/**
  * Mutable parsing state - shared between sync and streaming parsers
  */
 export interface ParseState {
-  // Field/row building
-  currentRow: string[];
-  currentField: string;
-
   // Position tracking
   lineNumber: number;
 
@@ -63,8 +51,6 @@ export function createParseState(
   config: Pick<ParseConfig, "headers" | "groupColumnsByName" | "infoOption" | "rawOption">
 ): ParseState {
   const state: ParseState = {
-    currentRow: [],
-    currentField: "",
     lineNumber: 0,
     dataRowCount: 0,
     skippedDataRows: 0,

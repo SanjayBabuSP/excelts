@@ -43,8 +43,8 @@ import { DEFAULT_SCANNER_CONFIG, createScannerState } from "./types";
 // Re-exports from types
 // =============================================================================
 
-export type { ScannerConfig, FieldScanResult, RowScanResult, ScannerState, Scanner } from "./types";
-export { DEFAULT_SCANNER_CONFIG, createScannerState } from "./types";
+export type { ScannerConfig, RowScanResult, Scanner } from "./types";
+export { DEFAULT_SCANNER_CONFIG } from "./types";
 
 // =============================================================================
 // Helper Functions
@@ -57,25 +57,26 @@ export { DEFAULT_SCANNER_CONFIG, createScannerState } from "./types";
  */
 function findNewline(input: string, start: number): [number, number] {
   const len = input.length;
-  let pos = start;
+  const lfPos = input.indexOf("\n", start);
+  const crPos = input.indexOf("\r", start);
 
-  while (pos < len) {
-    const char = input[pos];
-    if (char === "\n") {
-      return [pos, 1];
-    }
-    if (char === "\r") {
-      // Check for CRLF
-      if (pos + 1 < len) {
-        return input[pos + 1] === "\n" ? [pos, 2] : [pos, 1];
-      }
-      // CR at end of buffer - might be CRLF, need more data
-      return [pos, -1]; // -1 signals "maybe CRLF"
-    }
-    pos++;
+  // Neither found
+  if (lfPos === -1 && crPos === -1) {
+    return [-1, 0];
   }
 
-  return [-1, 0];
+  // Only LF found, or LF comes before CR
+  if (crPos === -1 || (lfPos !== -1 && lfPos < crPos)) {
+    return [lfPos, 1];
+  }
+
+  // CR found first (or only CR)
+  if (crPos + 1 < len) {
+    return input[crPos + 1] === "\n" ? [crPos, 2] : [crPos, 1];
+  }
+
+  // CR at end of buffer - might be CRLF, need more data
+  return [crPos, -1]; // -1 signals "maybe CRLF"
 }
 
 /**
@@ -85,16 +86,13 @@ function isAtDelimiter(input: string, pos: number, delimiter: string): boolean {
   if (delimiter.length === 1) {
     return input[pos] === delimiter;
   }
-  return input.slice(pos, pos + delimiter.length) === delimiter;
+  return input.startsWith(delimiter, pos);
 }
 
 /**
  * Find the next delimiter position (supports multi-character delimiters).
  */
 function findDelimiter(input: string, start: number, delimiter: string): number {
-  if (delimiter.length === 1) {
-    return input.indexOf(delimiter, start);
-  }
   return input.indexOf(delimiter, start);
 }
 
@@ -132,16 +130,21 @@ export function scanQuotedField(
 
   // Skip opening quote
   let pos = start + 1;
-  // Use array to collect segments for O(n) string building instead of O(n²) concatenation
-  const segments: string[] = [];
+  // Lazy-initialized array for collecting segments when escaped quotes or CR normalization occur.
+  // null means no segments yet (common fast path: no escaping needed).
+  let segments: string[] | null = null;
   let segmentStart = pos;
 
   // Helper to build final value from segments
   const buildValue = (endPos: number): string => {
-    if (endPos > segmentStart) {
-      segments.push(input.slice(segmentStart, endPos));
+    const lastSegment = endPos > segmentStart ? input.slice(segmentStart, endPos) : "";
+    if (segments === null) {
+      return lastSegment;
     }
-    return segments.length === 0 ? "" : segments.length === 1 ? segments[0] : segments.join("");
+    if (lastSegment) {
+      segments.push(lastSegment);
+    }
+    return segments.length === 1 ? segments[0] : segments.join("");
   };
 
   while (pos < len) {
@@ -153,10 +156,22 @@ export function scanQuotedField(
       if (pos + 1 < len && input[pos + 1] === quote) {
         // Escaped quote: add segment up to escape, then add the quote char
         if (pos > segmentStart) {
-          segments.push(input.slice(segmentStart, pos));
+          (segments ??= []).push(input.slice(segmentStart, pos));
         }
-        segments.push(quote);
+        (segments ??= []).push(quote);
         pos += 2; // Skip escape + quote
+        segmentStart = pos;
+        continue;
+      }
+
+      // Handle escape + escape (e.g., \\ → \) when escape !== quote
+      if (escape !== quote && pos + 1 < len && input[pos + 1] === escape) {
+        // Escaped escape: add segment up to first escape, then add one escape char
+        if (pos > segmentStart) {
+          (segments ??= []).push(input.slice(segmentStart, pos));
+        }
+        (segments ??= []).push(escape);
+        pos += 2; // Skip escape + escape
         segmentStart = pos;
         continue;
       }
@@ -188,10 +203,11 @@ export function scanQuotedField(
 
         // Check if this is a closing quote (followed by delimiter, newline, or EOF)
         if (
-          nextChar === delimiter[0] ||
+          (delimiter.length === 1
+            ? nextChar === delimiter
+            : isAtDelimiter(input, pos + 1, delimiter)) ||
           nextChar === "\n" ||
-          nextChar === "\r" ||
-          (delimiter.length > 1 && isAtDelimiter(input, pos + 1, delimiter))
+          nextChar === "\r"
         ) {
           // Closing quote - add segment and return
           return {
@@ -202,9 +218,14 @@ export function scanQuotedField(
           };
         }
 
-        // relaxQuotes: treat mid-field quote as literal
+        // relaxQuotes: treat mid-field quote as literal (preserve the quote character)
         if (relaxQuotes) {
+          if (pos > segmentStart) {
+            (segments ??= []).push(input.slice(segmentStart, pos));
+          }
+          (segments ??= []).push(quote);
           pos++;
+          segmentStart = pos;
           continue;
         }
 
@@ -243,10 +264,11 @@ export function scanQuotedField(
 
       const nextChar = input[pos + 1];
       if (
-        nextChar === delimiter[0] ||
+        (delimiter.length === 1
+          ? nextChar === delimiter
+          : isAtDelimiter(input, pos + 1, delimiter)) ||
         nextChar === "\n" ||
-        nextChar === "\r" ||
-        (delimiter.length > 1 && isAtDelimiter(input, pos + 1, delimiter))
+        nextChar === "\r"
       ) {
         return {
           value: buildValue(pos),
@@ -256,9 +278,14 @@ export function scanQuotedField(
         };
       }
 
-      // relaxQuotes: continue
+      // relaxQuotes: treat mid-field quote as literal (preserve the quote character)
       if (relaxQuotes) {
+        if (pos > segmentStart) {
+          (segments ??= []).push(input.slice(segmentStart, pos));
+        }
+        (segments ??= []).push(quote);
         pos++;
+        segmentStart = pos;
         continue;
       }
 
@@ -290,18 +317,18 @@ export function scanQuotedField(
         if (input[pos + 1] === "\n") {
           // CRLF -> LF
           if (pos > segmentStart) {
-            segments.push(input.slice(segmentStart, pos));
+            (segments ??= []).push(input.slice(segmentStart, pos));
           }
-          segments.push("\n");
+          (segments ??= []).push("\n");
           pos += 2;
           segmentStart = pos;
           continue;
         }
         // Standalone CR -> LF
         if (pos > segmentStart) {
-          segments.push(input.slice(segmentStart, pos));
+          (segments ??= []).push(input.slice(segmentStart, pos));
         }
-        segments.push("\n");
+        (segments ??= []).push("\n");
         pos++;
         segmentStart = pos;
         continue;
@@ -318,9 +345,9 @@ export function scanQuotedField(
       }
       // EOF: treat as LF
       if (pos > segmentStart) {
-        segments.push(input.slice(segmentStart, pos));
+        (segments ??= []).push(input.slice(segmentStart, pos));
       }
-      segments.push("\n");
+      (segments ??= []).push("\n");
       pos++;
       segmentStart = pos;
       continue;
@@ -762,8 +789,6 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
   };
 
   let state = createScannerState();
-  // Track the global offset of the buffer start for zero-copy raw row extraction
-  let bufferStartOffset = 0;
 
   // Reusable arrays for streaming mode (S3 optimization)
   // Safe to reuse because:
@@ -821,8 +846,6 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
         const consumedBytes = state.position;
         const bufferLength = state.buffer.length;
         if (consumedBytes > 65536 || (consumedBytes > bufferLength / 2 && consumedBytes > 4096)) {
-          // Update global offset before compacting
-          bufferStartOffset += state.position;
           state.buffer = state.buffer.slice(state.position);
           state.position = 0;
         }
@@ -862,7 +885,6 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
 
     reset(): void {
       state = createScannerState();
-      bufferStartOffset = 0;
       // Clear reusable arrays
       reuseFields.length = 0;
       reuseQuoted.length = 0;
@@ -870,11 +892,6 @@ export function createScanner(config?: Partial<ScannerConfig>): Scanner {
 
     getBuffer(): string {
       return state.buffer.slice(state.position);
-    },
-
-    getBufferOffset(): number {
-      // Return the global offset where current buffer position starts
-      return bufferStartOffset + state.position;
     }
   };
 }

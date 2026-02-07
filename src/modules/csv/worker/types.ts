@@ -129,7 +129,8 @@ export type CsvWorkerTaskType =
   | "getPage"
   | "getData"
   | "clear"
-  | "query";
+  | "query"
+  | "terminate";
 
 /** Base request structure */
 interface BaseRequest<T extends CsvWorkerTaskType> {
@@ -152,7 +153,7 @@ export type CsvWorkerRequestMessage =
   | (BaseRequest<"aggregate"> & { sessionId: string; config: AggregateConfig[] })
   | (BaseRequest<"getPage"> & { sessionId: string; config: PageConfig })
   | (BaseRequest<"query"> & { sessionId: string; config: QueryConfig })
-  | { type: "terminate" };
+  | BaseRequest<"terminate">;
 
 /** Unified worker response - single format for all results */
 export type CsvWorkerResponseMessage =

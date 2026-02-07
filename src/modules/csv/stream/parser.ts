@@ -27,7 +27,7 @@ import { splitLinesWithEndings } from "../parse/lines";
 // Import shared core functionality from parse/
 import type { ParseConfig } from "../parse/config";
 import type { ParseState } from "../parse/state";
-import { createParseConfig } from "../parse/config";
+import { createParseConfig, toScannerConfig } from "../parse/config";
 import { createParseState, getUnquotedArray } from "../parse/state";
 import {
   processCompletedRow as processCompletedRowCore,
@@ -53,7 +53,13 @@ export class CsvParserStream extends Transform {
   private options: CsvParseOptions;
   private parseConfig: ParseConfig;
   private parseState: ParseState;
-  private parseErrors: CsvRecordError[] = [];
+
+  /**
+   * Shared sink array for processCompletedRowCore's errors parameter.
+   * The streaming parser emits errors via 'data-invalid' events instead,
+   * so this array is cleared after each call to prevent unbounded growth.
+   */
+  private readonly parseErrorsSink: CsvRecordError[] = [];
 
   // -------------------------------------------------------------------------
   // Streaming-specific state (not in parse-core)
@@ -108,13 +114,7 @@ export class CsvParserStream extends Transform {
     this.parseState = createParseState(config);
 
     // Create Scanner instance for efficient batch scanning
-    this.scanner = createScanner({
-      delimiter: config.delimiter,
-      quote: config.quote,
-      escape: config.escape,
-      quoteEnabled: config.quoteEnabled,
-      relaxQuotes: config.relaxQuotes
-    });
+    this.scanner = createScanner(toScannerConfig(config));
 
     // Apply transform/validate from options if provided
     if (options.rowTransform) {
@@ -271,13 +271,7 @@ export class CsvParserStream extends Transform {
           // Emit delimiter event so consumers can know which delimiter was detected
           this.emit("delimiter", this.parseConfig.delimiter);
           // Re-create Scanner with the detected delimiter
-          this.scanner = createScanner({
-            delimiter: this.parseConfig.delimiter,
-            quote: this.parseConfig.quote,
-            escape: this.parseConfig.escape,
-            quoteEnabled: this.parseConfig.quoteEnabled,
-            relaxQuotes: this.parseConfig.relaxQuotes
-          });
+          this.scanner = createScanner(toScannerConfig(this.parseConfig));
         }
       }
 
@@ -376,65 +370,19 @@ export class CsvParserStream extends Transform {
       ? scanResult.fields.slice()
       : scanResult.fields.map(this.parseConfig.trimField);
 
-    // Check toLine for the final row
-    const { toLine } = this.options;
-    this.parseState.lineNumber++;
-    if (toLine !== undefined && this.parseState.lineNumber > toLine) {
-      this.toLineReached = true;
-      callback();
-      return;
-    }
-
-    const { skipLines = 0, skipEmptyLines = false } = this.options;
-    const shouldSkipEmpty = skipEmptyLines;
-
-    // Skip lines at beginning
-    if (this.parseState.lineNumber <= skipLines) {
-      callback();
-      return;
-    }
-
-    // Set up info tracking state
-    if (this.parseConfig.infoOption) {
-      this.parseState.currentRowStartLine = this.parseState.lineNumber;
-      this.parseState.currentRowStartOffset = this.totalCharsProcessed;
-      this.parseState.currentRowQuoted = scanResult.quoted;
-    }
-
-    // Check maxRowBytes limit and set raw row for info tracking
-    // Use zero-copy raw row from scanner
-    const needRawRow = this.parseConfig.maxRowBytes !== undefined || this.parseConfig.rawOption;
-    const rawRow = needRawRow ? scanResult.raw : undefined;
-
-    if (needRawRow && rawRow !== undefined) {
-      // Check maxRowBytes limit
-      if (this.parseConfig.maxRowBytes !== undefined) {
-        const rawRowBytes = getUtf8ByteLength(rawRow);
-        if (rawRowBytes > this.parseConfig.maxRowBytes) {
-          callback(
-            new Error(`Row exceeds the maximum size of ${this.parseConfig.maxRowBytes} bytes`)
-          );
-          return;
-        }
-      }
-
-      // Set raw row for info tracking
-      if (this.parseConfig.rawOption) {
-        this.parseState.currentRawRow = rawRow;
-      }
-    }
-
-    // Skip comment/empty lines
-    if (this.shouldSkipRow(row, shouldSkipEmpty)) {
-      callback();
-      return;
-    }
-
-    // Process through the same path as normal rows for proper validation and onSkip handling
     const pendingRows: Row[] = [];
-    this.parseState.currentRow = row;
-    if (!this.processCompletedRow(row, pendingRows)) {
-      this.processPendingRows(pendingRows, callback);
+    const action = this._handleParsedRow({
+      fields: row,
+      charLength: 0, // flush — no further offset tracking needed
+      raw: scanResult.raw,
+      quoted: scanResult.quoted,
+      pendingRows,
+      shouldSkipEmpty: this.options.skipEmptyLines || false,
+      skipLines: this.options.skipLines ?? 0,
+      callback
+    });
+
+    if (action === "stop" || action === "error") {
       return;
     }
     this.processPendingRows(pendingRows, callback);
@@ -455,49 +403,29 @@ export class CsvParserStream extends Transform {
       return;
     }
 
-    const { skipLines = 0, skipEmptyLines = false, toLine } = this.options;
-    const shouldSkipEmpty = skipEmptyLines;
-
-    this.parseState.lineNumber++;
-
-    // Check toLine - stop parsing at specified line number
-    if (toLine !== undefined && this.parseState.lineNumber > toLine) {
-      this.toLineReached = true;
-      callback();
-      return;
-    }
-
-    if (this.parseState.lineNumber <= skipLines) {
-      callback();
-      return;
-    }
-
     const pendingRows: Row[] = [];
     const row = line.split(this.parseConfig.delimiter);
     const trimmedRow = this.parseConfig.trimFieldIsIdentity
       ? row
       : row.map(this.parseConfig.trimField);
 
-    // Set up info tracking state before processing row (same as in parseFastMode)
-    if (this.parseConfig.infoOption) {
-      this.parseState.currentRowStartLine = this.parseState.lineNumber;
-      this.parseState.currentRowStartOffset = this.totalCharsProcessed;
-      this.parseState.currentRowQuoted = getUnquotedArray(trimmedRow.length);
-    }
-    if (this.parseConfig.rawOption) {
-      this.parseState.currentRawRow = line;
-    }
+    // In fast mode, no fields are quoted
+    const quoted = this.parseConfig.infoOption ? getUnquotedArray(trimmedRow.length) : undefined;
 
-    if (this.shouldSkipRow(trimmedRow, shouldSkipEmpty)) {
-      callback();
+    const action = this._handleParsedRow({
+      fields: trimmedRow,
+      charLength: 0, // flush — no further offset tracking needed
+      raw: line,
+      quoted,
+      pendingRows,
+      shouldSkipEmpty: this.options.skipEmptyLines || false,
+      skipLines: this.options.skipLines ?? 0,
+      callback
+    });
+
+    if (action === "stop" || action === "error") {
       return;
     }
-
-    if (!this.processCompletedRow(trimmedRow, pendingRows)) {
-      this.processPendingRows(pendingRows, callback);
-      return;
-    }
-
     this.processPendingRows(pendingRows, callback);
   }
 
@@ -608,31 +536,9 @@ export class CsvParserStream extends Transform {
     // Process complete rows from scanner
     let scanResult;
     while ((scanResult = this.scanner.nextRow()) !== null) {
-      // Only need raw row for maxRowBytes check or rawOption
-      const needRawRow = this.parseConfig.maxRowBytes !== undefined || this.parseConfig.rawOption;
-      let rawRow: string | undefined;
-      let rowCharLength: number;
-
-      if (needRawRow) {
-        // Use zero-copy raw row from scanner (already extracted before buffer compaction)
-        rawRow = scanResult.raw;
-        const rawRowBytes = getUtf8ByteLength(rawRow!);
-
-        rowCharLength = (rawRow?.length ?? 0) + (scanResult.newline?.length ?? 0);
-
-        // Check maxRowBytes limit (rawRowBytes excludes newline, consistent with sync parser)
-        if (
-          this.parseConfig.maxRowBytes !== undefined &&
-          rawRowBytes > this.parseConfig.maxRowBytes
-        ) {
-          callback(
-            new Error(`Row exceeds the maximum size of ${this.parseConfig.maxRowBytes} bytes`)
-          );
-          return;
-        }
-      } else {
-        rowCharLength = (scanResult.raw?.length ?? 0) + (scanResult.newline?.length ?? 0);
-      }
+      // Always pass raw so _handleParsedRow can count newlines for accurate lineNumber
+      const rawRow = scanResult.raw;
+      const rowCharLength = (scanResult.raw?.length ?? 0) + (scanResult.newline?.length ?? 0);
 
       // Apply trim to fields.
       // Note: scanResult.fields is reused by the streaming scanner; we must copy even when trim is identity.
@@ -640,49 +546,24 @@ export class CsvParserStream extends Transform {
         ? scanResult.fields.slice()
         : scanResult.fields.map(this.parseConfig.trimField);
 
-      this.parseState.lineNumber++;
+      const action = this._handleParsedRow({
+        fields: row,
+        charLength: rowCharLength,
+        raw: rawRow,
+        quoted: scanResult.quoted,
+        pendingRows,
+        shouldSkipEmpty,
+        skipLines,
+        callback
+      });
 
-      // Check toLine - stop parsing at specified line number
-      const { toLine } = this.options;
-      if (toLine !== undefined && this.parseState.lineNumber > toLine) {
-        this.toLineReached = true;
-        this.totalCharsProcessed += rowCharLength;
-        this.processPendingRows(pendingRows, callback);
+      if (action === "stop") {
         return;
       }
-
-      // Skip lines at beginning
-      if (this.parseState.lineNumber <= skipLines) {
-        this.totalCharsProcessed += rowCharLength;
-        continue;
-      }
-
-      // Set up info tracking state
-      if (this.parseConfig.infoOption) {
-        this.parseState.currentRowStartLine = this.parseState.lineNumber;
-        this.parseState.currentRowStartOffset = this.totalCharsProcessed;
-        this.parseState.currentRowQuoted = scanResult.quoted;
-      }
-
-      // Update char offset for this row (RecordInfo.offset is character offset)
-      this.totalCharsProcessed += rowCharLength;
-
-      // Skip comment/empty lines
-      if (this.shouldSkipRow(row, shouldSkipEmpty)) {
-        continue;
-      }
-
-      // Set raw row for info tracking (reuse already computed rawRow)
-      if (this.parseConfig.rawOption && rawRow !== undefined) {
-        this.parseState.currentRawRow = rawRow;
-      }
-
-      // Process completed row (handles headers, skipRows, column validation, maxRows)
-      this.parseState.currentRow = row;
-      if (!this.processCompletedRow(row, pendingRows)) {
-        this.processPendingRows(pendingRows, callback);
+      if (action === "error") {
         return;
       }
+      // "continue" and "skip" both fall through to process next row
     }
 
     // Scanner internally tracks unconsumed data - no need to reset
@@ -755,7 +636,6 @@ export class CsvParserStream extends Transform {
   ): void {
     const { skipLines = 0 } = this.options;
     const pendingRows: Row[] = [];
-    const startCharOffset = this.totalCharsProcessed;
 
     const completeEnd = this.getFastModeCompleteDataEnd(this.buffer);
     // If no complete line, wait for more data
@@ -768,42 +648,15 @@ export class CsvParserStream extends Transform {
     const completeData = this.buffer.slice(0, completeEnd);
     this.buffer = this.buffer.slice(completeEnd);
 
-    let currentCharOffset = startCharOffset;
-
     for (const { line, lineLengthWithEnding: lineCharLength } of splitLinesWithEndings(
       completeData,
       this.parseConfig.linebreakRegex
     )) {
-      this.parseState.lineNumber++;
-
-      // Check toLine - stop parsing at specified line number
-      const { toLine } = this.options;
-      if (toLine !== undefined && this.parseState.lineNumber > toLine) {
-        this.toLineReached = true;
-        this.totalCharsProcessed = currentCharOffset;
-        this.processPendingRows(pendingRows, callback);
-        return;
-      }
-
-      // Skip lines at beginning
-      if (this.parseState.lineNumber <= skipLines) {
-        currentCharOffset += lineCharLength;
-        continue;
-      }
-
-      // FastMode: only skip empty lines if skipEmptyLines option is enabled
+      // FastMode: skip empty lines early before split (optimization)
       if (line === "" && shouldSkipEmpty) {
-        currentCharOffset += lineCharLength;
+        this.parseState.lineNumber++;
+        this.totalCharsProcessed += lineCharLength;
         continue;
-      }
-
-      // Set up info tracking state before processing row
-      if (this.parseConfig.infoOption) {
-        this.parseState.currentRowStartLine = this.parseState.lineNumber;
-        this.parseState.currentRowStartOffset = currentCharOffset;
-      }
-      if (this.parseConfig.rawOption) {
-        this.parseState.currentRawRow = line;
       }
 
       // Split by delimiter (fast path - no quote detection)
@@ -813,26 +666,27 @@ export class CsvParserStream extends Transform {
         : row.map(this.parseConfig.trimField);
 
       // In fast mode, no fields are quoted
-      if (this.parseConfig.infoOption) {
-        this.parseState.currentRowQuoted = getUnquotedArray(trimmedRow.length);
-      }
+      const quoted = this.parseConfig.infoOption ? getUnquotedArray(trimmedRow.length) : undefined;
 
-      if (this.shouldSkipRow(trimmedRow, shouldSkipEmpty)) {
-        currentCharOffset += lineCharLength;
-        continue;
-      }
+      const action = this._handleParsedRow({
+        fields: trimmedRow,
+        charLength: lineCharLength,
+        raw: line,
+        quoted,
+        pendingRows,
+        shouldSkipEmpty,
+        skipLines,
+        callback
+      });
 
-      // Process completed row (handles headers, skipRows, column validation, maxRows)
-      if (!this.processCompletedRow(trimmedRow, pendingRows)) {
-        this.totalCharsProcessed = currentCharOffset + lineCharLength;
-        this.processPendingRows(pendingRows, callback);
+      if (action === "stop") {
         return;
       }
-
-      currentCharOffset += lineCharLength;
+      if (action === "error") {
+        return;
+      }
     }
 
-    this.totalCharsProcessed = currentCharOffset;
     this.processPendingRows(pendingRows, callback);
   }
 
@@ -897,6 +751,109 @@ export class CsvParserStream extends Transform {
   }
 
   /**
+   * Shared per-row handling for all four processing paths (processBuffer, processBufferFastMode,
+   * flushCurrentRow, flushFastModeRemainder).
+   *
+   * Performs: lineNumber increment, toLine/skipLines checks, info tracking, maxRowBytes,
+   * raw row assignment, shouldSkipRow, and processCompletedRow delegation.
+   *
+   * @returns "continue" — row processed, keep going
+   *          "skip"     — row skipped, keep going
+   *          "stop"     — toLine/maxRows reached; pendingRows already flushed via callback
+   *          "error"    — error passed to callback
+   */
+  private _handleParsedRow(input: {
+    fields: string[];
+    charLength: number;
+    raw: string | undefined;
+    quoted: readonly boolean[] | undefined;
+    pendingRows: Row[];
+    shouldSkipEmpty: boolean | "greedy";
+    skipLines: number;
+    callback: (error?: Error | null) => void;
+  }): "continue" | "skip" | "stop" | "error" {
+    const { fields, charLength, raw, quoted, pendingRows, shouldSkipEmpty, skipLines, callback } =
+      input;
+
+    // Save the start line BEFORE counting newlines (for accurate info.line on multi-line rows)
+    const rowStartLine = this.parseState.lineNumber + 1;
+
+    // Update line number (count newlines in raw content for multi-line quoted fields)
+    if (raw !== undefined) {
+      let newlines = 1;
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw.charCodeAt(i);
+        if (ch === 10) {
+          newlines++;
+        } else if (ch === 13) {
+          if (i + 1 < raw.length && raw.charCodeAt(i + 1) === 10) {
+            i++;
+          }
+          newlines++;
+        }
+      }
+      this.parseState.lineNumber += newlines;
+    } else {
+      this.parseState.lineNumber++;
+    }
+
+    // Check toLine - stop parsing at specified line number
+    const { toLine } = this.options;
+    if (toLine !== undefined && this.parseState.lineNumber > toLine) {
+      this.toLineReached = true;
+      this.totalCharsProcessed += charLength;
+      this.processPendingRows(pendingRows, callback);
+      return "stop";
+    }
+
+    // Skip lines at beginning
+    if (this.parseState.lineNumber <= skipLines) {
+      this.totalCharsProcessed += charLength;
+      return "skip";
+    }
+
+    // Set up info tracking state
+    if (this.parseConfig.infoOption) {
+      this.parseState.currentRowStartLine = rowStartLine;
+      this.parseState.currentRowStartOffset = this.totalCharsProcessed;
+      if (quoted) {
+        this.parseState.currentRowQuoted = quoted;
+      }
+    }
+
+    // Update char offset (RecordInfo.offset is character offset)
+    this.totalCharsProcessed += charLength;
+
+    // Check maxRowBytes limit
+    if (raw !== undefined && this.parseConfig.maxRowBytes !== undefined) {
+      const rawBytes = getUtf8ByteLength(raw);
+      if (rawBytes > this.parseConfig.maxRowBytes) {
+        callback(
+          new Error(`Row exceeds the maximum size of ${this.parseConfig.maxRowBytes} bytes`)
+        );
+        return "error";
+      }
+    }
+
+    // Set raw row for info tracking
+    if (this.parseConfig.rawOption && raw !== undefined) {
+      this.parseState.currentRawRow = raw;
+    }
+
+    // Skip comment/empty lines
+    if (this.shouldSkipRow(fields, shouldSkipEmpty)) {
+      return "skip";
+    }
+
+    // Process completed row (handles headers, skipRows, column validation, maxRows)
+    if (!this.processCompletedRow(fields, pendingRows)) {
+      this.processPendingRows(pendingRows, callback);
+      return "stop";
+    }
+    return "continue";
+  }
+
+  /**
    * Process a completed row (shared logic for standard and fast mode)
    * Returns true if processing should continue, false if maxRows/toLine reached
    */
@@ -906,9 +863,14 @@ export class CsvParserStream extends Transform {
       row,
       this.parseState,
       this.parseConfig,
-      this.parseErrors,
+      this.parseErrorsSink,
       this.parseState.lineNumber
     );
+
+    // Clear sink to prevent unbounded memory growth.
+    // Errors are reported via result.reason (data-invalid) or onSkip callback;
+    // the sink is only used as a shared collector for processCompletedRowCore.
+    this.parseErrorsSink.length = 0;
 
     // Emit headers event when headers become available
     this.emitHeaders();
@@ -927,7 +889,13 @@ export class CsvParserStream extends Transform {
     }
 
     if (result.row) {
-      pendingRows.push(this.buildRow(result.row, result.info));
+      const builtRow = this.buildRow(result.row, result.info);
+      // Attach extras to the record for columnMismatch.more: 'keep' (consistent with sync parser)
+      if (result.extras && result.extras.length > 0) {
+        const record = this.parseConfig.infoOption ? (builtRow as any).record : builtRow;
+        (record as Record<string, unknown>)._extra = result.extras;
+      }
+      pendingRows.push(builtRow);
     }
     return true;
   }
@@ -949,7 +917,7 @@ export class CsvParserStream extends Transform {
       row,
       this.parseConfig.comment,
       shouldSkipEmpty,
-      this.parseConfig.skipRecordsWithEmptyValues
+      false // skipRecordsWithEmptyValues is handled inside processCompletedRowCore
     );
   }
 
@@ -990,8 +958,12 @@ export class CsvParserStream extends Transform {
                   callback();
                   return;
                 }
-                // Continue processing remaining rows
-                processNextBatch();
+                // Trampoline: yield to event loop periodically to prevent stack overflow
+                if (index % 1000 === 0) {
+                  setTimeout(processNextBatch, 0);
+                } else {
+                  processNextBatch();
+                }
               });
               return;
             }

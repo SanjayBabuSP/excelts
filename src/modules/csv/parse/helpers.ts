@@ -177,6 +177,10 @@ export function validateAndAdjustColumns(
         const extras = row.splice(expectedCols);
         return { isValid: true, errorCode: "TooManyFields", modified: true, extras };
       }
+      default: {
+        const _never: never = columnMore;
+        throw new Error(`Unknown columnMore strategy: ${_never}`);
+      }
     }
   }
 
@@ -194,6 +198,10 @@ export function validateAndAdjustColumns(
         row.push("");
       }
       return { isValid: true, errorCode: "TooFewFields", modified: true };
+    default: {
+      const _never: never = columnLess;
+      throw new Error(`Unknown columnLess strategy: ${_never}`);
+    }
   }
 }
 

@@ -6,12 +6,6 @@
  */
 
 /**
- * Threshold for switching to array-based field building.
- * Avoids O(n²) string concat overhead for large fields.
- */
-export const LARGE_FIELD_THRESHOLD = 1024;
-
-/**
  * Pre-compiled regex for line splitting (matches CR, LF, or CRLF)
  */
 export const DEFAULT_LINEBREAK_REGEX = /\r\n|\r|\n/;
@@ -20,13 +14,19 @@ export const DEFAULT_LINEBREAK_REGEX = /\r\n|\r|\n/;
  * Shared TextEncoder instance for byte length calculations.
  * Avoids creating new instances in hot paths.
  */
-export const sharedTextEncoder = new TextEncoder();
+const sharedTextEncoder = new TextEncoder();
 
 /**
  * Reusable buffer for encodeInto() to avoid allocations.
  * Size 4 is enough for any single UTF-8 character (max 4 bytes).
  */
 const singleCharBuffer = new Uint8Array(4);
+
+/**
+ * Reusable buffer for encodeInto() on multi-character non-ASCII strings.
+ * Grows as needed; avoids per-call Uint8Array allocation from encode().
+ */
+let encodeBuffer = new Uint8Array(4096);
 
 /**
  * Get UTF-8 byte length of a string efficiently.
@@ -65,6 +65,9 @@ export function getUtf8ByteLength(text: string): number {
   }
 
   // Mixed content: must encode to get accurate byte count
-  // Note: encode() allocates, but this is rare path for non-ASCII content
-  return sharedTextEncoder.encode(text).length;
+  // Use encodeInto with a reusable buffer to avoid per-call allocation
+  if (len * 3 > encodeBuffer.length) {
+    encodeBuffer = new Uint8Array(len * 3);
+  }
+  return sharedTextEncoder.encodeInto(text, encodeBuffer).written!;
 }

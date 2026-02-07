@@ -112,22 +112,22 @@ function toObjectRows(
 
 function sortData(data: any[], configs: SortConfig | SortConfig[]): void {
   const list = Array.isArray(configs) ? configs : [configs];
-
   data.sort((a, b) => {
     for (const config of list) {
       const { column, order = "asc", comparator = "auto" } = config;
       const aVal = (a as any)[column as any];
       const bVal = (b as any)[column as any];
-
       let result = 0;
-      if (comparator === "number" || (comparator === "auto" && !Number.isNaN(Number(aVal)))) {
-        result = Number(aVal || 0) - Number(bVal || 0);
+      if (
+        comparator === "number" ||
+        (comparator === "auto" && !Number.isNaN(Number(aVal)) && !Number.isNaN(Number(bVal)))
+      ) {
+        result = Number(aVal ?? 0) - Number(bVal ?? 0);
       } else if (comparator === "date") {
-        result = new Date(aVal || 0).getTime() - new Date(bVal || 0).getTime();
+        result = new Date(aVal ?? 0).getTime() - new Date(bVal ?? 0).getTime();
       } else {
-        result = String(aVal || "").localeCompare(String(bVal || ""));
+        result = String(aVal ?? "").localeCompare(String(bVal ?? ""));
       }
-
       if (result !== 0) {
         return order === "desc" ? -result : result;
       }
@@ -136,15 +136,17 @@ function sortData(data: any[], configs: SortConfig | SortConfig[]): void {
   });
 }
 
-function evaluateCondition(row: any, condition: FilterCondition): boolean {
+function evaluateCondition(row: any, condition: FilterCondition, compiledRegex?: RegExp): boolean {
   const { column, operator, value, ignoreCase = false } = condition;
   let fieldValue: any = row?.[column as any];
   let compareValue: any = value;
 
-  if (ignoreCase && typeof fieldValue === "string") {
+  if (ignoreCase && typeof fieldValue === "string" && operator !== "regex") {
     fieldValue = fieldValue.toLowerCase();
     if (typeof compareValue === "string") {
       compareValue = compareValue.toLowerCase();
+    } else if (Array.isArray(compareValue)) {
+      compareValue = compareValue.map((v: any) => (typeof v === "string" ? v.toLowerCase() : v));
     }
   }
 
@@ -161,18 +163,29 @@ function evaluateCondition(row: any, condition: FilterCondition): boolean {
       return Number(fieldValue) < Number(compareValue);
     case "lte":
       return Number(fieldValue) <= Number(compareValue);
-    case "contains":
-      return String(fieldValue).includes(String(compareValue));
-    case "startsWith":
-      return String(fieldValue).startsWith(String(compareValue));
-    case "endsWith":
-      return String(fieldValue).endsWith(String(compareValue));
-    case "regex":
-      return new RegExp(compareValue, ignoreCase ? "i" : "").test(String(fieldValue));
+    case "contains": {
+      const fv = ignoreCase ? String(fieldValue).toLowerCase() : String(fieldValue);
+      const cv = ignoreCase ? String(compareValue).toLowerCase() : String(compareValue);
+      return fv.includes(cv);
+    }
+    case "startsWith": {
+      const fv = ignoreCase ? String(fieldValue).toLowerCase() : String(fieldValue);
+      const cv = ignoreCase ? String(compareValue).toLowerCase() : String(compareValue);
+      return fv.startsWith(cv);
+    }
+    case "endsWith": {
+      const fv = ignoreCase ? String(fieldValue).toLowerCase() : String(fieldValue);
+      const cv = ignoreCase ? String(compareValue).toLowerCase() : String(compareValue);
+      return fv.endsWith(cv);
+    }
+    case "regex": {
+      const re = compiledRegex ?? new RegExp(compareValue, ignoreCase ? "i" : "");
+      return re.test(String(fieldValue));
+    }
     case "in":
       return Array.isArray(compareValue) && compareValue.includes(fieldValue);
     case "notIn":
-      return Array.isArray(compareValue) && !compareValue.includes(fieldValue);
+      return !Array.isArray(compareValue) || !compareValue.includes(fieldValue);
     case "isNull":
       return fieldValue === null || fieldValue === undefined || fieldValue === "";
     case "notNull":
@@ -184,19 +197,31 @@ function evaluateCondition(row: any, condition: FilterCondition): boolean {
 
 function filterData(data: any[], config: FilterConfig): any[] {
   const { conditions, logic = "and" } = config;
-  return data.filter(row => {
-    const results = conditions.map(cond => evaluateCondition(row, cond));
-    return logic === "and" ? results.every(Boolean) : results.some(Boolean);
-  });
+
+  // Pre-compile regex patterns to avoid re-creating RegExp per row
+  const compiledRegexMap = new Map<FilterCondition, RegExp>();
+  for (const cond of conditions) {
+    if (cond.operator === "regex") {
+      compiledRegexMap.set(cond, new RegExp(cond.value as string, cond.ignoreCase ? "i" : ""));
+    }
+  }
+
+  const evaluate =
+    logic === "and"
+      ? (row: any) =>
+          conditions.every(cond => evaluateCondition(row, cond, compiledRegexMap.get(cond)))
+      : (row: any) =>
+          conditions.some(cond => evaluateCondition(row, cond, compiledRegexMap.get(cond)));
+  return data.filter(evaluate);
 }
 
 function searchData(data: any[], config: SearchConfig): any[] {
   const { query, columns, ignoreCase = true } = config;
   const searchQuery = ignoreCase ? query.toLowerCase() : query;
 
+  const resolvedColumns = columns ?? Object.keys(data[0] ?? {});
   return data.filter(row => {
-    const columnsToSearch = columns ?? Object.keys(row);
-    return columnsToSearch.some(col => {
+    return resolvedColumns.some(col => {
       let value = String((row as any)[col as any] ?? "");
       if (ignoreCase) {
         value = value.toLowerCase();
@@ -217,22 +242,22 @@ function computeAggregate(rows: any[], column: string | number, fn: AggregateCon
     return rows.length > 0 ? rows[rows.length - 1]?.[column as any] : null;
   }
 
-  const values = rows
-    .map(r => r?.[column as any])
-    .filter(v => v !== null && v !== undefined && v !== "");
+  const nums = rows.map(r => Number(r?.[column as any])).filter(n => !Number.isNaN(n));
 
-  if (values.length === 0) {
+  if (nums.length === 0) {
     return fn === "avg" ? 0 : null;
   }
 
   if (fn === "sum" || fn === "avg") {
-    const sum = values.reduce((a, b) => a + Number(b), 0);
-    return fn === "avg" ? sum / values.length : sum;
+    const sum = nums.reduce((a, b) => a + b, 0);
+    return fn === "avg" ? sum / nums.length : sum;
   }
 
-  if (fn === "min" || fn === "max") {
-    const nums = values.map(Number);
-    return fn === "min" ? Math.min(...nums) : Math.max(...nums);
+  if (fn === "min") {
+    return nums.reduce((a, b) => (a < b ? a : b), nums[0]);
+  }
+  if (fn === "max") {
+    return nums.reduce((a, b) => (a > b ? a : b), nums[0]);
   }
 
   return null;
@@ -287,7 +312,11 @@ function getPageData(
   totalRows: number;
   totalPages: number;
 } {
-  const { page, pageSize } = config;
+  const page = Math.max(1, config.page);
+  let { pageSize } = config;
+  if (pageSize <= 0) {
+    pageSize = data.length || 1;
+  }
   const start = (page - 1) * pageSize;
   return {
     data: data.slice(start, start + pageSize),
@@ -299,7 +328,7 @@ function getPageData(
 }
 
 function executeQuery(session: WorkerSession, config: QueryConfig): any {
-  let data = [...session.originalData];
+  let data = config.sort ? [...session.originalData] : session.originalData;
   const result: any = { data: [] };
 
   if (config.sort) {
@@ -343,7 +372,7 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
 
 (self as any).onmessage = (event: MessageEvent<CsvWorkerRequestMessage>) => {
   const msg = event.data;
-  const taskId = (msg as any).taskId ?? 0;
+  const taskId = msg.taskId ?? 0;
   const start = performance.now();
 
   try {
@@ -391,8 +420,8 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
       }
 
       case "clear": {
-        if ((msg as any).sessionId) {
-          sessions.delete((msg as any).sessionId);
+        if (msg.sessionId) {
+          sessions.delete(msg.sessionId);
         } else {
           sessions.clear();
         }
@@ -403,6 +432,7 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
       case "sort": {
         const session = getSession(msg.sessionId);
         sortData(session.data, msg.config);
+        session.originalData = [...session.data];
         reply(taskId, start, { rowCount: session.data.length });
         break;
       }
@@ -458,8 +488,6 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
 
       case "terminate": {
         sessions.clear();
-
-        (self as any).close();
         break;
       }
 

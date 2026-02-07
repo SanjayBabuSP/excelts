@@ -23,13 +23,11 @@ import type {
   CsvParseArrayOptions,
   CsvParseObjectOptions,
   CsvParseResult,
-  CsvParseMeta,
-  CsvRecordError,
   RecordWithInfo
 } from "../types";
 import { parseCsv } from "./sync";
 import { CsvParserStream } from "../stream/parser";
-import { sharedTextEncoder } from "../constants";
+import { getUtf8ByteLength } from "../constants";
 import { CsvError } from "../errors";
 import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils";
 
@@ -79,7 +77,7 @@ async function collectText(
     if (typeof chunk === "string") {
       chunks.push(chunk);
       // Always track bytes for consistent semantics
-      totalBytes += sharedTextEncoder.encode(chunk).length;
+      totalBytes += getUtf8ByteLength(chunk);
     } else {
       chunks.push(decoder.decode(chunk, { stream: true }));
       totalBytes += chunk.length;
@@ -324,7 +322,10 @@ export async function* parseCsvRows(
         if (aborted) {
           break;
         }
-        parser.write(chunk as any);
+        const canContinue = parser.write(chunk as any);
+        if (!canContinue && !aborted) {
+          await new Promise<void>(resolve => parser.once("drain", resolve));
+        }
       }
 
       if (!aborted) {
@@ -375,22 +376,14 @@ export async function* parseCsvRows(
     aborted = true;
     // Ensure stream stops as soon as possible.
     parser.destroy();
+    // Release the writer if it is waiting for drain (destroy does not emit drain).
+    parser.emit("drain");
     parser.off("data", onData);
     parser.off("end", onEnd);
     parser.off("error", onError);
     // Avoid unhandled rejections from the writer task.
     await writePromise.catch(() => undefined);
   }
-}
-
-/**
- * Interface for streaming parse metadata
- */
-export interface StreamParseMeta extends CsvParseMeta {
-  /** Errors encountered during streaming parse */
-  errors?: CsvRecordError[];
-  /** Invalid rows (if validation was used) */
-  invalidRows?: Array<{ row: string[]; reason: string }>;
 }
 
 /**
@@ -417,7 +410,7 @@ export async function parseCsvWithProgress(
 
   if (typeof input === "string") {
     content = input;
-    totalBytes = sharedTextEncoder.encode(content).length;
+    totalBytes = getUtf8ByteLength(content);
   } else {
     const asyncInput = normalizeAsyncInput(input);
     const result = await collectText(
@@ -437,9 +430,9 @@ export async function parseCsvWithProgress(
     let rowCount: number;
     if (Array.isArray(result)) {
       rowCount = result.length;
-    } else if (result.rows instanceof Map) {
-      // objname mode: rows is a Map
-      rowCount = result.rows.size;
+    } else if (typeof result.rows === "object" && !Array.isArray(result.rows)) {
+      // objname mode: rows is a plain object
+      rowCount = Object.keys(result.rows).length;
     } else if (Array.isArray(result.rows)) {
       rowCount = result.rows.length;
     } else {

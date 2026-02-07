@@ -131,13 +131,14 @@ export function validateRowColumns(
 export function buildRecordInfo(
   state: ParseState,
   dataRowIndex: number,
-  includeRaw: boolean
+  includeRaw: boolean,
+  fieldCount: number
 ): RecordInfo {
   const info: RecordInfo = {
     index: dataRowIndex,
     line: state.currentRowStartLine,
     offset: state.currentRowStartOffset,
-    quoted: [...state.currentRowQuoted]
+    quoted: state.currentRowQuoted.slice(0, fieldCount) as boolean[]
   };
   if (includeRaw) {
     info.raw = state.currentRawRow;
@@ -261,7 +262,17 @@ export function processCompletedRow(
           },
           row
         );
-        return { stop: false, skipped: true };
+        return {
+          stop: false,
+          skipped: true,
+          row,
+          error: {
+            code: validationError.errorCode,
+            message: validationError.reason || "Column mismatch",
+            line: lineNumber
+          },
+          reason: validationError.reason || "Column mismatch"
+        };
       }
       // Column mismatch with error strategy - return as invalid
       return {
@@ -293,7 +304,7 @@ export function processCompletedRow(
   // Build info if needed
   let info: RecordInfo | undefined;
   if (config.infoOption) {
-    info = buildRecordInfo(state, state.dataRowCount - 1, config.rawOption);
+    info = buildRecordInfo(state, state.dataRowCount - 1, config.rawOption, row.length);
   }
 
   return { stop: false, skipped: false, row, info, extras };

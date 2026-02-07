@@ -8,10 +8,10 @@
  *
  * Key functions:
  * - isRowHashArray(): Type guard for RowHashArray detection
- * - rowHashArrayToHeaders(): Extract headers from RowHashArray
- * - convertRowToObject(): Transform array row to keyed object
+ * - extractRowValues(): Extract values from any row format
+ * - detectRowKeys(): Detect header keys from a row
  * - deduplicateHeaders(): Handle duplicate column names
- * - filterValidHeaders(): Remove null/undefined from header arrays
+ * - processColumns(): Process column configuration
  */
 
 // Re-export types from central types.ts to avoid duplication
@@ -262,9 +262,19 @@ export function isEmptyRow(row: string[], shouldSkipEmpty: boolean | "greedy"): 
   if (!shouldSkipEmpty) {
     return false;
   }
-  for (const field of row) {
-    if (NON_WHITESPACE_REGEX.test(field)) {
-      return false;
+  if (shouldSkipEmpty === "greedy") {
+    // Greedy: whitespace-only fields count as empty
+    for (const field of row) {
+      if (NON_WHITESPACE_REGEX.test(field)) {
+        return false;
+      }
+    }
+  } else {
+    // Non-greedy: only truly empty strings count as empty
+    for (const field of row) {
+      if (field !== "") {
+        return false;
+      }
     }
   }
   return true;
@@ -278,10 +288,5 @@ export function isEmptyRow(row: string[], shouldSkipEmpty: boolean | "greedy"): 
  * @returns true if all fields are empty strings
  */
 export function hasAllEmptyValues(row: string[]): boolean {
-  for (const field of row) {
-    if (field !== "") {
-      return false;
-    }
-  }
-  return true;
+  return isEmptyRow(row, true);
 }

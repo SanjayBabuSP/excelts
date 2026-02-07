@@ -20,13 +20,14 @@ import type {
 import type { ParseConfig } from "./config";
 import type { ParseState } from "./state";
 import type { RowProcessResult } from "./row-processor";
-import { resolveParseConfig } from "./config";
+import { resolveParseConfig, toScannerConfig } from "./config";
 import { createParseState, resetInfoState, getUnquotedArray } from "./state";
 import { processCompletedRow, rowToRecord } from "./row-processor";
 import { applyDynamicTypingToArrayRow } from "../utils/dynamic-typing";
 import { isEmptyRow } from "../utils/row";
+import { filterValidHeaders } from "./helpers";
 import { getUtf8ByteLength } from "../constants";
-import { scanRow as scanRowImpl, type ScannerConfig } from "./scanner";
+import { scanRow as scanRowImpl } from "./scanner";
 import { splitLinesWithEndings } from "./lines";
 
 // =============================================================================
@@ -65,15 +66,17 @@ function optionalArray<T>(arr: T[]): T[] | undefined {
 }
 
 /**
- * Convert ParseConfig to ScannerConfig
+ * Build CsvParseMeta from config and state (avoids duplication between array and object mode)
  */
-function toScannerConfig(config: ParseConfig): ScannerConfig {
+function buildMeta(config: ParseConfig, state: ParseState): CsvParseMeta {
   return {
     delimiter: config.delimiter,
-    quote: config.quote,
-    escape: config.escape,
-    quoteEnabled: config.quoteEnabled,
-    relaxQuotes: config.relaxQuotes
+    linebreak: config.linebreak,
+    aborted: false,
+    truncated: state.truncated,
+    cursor: state.dataRowCount,
+    fields: state.headerRow ? filterValidHeaders(state.headerRow) : undefined,
+    renamedHeaders: state.renamedHeadersForMeta
   };
 }
 
@@ -110,7 +113,7 @@ export function* parseFastMode(
   // Track character offset for info.offset
   let currentCharOffset = 0;
 
-  for (const { line, lineLengthWithEnding: lineByteLength } of splitLinesWithEndings(
+  for (const { line, lineLengthWithEnding: lineCharLength } of splitLinesWithEndings(
     input,
     config.linebreakRegex
   )) {
@@ -121,12 +124,12 @@ export function* parseFastMode(
       break;
     }
     if (state.lineNumber <= config.skipLines) {
-      currentCharOffset += lineByteLength;
+      currentCharOffset += lineCharLength;
       continue;
     }
     // Only skip empty lines if skipEmptyLines option is enabled
     if (line === "" && config.shouldSkipEmpty) {
-      currentCharOffset += lineByteLength;
+      currentCharOffset += lineCharLength;
       continue;
     }
 
@@ -147,23 +150,23 @@ export function* parseFastMode(
     }
 
     const row = line.split(config.delimiter);
-    const trimmedRow = config.trimFieldIsIdentity ? row : row.map(config.trimField);
+    const trimmedRow = trimFields(row, config);
 
     if (config.infoOption) {
       state.currentRowQuoted = getUnquotedArray(trimmedRow.length);
     }
 
-    if (config.comment && trimmedRow[0]?.startsWith(config.comment)) {
-      currentCharOffset += lineByteLength;
+    if (config.comment && trimmedRow[0]?.trimStart().startsWith(config.comment)) {
+      currentCharOffset += lineCharLength;
       continue;
     }
     if (config.shouldSkipEmpty && isEmptyRow(trimmedRow, config.shouldSkipEmpty)) {
-      currentCharOffset += lineByteLength;
+      currentCharOffset += lineCharLength;
       continue;
     }
 
     const result = processCompletedRow(trimmedRow, state, config, errors, state.lineNumber);
-    currentCharOffset += lineByteLength;
+    currentCharOffset += lineCharLength;
 
     if (result.stop) {
       yield result;
@@ -173,7 +176,13 @@ export function* parseFastMode(
     if (!result.skipped || result.error) {
       yield result;
     }
-    resetInfoState(state, config.infoOption, config.rawOption, state.lineNumber + 1, 0);
+    resetInfoState(
+      state,
+      config.infoOption,
+      config.rawOption,
+      state.lineNumber + 1,
+      currentCharOffset
+    );
   }
 }
 
@@ -202,7 +211,6 @@ export function* parseWithScanner(
   let pos = 0;
 
   if (config.infoOption) {
-    state.currentRowStartLine = 1;
     state.currentRowStartOffset = 0;
   }
 
@@ -218,8 +226,31 @@ export function* parseWithScanner(
     // Apply trim to fields
     const row = trimFields(scanResult.fields, config);
 
-    // Update line number
-    state.lineNumber++;
+    // Save the start line BEFORE counting newlines (for accurate info.line on multi-line rows).
+    // This must happen before any skip checks, so that skipped rows don't leave
+    // currentRowStartLine stale from a previous iteration.
+    const rowStartLine = state.lineNumber + 1;
+
+    // Update line number (count newlines in raw content for multi-line quoted fields)
+    {
+      const rawStart = scanResult.rawStart;
+      const rawEnd = scanResult.rawEnd;
+      let newlines = 1; // At least one line per row
+      for (let i = rawStart; i < rawEnd; i++) {
+        const ch = input.charCodeAt(i);
+        if (ch === 10) {
+          // \n
+          newlines++;
+        } else if (ch === 13) {
+          // \r — skip \r\n as single newline
+          if (i + 1 < rawEnd && input.charCodeAt(i + 1) === 10) {
+            i++;
+          }
+          newlines++;
+        }
+      }
+      state.lineNumber += newlines;
+    }
 
     // Check toLine limit
     if (config.toLine !== undefined && state.lineNumber > config.toLine) {
@@ -228,9 +259,14 @@ export function* parseWithScanner(
     }
 
     // Calculate positions for raw/info tracking
-    const nextByteOffset = scanResult.endPos;
     // Use rawEnd directly from scan result (position before newline)
     const rawEndPos = scanResult.rawEnd;
+
+    // Skip lines at beginning (must be before maxRowBytes to avoid errors on skipped rows)
+    if (state.lineNumber <= config.skipLines) {
+      pos = scanResult.endPos;
+      continue;
+    }
 
     // Check maxRowBytes limit
     if (config.maxRowBytes !== undefined) {
@@ -241,31 +277,23 @@ export function* parseWithScanner(
       }
     }
 
-    // Skip lines at beginning
-    if (state.lineNumber <= config.skipLines) {
-      pos = scanResult.endPos;
-      continue;
-    }
-
     // Skip comment lines
-    if (config.comment && row[0]?.startsWith(config.comment)) {
+    if (config.comment && row[0]?.trimStart().startsWith(config.comment)) {
       pos = scanResult.endPos;
       continue;
     }
 
     // Skip empty lines
-    const isEmpty = row.length === 1 && row[0] === "";
-    if (
-      config.shouldSkipEmpty &&
-      (isEmpty || (config.shouldSkipEmpty === "greedy" && isEmptyRow(row, true)))
-    ) {
+    if (config.shouldSkipEmpty && isEmptyRow(row, config.shouldSkipEmpty)) {
       pos = scanResult.endPos;
       continue;
     }
 
     // Set up info tracking
+    // Use rowStartLine computed BEFORE newline counting — this gives the correct
+    // 1-based line number where the row starts, even after skipped rows.
     if (config.infoOption) {
-      state.currentRowStartLine = state.lineNumber;
+      state.currentRowStartLine = rowStartLine;
       state.currentRowStartOffset = scanResult.rawStart;
       state.currentRowQuoted = scanResult.quoted;
     }
@@ -275,8 +303,8 @@ export function* parseWithScanner(
       state.currentRawRow = input.slice(scanResult.rawStart, rawEndPos);
     }
 
-    // Populate state.currentRow for processCompletedRow
-    state.currentRow = row;
+    // Populate state for processCompletedRow
+    // (state.currentRow was removed as dead code - row is passed directly)
 
     // Check for unterminated quotes and report error
     if (scanResult.unterminatedQuote) {
@@ -300,12 +328,10 @@ export function* parseWithScanner(
     }
 
     // Reset for next row
-    state.currentRow = [];
     pos = scanResult.endPos;
 
     if (config.infoOption) {
-      state.currentRowStartLine = state.lineNumber + 1;
-      state.currentRowStartOffset = nextByteOffset;
+      state.currentRowStartOffset = scanResult.endPos;
     }
   }
 }
@@ -459,17 +485,7 @@ export function parseCsv(
     }
 
     // Build metadata
-    const meta: CsvParseMeta = {
-      delimiter: config.delimiter,
-      linebreak: config.linebreak,
-      aborted: false,
-      truncated: state.truncated,
-      cursor: state.dataRowCount,
-      fields: state.headerRow
-        ? state.headerRow.filter((h): h is string => h !== null && h !== undefined)
-        : undefined,
-      renamedHeaders: state.renamedHeadersForMeta
-    };
+    const meta = buildMeta(config, state);
 
     // If info option is enabled, rows are already wrapped
     if (config.infoOption) {
@@ -548,17 +564,7 @@ export function parseCsv(
   }
 
   // Build metadata
-  const meta: CsvParseMeta = {
-    delimiter: config.delimiter,
-    linebreak: config.linebreak,
-    aborted: false,
-    truncated: state.truncated,
-    cursor: state.dataRowCount,
-    fields: state.headerRow
-      ? state.headerRow.filter((h): h is string => h !== null && h !== undefined)
-      : undefined,
-    renamedHeaders: state.renamedHeadersForMeta
-  };
+  const meta = buildMeta(config, state);
 
   // Handle objname option
   const { objname } = options;

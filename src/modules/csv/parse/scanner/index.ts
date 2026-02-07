@@ -6,16 +6,10 @@
  */
 
 // Types
-export type {
-  ScannerConfig,
-  FieldScanResult,
-  RowScanResult,
-  ScannerState,
-  Scanner
-} from "./scanner";
+export type { ScannerConfig, RowScanResult, Scanner } from "./scanner";
 
 // Constants and state factory
-export { DEFAULT_SCANNER_CONFIG, createScannerState } from "./scanner";
+export { DEFAULT_SCANNER_CONFIG } from "./scanner";
 
 // Core scanning functions
 export { scanQuotedField, scanUnquotedField, scanRow } from "./scanner";

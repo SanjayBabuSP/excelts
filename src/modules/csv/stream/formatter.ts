@@ -7,8 +7,13 @@
 
 import { Transform } from "@stream";
 import type { CsvFormatOptions, Row } from "../types";
-import { createFormatConfig, formatRowWithLookup, type FormatConfig } from "../format";
-import { extractRowValues, detectRowKeys, processColumns } from "../utils/row";
+import {
+  createFormatConfig,
+  formatRowWithLookup,
+  type FormatConfig,
+  type FormatRowOptions
+} from "../format";
+import { extractRowValues, detectRowKeys, processColumns, deduplicateHeaders } from "../utils/row";
 
 /**
  * Transform stream that formats rows to CSV
@@ -35,6 +40,8 @@ export class CsvFormatterStream extends Transform {
   private sourceRowIndex: number = 0;
   /** Index of output data row (after filtering, excludes header), used for ctx.index */
   private outputRowIndex: number = 0;
+  /** Pre-allocated options object to avoid per-row allocation in streaming */
+  declare private rowOptions: FormatRowOptions;
 
   constructor(options: CsvFormatOptions = {}) {
     super({
@@ -46,6 +53,20 @@ export class CsvFormatterStream extends Transform {
     // Use shared config factory (same as batch formatter)
     this.formatConfig = createFormatConfig(options);
 
+    // Pre-allocate row options object (mutated per-row to avoid GC pressure)
+    const cfg = this.formatConfig;
+    this.rowOptions = {
+      quoteLookup: cfg.shouldQuoteColumn,
+      delimiter: cfg.delimiter,
+      headers: undefined,
+      isHeader: false,
+      outputRowIndex: 0,
+      quoteAll: cfg.quoteAll,
+      escapeFormulae: cfg.escapeFormulae,
+      decimalSeparator: cfg.decimalSeparator,
+      transform: cfg.typeTransform
+    };
+
     // Process columns config (takes precedence over headers)
     const columnsConfig = processColumns(options.columns);
     if (columnsConfig) {
@@ -54,6 +75,11 @@ export class CsvFormatterStream extends Transform {
     } else if (Array.isArray(options.headers)) {
       this.keys = options.headers;
       this.displayHeaders = options.headers;
+    }
+
+    // Deduplicate headers (consistent with batch formatCsv)
+    if (this.displayHeaders) {
+      this.displayHeaders = deduplicateHeaders(this.displayHeaders);
     }
   }
 
@@ -64,7 +90,7 @@ export class CsvFormatterStream extends Transform {
     const detectedKeys = detectRowKeys(chunk);
     if (detectedKeys.length > 0) {
       this.keys = detectedKeys;
-      this.displayHeaders = detectedKeys;
+      this.displayHeaders = deduplicateHeaders(detectedKeys);
     }
   }
 
@@ -112,6 +138,12 @@ export class CsvFormatterStream extends Transform {
     }
   }
 
+  override _destroy(error: Error | null, callback: (error: Error | null) => void): void {
+    this.keys = null;
+    this.displayHeaders = null;
+    callback(error);
+  }
+
   override _flush(callback: (error?: Error | null) => void): void {
     // Handle writeHeaders: true with no data - still write headers
     if (!this.headerWritten && this.displayHeaders && this.formatConfig.writeHeaders) {
@@ -140,20 +172,14 @@ export class CsvFormatterStream extends Transform {
 
   private formatRow(row: unknown[], isHeader: boolean = false): string {
     const cfg = this.formatConfig;
-    // Use pre-computed quote lookup for performance
-    const quoteLookup = isHeader ? cfg.shouldQuoteHeader : cfg.shouldQuoteColumn;
+    // Mutate pre-allocated options to avoid per-row object allocation
+    const opts = this.rowOptions;
+    opts.quoteLookup = isHeader ? cfg.shouldQuoteHeader : cfg.shouldQuoteColumn;
+    opts.headers = this.displayHeaders ?? undefined;
+    opts.isHeader = isHeader;
+    opts.outputRowIndex = this.outputRowIndex;
 
-    const formattedRow = formatRowWithLookup(row, cfg.regex, {
-      quoteLookup,
-      delimiter: cfg.delimiter,
-      headers: this.displayHeaders ?? undefined,
-      isHeader,
-      outputRowIndex: this.outputRowIndex,
-      quoteAll: cfg.quoteAll,
-      escapeFormulae: cfg.escapeFormulae,
-      decimalSeparator: cfg.decimalSeparator,
-      transform: cfg.typeTransform
-    });
+    const formattedRow = formatRowWithLookup(row, cfg.regex, opts);
 
     // Use row delimiter as prefix (except for first output)
     // First output = header row OR (no header AND first data row)

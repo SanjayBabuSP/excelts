@@ -31,12 +31,6 @@ export type RowMap = Record<string, string>;
  */
 export type Row = RowArray | RowMap | RowHashArray;
 
-/**
- * Parsed row - the actual type produced by the parser before conversion.
- * Always a string array; gets converted to object when headers are enabled.
- */
-export type ParsedRow = string[];
-
 // =============================================================================
 // Transform Types
 // =============================================================================
@@ -489,7 +483,7 @@ export { isFormattedValue, quoted, unquoted } from "./format/formatted-value";
 export function isSyncTransform<I, O>(
   transform: RowTransformFunction<I, O>
 ): transform is (row: I) => O | null {
-  return transform.length === 1;
+  return transform.length < 2;
 }
 
 /**
@@ -520,5 +514,5 @@ export function isSyncTransform<I, O>(
 export function isSyncValidate<T>(
   validate: RowValidateFunction<T>
 ): validate is (row: T) => boolean | { isValid: boolean; reason?: string } {
-  return validate.length === 1;
+  return validate.length < 2;
 }

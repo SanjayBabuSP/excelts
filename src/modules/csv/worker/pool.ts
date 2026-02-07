@@ -32,6 +32,10 @@ const stubHandler: ProxyHandler<object> = {
     if (prop === "prototype") {
       return {};
     }
+    // Prevent being treated as thenable (avoids confusing errors with `await`)
+    if (prop === "then" || typeof prop === "symbol") {
+      return undefined;
+    }
     // Everything else throws
     return throwNotSupported;
   },

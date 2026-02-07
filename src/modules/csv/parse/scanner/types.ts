@@ -242,23 +242,4 @@ export interface Scanner {
    * Useful for error recovery or debugging.
    */
   getBuffer(): string;
-
-  /**
-   * Get the current buffer's start offset in the global input.
-   * Used for zero-copy raw row extraction in streaming mode.
-   *
-   * The returned offset indicates where the current buffer starts
-   * relative to all data that has been fed to the scanner.
-   *
-   * To extract raw row from streaming scanner:
-   * ```ts
-   * const result = scanner.nextRow();
-   * const bufferOffset = scanner.getBufferOffset();
-   * const rawRow = scanner.getBuffer().slice(
-   *   result.rawStart - bufferOffset,
-   *   result.rawEnd - bufferOffset
-   * );
-   * ```
-   */
-  getBufferOffset(): number;
 }

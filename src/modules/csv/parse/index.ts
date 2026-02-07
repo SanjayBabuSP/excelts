@@ -24,7 +24,7 @@ export { createParseConfig, resolveParseConfig, makeTrimField } from "./config";
 // State Management
 // =============================================================================
 
-export type { ParseState, FieldState } from "./state";
+export type { ParseState } from "./state";
 export { createParseState, resetInfoState } from "./state";
 
 // =============================================================================

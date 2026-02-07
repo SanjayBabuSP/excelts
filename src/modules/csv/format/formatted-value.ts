@@ -49,11 +49,12 @@ export function isFormattedValue(value: unknown): value is FormattedValue {
  *
  * formatCsv(data, {
  *   transform: {
- *     // Force quoting for code-like fields
- *     string: (v, ctx) => ctx.column === 'code' ? quoted(v) : v,
- *
- *     // Quote empty strings
- *     string: (v) => v === '' ? quoted(v) : v
+ *     // Force quoting for code-like fields, and quote empty strings
+ *     string: (v, ctx) => {
+ *       if (ctx.column === 'code') return quoted(v);
+ *       if (v === '') return quoted(v);
+ *       return v;
+ *     }
  *   }
  * });
  * ```

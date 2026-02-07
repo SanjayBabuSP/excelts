@@ -2,16 +2,13 @@
  * CSV module error types.
  */
 
-import { BaseError, type BaseErrorOptions } from "@utils/errors";
+import { BaseError } from "@utils/errors";
 
 /**
  * Base class for all CSV-related errors.
  */
 export class CsvError extends BaseError {
-  constructor(message: string, options?: BaseErrorOptions) {
-    super(message, options);
-    this.name = "CsvError";
-  }
+  override name = "CsvError";
 }
 
 /**

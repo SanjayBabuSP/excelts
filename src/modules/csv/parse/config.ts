@@ -6,8 +6,7 @@
  */
 
 import type { CsvParseOptions } from "../types";
-import type { createOnSkipHandler } from "./helpers";
-import { createOnSkipHandler as createOnSkipHandlerImpl } from "./helpers";
+import { createOnSkipHandler } from "./helpers";
 import {
   normalizeQuoteOption,
   normalizeEscapeOption,
@@ -17,6 +16,7 @@ import {
 } from "../utils/detect";
 import { DEFAULT_LINEBREAK_REGEX } from "../constants";
 import { CsvError } from "../errors";
+import type { ScannerConfig } from "./scanner";
 
 // =============================================================================
 // Types
@@ -110,7 +110,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     delimitersToGuess,
     lineEnding: lineEndingOption = "",
     quote: quoteOption = '"',
-    escape: escapeOption = '"',
+    escape: escapeOption,
     skipEmptyLines = false,
     trim = false,
     ltrim = false,
@@ -167,7 +167,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
   // Normalize quote/escape
   const { enabled: quoteEnabled, char: quote } = normalizeQuoteOption(quoteOption);
   const escapeNormalized = normalizeEscapeOption(escapeOption, quote);
-  const escape = quoteEnabled ? escapeNormalized.char || quote : escapeNormalized.char;
+  const escape = escapeNormalized.enabled ? escapeNormalized.char || quote : "";
 
   // Determine delimiter
   let delimiter: string;
@@ -228,7 +228,7 @@ export function createParseConfig(opts: CreateParseConfigOptions): ParseConfigRe
     rawOption,
     dynamicTyping,
     castDate,
-    invokeOnSkip: createOnSkipHandlerImpl(onSkip),
+    invokeOnSkip: createOnSkipHandler(onSkip),
     headers
   };
 
@@ -247,6 +247,23 @@ export function resolveParseConfig(
   return {
     config: result.config,
     processedInput: result.processedInput!
+  };
+}
+
+// =============================================================================
+// Scanner Config Helper
+// =============================================================================
+
+/**
+ * Convert ParseConfig to ScannerConfig
+ */
+export function toScannerConfig(config: ParseConfig): ScannerConfig {
+  return {
+    delimiter: config.delimiter,
+    quote: config.quote,
+    escape: config.escape,
+    quoteEnabled: config.quoteEnabled,
+    relaxQuotes: config.relaxQuotes
   };
 }
 

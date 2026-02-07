@@ -10,7 +10,7 @@
 // Configuration
 // =============================================================================
 
-export type { FormatConfig } from "./config";
+export type { FormatConfig, FormatRowOptions } from "./config";
 export { createFormatConfig } from "./config";
 
 // =============================================================================

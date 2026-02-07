@@ -21,7 +21,6 @@ export type {
   RowArray,
   RowMap,
   Row,
-  ParsedRow,
 
   // Transform types
   HeaderTransformFunction,
@@ -47,7 +46,6 @@ export type {
   OnSkipCallback,
 
   // Options (general)
-  CsvBaseOptions,
   CsvParseOptions,
   CsvFormatOptions,
 
@@ -60,7 +58,13 @@ export type {
   CsvParseMeta,
   RecordInfo,
   RecordWithInfo,
-  CsvParseResult
+  CsvParseResult,
+  CsvParseResultWithObjname,
+
+  // Column mismatch config
+  ColumnMismatchConfig,
+  ColumnMismatchLess,
+  ColumnMismatchMore
 } from "./types";
 
 // Type guards and helpers from types.ts
@@ -137,9 +141,6 @@ export {
 
 // Number formatting utilities
 export { formatNumberForCsv, parseNumberFromCsv, type DecimalSeparator } from "./utils/number";
-
-// Browser worker pool (Node build exports stubs)
-export * as csvWorker from "./worker";
 
 // =============================================================================
 // Errors

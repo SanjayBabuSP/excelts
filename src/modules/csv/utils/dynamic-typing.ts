@@ -154,10 +154,10 @@ export function convertValue(value: string): string | number | boolean | null {
     firstChar === 73 || // I (Infinity)
     firstChar === 78 // N (NaN)
   ) {
-    // Check for whitespace - if value has leading/trailing whitespace, skip number conversion
+    // Check for trailing whitespace - skip number conversion
     const lastChar = value.charCodeAt(len - 1);
     // Space = 32, Tab = 9, \n = 10, \r = 13
-    if (firstChar <= 32 || lastChar <= 32) {
+    if (lastChar <= 32) {
       return value;
     }
 

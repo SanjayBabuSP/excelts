@@ -12,6 +12,9 @@
  */
 export type DecimalSeparator = "." | ",";
 
+/** Pre-compiled regex for European decimal comma format */
+const COMMA_DECIMAL_REGEX = /^-?\d+(,\d+)?([eE][+-]?\d+)?$/;
+
 /**
  * Format a number for CSV output with the specified decimal separator.
  *
@@ -43,17 +46,17 @@ export function formatNumberForCsv(value: number, decimalSeparator: DecimalSepar
  * parseNumberFromCsv("3,14", ",") // 3.14
  */
 export function parseNumberFromCsv(value: string, decimalSeparator: DecimalSeparator): number {
-  if (decimalSeparator !== ",") {
-    return Number(value);
-  }
-
   const trimmed = value.trim();
+
+  if (decimalSeparator !== ",") {
+    return Number(trimmed);
+  }
 
   // Minimal locale support: treat a single comma as the decimal separator.
   // Common EU CSV uses delimiter ';' and decimal ',' (e.g. 12,34).
-  if (/^-?\d+(,\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
+  if (COMMA_DECIMAL_REGEX.test(trimmed)) {
     return Number(trimmed.replace(",", "."));
   }
 
-  return Number(value);
+  return Number(trimmed);
 }

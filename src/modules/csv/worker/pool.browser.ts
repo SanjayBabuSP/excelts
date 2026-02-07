@@ -71,12 +71,6 @@ const DEFAULT_OPTIONS: Required<Omit<CsvWorkerPoolOptions, "workerUrl">> & { wor
     workerUrl: undefined
   };
 
-const PRIORITY_VALUES: Record<CsvTaskPriority, number> = {
-  high: 3,
-  normal: 2,
-  low: 1
-};
-
 /** Check if Web Workers are available */
 export function hasWorkerSupport(): boolean {
   return typeof Worker !== "undefined" && typeof Blob !== "undefined";
@@ -104,7 +98,6 @@ interface PendingTask<T> {
 interface QueuedTask extends PendingTask<any> {
   message: CsvWorkerRequestMessage;
   priority: CsvTaskPriority;
-  priorityValue: number;
 }
 
 interface PoolWorker {
@@ -122,7 +115,9 @@ interface PoolWorker {
 class CsvWorkerPool {
   private readonly _options: typeof DEFAULT_OPTIONS;
   private readonly _workers: Map<number, PoolWorker> = new Map();
-  private readonly _taskQueue: QueuedTask[] = [];
+  private readonly _highQueue: QueuedTask[] = [];
+  private readonly _normalQueue: QueuedTask[] = [];
+  private readonly _lowQueue: QueuedTask[] = [];
   private readonly _pendingTasks: Map<number, PendingTask<any>> = new Map();
   private _nextTaskId = 1;
   private _nextWorkerId = 1;
@@ -166,13 +161,19 @@ class CsvWorkerPool {
       return this._initPromise;
     }
 
-    this._initPromise = getWorkerBlobUrl().then(url => {
-      this._workerUrl = url;
-      // Create min workers after URL is ready
-      for (let i = 0; i < this._options.minWorkers; i++) {
-        this._createWorker();
-      }
-    });
+    this._initPromise = getWorkerBlobUrl()
+      .then(url => {
+        this._workerUrl = url;
+        // Create min workers after URL is ready
+        for (let i = 0; i < this._options.minWorkers; i++) {
+          this._createWorker();
+        }
+      })
+      .catch(err => {
+        // Clear the cached promise so subsequent calls can retry initialization
+        this._initPromise = null;
+        throw err;
+      });
 
     return this._initPromise;
   }
@@ -314,7 +315,7 @@ class CsvWorkerPool {
     return {
       totalWorkers: this._workers.size,
       busyWorkers,
-      pendingTasks: this._taskQueue.length,
+      pendingTasks: this._pendingQueueSize,
       completedTasks: this._completedTasks,
       failedTasks: this._failedTasks
     };
@@ -333,11 +334,13 @@ class CsvWorkerPool {
     }
     this._pendingTasks.clear();
 
-    for (const task of this._taskQueue) {
-      task.reject(new Error("Worker pool terminated"));
-      this._cleanupTask(task);
+    for (const queue of [this._highQueue, this._normalQueue, this._lowQueue]) {
+      for (const task of queue) {
+        task.reject(new Error("Worker pool terminated"));
+        this._cleanupTask(task);
+      }
+      queue.length = 0;
     }
-    this._taskQueue.length = 0;
 
     // Terminate all workers
     for (const poolWorker of this._workers.values()) {
@@ -374,6 +377,10 @@ class CsvWorkerPool {
     // Ensure pool is initialized (lazy load worker script)
     await this._ensureInitialized();
 
+    if (this._terminated) {
+      return Promise.reject(new Error("Worker pool has been terminated"));
+    }
+
     const { priority = "normal", signal } = taskOptions ?? {};
 
     if (signal?.aborted) {
@@ -388,7 +395,6 @@ class CsvWorkerPool {
         taskId,
         message,
         priority,
-        priorityValue: PRIORITY_VALUES[priority],
         resolve,
         reject,
         signal,
@@ -411,39 +417,57 @@ class CsvWorkerPool {
     }
   }
 
+  private get _pendingQueueSize(): number {
+    return this._highQueue.length + this._normalQueue.length + this._lowQueue.length;
+  }
+
   private _enqueueTask(task: QueuedTask): void {
-    let inserted = false;
-    for (let i = 0; i < this._taskQueue.length; i++) {
-      if (task.priorityValue > this._taskQueue[i].priorityValue) {
-        this._taskQueue.splice(i, 0, task);
-        inserted = true;
+    switch (task.priority) {
+      case "high":
+        this._highQueue.push(task);
         break;
-      }
-    }
-    if (!inserted) {
-      this._taskQueue.push(task);
+      case "low":
+        this._lowQueue.push(task);
+        break;
+      default:
+        this._normalQueue.push(task);
+        break;
     }
   }
 
+  private _dequeueTask(): QueuedTask | undefined {
+    if (this._highQueue.length > 0) {
+      return this._highQueue.shift();
+    }
+    if (this._normalQueue.length > 0) {
+      return this._normalQueue.shift();
+    }
+    return this._lowQueue.shift();
+  }
+
   private _processQueue(): void {
-    if (this._terminated || this._taskQueue.length === 0 || !this._workerUrl) {
+    if (this._terminated || this._pendingQueueSize === 0 || !this._workerUrl) {
       return;
     }
 
-    let idleWorker: PoolWorker | null = null;
-    for (const worker of this._workers.values()) {
-      if (!worker.busy) {
-        idleWorker = worker;
-        break;
+    while (this._pendingQueueSize > 0) {
+      let idleWorker: PoolWorker | null = null;
+      for (const worker of this._workers.values()) {
+        if (!worker.busy) {
+          idleWorker = worker;
+          break;
+        }
       }
-    }
 
-    if (!idleWorker && this._workers.size < this._options.maxWorkers) {
-      idleWorker = this._createWorker();
-    }
+      if (!idleWorker && this._workers.size < this._options.maxWorkers) {
+        idleWorker = this._createWorker();
+      }
 
-    if (idleWorker) {
-      const task = this._taskQueue.shift()!;
+      if (!idleWorker) {
+        break; // No available workers
+      }
+
+      const task = this._dequeueTask()!;
       this._assignTask(idleWorker, task);
     }
   }
@@ -567,12 +591,14 @@ class CsvWorkerPool {
   }
 
   private _cancelTask(taskId: number): void {
-    const queueIndex = this._taskQueue.findIndex(t => t.taskId === taskId);
-    if (queueIndex !== -1) {
-      const task = this._taskQueue.splice(queueIndex, 1)[0];
-      this._cleanupTask(task);
-      queueMicrotask(() => task.reject(createAbortError()));
-      return;
+    for (const queue of [this._highQueue, this._normalQueue, this._lowQueue]) {
+      const idx = queue.findIndex(t => t.taskId === taskId);
+      if (idx !== -1) {
+        const task = queue.splice(idx, 1)[0];
+        this._cleanupTask(task);
+        queueMicrotask(() => task.reject(createAbortError()));
+        return;
+      }
     }
 
     const task = this._pendingTasks.get(taskId);
@@ -723,7 +749,7 @@ export class CsvWorkerSession {
   private _wrap<T>(fn: () => Promise<T>): () => Promise<T> {
     return () => {
       if (this._disposed) {
-        return Promise.reject(new Error("Session has been disposed"));
+        return Promise.reject(new CsvWorkerError("Session has been disposed"));
       }
       return fn();
     };
@@ -743,10 +769,15 @@ export async function getDefaultWorkerPool(): Promise<CsvWorkerPool> {
     return defaultPool;
   }
   if (!defaultPoolPromise) {
-    defaultPoolPromise = CsvWorkerPool.create().then(pool => {
-      defaultPool = pool;
-      return pool;
-    });
+    defaultPoolPromise = CsvWorkerPool.create()
+      .then(pool => {
+        defaultPool = pool;
+        return pool;
+      })
+      .catch(err => {
+        defaultPoolPromise = null;
+        throw err;
+      });
   }
   return defaultPoolPromise;
 }
@@ -756,6 +787,11 @@ export function terminateDefaultWorkerPool(): void {
     defaultPool.terminate();
     defaultPool = null;
     defaultPoolPromise = null;
+  } else if (defaultPoolPromise) {
+    // Handle in-flight pool creation: wait for it to resolve, then terminate
+    const pending = defaultPoolPromise;
+    defaultPoolPromise = null;
+    pending.then(pool => pool.terminate()).catch(() => {});
   }
 }
 
