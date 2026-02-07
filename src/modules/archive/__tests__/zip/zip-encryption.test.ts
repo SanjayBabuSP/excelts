@@ -49,7 +49,11 @@ describe("ZIP Encryption End-to-End", () => {
       });
 
       const parser = new ZipParser(zipData);
-      await expect(parser.extract("data.txt", "wrong")).rejects.toThrow(/incorrect password/i);
+      // ZipCrypto header check has 1/256 false positive rate per ZIP spec.
+      // Wrong password always fails, but error may be DecryptionError or CRC32/inflate mismatch.
+      await expect(parser.extract("data.txt", "wrong")).rejects.toThrow(
+        /incorrect password|CRC32 mismatch|size mismatch|invalid/i
+      );
     });
 
     it("should throw when encryption without password (createZip)", async () => {
