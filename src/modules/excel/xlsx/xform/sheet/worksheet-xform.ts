@@ -111,7 +111,7 @@ class WorkSheetXform extends BaseXform {
 
     const { maxRows, maxCols, ignoreNodes } = options || {};
 
-    this.ignoreNodes = ignoreNodes || [];
+    this.ignoreNodes = ignoreNodes ?? [];
 
     this.map = {
       sheetPr: new SheetPropertiesXform(),
@@ -336,7 +336,7 @@ class WorkSheetXform extends BaseXform {
     });
 
     // prepare pivot tables
-    (model.pivotTables || []).forEach((pivotTable: any) => {
+    (model.pivotTables ?? []).forEach((pivotTable: any) => {
       rels.push({
         Id: nextRid(rels),
         Type: RelType.PivotTable,
@@ -633,8 +633,8 @@ class WorkSheetXform extends BaseXform {
           drawing: this.map.drawing.model,
           tables: this.map.tableParts.model,
           conditionalFormattings,
-          rowBreaks: this.map.rowBreaks.model || [],
-          colBreaks: this.map.colBreaks.model || []
+          rowBreaks: this.map.rowBreaks.model ?? [],
+          colBreaks: this.map.colBreaks.model ?? []
         };
 
         if (this.map.autoFilter.model) {
@@ -656,7 +656,7 @@ class WorkSheetXform extends BaseXform {
   reconcile(model, options) {
     // options.merges = new Merges();
     // options.merges.reconcile(model.mergeCells, model.rows);
-    const rels = (model.relationships || []).reduce((h, rel) => {
+    const rels = (model.relationships ?? []).reduce((h, rel) => {
       h[rel.Id] = rel;
       if (rel.Type === RelType.Comments) {
         model.comments = options.comments[rel.Target].comments;
@@ -669,13 +669,13 @@ class WorkSheetXform extends BaseXform {
       }
       return h;
     }, {});
-    options.commentsMap = (model.comments || []).reduce((h, comment) => {
+    options.commentsMap = (model.comments ?? []).reduce((h, comment) => {
       if (comment.ref) {
         h[comment.ref] = comment;
       }
       return h;
     }, {});
-    options.hyperlinkMap = (model.hyperlinks || []).reduce((h, hyperlink) => {
+    options.hyperlinkMap = (model.hyperlinks ?? []).reduce((h, hyperlink) => {
       if (hyperlink.rId) {
         h[hyperlink.address] = rels[hyperlink.rId].Target;
       }
@@ -684,9 +684,9 @@ class WorkSheetXform extends BaseXform {
     options.formulae = {};
 
     // compact the rows and cells
-    model.rows = (model.rows && model.rows.filter(Boolean)) || [];
+    model.rows = model.rows?.filter(Boolean) ?? [];
     model.rows.forEach(row => {
-      row.cells = (row.cells && row.cells.filter(Boolean)) || [];
+      row.cells = row.cells?.filter(Boolean) ?? [];
     });
 
     this.map.cols.reconcile(model.cols, options);
@@ -706,7 +706,7 @@ class WorkSheetXform extends BaseXform {
           model.drawing = {
             ...drawing,
             name: drawingName,
-            rels: options.drawingRels?.[drawingName] || drawing.rels || []
+            rels: options.drawingRels?.[drawingName] ?? drawing.rels ?? []
           };
 
           // Also extract images to model.media for backward compatibility
@@ -737,7 +737,7 @@ class WorkSheetXform extends BaseXform {
       }
     }
 
-    model.tables = (model.tables || []).map(tablePart => {
+    model.tables = (model.tables ?? []).map(tablePart => {
       const rel = rels[tablePart.rId];
       return options.tables[rel.Target];
     });
@@ -745,7 +745,7 @@ class WorkSheetXform extends BaseXform {
     // Link pivot tables from relationships to worksheet
     // This is needed so that when writing, the worksheet knows which pivot tables it contains
     model.pivotTables = [];
-    (model.relationships || []).forEach(rel => {
+    (model.relationships ?? []).forEach(rel => {
       if (rel.Type === RelType.PivotTable && options.pivotTables) {
         const pivotTable = options.pivotTables[rel.Target];
         if (pivotTable) {

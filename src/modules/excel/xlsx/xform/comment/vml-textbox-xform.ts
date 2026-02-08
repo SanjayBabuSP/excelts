@@ -13,9 +13,7 @@ interface TextboxModel {
   inset?: number[];
 }
 
-class VmlTextboxXform extends BaseXform {
-  declare public model: TextboxModel;
-
+class VmlTextboxXform extends BaseXform<TextboxModel> {
   constructor() {
     super();
     this.model = {};
@@ -30,7 +28,7 @@ class VmlTextboxXform extends BaseXform {
   }
 
   reverseConversionUnit(inset?: string): number[] {
-    return (inset || "").split(",").map(margin => {
+    return (inset ?? "").split(",").map(margin => {
       return Number(parseFloat(this.conversionUnit(parseFloat(margin), 0.1, "")).toFixed(2));
     });
   }

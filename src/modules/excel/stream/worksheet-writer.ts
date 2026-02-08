@@ -154,7 +154,7 @@ class WorksheetWriter {
     this.name = options.name || `Sheet${this.id}`;
 
     // add a state
-    this.state = options.state || "visible";
+    this.state = options.state ?? "visible";
 
     // rows are stored here while they need to be worked on.
     // when they are committed, they will be deleted.
@@ -260,17 +260,17 @@ class WorksheetWriter {
     );
 
     // using shared strings creates a smaller xlsx file but may use more memory
-    this.useSharedStrings = options.useSharedStrings || false;
+    this.useSharedStrings = options.useSharedStrings ?? false;
 
     this._workbook = options.workbook;
 
     this.hasComments = false;
 
     // views
-    this._views = options.views || [];
+    this._views = options.views ?? [];
 
     // auto filter
-    this.autoFilter = options.autoFilter || null;
+    this.autoFilter = options.autoFilter ?? null;
 
     this._media = [];
 

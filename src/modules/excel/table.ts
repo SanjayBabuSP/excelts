@@ -162,7 +162,7 @@ class Table {
       case "sum":
         return `SUBTOTAL(109,${this.table.name}[${column.name}])`;
       case "custom":
-        return column.totalsRowFormula || null;
+        return column.totalsRowFormula ?? null;
       default:
         throw new TableError(`Invalid Totals Row Function: ${column.totalsRowFunction}`);
     }
@@ -235,7 +235,7 @@ class Table {
         assign(column, "totalsRowLabel", "Total");
       } else {
         assign(column, "totalsRowFunction", "none");
-        column.totalsRowFormula = this.getFormula(column) || undefined;
+        column.totalsRowFormula = this.getFormula(column) ?? undefined;
       }
     });
   }

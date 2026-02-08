@@ -12,9 +12,9 @@ export function isNode(): boolean {
 }
 
 /**
- * Check if running in browser environment
- * Returns true if window and document are defined
+ * Check if running in a browser environment
+ * Returns true if NOT running in Node.js
  */
 export function isBrowser(): boolean {
-  return typeof window !== "undefined" && typeof document !== "undefined";
+  return !isNode();
 }

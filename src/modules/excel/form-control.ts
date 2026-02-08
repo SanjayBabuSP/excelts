@@ -131,7 +131,7 @@ class FormCheckbox {
     const { tl, br } = this._parseRange(range);
 
     // Generate shape ID (starting from 1025)
-    const existingCount = worksheet.formControls?.length || 0;
+    const existingCount = worksheet.formControls?.length ?? 0;
     const shapeId = 1025 + existingCount;
 
     // Parse link cell reference

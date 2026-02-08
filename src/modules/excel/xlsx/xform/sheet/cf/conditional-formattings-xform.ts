@@ -22,7 +22,7 @@ class ConditionalFormattingsXform extends BaseXform {
   prepare(model: any, options: any): void {
     // ensure each rule has a priority value
     let nextPriority = model.reduce(
-      (p: number, cf: any) => Math.max(p, ...cf.rules.map((rule: any) => rule.priority || 0)),
+      (p: number, cf: any) => Math.max(p, ...cf.rules.map((rule: any) => rule.priority ?? 0)),
       1
     );
     model.forEach((cf: any) => {

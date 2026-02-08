@@ -27,10 +27,9 @@ interface RenderModel {
   };
 }
 
-class VmlClientDataXform extends BaseXform {
+class VmlClientDataXform extends BaseXform<ClientDataModel> {
   declare public map: { [key: string]: any };
   declare public parser: any;
-  declare public model: ClientDataModel;
 
   constructor() {
     super();

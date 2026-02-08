@@ -909,7 +909,7 @@ async function readFileRecord(
 
   entry.path = fileName;
   entry.props = buildZipEntryProps(fileName, fileNameBuffer, vars.flags) as EntryProps;
-  entry.type = getZipEntryType(fileName, vars.uncompressedSize || 0);
+  entry.type = getZipEntryType(fileName, vars.uncompressedSize ?? 0);
 
   if (opts.verbose) {
     if (entry.type === "Directory") {
@@ -931,7 +931,7 @@ async function readFileRecord(
 
   const fileSizeKnown = isFileSizeKnown(vars.flags, vars.compressedSize);
   if (fileSizeKnown) {
-    entry.size = vars.uncompressedSize || 0;
+    entry.size = vars.uncompressedSize ?? 0;
   }
 
   if (opts.forceStream) {
@@ -960,8 +960,8 @@ async function readFileRecord(
   // This prevents materializing large highly-compressible files in memory,
   // which can cause massive peak RSS and negate streaming backpressure.
   const sizesTrusted = !hasDataDescriptorFlag(vars.flags);
-  const compressedSize = vars.compressedSize || 0;
-  const uncompressedSize = vars.uncompressedSize || 0;
+  const compressedSize = vars.compressedSize ?? 0;
+  const uncompressedSize = vars.uncompressedSize ?? 0;
 
   const useSmallFileOptimization =
     sizesTrusted &&
@@ -988,11 +988,11 @@ async function readFileRecord(
       : new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
 
   if (fileSizeKnown) {
-    await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize || 0);
+    await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize ?? 0);
     return;
   }
 
   await pipeline(io.streamUntilDataDescriptor() as any, inflater as any, entry as any);
   const dd = await readDataDescriptor(async l => io.pull(l));
-  entry.size = dd.uncompressedSize || 0;
+  entry.size = dd.uncompressedSize ?? 0;
 }

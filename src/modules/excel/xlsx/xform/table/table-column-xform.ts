@@ -8,9 +8,7 @@ interface TableColumnModel {
   dxfId?: string;
 }
 
-class TableColumnXform extends BaseXform {
-  declare public model: TableColumnModel;
-
+class TableColumnXform extends BaseXform<TableColumnModel> {
   constructor() {
     super();
     this.model = { name: "" };

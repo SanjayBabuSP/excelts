@@ -258,7 +258,7 @@ class WorksheetReader extends EventEmitter {
                     min: parseInt(node.attributes.min, 10),
                     max: parseInt(node.attributes.max, 10),
                     width: parseFloat(node.attributes.width),
-                    styleId: parseInt(node.attributes.style || "0", 10)
+                    styleId: parseInt(node.attributes.style ?? "0", 10)
                   });
                 }
                 break;

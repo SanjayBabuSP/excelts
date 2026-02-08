@@ -4,9 +4,7 @@ interface BlipModel {
   rId: string;
 }
 
-class BlipXform extends BaseXform {
-  declare public model: BlipModel;
-
+class BlipXform extends BaseXform<BlipModel> {
   constructor() {
     super();
     this.model = { rId: "" };

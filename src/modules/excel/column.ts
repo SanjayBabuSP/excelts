@@ -195,7 +195,7 @@ class Column {
    * Set an outline level for columns
    */
   get outlineLevel(): number {
-    return this._outlineLevel || 0;
+    return this._outlineLevel ?? 0;
   }
 
   set outlineLevel(value: number | undefined) {
@@ -330,8 +330,8 @@ class Column {
    */
   addPageBreak(top?: number, bottom?: number): void {
     const ws = this._worksheet;
-    const topRow = Math.max(0, (top || 0) - 1) || 0;
-    const bottomRow = Math.max(0, (bottom || 0) - 1) || 1048575;
+    const topRow = Math.max(0, (top ?? 0) - 1) || 0;
+    const bottomRow = Math.max(0, (bottom ?? 0) - 1) || 1048575;
     const pb: ColBreak = {
       id: this._number,
       max: bottomRow,
@@ -460,7 +460,7 @@ class Column {
       : worksheetOrCols;
     let cols: ColumnModel[] = Array.isArray(worksheetOrCols) ? worksheetOrCols : (colsMaybe ?? []);
 
-    cols = cols || [];
+    cols = cols ?? [];
     const columns: Column[] = [];
     let count = 1;
     let index = 0;

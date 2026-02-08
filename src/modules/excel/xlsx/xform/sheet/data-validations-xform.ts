@@ -182,7 +182,7 @@ class DataValidationsXform extends BaseXform {
           xmlStream.addAttribute("error", value.error);
         }
         xmlStream.addAttribute("sqref", value.sqref);
-        (value.formulae || []).forEach((formula: any, index: number) => {
+        (value.formulae ?? []).forEach((formula: any, index: number) => {
           xmlStream.openNode(`formula${index + 1}`);
           if (value.type === "date") {
             xmlStream.writeText(dateToExcel(new Date(formula)));
@@ -205,7 +205,7 @@ class DataValidationsXform extends BaseXform {
 
       case "dataValidation": {
         this._address = node.attributes.sqref;
-        const dataValidation: any = { type: node.attributes.type || "any", formulae: [] };
+        const dataValidation: any = { type: node.attributes.type ?? "any", formulae: [] };
 
         if (node.attributes.type) {
           assignBool(dataValidation, node.attributes, "allowBlank");
@@ -258,7 +258,7 @@ class DataValidationsXform extends BaseXform {
           delete this._dataValidation.operator;
         }
         // The four known cases: 1. E4:L9 N4:U9  2.E4 L9  3. N4:U9  4. E4
-        const list = this._address.split(/\s+/g) || [];
+        const list = this._address.split(/\s+/g);
         list.forEach((addr: string) => {
           if (addr.includes(":")) {
             // Store ranges directly to avoid expanding large (or many) validations.

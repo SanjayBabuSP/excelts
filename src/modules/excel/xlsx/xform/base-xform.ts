@@ -50,9 +50,9 @@ function stripPrefix(name: string, nsPrefix: string | null): string {
 }
 
 // Base class for Xforms
-class BaseXform {
+class BaseXform<TModel = any> {
   declare public map?: { [key: string]: any };
-  declare public model?: any;
+  public model?: TModel;
 
   // ============================================================
   // Virtual Interface
@@ -84,7 +84,7 @@ class BaseXform {
   // ============================================================
   reset(): void {
     // to make sure parses don't bleed to next iteration
-    (this as any).model = null;
+    this.model = undefined;
 
     // if we have a map - reset them too
     if (this.map) {
@@ -100,17 +100,17 @@ class BaseXform {
 
   mergeModel(obj: any): void {
     // set obj's props to this.model
-    (this as any).model = Object.assign((this as any).model || {}, obj);
+    this.model = Object.assign(this.model || ({} as any), obj);
   }
 
-  async parse(saxParser: AsyncIterable<ParseEvent[]>): Promise<any> {
+  async parse(saxParser: AsyncIterable<ParseEvent[]>): Promise<TModel | undefined> {
     // IMPORTANT:
     // Do not return early once parsing is "done".
     // In true streaming scenarios, `parseSax(stream)` is backed by a Node.js
     // Readable async iterator. Returning early would close the iterator, which
     // destroys the underlying stream and can surface as AbortError (ABORT_ERR).
     let done = false;
-    let finalModel: any;
+    let finalModel: TModel | undefined;
 
     // HAN CELL compatibility: 0 = not checked, 1 = normal file, 2 = HAN CELL file
     let nsMode = 0;
@@ -148,7 +148,7 @@ class BaseXform {
           if (nsMode === 1) {
             if (!this.parseClose(value.name)) {
               done = true;
-              finalModel = (this as any).model;
+              finalModel = this.model;
               break;
             }
             continue;
@@ -156,27 +156,27 @@ class BaseXform {
           // HAN CELL mode - strip prefix
           if (!this.parseClose(stripPrefix(value.name, nsPrefix))) {
             done = true;
-            finalModel = (this as any).model;
+            finalModel = this.model;
             break;
           }
         }
       }
     }
 
-    return done ? finalModel : (this as any).model;
+    return done ? finalModel : this.model;
   }
 
-  async parseStream(stream: any): Promise<any> {
+  async parseStream(stream: any): Promise<TModel | undefined> {
     return this.parse(parseSax(stream));
   }
 
   get xml(): string {
     // convenience function to get the xml of this.model
     // useful for manager types that are built during the prepare phase
-    return this.toXml((this as any).model);
+    return this.toXml(this.model);
   }
 
-  toXml(model: any): string {
+  toXml(model?: any): string {
     const xmlStream = new XmlStream();
     this.render(xmlStream, model);
     return xmlStream.xml;

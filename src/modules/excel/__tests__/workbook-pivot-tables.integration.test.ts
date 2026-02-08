@@ -19,6 +19,27 @@ import { testFilePath } from "@test/utils";
 const TEST_XLSX_FILEPATH = testFilePath("workbook-pivot.test");
 const TEST_XLSX_TABLE_FILEPATH = testFilePath("workbook-pivot-table.test");
 
+// ---------------------------------------------------------------------------
+// Helper: write workbook to buffer, parse zip, return decoded entries
+// ---------------------------------------------------------------------------
+type ZipEntries = Record<string, Uint8Array>;
+
+async function writeThenParseZip(workbook: Workbook): Promise<ZipEntries>;
+async function writeThenParseZip(workbook: Workbook, filePath: string): Promise<ZipEntries>;
+async function writeThenParseZip(workbook: Workbook, filePath?: string): Promise<ZipEntries> {
+  if (filePath) {
+    await workbook.xlsx.writeFile(filePath);
+    const buffer = await fsReadFileAsync(filePath);
+    return new ZipParser(buffer).extractAllSync();
+  }
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new ZipParser(buffer as Buffer).extractAllSync();
+}
+
+function decodeXml(zipData: ZipEntries, path: string): string {
+  return new TextDecoder().decode(zipData[path]);
+}
+
 const TEST_DATA = [
   ["A", "B", "C", "D", "E"],
   ["a1", "b1", "c1", 4, 5],
@@ -49,13 +70,10 @@ describe("Workbook", () => {
         metric: "sum"
       });
 
-      return workbook.xlsx.writeFile(TEST_XLSX_FILEPATH).then(async () => {
-        const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-        const zipData = new ZipParser(buffer).extractAllSync();
-        for (const filepath of PIVOT_TABLE_FILEPATHS) {
-          expect(zipData[filepath]).toBeDefined();
-        }
-      });
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      for (const filepath of PIVOT_TABLE_FILEPATHS) {
+        expect(zipData[filepath]).toBeDefined();
+      }
     });
 
     it("if pivot table added with sourceTable, then certain xml and rels files are added", async () => {
@@ -87,16 +105,13 @@ describe("Workbook", () => {
         metric: "sum"
       });
 
-      return workbook.xlsx.writeFile(TEST_XLSX_TABLE_FILEPATH).then(async () => {
-        const buffer = await fsReadFileAsync(TEST_XLSX_TABLE_FILEPATH);
-        const zipData = new ZipParser(buffer).extractAllSync();
-        for (const filepath of PIVOT_TABLE_FILEPATHS) {
-          expect(zipData[filepath]).toBeDefined();
-        }
-      });
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_TABLE_FILEPATH);
+      for (const filepath of PIVOT_TABLE_FILEPATHS) {
+        expect(zipData[filepath]).toBeDefined();
+      }
     });
 
-    it("if pivot table NOT added, then certain xml and rels files are not added", () => {
+    it("if pivot table NOT added, then certain xml and rels files are not added", async () => {
       const workbook = new Workbook();
 
       const worksheet1 = workbook.addWorksheet("Sheet1");
@@ -104,13 +119,10 @@ describe("Workbook", () => {
 
       workbook.addWorksheet("Sheet2");
 
-      return workbook.xlsx.writeFile(TEST_XLSX_FILEPATH).then(async () => {
-        const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-        const zipData = new ZipParser(buffer).extractAllSync();
-        for (const filepath of PIVOT_TABLE_FILEPATHS) {
-          expect(zipData[filepath]).toBeUndefined();
-        }
-      });
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      for (const filepath of PIVOT_TABLE_FILEPATHS) {
+        expect(zipData[filepath]).toBeUndefined();
+      }
     });
 
     it("throws error if neither sourceSheet nor sourceTable is provided", () => {
@@ -254,13 +266,10 @@ describe("Workbook", () => {
       });
 
       const offsetFilePath = testFilePath("workbook-pivot-offset.test");
-      return workbook.xlsx.writeFile(offsetFilePath).then(async () => {
-        const buffer = await fsReadFileAsync(offsetFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
-        for (const filepath of PIVOT_TABLE_FILEPATHS) {
-          expect(zipData[filepath]).toBeDefined();
-        }
-      });
+      const zipData = await writeThenParseZip(workbook, offsetFilePath);
+      for (const filepath of PIVOT_TABLE_FILEPATHS) {
+        expect(zipData[filepath]).toBeDefined();
+      }
     });
 
     it("supports multiple values when columns is empty", async () => {
@@ -289,13 +298,10 @@ describe("Workbook", () => {
       });
 
       const multiValuesFilePath = testFilePath("workbook-pivot-multi-values.test");
-      return workbook.xlsx.writeFile(multiValuesFilePath).then(async () => {
-        const buffer = await fsReadFileAsync(multiValuesFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
-        for (const filepath of PIVOT_TABLE_FILEPATHS) {
-          expect(zipData[filepath]).toBeDefined();
-        }
-      });
+      const zipData = await writeThenParseZip(workbook, multiValuesFilePath);
+      for (const filepath of PIVOT_TABLE_FILEPATHS) {
+        expect(zipData[filepath]).toBeDefined();
+      }
     });
 
     it("supports empty columns with single value", async () => {
@@ -313,33 +319,36 @@ describe("Workbook", () => {
       });
 
       const emptyColsFilePath = testFilePath("workbook-pivot-empty-cols.test");
-      return workbook.xlsx.writeFile(emptyColsFilePath).then(async () => {
-        const buffer = await fsReadFileAsync(emptyColsFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
-        for (const filepath of PIVOT_TABLE_FILEPATHS) {
-          expect(zipData[filepath]).toBeDefined();
-        }
-      });
+      const zipData = await writeThenParseZip(workbook, emptyColsFilePath);
+      for (const filepath of PIVOT_TABLE_FILEPATHS) {
+        expect(zipData[filepath]).toBeDefined();
+      }
     });
 
-    it("throws error if multiple values with non-empty columns", () => {
+    it("supports multiple values with non-empty columns (field x=-2 appended)", async () => {
       const workbook = new Workbook();
       const worksheet1 = workbook.addWorksheet("Sheet1");
       worksheet1.addRows(TEST_DATA);
 
       const worksheet2 = workbook.addWorksheet("Sheet2");
+      worksheet2.addPivotTable({
+        sourceSheet: worksheet1,
+        rows: ["A"],
+        columns: ["B"], // Non-empty columns
+        values: ["D", "E"], // Multiple values
+        metric: "sum"
+      });
 
-      expect(() => {
-        worksheet2.addPivotTable({
-          sourceSheet: worksheet1,
-          rows: ["A"],
-          columns: ["B"], // Non-empty columns
-          values: ["D", "E"], // Multiple values - not allowed with columns
-          metric: "sum"
-        });
-      }).toThrow(
-        "It is currently not possible to have multiple values when columns are specified. Please either supply an empty array for columns or a single value."
-      );
+      const zipData = await writeThenParseZip(workbook);
+      const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+      // colFields should have B's field index + the -2 sentinel
+      expect(pivotXml).toContain('colFields count="2"');
+      expect(pivotXml).toContain('field x="-2"');
+      // dataFields should have both values
+      expect(pivotXml).toContain('dataFields count="2"');
+      expect(pivotXml).toContain("Sum of D");
+      expect(pivotXml).toContain("Sum of E");
     });
 
     it("throws error if no values specified", () => {
@@ -358,6 +367,84 @@ describe("Workbook", () => {
           metric: "sum"
         });
       }).toThrow("Must have at least one value.");
+    });
+
+    // R8-T2: Additional validate() branch coverage
+
+    it("throws error if no rows specified", () => {
+      const workbook = new Workbook();
+      const worksheet1 = workbook.addWorksheet("Sheet1");
+      worksheet1.addRows(TEST_DATA);
+
+      const worksheet2 = workbook.addWorksheet("Sheet2");
+
+      expect(() => {
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: [],
+          columns: ["B"],
+          values: ["D"],
+          metric: "sum"
+        });
+      }).toThrow("No pivot table rows specified.");
+    });
+
+    it("throws error for empty header name in source sheet", () => {
+      const workbook = new Workbook();
+      const worksheet1 = workbook.addWorksheet("Sheet1");
+      // Header row with an empty string header
+      worksheet1.addRows([
+        ["A", "", "C"],
+        ["a1", "b1", "c1"]
+      ]);
+
+      const worksheet2 = workbook.addWorksheet("Sheet2");
+
+      expect(() => {
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          values: ["C"],
+          metric: "sum"
+        });
+      }).toThrow(/Empty or missing header name at column 2/);
+    });
+
+    it("throws error for whitespace-only header name in source sheet", () => {
+      const workbook = new Workbook();
+      const worksheet1 = workbook.addWorksheet("Sheet1");
+      worksheet1.addRows([
+        ["A", "   ", "C"],
+        ["a1", "b1", "c1"]
+      ]);
+
+      const worksheet2 = workbook.addWorksheet("Sheet2");
+
+      expect(() => {
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          values: ["C"],
+          metric: "sum"
+        });
+      }).toThrow(/Empty or missing header name at column 2/);
+    });
+
+    it("throws error for duplicate value field names", () => {
+      const workbook = new Workbook();
+      const worksheet1 = workbook.addWorksheet("Sheet1");
+      worksheet1.addRows(TEST_DATA);
+
+      const worksheet2 = workbook.addWorksheet("Sheet2");
+
+      expect(() => {
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          values: ["D", "D"],
+          metric: "sum"
+        });
+      }).toThrow('Duplicate value field "D". Each value field name must be unique.');
     });
 
     it("supports applyWidthHeightFormats option to preserve column widths", async () => {
@@ -380,12 +467,8 @@ describe("Workbook", () => {
         applyWidthHeightFormats: "0" // Preserve worksheet column widths
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      // Verify the pivot table XML contains the correct attribute
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
-      const pivotTableXml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable1.xml"]);
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
       expect(pivotTableXml).toContain('applyWidthHeightFormats="0"');
     });
@@ -406,12 +489,8 @@ describe("Workbook", () => {
         // applyWidthHeightFormats not specified, should default to "1"
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      // Verify the pivot table XML contains the default attribute
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
-      const pivotTableXml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable1.xml"]);
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
       expect(pivotTableXml).toContain('applyWidthHeightFormats="1"');
     });
@@ -432,11 +511,7 @@ describe("Workbook", () => {
         metric: "sum"
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      // Verify the file was created successfully
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
 
       // Verify pivot table XML exists
       expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
@@ -466,16 +541,10 @@ describe("Workbook", () => {
         metric: "sum"
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      // Verify the file was created successfully
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
 
       // Verify pivot cache definition contains properly escaped XML
-      const cacheDefinition = new TextDecoder().decode(
-        zipData["xl/pivotCache/pivotCacheDefinition1.xml"]
-      );
+      const cacheDefinition = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
 
       // Check that XML special characters are escaped in sharedItems
       expect(cacheDefinition).toContain("Johnson &amp; Johnson");
@@ -488,7 +557,7 @@ describe("Workbook", () => {
       expect(cacheDefinition).not.toContain('v="BioTech <Special>"');
 
       // Verify pivot table definition has escaped dataField name
-      const pivotTableXml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable1.xml"]);
+      const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
       expect(pivotTableXml).toContain("Sum of Sales &amp; Revenue");
       expect(pivotTableXml).not.toContain("Sum of Sales & Revenue");
     });
@@ -515,19 +584,16 @@ describe("Workbook", () => {
         metric: "sum"
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
 
-      // Verify the file was created successfully (no crash)
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
+      // Null values in row fields are added to sharedItems as <m /> and referenced via <x v="..."/>
+      const cacheDef = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
+      expect(cacheDef).toContain("<m />");
+      expect(cacheDef).toContain('containsBlank="1"');
 
-      // Verify pivot cache records contains <m /> for missing values
-      const cacheRecords = new TextDecoder().decode(
-        zipData["xl/pivotCache/pivotCacheRecords1.xml"]
-      );
-
-      // <m /> is OOXML standard for missing values
-      expect(cacheRecords).toContain("<m />");
+      // Cache records use index references for row fields (no inline <m /> in records)
+      const cacheRecords = decodeXml(zipData, "xl/pivotCache/pivotCacheRecords1.xml");
+      expect(cacheRecords).toContain('<x v="');
 
       // Verify pivot table XML exists
       expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
@@ -578,11 +644,7 @@ describe("Workbook", () => {
         metric: "sum"
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      // Verify the file was created successfully
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
 
       // Verify all three pivot tables exist
       expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
@@ -595,9 +657,9 @@ describe("Workbook", () => {
       expect(zipData["xl/pivotCache/pivotCacheDefinition3.xml"]).toBeDefined();
 
       // Verify each pivot table has unique cacheId
-      const pivotTable1Xml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable1.xml"]);
-      const pivotTable2Xml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable2.xml"]);
-      const pivotTable3Xml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable3.xml"]);
+      const pivotTable1Xml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+      const pivotTable2Xml = decodeXml(zipData, "xl/pivotTables/pivotTable2.xml");
+      const pivotTable3Xml = decodeXml(zipData, "xl/pivotTables/pivotTable3.xml");
 
       expect(pivotTable1Xml).toContain('cacheId="10"');
       expect(pivotTable2Xml).toContain('cacheId="11"');
@@ -619,14 +681,8 @@ describe("Workbook", () => {
         metric: "count"
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      // Verify the file was created successfully
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
-
-      // Verify pivot table XML contains count-specific attributes
-      const pivotTableXml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable1.xml"]);
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
       // dataField should have name="Count of D" and subtotal="count"
       expect(pivotTableXml).toContain("Count of D");
@@ -649,34 +705,35 @@ describe("Workbook", () => {
         // metric not specified - should default to 'sum'
       });
 
-      await workbook.xlsx.writeFile(TEST_XLSX_FILEPATH);
-
-      const buffer = await fsReadFileAsync(TEST_XLSX_FILEPATH);
-      const zipData = new ZipParser(buffer).extractAllSync();
-
-      const pivotTableXml = new TextDecoder().decode(zipData["xl/pivotTables/pivotTable1.xml"]);
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
       // dataField should have name="Sum of D" and no subtotal attribute
       expect(pivotTableXml).toContain("Sum of D");
       expect(pivotTableXml).not.toContain('subtotal="count"');
     });
 
-    it("throws error for unsupported metric", () => {
+    it("supports 'average' metric for pivot tables", async () => {
       const workbook = new Workbook();
       const worksheet1 = workbook.addWorksheet("Sheet1");
       worksheet1.addRows(TEST_DATA);
 
       const worksheet2 = workbook.addWorksheet("Sheet2");
 
-      expect(() => {
-        worksheet2.addPivotTable({
-          sourceSheet: worksheet1,
-          rows: ["A", "B"],
-          columns: ["C"],
-          values: ["D"],
-          metric: "average" as any // unsupported metric
-        });
-      }).toThrow('Only the "sum" and "count" metrics are supported at this time.');
+      worksheet2.addPivotTable({
+        sourceSheet: worksheet1,
+        rows: ["A", "B"],
+        columns: ["C"],
+        values: ["D"],
+        metric: "average"
+      });
+
+      const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+      const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+      expect(pivotTableXml).toContain("Average of D");
+      expect(pivotTableXml).toContain('subtotal="average"');
+      expect(pivotTableXml).not.toContain("Sum of");
     });
 
     // ==========================================================================
@@ -715,13 +772,9 @@ describe("Workbook", () => {
         expect(loadedPivot.isLoaded).toBe(true);
         expect(loadedPivot.tableNumber).toBe(1);
 
-        // Step 5: Save again
+        // Step 5: Save again and verify
         const ROUNDTRIP_FILEPATH2 = testFilePath("workbook-pivot-roundtrip2.test");
-        await loadedWorkbook.xlsx.writeFile(ROUNDTRIP_FILEPATH2);
-
-        // Step 6: Verify pivot table files are present in the saved file
-        const buffer = await fsReadFileAsync(ROUNDTRIP_FILEPATH2);
-        const zipData = new ZipParser(buffer).extractAllSync();
+        const zipData = await writeThenParseZip(loadedWorkbook, ROUNDTRIP_FILEPATH2);
         for (const filepath of PIVOT_TABLE_FILEPATHS) {
           expect(zipData[filepath]).toBeDefined();
         }
@@ -765,13 +818,9 @@ describe("Workbook", () => {
         // Step 4: Verify both pivot tables are loaded
         expect(loadedWorkbook.pivotTables.length).toBe(2);
 
-        // Step 5: Save again
+        // Step 5: Save again and verify
         const MULTI_PIVOT_PATH2 = testFilePath("workbook-multi-pivot-roundtrip2.test");
-        await loadedWorkbook.xlsx.writeFile(MULTI_PIVOT_PATH2);
-
-        // Step 6: Verify both pivot tables files exist
-        const buffer = await fsReadFileAsync(MULTI_PIVOT_PATH2);
-        const zipData = new ZipParser(buffer).extractAllSync();
+        const zipData = await writeThenParseZip(loadedWorkbook, MULTI_PIVOT_PATH2);
 
         // Both pivot tables should have their files
         expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
@@ -1013,8 +1062,8 @@ describe("Workbook", () => {
       });
     });
 
-    describe("rowItems/colItems/recordCount fix", () => {
-      it("generates correct rowItems with all unique values plus grand total", async () => {
+    describe("minimal rowItems/colItems (required by Excel)", () => {
+      it("emits minimal rowItems and colItems — refreshOnLoad rebuilds full expansion", async () => {
         const workbook = new Workbook();
         const worksheet = workbook.addWorksheet("table");
 
@@ -1043,44 +1092,28 @@ describe("Workbook", () => {
         });
 
         const pivotFilePath = testFilePath("workbook-pivot-rowitems-and-recordcount.test");
-        await workbook.xlsx.writeFile(pivotFilePath);
-
-        // Read and parse the XML to verify correct structure
-        const buffer = await fsReadFileAsync(pivotFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
+        const zipData = await writeThenParseZip(workbook, pivotFilePath);
 
         // Check pivotTable1.xml
-        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
-        expect(pivotTableXml).toBeDefined();
-        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
+        expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
+        const pivotTableStr = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
-        // rowItems should have 4 items: a1, a2, a3, and grand total
-        // The pattern should be: <rowItems count="4">
-        expect(pivotTableStr).toMatch(/<rowItems count="4">/);
-        // Should have 3 regular items: <i><x /></i>, <i><x v="1" /></i>, <i><x v="2" /></i>
-        // Note: v="0" is omitted per Excel convention (v="0" is the default)
-        expect(pivotTableStr).toMatch(/<i><x \/><\/i>/);
-        expect(pivotTableStr).toMatch(/<i><x v="1" \/><\/i>/);
-        expect(pivotTableStr).toMatch(/<i><x v="2" \/><\/i>/);
-        // And grand total: <i t="grand"><x /></i>
-        expect(pivotTableStr).toMatch(/<i t="grand"><x \/><\/i>/);
-
-        // colItems should have 3 items: b1, b2, and grand total
-        expect(pivotTableStr).toMatch(/<colItems count="3">/);
+        // Minimal rowItems (grand total) and colItems are required by Excel
+        expect(pivotTableStr).toContain('rowItems count="1"');
+        expect(pivotTableStr).toContain('<i t="grand">');
+        expect(pivotTableStr).toContain('colItems count="1"');
+        // colFields present because columns=["B"] is non-empty
+        expect(pivotTableStr).toContain("colFields");
 
         // Check pivotCacheDefinition1.xml for correct recordCount
-        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
-        expect(cacheDefXml).toBeDefined();
-        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
-
-        // recordCount should be 6 (number of data rows)
+        const cacheDefStr = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
         expect(cacheDefStr).toMatch(/recordCount="6"/);
 
         // Clean up
         await promisify(fs.unlink)(pivotFilePath);
       });
 
-      it("generates correct colItems when columns is empty with single value", async () => {
+      it("emits minimal colItems when columns is empty with single value", async () => {
         const workbook = new Workbook();
         const worksheet = workbook.addWorksheet("table");
 
@@ -1105,22 +1138,20 @@ describe("Workbook", () => {
         });
 
         const pivotFilePath = testFilePath("workbook-pivot-no-cols.test");
-        await workbook.xlsx.writeFile(pivotFilePath);
+        const zipData = await writeThenParseZip(workbook, pivotFilePath);
+        const pivotTableStr = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
-        const buffer = await fsReadFileAsync(pivotFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
-
-        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
-        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
-
-        // With no columns and single value, colItems should just have grand total
-        expect(pivotTableStr).toMatch(/<colItems count="1">/);
+        // Minimal rowItems and colItems present
+        expect(pivotTableStr).toContain('rowItems count="1"');
+        expect(pivotTableStr).toContain('colItems count="1"');
+        // No colFields when columns is empty
+        expect(pivotTableStr).not.toContain("colFields");
 
         // Clean up
         await promisify(fs.unlink)(pivotFilePath);
       });
 
-      it("generates correct colItems when columns is empty with multiple values", async () => {
+      it("emits colFields with field x=-2 and multi-value colItems when columns is empty with multiple values", async () => {
         const workbook = new Workbook();
         const worksheet = workbook.addWorksheet("table");
 
@@ -1145,24 +1176,27 @@ describe("Workbook", () => {
         });
 
         const pivotFilePath = testFilePath("workbook-pivot-multi-vals.test");
-        await workbook.xlsx.writeFile(pivotFilePath);
+        const zipData = await writeThenParseZip(workbook, pivotFilePath);
+        const pivotTableStr = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
 
-        const buffer = await fsReadFileAsync(pivotFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
+        // Minimal rowItems present
+        expect(pivotTableStr).toContain('rowItems count="1"');
+        // Multi-value requires colFields with the synthetic "Values" pseudo-field
+        expect(pivotTableStr).toContain('colFields count="1"');
+        expect(pivotTableStr).toContain('field x="-2"');
+        // colItems: one per value + grand total = 3
+        expect(pivotTableStr).toContain('colItems count="3"');
 
-        const pivotTableXml = zipData["xl/pivotTables/pivotTable1.xml"];
-        const pivotTableStr = new TextDecoder().decode(pivotTableXml);
-
-        // With no columns and 2 values, colItems should have 3 items (2 values + grand total)
-        expect(pivotTableStr).toMatch(/<colItems count="3">/);
+        // dataFields should still be correct
+        expect(pivotTableStr).toContain('dataFields count="2"');
 
         // Clean up
         await promisify(fs.unlink)(pivotFilePath);
       });
     });
 
-    describe("worksheetSource sheet name fix", () => {
-      it("uses worksheet name (not table name) in pivotCacheDefinition worksheetSource", async () => {
+    describe("worksheetSource uses table name attribute", () => {
+      it("uses table name (not sheet+ref) in pivotCacheDefinition worksheetSource", async () => {
         const workbook = new Workbook();
         // Create a worksheet named "DataSheet" with a table named "MyTable"
         const worksheet = workbook.addWorksheet("DataSheet");
@@ -1188,19 +1222,14 @@ describe("Workbook", () => {
         });
 
         const pivotFilePath = testFilePath("workbook-pivot-worksheet-name.test");
-        await workbook.xlsx.writeFile(pivotFilePath);
+        const zipData = await writeThenParseZip(workbook, pivotFilePath);
+        const cacheDefStr = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
 
-        const buffer = await fsReadFileAsync(pivotFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
-
-        // Check pivotCacheDefinition1.xml
-        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
-        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
-
-        // The worksheetSource sheet attribute should reference the worksheet name "DataSheet"
-        // NOT the table name "MyTable"
-        expect(cacheDefStr).toContain('sheet="DataSheet"');
-        expect(cacheDefStr).not.toContain('sheet="MyTable"');
+        // The worksheetSource should use the table name attribute
+        expect(cacheDefStr).toContain('name="MyTable"');
+        // Should NOT have sheet+ref format when using sourceTable
+        expect(cacheDefStr).not.toContain("sheet=");
+        expect(cacheDefStr).not.toContain("ref=");
 
         // Clean up
         await promisify(fs.unlink)(pivotFilePath);
@@ -1238,39 +1267,27 @@ describe("Workbook", () => {
         });
 
         const pivotFilePath = testFilePath("workbook-pivot-shared-field-row-and-value.test");
-        await workbook.xlsx.writeFile(pivotFilePath);
-
-        const buffer = await fsReadFileAsync(pivotFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
+        const zipData = await writeThenParseZip(workbook, pivotFilePath);
 
         // Check pivotCacheDefinition1.xml
-        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
-        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+        const cacheDefStr = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
 
         // Field C should have numeric shared items (not string)
-        // Should have containsNumber="1" and use <n v="..." /> format
         expect(cacheDefStr).toContain('name="C"');
         expect(cacheDefStr).toContain('containsNumber="1"');
         expect(cacheDefStr).toContain('<n v="5"');
         expect(cacheDefStr).toContain('<n v="24"');
         expect(cacheDefStr).toContain('<n v="35"');
         expect(cacheDefStr).toContain('<n v="45"');
-        // Should NOT have string format for numeric values
         expect(cacheDefStr).not.toContain('<s v="5"');
         expect(cacheDefStr).not.toContain('<s v="24"');
 
         // Check pivotCacheRecords1.xml - records should use index references
-        const cacheRecXml = zipData["xl/pivotCache/pivotCacheRecords1.xml"];
-        const cacheRecStr = new TextDecoder().decode(cacheRecXml);
-
-        // Records should use <x v="..." /> format for indexed lookup
+        const cacheRecStr = decodeXml(zipData, "xl/pivotCache/pivotCacheRecords1.xml");
         expect(cacheRecStr).toContain('<x v="');
 
         // Check pivotTable1.xml
-        const pivotXml = zipData["xl/pivotTables/pivotTable1.xml"];
-        const pivotStr = new TextDecoder().decode(pivotXml);
-
-        // Should have dataField for "C" with Sum
+        const pivotStr = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
         expect(pivotStr).toContain("Sum of C");
 
         // Clean up
@@ -1295,7 +1312,6 @@ describe("Workbook", () => {
         });
 
         const worksheet2 = workbook.addWorksheet("Sheet2");
-        // Use numeric field "B" for rows and "C" for values
         worksheet2.addPivotTable({
           sourceTable: table,
           rows: ["B"],
@@ -1305,14 +1321,8 @@ describe("Workbook", () => {
         });
 
         const pivotFilePath = testFilePath("workbook-pivot-numeric-rows.test");
-        await workbook.xlsx.writeFile(pivotFilePath);
-
-        const buffer = await fsReadFileAsync(pivotFilePath);
-        const zipData = new ZipParser(buffer).extractAllSync();
-
-        // Check pivotCacheDefinition1.xml
-        const cacheDefXml = zipData["xl/pivotCache/pivotCacheDefinition1.xml"];
-        const cacheDefStr = new TextDecoder().decode(cacheDefXml);
+        const zipData = await writeThenParseZip(workbook, pivotFilePath);
+        const cacheDefStr = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
 
         // Field B should have numeric shared items
         expect(cacheDefStr).toContain('name="B"');
@@ -1321,6 +1331,1205 @@ describe("Workbook", () => {
 
         // Clean up
         await promisify(fs.unlink)(pivotFilePath);
+      });
+    });
+
+    // ==========================================================================
+    // Page Fields (Report Filters) Tests
+    // ==========================================================================
+
+    describe("Page Fields (Report Filters)", () => {
+      it("creates pivot table with a single page field", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          pages: ["C"],
+          metric: "sum"
+        });
+
+        const filePath = testFilePath("workbook-pivot-page-single.test");
+        const zipData = await writeThenParseZip(workbook, filePath);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // Should have pageFields element
+        expect(pivotXml).toContain("<pageFields");
+        expect(pivotXml).toMatch(/<pageFields count="1">/);
+        expect(pivotXml).toMatch(/<pageField fld="2" hier="-1"/);
+        expect(pivotXml).toContain('axis="axisPage"');
+
+        // Should also have sharedItems for "C" in cache definition
+        const cacheDefXml = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
+        expect(cacheDefXml).toContain('name="C"');
+
+        // Clean up
+        await promisify(fs.unlink)(filePath);
+      });
+
+      it("creates pivot table with multiple page fields", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          values: ["E"],
+          pages: ["B", "C"],
+          metric: "sum"
+        });
+
+        const filePath = testFilePath("workbook-pivot-page-multi.test");
+        const zipData = await writeThenParseZip(workbook, filePath);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // Should have 2 page fields
+        expect(pivotXml).toMatch(/<pageFields count="2">/);
+        expect(pivotXml).toMatch(/<pageField fld="1" hier="-1"/);
+        expect(pivotXml).toMatch(/<pageField fld="2" hier="-1"/);
+
+        // Both pivotFields should have axis="axisPage"
+        const axisPageMatches = pivotXml.match(/axis="axisPage"/g);
+        expect(axisPageMatches).toHaveLength(2);
+
+        // Clean up
+        await promisify(fs.unlink)(filePath);
+      });
+
+      it("creates pivot table with pages, rows, columns, and values combined", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          pages: ["C"],
+          metric: "sum"
+        });
+
+        const filePath = testFilePath("workbook-pivot-page-combined.test");
+        const zipData = await writeThenParseZip(workbook, filePath);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // Verify all areas present (minimal rowItems/colItems/colFields required by Excel)
+        expect(pivotXml).toContain("<rowFields");
+        expect(pivotXml).toContain("<pageFields");
+        expect(pivotXml).toContain("<dataFields");
+        // colFields present because columns=["B"] is non-empty
+        expect(pivotXml).toContain("colFields");
+        // Minimal rowItems and colItems required by Excel
+        expect(pivotXml).toContain('rowItems count="1"');
+        expect(pivotXml).toContain('colItems count="1"');
+
+        // Verify correct axis types
+        expect(pivotXml).toContain('axis="axisRow"');
+        expect(pivotXml).toContain('axis="axisCol"');
+        expect(pivotXml).toContain('axis="axisPage"');
+
+        // Clean up
+        await promisify(fs.unlink)(filePath);
+      });
+
+      it("adjusts location ref when page fields are present", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        // Without page fields: location starts at A3
+        const ws2 = workbook.addWorksheet("NoPagesSheet");
+        ws2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          metric: "sum"
+        });
+
+        // With 1 page field: location starts at A5 (3 + 1 page + 1 separator)
+        const ws3 = workbook.addWorksheet("OnePageSheet");
+        ws3.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          pages: ["C"],
+          metric: "sum"
+        });
+
+        // With 2 page fields: location starts at A6 (3 + 2 pages + 1 separator)
+        const ws4 = workbook.addWorksheet("TwoPagesSheet");
+        ws4.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          pages: ["C", "D"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+
+        // No pages: starts at A3
+        const xml1 = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+        expect(xml1).toMatch(/ref="A3:/);
+
+        // 1 page field: starts at A5
+        const xml2 = decodeXml(zipData, "xl/pivotTables/pivotTable2.xml");
+        expect(xml2).toMatch(/ref="A5:/);
+
+        // 2 page fields: starts at A6
+        const xml3 = decodeXml(zipData, "xl/pivotTables/pivotTable3.xml");
+        expect(xml3).toMatch(/ref="A6:/);
+      });
+
+      it("page fields have sharedItems in cache definition", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          values: ["E"],
+          pages: ["C"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+
+        const cacheDefXml = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
+
+        // Field "C" (page field) should have shared items with c1, c2, c3
+        expect(cacheDefXml).toContain('name="C"');
+        expect(cacheDefXml).toContain('<s v="c1"');
+        expect(cacheDefXml).toContain('<s v="c2"');
+        expect(cacheDefXml).toContain('<s v="c3"');
+      });
+
+      it("throws error for invalid page field name", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            values: ["E"],
+            pages: ["NonExistent"],
+            metric: "sum"
+          });
+        }).toThrow('The header name "NonExistent" was not found in Sheet1.');
+      });
+
+      it("throws error when same field appears in rows and columns", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            columns: ["A"],
+            values: ["E"],
+            metric: "sum"
+          });
+        }).toThrow(
+          'Field "A" cannot appear in both rows and columns. Each field can only be assigned to one axis area.'
+        );
+      });
+
+      it("throws error when same field appears in rows and pages", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            values: ["E"],
+            pages: ["A"],
+            metric: "sum"
+          });
+        }).toThrow(
+          'Field "A" cannot appear in both rows and pages. Each field can only be assigned to one axis area.'
+        );
+      });
+
+      it("throws error when same field appears in columns and pages", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            columns: ["B"],
+            values: ["E"],
+            pages: ["B"],
+            metric: "sum"
+          });
+        }).toThrow(
+          'Field "B" cannot appear in both columns and pages. Each field can only be assigned to one axis area.'
+        );
+      });
+
+      it("allows same field in values and another axis area", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        // This should NOT throw - values can overlap with axis areas (dataField="1")
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            values: ["A"],
+            metric: "count"
+          });
+        }).not.toThrow();
+      });
+
+      it("no pageFields element when pages is empty", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          pages: [], // explicitly empty
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // Should NOT have pageFields element
+        expect(pivotXml).not.toContain("<pageFields");
+        expect(pivotXml).not.toContain("axisPage");
+
+        // Location should still start at A3
+        expect(pivotXml).toMatch(/ref="A3:/);
+      });
+
+      it("preserves page fields through load/save roundtrip", async () => {
+        // Step 1: Create workbook with page fields
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["E"],
+          pages: ["C"],
+          metric: "sum"
+        });
+
+        // Step 2: Save
+        const filePath = testFilePath("workbook-pivot-page-roundtrip1.test");
+        await workbook.xlsx.writeFile(filePath);
+
+        // Step 3: Load
+        const loadedWorkbook = new Workbook();
+        await loadedWorkbook.xlsx.readFile(filePath);
+
+        expect(loadedWorkbook.pivotTables.length).toBe(1);
+        const pivot = loadedWorkbook.pivotTables[0];
+        expect(pivot.isLoaded).toBe(true);
+
+        // Step 4: Save again and verify
+        const zipData = await writeThenParseZip(loadedWorkbook);
+
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // pageFields should still be present
+        expect(pivotXml).toContain("<pageFields");
+        expect(pivotXml).toMatch(/<pageFields count="1">/);
+        expect(pivotXml).toMatch(/<pageField fld="2"/);
+
+        // pivotField with axisPage should still be present
+        expect(pivotXml).toContain('axis="axisPage"');
+
+        // Clean up
+        await promisify(fs.unlink)(filePath);
+      });
+
+      it("supports page fields with sourceTable", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("Sheet1");
+
+        const table = worksheet.addTable({
+          name: "TestTable",
+          ref: "A1",
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }, { name: "E" }],
+          rows: [
+            ["a1", "b1", "c1", 4, 5],
+            ["a1", "b2", "c1", 4, 5],
+            ["a2", "b1", "c2", 14, 24],
+            ["a2", "b2", "c2", 24, 35]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          values: ["E"],
+          pages: ["B", "C"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        expect(pivotXml).toMatch(/<pageFields count="2">/);
+        expect(pivotXml).toContain('axis="axisPage"');
+      });
+
+      it("supports 3 page fields with correct location offset", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          values: ["E"],
+          pages: ["B", "C", "D"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // 3 page fields
+        expect(pivotXml).toMatch(/<pageFields count="3">/);
+        // Location: 3 base + 3 pages + 1 separator = A7
+        expect(pivotXml).toMatch(/ref="A7:/);
+        expect(pivotXml).toContain('rowPageCount="3"');
+        expect(pivotXml).toContain('colPageCount="1"');
+        // 3 axisPage pivotFields
+        const axisPageMatches = pivotXml.match(/axis="axisPage"/g);
+        expect(axisPageMatches).toHaveLength(3);
+      });
+    });
+
+    describe("sourceSheet with multiple values", () => {
+      it("supports sourceSheet with multiple values and no columns", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: [],
+          values: ["D", "E"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // Multi-value with no columns
+        expect(pivotXml).toContain('colFields count="1"');
+        expect(pivotXml).toContain('field x="-2"');
+        expect(pivotXml).toContain('colItems count="3"'); // 2 values + grand total
+        expect(pivotXml).toContain('dataFields count="2"');
+        expect(pivotXml).toContain("Sum of D");
+        expect(pivotXml).toContain("Sum of E");
+      });
+
+      it("supports sourceSheet with multiple values + pages", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: [],
+          values: ["D", "E"],
+          pages: ["B", "C"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // Multi-value + pages
+        expect(pivotXml).toContain('colFields count="1"');
+        expect(pivotXml).toContain('field x="-2"');
+        expect(pivotXml).toContain('pageFields count="2"');
+        expect(pivotXml).toContain('dataFields count="2"');
+        // Location offset for 2 pages: A6
+        expect(pivotXml).toMatch(/ref="A6:/);
+      });
+    });
+
+    describe("deep row nesting", () => {
+      it("supports 4-level row nesting", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows([
+          ["L1", "L2", "L3", "L4", "Value"],
+          ["a", "b", "c", "d", 10],
+          ["a", "b", "c", "e", 20],
+          ["a", "b", "f", "g", 30],
+          ["h", "i", "j", "k", 40]
+        ]);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["L1", "L2", "L3", "L4"],
+          columns: [],
+          values: ["Value"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // 4 row fields
+        expect(pivotXml).toContain('rowFields count="4"');
+        // firstDataCol should be 4 (4 row fields)
+        expect(pivotXml).toContain('firstDataCol="4"');
+        // 4 axisRow pivotFields
+        const axisRowMatches = pivotXml.match(/axis="axisRow"/g);
+        expect(axisRowMatches).toHaveLength(4);
+      });
+    });
+
+    describe("multiple values with columns (columns>0 && values>1)", () => {
+      it("supports multiple values with non-empty columns using sourceTable", async () => {
+        const workbook = new Workbook();
+        const worksheet = workbook.addWorksheet("Sheet1");
+
+        const table = worksheet.addTable({
+          name: "TestTable",
+          ref: "A1",
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }, { name: "E" }],
+          rows: [
+            ["a1", "b1", "c1", 4, 5],
+            ["a1", "b2", "c1", 4, 5],
+            ["a2", "b1", "c2", 14, 24],
+            ["a2", "b2", "c2", 24, 35]
+          ]
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["D", "E"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // colFields should have B + -2 sentinel = 2
+        expect(pivotXml).toContain('colFields count="2"');
+        expect(pivotXml).toContain('field x="-2"');
+        // dataFields should have both values
+        expect(pivotXml).toContain('dataFields count="2"');
+        expect(pivotXml).toContain("Sum of D");
+        expect(pivotXml).toContain("Sum of E");
+      });
+
+      it("supports multiple values with columns and pages combined", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["D", "E"],
+          pages: ["C"],
+          metric: "sum"
+        });
+
+        const zipData = await writeThenParseZip(workbook);
+        const pivotXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // colFields: B + -2 = 2
+        expect(pivotXml).toContain('colFields count="2"');
+        expect(pivotXml).toContain('field x="-2"');
+        // pageFields
+        expect(pivotXml).toContain('pageFields count="1"');
+        // dataFields
+        expect(pivotXml).toContain('dataFields count="2"');
+        // Location offset for 1 page: A5
+        expect(pivotXml).toMatch(/ref="A5:/);
+      });
+    });
+
+    describe("all metric types", () => {
+      const ALL_METRICS = [
+        { metric: "average" as const, display: "Average", hasSubtotal: true },
+        { metric: "max" as const, display: "Max", hasSubtotal: true },
+        { metric: "min" as const, display: "Min", hasSubtotal: true },
+        { metric: "product" as const, display: "Product", hasSubtotal: true },
+        { metric: "countNums" as const, display: "Count Numbers", hasSubtotal: true },
+        { metric: "stdDev" as const, display: "StdDev", hasSubtotal: true },
+        { metric: "stdDevP" as const, display: "StdDevP", hasSubtotal: true },
+        { metric: "var" as const, display: "Var", hasSubtotal: true },
+        { metric: "varP" as const, display: "VarP", hasSubtotal: true }
+      ];
+
+      for (const { metric, display, hasSubtotal } of ALL_METRICS) {
+        it(`supports '${metric}' metric with display name "${display} of D"`, async () => {
+          const workbook = new Workbook();
+          const worksheet1 = workbook.addWorksheet("Sheet1");
+          worksheet1.addRows(TEST_DATA);
+
+          const worksheet2 = workbook.addWorksheet("Sheet2");
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            columns: ["C"],
+            values: ["D"],
+            metric
+          });
+
+          const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+          const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+          expect(pivotTableXml).toContain(`${display} of D`);
+          if (hasSubtotal) {
+            expect(pivotTableXml).toContain(`subtotal="${metric}"`);
+          }
+        });
+      }
+    });
+
+    describe("per-value metric overrides", () => {
+      it("supports per-value metrics with PivotTableValue objects", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: [],
+          values: [
+            { name: "D", metric: "sum" },
+            { name: "E", metric: "average" }
+          ]
+        });
+
+        const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+        const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        expect(pivotTableXml).toContain("Sum of D");
+        expect(pivotTableXml).toContain("Average of E");
+        expect(pivotTableXml).toContain('subtotal="average"');
+        expect(pivotTableXml).toContain('dataFields count="2"');
+      });
+
+      it("supports mixed string and PivotTableValue in values array", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: [],
+          values: ["D", { name: "E", metric: "max" }],
+          metric: "count"
+        });
+
+        const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+        const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        // "D" inherits table-wide "count"
+        expect(pivotTableXml).toContain("Count of D");
+        // "E" overrides with "max"
+        expect(pivotTableXml).toContain("Max of E");
+        expect(pivotTableXml).toContain('subtotal="count"');
+        expect(pivotTableXml).toContain('subtotal="max"');
+      });
+
+      it("supports per-value metrics with columns and pages", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: ["B"],
+          values: [
+            { name: "D", metric: "min" },
+            { name: "E", metric: "stdDev" }
+          ],
+          pages: ["C"]
+        });
+
+        const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+        const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        expect(pivotTableXml).toContain("Min of D");
+        expect(pivotTableXml).toContain("StdDev of E");
+        expect(pivotTableXml).toContain('subtotal="min"');
+        expect(pivotTableXml).toContain('subtotal="stdDev"');
+        // Multi-value with columns → field x="-2"
+        expect(pivotTableXml).toContain('field x="-2"');
+        expect(pivotTableXml).toContain('pageFields count="1"');
+      });
+
+      it("preserves per-value metrics through load/save", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Data");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Pivot");
+        worksheet2.addPivotTable({
+          sourceSheet: worksheet1,
+          rows: ["A"],
+          columns: [],
+          values: [
+            { name: "D", metric: "sum" },
+            { name: "E", metric: "average" }
+          ]
+        });
+
+        const PERVALUE_FILEPATH = testFilePath("workbook-pivot-pervalue.test");
+        await workbook.xlsx.writeFile(PERVALUE_FILEPATH);
+
+        // Load and verify
+        const loadedWorkbook = new Workbook();
+        await loadedWorkbook.xlsx.readFile(PERVALUE_FILEPATH);
+
+        const pivot = loadedWorkbook.pivotTables[0];
+        expect(pivot.valueMetrics).toBeDefined();
+        expect(pivot.valueMetrics).toHaveLength(2);
+        expect(pivot.valueMetrics[0]).toBe("sum");
+        expect(pivot.valueMetrics[1]).toBe("average");
+      });
+
+      it("supports sourceTable with per-value metrics", async () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const table = worksheet1.addTable({
+          name: "MetricTable",
+          ref: "A1",
+          headerRow: true,
+          columns: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }, { name: "E" }],
+          rows: TEST_DATA.slice(1)
+        });
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+        worksheet2.addPivotTable({
+          sourceTable: table,
+          rows: ["A"],
+          columns: [],
+          values: [
+            { name: "D", metric: "product" },
+            { name: "E", metric: "varP" }
+          ]
+        });
+
+        const zipData = await writeThenParseZip(workbook, TEST_XLSX_FILEPATH);
+        const pivotTableXml = decodeXml(zipData, "xl/pivotTables/pivotTable1.xml");
+
+        expect(pivotTableXml).toContain("Product of D");
+        expect(pivotTableXml).toContain("VarP of E");
+        expect(pivotTableXml).toContain('subtotal="product"');
+        expect(pivotTableXml).toContain('subtotal="varP"');
+      });
+    });
+
+    describe("intra-axis duplicate field validation (bug #3)", () => {
+      it("throws error when same field appears twice in rows", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A", "A"],
+            columns: ["B"],
+            values: ["E"],
+            metric: "sum"
+          });
+        }).toThrow('Duplicate field "A" in rows');
+      });
+
+      it("throws error when same field appears twice in columns", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            columns: ["B", "B"],
+            values: ["E"],
+            metric: "sum"
+          });
+        }).toThrow('Duplicate field "B" in columns');
+      });
+
+      it("throws error when same field appears twice in pages", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            values: ["E"],
+            pages: ["B", "B"],
+            metric: "sum"
+          });
+        }).toThrow('Duplicate field "B" in pages');
+      });
+    });
+
+    describe("invalid metric validation (bug #4)", () => {
+      it("throws error for invalid table-wide metric", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            columns: ["B"],
+            values: ["E"],
+            metric: "foo" as any
+          });
+        }).toThrow('Invalid metric "foo"');
+      });
+
+      it("throws error for invalid per-value metric", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const worksheet2 = workbook.addWorksheet("Sheet2");
+
+        expect(() => {
+          worksheet2.addPivotTable({
+            sourceSheet: worksheet1,
+            rows: ["A"],
+            columns: [],
+            values: [
+              { name: "D", metric: "sum" },
+              { name: "E", metric: "banana" as any }
+            ]
+          });
+        }).toThrow('Invalid metric "banana" on value field "E"');
+      });
+
+      it("accepts all valid metric strings without throwing", () => {
+        const workbook = new Workbook();
+        const worksheet1 = workbook.addWorksheet("Sheet1");
+        worksheet1.addRows(TEST_DATA);
+
+        const validMetrics = [
+          "sum",
+          "count",
+          "average",
+          "max",
+          "min",
+          "product",
+          "countNums",
+          "stdDev",
+          "stdDevP",
+          "var",
+          "varP"
+        ] as const;
+
+        for (const metric of validMetrics) {
+          const ws = workbook.addWorksheet(`M_${metric}`);
+          expect(() => {
+            ws.addPivotTable({
+              sourceSheet: worksheet1,
+              rows: ["A"],
+              columns: [],
+              values: ["E"],
+              metric
+            });
+          }).not.toThrow();
+        }
+      });
+    });
+
+    // =========================================================================
+    // R9 Bug Fixes — Tests
+    // =========================================================================
+
+    describe("R9-B1: tableNumber collision avoidance", () => {
+      it("assigns non-colliding tableNumber when loaded tables have non-contiguous numbering", async () => {
+        // Step 1: Create 3 pivot tables → tableNumbers 1, 2, 3
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+
+        const ws1 = workbook.addWorksheet("P1");
+        ws1.addPivotTable({ sourceSheet: source, rows: ["A"], values: ["D"], metric: "sum" });
+
+        const ws2 = workbook.addWorksheet("P2");
+        ws2.addPivotTable({ sourceSheet: source, rows: ["B"], values: ["D"], metric: "sum" });
+
+        const ws3 = workbook.addWorksheet("P3");
+        ws3.addPivotTable({ sourceSheet: source, rows: ["C"], values: ["D"], metric: "sum" });
+
+        expect(workbook.pivotTables.map(pt => pt.tableNumber)).toEqual([1, 2, 3]);
+
+        // Step 2: Save → Load (loaded tables keep their tableNumbers)
+        const filepath = testFilePath("r9-b1-table-number.test");
+        await workbook.xlsx.writeFile(filepath);
+
+        const loaded = new Workbook();
+        await loaded.xlsx.readFile(filepath);
+
+        expect(loaded.pivotTables.length).toBe(3);
+        expect(loaded.pivotTables.map(pt => pt.tableNumber).sort()).toEqual([1, 2, 3]);
+
+        // Step 3: Add a new pivot table to the loaded workbook
+        const newSource = loaded.getWorksheet("Data")!;
+        const newWs = loaded.addWorksheet("P4");
+        newWs.addPivotTable({ sourceSheet: newSource, rows: ["A"], values: ["E"], metric: "sum" });
+
+        // The new table should get tableNumber 4 (max(1,2,3)+1)
+        const newPivot = loaded.pivotTables[3];
+        expect(newPivot.tableNumber).toBe(4);
+
+        // No duplicates
+        const tableNumbers = loaded.pivotTables.map(pt => pt.tableNumber);
+        expect(new Set(tableNumbers).size).toBe(tableNumbers.length);
+
+        // Step 4: Save again and verify all 4 pivot table files exist
+        const zipData = await writeThenParseZip(loaded);
+        for (let i = 1; i <= 4; i++) {
+          expect(zipData[`xl/pivotTables/pivotTable${i}.xml`]).toBeDefined();
+        }
+      });
+
+      it("handles first-ever pivot table getting tableNumber 1", () => {
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+        const ws = workbook.addWorksheet("Pivot");
+
+        ws.addPivotTable({ sourceSheet: source, rows: ["A"], values: ["D"], metric: "sum" });
+        expect(workbook.pivotTables[0].tableNumber).toBe(1);
+      });
+    });
+
+    describe("R9-B4+B5: loaded pivot table without cacheRecords", () => {
+      it("writes correctly when loaded pivot table has no cacheRecords", async () => {
+        // Step 1: Create a normal pivot table and save
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+        const ws = workbook.addWorksheet("Pivot");
+        ws.addPivotTable({ sourceSheet: source, rows: ["A"], values: ["D"], metric: "sum" });
+
+        const filepath = testFilePath("r9-b4-no-records.test");
+        await workbook.xlsx.writeFile(filepath);
+
+        // Step 2: Load and artificially remove cacheRecords (simulating OLAP scenario)
+        const loaded = new Workbook();
+        await loaded.xlsx.readFile(filepath);
+
+        const pivot = loaded.pivotTables[0];
+        expect(pivot.cacheRecords).toBeDefined();
+
+        // Simulate missing cache records
+        delete (pivot as any).cacheRecords;
+
+        // Step 3: Save again — should not throw
+        const zipData = await writeThenParseZip(loaded);
+
+        // Pivot table file should exist
+        expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
+        // Cache definition should exist
+        expect(zipData["xl/pivotCache/pivotCacheDefinition1.xml"]).toBeDefined();
+        // Cache records should NOT exist
+        expect(zipData["xl/pivotCache/pivotCacheRecords1.xml"]).toBeUndefined();
+        // Cache definition rels should NOT exist (no records to point to)
+        expect(zipData["xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels"]).toBeUndefined();
+
+        // Content types should NOT mention pivotCacheRecords
+        const contentTypesXml = decodeXml(zipData, "[Content_Types].xml");
+        expect(contentTypesXml).not.toContain("pivotCacheRecords");
+        // But should mention pivotCacheDefinition and pivotTable
+        expect(contentTypesXml).toContain("pivotCacheDefinition");
+        expect(contentTypesXml).toContain("pivotTable");
+      });
+    });
+
+    describe("R9-B3: cache definition rels rId consistency", () => {
+      it("writes rels Id matching cache definition r:id", async () => {
+        // Create and save a pivot table
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+        const ws = workbook.addWorksheet("Pivot");
+        ws.addPivotTable({ sourceSheet: source, rows: ["A"], values: ["D"], metric: "sum" });
+
+        const filepath = testFilePath("r9-b3-rid-consistency.test");
+        await workbook.xlsx.writeFile(filepath);
+
+        // Load, then save again
+        const loaded = new Workbook();
+        await loaded.xlsx.readFile(filepath);
+
+        const zipData = await writeThenParseZip(loaded);
+
+        // Check that cache definition r:id and rels Id are consistent
+        const cacheDefXml = decodeXml(zipData, "xl/pivotCache/pivotCacheDefinition1.xml");
+        const relsXml = decodeXml(zipData, "xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels");
+
+        // Extract r:id from cache definition
+        const rIdMatch = cacheDefXml.match(/r:id="([^"]+)"/);
+        expect(rIdMatch).not.toBeNull();
+        const cacheDefRId = rIdMatch![1];
+
+        // Extract Id from rels
+        const relIdMatch = relsXml.match(/Id="([^"]+)"/);
+        expect(relIdMatch).not.toBeNull();
+        const relsId = relIdMatch![1];
+
+        // They must match
+        expect(cacheDefRId).toBe(relsId);
+      });
+    });
+
+    describe("R9-B6: shared cache deduplication", () => {
+      it("does not duplicate cache files when pivot tables share the same cacheId", async () => {
+        // Create a workbook with a pivot table
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+
+        const ws1 = workbook.addWorksheet("Pivot1");
+        ws1.addPivotTable({ sourceSheet: source, rows: ["A"], values: ["D"], metric: "sum" });
+
+        const ws2 = workbook.addWorksheet("Pivot2");
+        ws2.addPivotTable({ sourceSheet: source, rows: ["B"], values: ["E"], metric: "count" });
+
+        // Save and load (so pivot tables get loaded with their own cacheIds)
+        const filepath = testFilePath("r9-b6-shared-cache.test");
+        await workbook.xlsx.writeFile(filepath);
+
+        const loaded = new Workbook();
+        await loaded.xlsx.readFile(filepath);
+
+        // Force both pivot tables to share the same cacheId (simulate shared cache)
+        const pivot1 = loaded.pivotTables[0];
+        const pivot2 = loaded.pivotTables[1];
+        const sharedCacheId = pivot1.cacheId;
+        pivot2.cacheId = sharedCacheId;
+        // Share the cache data
+        pivot2.cacheDefinition = pivot1.cacheDefinition;
+        pivot2.cacheRecords = pivot1.cacheRecords;
+
+        // Save again
+        const zipData = await writeThenParseZip(loaded);
+
+        // Both pivot tables should exist
+        expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
+        expect(zipData["xl/pivotTables/pivotTable2.xml"]).toBeDefined();
+
+        // Only one cache definition should exist (the first table's)
+        expect(zipData["xl/pivotCache/pivotCacheDefinition1.xml"]).toBeDefined();
+        // The second table's cache definition should NOT be written
+        expect(zipData["xl/pivotCache/pivotCacheDefinition2.xml"]).toBeUndefined();
+
+        // Content types: only one pivotCacheDefinition entry
+        const contentTypesXml = decodeXml(zipData, "[Content_Types].xml");
+        const cacheDefMatches = contentTypesXml.match(/pivotCacheDefinition/g) ?? [];
+        // One in content type attribute value, one in PartName → 2 occurrences per entry
+        // With dedup we expect exactly 1 Override element = 2 text occurrences
+        expect(cacheDefMatches.length).toBe(2);
+
+        // Workbook.xml: only one pivotCache element for the shared cacheId
+        const workbookXml = decodeXml(zipData, "xl/workbook.xml");
+        const pivotCacheMatches = workbookXml.match(/<pivotCache /g) ?? [];
+        expect(pivotCacheMatches.length).toBe(1);
+
+        // Workbook rels: only one pivotCacheDefinition relationship
+        const workbookRelsXml = decodeXml(zipData, "xl/_rels/workbook.xml.rels");
+        const cacheRelMatches = workbookRelsXml.match(/pivotCacheDefinition/g) ?? [];
+        // One in Type attribute, one in Target → 2 occurrences per relationship
+        expect(cacheRelMatches.length).toBe(2);
+
+        // Pivot table 2's rels should point to pivotTable1's cache definition
+        const pt2RelsXml = decodeXml(zipData, "xl/pivotTables/_rels/pivotTable2.xml.rels");
+        expect(pt2RelsXml).toContain("pivotCacheDefinition1.xml");
+      });
+    });
+
+    describe("R9-T5: mixed loaded + new pivot tables", () => {
+      it("correctly writes both loaded and new pivot tables in the same workbook", async () => {
+        // Step 1: Create and save a workbook with one pivot table
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+        const ws = workbook.addWorksheet("Pivot1");
+        ws.addPivotTable({ sourceSheet: source, rows: ["A"], values: ["D"], metric: "sum" });
+
+        const filepath = testFilePath("r9-t5-mixed.test");
+        await workbook.xlsx.writeFile(filepath);
+
+        // Step 2: Load and add another new pivot table
+        const loaded = new Workbook();
+        await loaded.xlsx.readFile(filepath);
+
+        expect(loaded.pivotTables.length).toBe(1);
+        expect(loaded.pivotTables[0].isLoaded).toBe(true);
+
+        const loadedSource = loaded.getWorksheet("Data")!;
+        const newWs = loaded.addWorksheet("Pivot2");
+        newWs.addPivotTable({
+          sourceSheet: loadedSource,
+          rows: ["B"],
+          values: ["E"],
+          metric: "count"
+        });
+
+        expect(loaded.pivotTables.length).toBe(2);
+        expect(loaded.pivotTables[1].isLoaded).toBeUndefined();
+
+        // Step 3: Save and verify both pivot tables
+        const zipData = await writeThenParseZip(loaded);
+
+        // Both pivot table files should exist
+        expect(zipData["xl/pivotTables/pivotTable1.xml"]).toBeDefined();
+        expect(zipData["xl/pivotTables/pivotTable2.xml"]).toBeDefined();
+
+        // Both cache definitions should exist
+        expect(zipData["xl/pivotCache/pivotCacheDefinition1.xml"]).toBeDefined();
+        expect(zipData["xl/pivotCache/pivotCacheDefinition2.xml"]).toBeDefined();
+
+        // Both cache records should exist
+        expect(zipData["xl/pivotCache/pivotCacheRecords1.xml"]).toBeDefined();
+        expect(zipData["xl/pivotCache/pivotCacheRecords2.xml"]).toBeDefined();
+
+        // Content types should have entries for both
+        const contentTypesXml = decodeXml(zipData, "[Content_Types].xml");
+        expect(contentTypesXml).toContain("pivotTable1.xml");
+        expect(contentTypesXml).toContain("pivotTable2.xml");
+
+        // Workbook rels should have two cache definition relationships
+        const workbookRelsXml = decodeXml(zipData, "xl/_rels/workbook.xml.rels");
+        const cacheRelMatches = workbookRelsXml.match(/pivotCacheDefinition\d+\.xml/g) ?? [];
+        expect(cacheRelMatches.length).toBe(2);
+
+        // Step 4: Load the result again and verify integrity
+        const buffer = await loaded.xlsx.writeBuffer();
+        const final = new Workbook();
+        await final.xlsx.load(buffer as Buffer);
+
+        expect(final.pivotTables.length).toBe(2);
+        final.pivotTables.forEach(pt => {
+          expect(pt.cacheDefinition).toBeDefined();
+          expect(pt.cacheRecords).toBeDefined();
+          expect(pt.cacheFields.length).toBeGreaterThan(0);
+        });
+      });
+    });
+
+    describe("R9-B8: pivotCacheDefinitionRels parsing optimization", () => {
+      it("roundtrips correctly without parsing cache definition rels", async () => {
+        // Verify that skipping cache def rels parsing doesn't break roundtrip
+        const workbook = new Workbook();
+        const source = workbook.addWorksheet("Data");
+        source.addRows(TEST_DATA);
+        const ws = workbook.addWorksheet("Pivot");
+        ws.addPivotTable({
+          sourceSheet: source,
+          rows: ["A"],
+          columns: ["B"],
+          values: ["D"],
+          metric: "sum"
+        });
+
+        const filepath = testFilePath("r9-b8-rels-skip.test");
+        await workbook.xlsx.writeFile(filepath);
+
+        // Load (this will skip parsing cache def rels per R9-B8)
+        const loaded = new Workbook();
+        await loaded.xlsx.readFile(filepath);
+
+        // Verify pivot table is fully functional
+        const pivot = loaded.pivotTables[0];
+        expect(pivot.cacheDefinition).toBeDefined();
+        expect(pivot.cacheRecords).toBeDefined();
+        expect(pivot.cacheFields.length).toBe(5);
+
+        // Save again
+        const zipData = await writeThenParseZip(loaded);
+
+        // The cache def rels should still be written correctly
+        const relsXml = decodeXml(zipData, "xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels");
+        expect(relsXml).toContain("pivotCacheRecords1.xml");
       });
     });
   });

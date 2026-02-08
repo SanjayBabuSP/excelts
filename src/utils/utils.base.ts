@@ -36,42 +36,6 @@ export function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function nop(): void {}
-
-export const inherits = function <
-  T extends new (...args: any[]) => any,
-  S extends new (...args: any[]) => any
->(cls: T, superCtor: S, statics?: any, prototype?: any): void {
-  (cls as any).super_ = superCtor;
-
-  if (!prototype) {
-    prototype = statics;
-    statics = null;
-  }
-
-  if (statics) {
-    Object.keys(statics).forEach(i => {
-      Object.defineProperty(cls, i, Object.getOwnPropertyDescriptor(statics, i)!);
-    });
-  }
-
-  const properties: PropertyDescriptorMap = {
-    constructor: {
-      value: cls,
-      enumerable: false,
-      writable: false,
-      configurable: true
-    }
-  };
-  if (prototype) {
-    Object.keys(prototype).forEach(i => {
-      properties[i] = Object.getOwnPropertyDescriptor(prototype, i)!;
-    });
-  }
-
-  cls.prototype = Object.create(superCtor.prototype, properties);
-};
-
 // =============================================================================
 // Date utilities
 // =============================================================================
@@ -85,30 +49,13 @@ export function excelToDate(v: number, date1904?: boolean): Date {
   return new Date(millisecondSinceEpoch);
 }
 
-export function toIsoDateString(dt: Date): string {
-  return dt.toISOString().substr(0, 10);
-}
-
-// =============================================================================
-// Path utilities
-// =============================================================================
-
-interface PathInfo {
-  path: string;
-  name: string;
-}
-
-export function parsePath(filepath: string): PathInfo {
-  const last = filepath.lastIndexOf("/");
-  return {
-    path: filepath.substring(0, last),
-    name: filepath.substring(last + 1)
-  };
-}
-
-export function getRelsPath(filepath: string): string {
-  const path = parsePath(filepath);
-  return `${path.path}/_rels/${path.name}.rels`;
+/**
+ * Parse an OOXML date string into a Date object.
+ * OOXML dates like "2024-01-15T00:00:00" lack a timezone suffix,
+ * which some JS engines parse as local time. Appending "Z" forces UTC.
+ */
+export function parseOoxmlDate(raw: string): Date {
+  return new Date(raw.endsWith("Z") ? raw : raw + "Z");
 }
 
 // =============================================================================
@@ -225,7 +172,7 @@ export function isDateFmt(fmt: string | null | undefined): boolean {
   return cleanFmt.match(/[ymdhMsb]+/) !== null;
 }
 
-export function parseBoolean(value: any): boolean {
+export function parseBoolean(value: unknown): boolean {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 
@@ -240,23 +187,46 @@ export function* range(start: number, stop: number, step: number = 1): Generator
   }
 }
 
-export function toSortedArray(values: Iterable<any>): any[] {
+export function toSortedArray<T>(values: Iterable<T>): T[] {
   const result = Array.from(values);
-  // If all numbers, use numeric sort
-  if (result.every(item => Number.isFinite(item))) {
-    return result.sort((a, b) => a - b);
+  if (result.length <= 1) {
+    return result;
   }
-  return result.sort();
+  // All numbers → numeric sort
+  if (result.every(item => Number.isFinite(item))) {
+    return result.sort((a, b) => (a as number) - (b as number));
+  }
+  // All Dates → chronological sort
+  if (result.every(item => item instanceof Date)) {
+    return result.sort((a, b) => (a as Date).getTime() - (b as Date).getTime());
+  }
+  // Mixed types → type-aware sort: numbers first (numerically), then dates (chronologically), then strings (lexicographic)
+  return result.sort((a, b) => {
+    const ta = sortTypeRank(a);
+    const tb = sortTypeRank(b);
+    if (ta !== tb) {
+      return ta - tb;
+    }
+    // Same type group
+    if (ta === 0) {
+      return (a as number) - (b as number);
+    }
+    if (ta === 1) {
+      return (a as Date).getTime() - (b as Date).getTime();
+    }
+    return String(a).localeCompare(String(b));
+  });
 }
 
-export function objectFromProps<T = any>(
-  props: string[],
-  value: T | null = null
-): Record<string, T | null> {
-  return props.reduce((result: Record<string, T | null>, property: string) => {
-    result[property] = value;
-    return result;
-  }, {});
+/** Rank for mixed-type sort: numbers=0, dates=1, everything else=2 */
+function sortTypeRank(v: unknown): number {
+  if (Number.isFinite(v)) {
+    return 0;
+  }
+  if (v instanceof Date) {
+    return 1;
+  }
+  return 2;
 }
 
 // =============================================================================

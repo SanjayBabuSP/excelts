@@ -75,7 +75,7 @@ function isValidRange(range: string): boolean {
   }
 
   // Extract the cell reference part (after the sheet name if present)
-  const cellRef = range.split("!").pop() || "";
+  const cellRef = range.split("!").pop() ?? "";
 
   // Must match one of the valid patterns
   if (
@@ -118,7 +118,7 @@ function extractRanges(parsedText: string): string[] {
     if (!item) {
       return;
     }
-    const quotes = (item.match(/'/g) || []).length;
+    const quotes = (item.match(/'/g) ?? []).length;
 
     if (!quotes) {
       if (quotesOpened) {

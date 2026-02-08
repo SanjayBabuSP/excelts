@@ -8,9 +8,7 @@ interface TableStyleModel {
   showColumnStripes: boolean;
 }
 
-class TableStyleInfoXform extends BaseXform {
-  declare public model: TableStyleModel;
-
+class TableStyleInfoXform extends BaseXform<TableStyleModel> {
   constructor() {
     super();
     this.model = {

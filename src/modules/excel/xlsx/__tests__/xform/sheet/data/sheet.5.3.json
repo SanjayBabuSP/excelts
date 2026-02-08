@@ -8,8 +8,7 @@
     "customHeight": true
   },
   "pageSetup": {
-    "fitToPage": false,
-    "margins": null
+    "fitToPage": false
   },
   "rows": [
     {
@@ -30,15 +29,6 @@
       ]
     }
   ],
-  "background": null,
-  "mergeCells": null,
-  "dataValidations": null,
-  "drawing": null,
-  "headerFooter": null,
-  "cols": null,
-  "hyperlinks": null,
-  "views": null,
-  "tables": null,
   "conditionalFormattings": [],
   "rowBreaks": [],
   "colBreaks": []

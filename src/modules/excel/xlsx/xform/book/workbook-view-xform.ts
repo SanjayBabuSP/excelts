@@ -13,10 +13,10 @@ interface WorkbookViewModel {
 class WorkbookViewXform extends BaseXform {
   render(xmlStream: any, model: WorkbookViewModel): void {
     const attributes: any = {
-      xWindow: model.x || 0,
-      yWindow: model.y || 0,
-      windowWidth: model.width || 12000,
-      windowHeight: model.height || 24000,
+      xWindow: model.x ?? 0,
+      yWindow: model.y ?? 0,
+      windowWidth: model.width ?? 12000,
+      windowHeight: model.height ?? 24000,
       firstSheet: model.firstSheet,
       activeTab: model.activeTab
     };

@@ -697,11 +697,6 @@ export interface ConditionalFormattingOptions {
   rules: ConditionalFormattingRule[];
 }
 
-export interface ConditionalFormattingOptions {
-  ref: string;
-  rules: ConditionalFormattingRule[];
-}
-
 // ============================================================================
 // Table Types
 // ============================================================================

@@ -350,7 +350,7 @@ export abstract class WorkbookReaderBase<
 
     // Build fast lookup for worksheet relationship ids.
     this._workbookRelIdByTarget = Object.create(null) as Record<string, string>;
-    for (const rel of this.workbookRels || []) {
+    for (const rel of this.workbookRels ?? []) {
       if (rel?.Target && rel?.Id) {
         this._workbookRelIdByTarget[rel.Target] = rel.Id;
       }
@@ -365,7 +365,7 @@ export abstract class WorkbookReaderBase<
 
     // Build fast lookup for sheet metadata by relationship id.
     this._sheetByRelId = Object.create(null) as Record<string, SheetMetadata>;
-    for (const sheet of this.model?.sheets || []) {
+    for (const sheet of this.model?.sheets ?? []) {
       this._sheetByRelId[sheet.rId] = sheet;
     }
   }
@@ -475,9 +475,9 @@ export abstract class WorkbookReaderBase<
               break;
             case "si":
               if (this.options.sharedStrings === "cache") {
-                this.sharedStrings!.push(richText.length ? { richText } : text || "");
+                this.sharedStrings!.push(richText.length ? { richText } : (text ?? ""));
               } else if (this.options.sharedStrings === "emit") {
-                yield { index: index++, text: richText.length ? { richText } : text || "" };
+                yield { index: index++, text: richText.length ? { richText } : (text ?? "") };
               }
               richText = [];
               font = null;

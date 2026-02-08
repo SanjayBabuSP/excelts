@@ -22,7 +22,7 @@ class ContentTypesXform extends BaseXform {
     xmlStream.openNode("Types", ContentTypesXform.PROPERTY_ATTRIBUTES);
 
     const mediaHash: { [key: string]: boolean } = {};
-    (model.media || []).forEach((medium: any) => {
+    (model.media ?? []).forEach((medium: any) => {
       if (medium.type === "image") {
         const imageType = medium.extension;
         if (!mediaHash[imageType]) {
@@ -55,20 +55,37 @@ class ContentTypesXform extends BaseXform {
       });
     });
 
-    if ((model.pivotTables || []).length) {
+    if ((model.pivotTables ?? []).length) {
+      // R9-B6: Deduplicate cache content types by cacheId. When multiple pivot tables
+      // share the same cache, the cache definition/records files are written only once.
+      const writtenCacheIds = new Set<string>();
+
       // Add content types for each pivot table
-      (model.pivotTables || []).forEach((pivotTable: any) => {
+      (model.pivotTables ?? []).forEach((pivotTable: any) => {
         const n = pivotTable.tableNumber;
-        xmlStream.leafNode("Override", {
-          PartName: toContentTypesPartName(pivotCacheDefinitionPath(n)),
-          ContentType:
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"
-        });
-        xmlStream.leafNode("Override", {
-          PartName: toContentTypesPartName(pivotCacheRecordsPath(n)),
-          ContentType:
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"
-        });
+        const cacheId: string = pivotTable.cacheId;
+
+        if (!writtenCacheIds.has(cacheId)) {
+          writtenCacheIds.add(cacheId);
+
+          xmlStream.leafNode("Override", {
+            PartName: toContentTypesPartName(pivotCacheDefinitionPath(n)),
+            ContentType:
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"
+          });
+          // R9-B5: Only register cacheRecords content type when the file actually exists.
+          // Loaded pivot tables may lack cacheRecords (e.g. OLAP sources).
+          const hasCacheRecords = pivotTable.isLoaded ? !!pivotTable.cacheRecords : true;
+          if (hasCacheRecords) {
+            xmlStream.leafNode("Override", {
+              PartName: toContentTypesPartName(pivotCacheRecordsPath(n)),
+              ContentType:
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"
+            });
+          }
+        }
+
+        // Each pivot table always has its own file
         xmlStream.leafNode("Override", {
           PartName: toContentTypesPartName(pivotTablePath(n)),
           ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"

@@ -25,8 +25,7 @@ interface SheetViewModel {
   activeCell?: string;
 }
 
-class SheetViewXform extends BaseXform {
-  declare public model: SheetViewModel;
+class SheetViewXform extends BaseXform<SheetViewModel> {
   declare private sheetView: any;
   declare private pane: any;
   declare private selections: any;
@@ -52,7 +51,7 @@ class SheetViewXform extends BaseXform {
     if (model.tabSelected) {
       initialAttrs.tabSelected = "1";
     }
-    initialAttrs.workbookViewId = model.workbookViewId || 0;
+    initialAttrs.workbookViewId = model.workbookViewId ?? 0;
 
     xmlStream.openNode("sheetView", initialAttrs);
     const add = function (name: string, value: any, included: any): void {
@@ -79,8 +78,8 @@ class SheetViewXform extends BaseXform {
     let activePane;
     switch (model.state) {
       case "frozen":
-        xSplit = model.xSplit || 0;
-        ySplit = model.ySplit || 0;
+        xSplit = model.xSplit ?? 0;
+        ySplit = model.ySplit ?? 0;
         topLeftCell = model.topLeftCell || colCache.getAddress(ySplit + 1, xSplit + 1).address;
         activePane =
           (model.xSplit && model.ySplit && "bottomRight") ||
@@ -140,8 +139,8 @@ class SheetViewXform extends BaseXform {
           showRuler: !(node.attributes.showRuler === "0"),
           showRowColHeaders: !(node.attributes.showRowColHeaders === "0"),
           showGridLines: !(node.attributes.showGridLines === "0"),
-          zoomScale: parseInt(node.attributes.zoomScale || "100", 10),
-          zoomScaleNormal: parseInt(node.attributes.zoomScaleNormal || "100", 10),
+          zoomScale: parseInt(node.attributes.zoomScale ?? "100", 10),
+          zoomScaleNormal: parseInt(node.attributes.zoomScaleNormal ?? "100", 10),
           style: node.attributes.view
         };
         this.pane = undefined;
@@ -150,16 +149,16 @@ class SheetViewXform extends BaseXform {
 
       case "pane":
         this.pane = {
-          xSplit: parseInt(node.attributes.xSplit || "0", 10),
-          ySplit: parseInt(node.attributes.ySplit || "0", 10),
+          xSplit: parseInt(node.attributes.xSplit ?? "0", 10),
+          ySplit: parseInt(node.attributes.ySplit ?? "0", 10),
           topLeftCell: node.attributes.topLeftCell,
-          activePane: node.attributes.activePane || "topLeft",
+          activePane: node.attributes.activePane ?? "topLeft",
           state: node.attributes.state
         };
         return true;
 
       case "selection": {
-        const name = node.attributes.pane || "topLeft";
+        const name = node.attributes.pane ?? "topLeft";
         this.selections[name] = {
           pane: name,
           activeCell: node.attributes.activeCell
@@ -184,7 +183,7 @@ class SheetViewXform extends BaseXform {
             workbookViewId: this.sheetView.workbookViewId,
             rightToLeft: this.sheetView.rightToLeft,
             tabSelected: this.sheetView.tabSelected,
-            state: VIEW_STATES[this.pane.state] || "split", // split is default
+            state: VIEW_STATES[this.pane.state] ?? "split", // split is default
             xSplit: this.pane.xSplit,
             ySplit: this.pane.ySplit,
             topLeftCell: this.pane.topLeftCell,

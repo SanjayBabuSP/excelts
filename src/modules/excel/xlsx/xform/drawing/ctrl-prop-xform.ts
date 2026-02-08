@@ -9,9 +9,7 @@ import type { FormCheckboxModel } from "@excel/form-control";
  * that stores its properties like objectType, checked state, and linked cell.
  */
 
-class CtrlPropXform extends BaseXform {
-  declare public model: FormCheckboxModel;
-
+class CtrlPropXform extends BaseXform<FormCheckboxModel> {
   private _checkedToXmlValue(checked: FormCheckboxModel["checked"]): string {
     switch (checked) {
       case "Checked":

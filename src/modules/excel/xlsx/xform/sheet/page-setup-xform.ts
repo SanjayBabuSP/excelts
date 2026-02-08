@@ -105,21 +105,21 @@ class PageSetupXform extends BaseXform {
       case this.tag:
         this.model = {
           paperSize: pageSizeToModel(node.attributes.paperSize),
-          orientation: node.attributes.orientation || "portrait",
-          horizontalDpi: parseInt(node.attributes.horizontalDpi || "4294967295", 10),
-          verticalDpi: parseInt(node.attributes.verticalDpi || "4294967295", 10),
-          pageOrder: node.attributes.pageOrder || "downThenOver",
+          orientation: node.attributes.orientation ?? "portrait",
+          horizontalDpi: parseInt(node.attributes.horizontalDpi ?? "4294967295", 10),
+          verticalDpi: parseInt(node.attributes.verticalDpi ?? "4294967295", 10),
+          pageOrder: node.attributes.pageOrder ?? "downThenOver",
           blackAndWhite: node.attributes.blackAndWhite === "1",
           draft: node.attributes.draft === "1",
-          cellComments: node.attributes.cellComments || "None",
-          errors: node.attributes.errors || "displayed",
-          scale: parseInt(node.attributes.scale || "100", 10),
-          fitToWidth: parseInt(node.attributes.fitToWidth || "1", 10),
-          fitToHeight: parseInt(node.attributes.fitToHeight || "1", 10),
-          firstPageNumber: parseInt(node.attributes.firstPageNumber || "1", 10),
+          cellComments: node.attributes.cellComments ?? "None",
+          errors: node.attributes.errors ?? "displayed",
+          scale: parseInt(node.attributes.scale ?? "100", 10),
+          fitToWidth: parseInt(node.attributes.fitToWidth ?? "1", 10),
+          fitToHeight: parseInt(node.attributes.fitToHeight ?? "1", 10),
+          firstPageNumber: parseInt(node.attributes.firstPageNumber ?? "1", 10),
           useFirstPageNumber: node.attributes.useFirstPageNumber === "1",
           usePrinterDefaults: node.attributes.usePrinterDefaults === "1",
-          copies: parseInt(node.attributes.copies || "1", 10)
+          copies: parseInt(node.attributes.copies ?? "1", 10)
         };
         return true;
       default:

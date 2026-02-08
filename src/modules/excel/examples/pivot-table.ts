@@ -8,7 +8,7 @@
 import { Workbook } from "../../../index";
 import { HrStopwatch } from "@excel/examples/utils/hr-stopwatch";
 
-function main(filepath) {
+function main(filepath: string) {
   const workbook = new Workbook();
 
   const worksheet1 = workbook.addWorksheet("Sheet1");
@@ -31,14 +31,14 @@ function main(filepath) {
     // they come from the first row in `worksheet1`.
     rows: ["A", "B", "E"],
     columns: ["C", "D"],
-    values: ["H"], // only 1 item possible for now
-    metric: "sum" // only 'sum' possible for now
+    values: ["H"],
+    metric: "sum"
   });
 
   save(workbook, filepath);
 }
 
-function save(workbook, filepath) {
+function save(workbook: Workbook, filepath: string) {
   const stopwatch = new HrStopwatch();
   stopwatch.start();
 

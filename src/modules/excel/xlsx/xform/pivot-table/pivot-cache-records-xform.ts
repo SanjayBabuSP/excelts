@@ -1,61 +1,37 @@
 import { XmlStream } from "@excel/utils/xml-stream";
-import { xmlEncode, xmlDecode } from "@utils/utils";
+import { xmlEncode, parseOoxmlDate } from "@utils/utils";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { PivotTableError } from "@excel/errors";
-import type { PivotTableSource } from "@excel/pivot-table";
+import { formatDateForExcel } from "@excel/xlsx/xform/pivot-table/cache-field";
+import type {
+  PivotTableSource,
+  RecordValue,
+  ParsedCacheRecords,
+  CacheField,
+  SharedItemValue
+} from "@excel/pivot-table";
+import { PivotErrorValue } from "@excel/pivot-table";
+
+/** Attribute keys on <pivotCacheRecords> that are individually parsed (not collected into extraRootAttrs). */
+const KNOWN_CACHE_RECORDS_ROOT_KEYS = new Set(["xmlns", "xmlns:r", "count"]);
 
 /**
  * Model for generating pivot cache records (with live source)
  */
 interface CacheRecordsModel {
   source: PivotTableSource;
-  cacheFields: any[];
+  cacheFields: CacheField[];
 }
 
-/**
- * Parsed record value - can be:
- * - { type: 'x', value: number } - Shared item index
- * - { type: 'n', value: number } - Numeric value
- * - { type: 's', value: string } - String value
- * - { type: 'b', value: boolean } - Boolean value
- * - { type: 'm' } - Missing/null value
- * - { type: 'd', value: Date } - Date value
- * - { type: 'e', value: string } - Error value
- */
-interface RecordValue {
-  type: "x" | "n" | "s" | "b" | "m" | "d" | "e";
-  value?: any;
-}
-
-/**
- * Parsed cache records model
- */
-interface ParsedCacheRecordsModel {
-  // Array of records, each record is an array of values
-  records: RecordValue[][];
-  // Record count
-  count: number;
-  // Flag indicating this was loaded from file (not newly created)
-  isLoaded?: boolean;
-}
-
-class PivotCacheRecordsXform extends BaseXform {
-  declare public map: { [key: string]: any };
-  declare public model: ParsedCacheRecordsModel | null;
-
+class PivotCacheRecordsXform extends BaseXform<ParsedCacheRecords | null> {
   // Parser state
   private currentRecord: RecordValue[] | null;
 
   constructor() {
     super();
 
-    this.map = {};
     this.model = null;
     this.currentRecord = null;
-  }
-
-  prepare(_model: any): void {
-    // No preparation needed
   }
 
   get tag(): string {
@@ -72,12 +48,12 @@ class PivotCacheRecordsXform extends BaseXform {
    * Render pivot cache records XML.
    * Supports both newly created models (with PivotTableSource) and loaded models.
    */
-  render(xmlStream: any, model: CacheRecordsModel | ParsedCacheRecordsModel): void {
+  render(xmlStream: XmlStream, model: CacheRecordsModel | ParsedCacheRecords): void {
     // Check if this is a loaded model
-    const isLoaded = (model as ParsedCacheRecordsModel).isLoaded || !("source" in model);
+    const isLoaded = ("isLoaded" in model && model.isLoaded) || !("source" in model);
 
     if (isLoaded) {
-      this.renderLoaded(xmlStream, model as ParsedCacheRecordsModel);
+      this.renderLoaded(xmlStream, model as ParsedCacheRecords);
     } else {
       this.renderNew(xmlStream, model as CacheRecordsModel);
     }
@@ -86,9 +62,10 @@ class PivotCacheRecordsXform extends BaseXform {
   /**
    * Render newly created pivot cache records
    */
-  private renderNew(xmlStream: any, model: CacheRecordsModel): void {
+  private renderNew(xmlStream: XmlStream, model: CacheRecordsModel): void {
     const { source, cacheFields } = model;
-    const sourceBodyRows = source.getSheetValues().slice(2);
+    // R8-O2: Use Array.isArray for type safety — getSheetValues() returns a sparse array of row arrays
+    const sourceBodyRows = source.getSheetValues().slice(2).filter(Array.isArray);
 
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, {
@@ -102,12 +79,28 @@ class PivotCacheRecordsXform extends BaseXform {
   /**
    * Render loaded pivot cache records
    */
-  private renderLoaded(xmlStream: any, model: ParsedCacheRecordsModel): void {
+  private renderLoaded(xmlStream: XmlStream, model: ParsedCacheRecords): void {
     xmlStream.openXml(XmlStream.StdDocAttributes);
-    xmlStream.openNode(this.tag, {
-      ...PivotCacheRecordsXform.PIVOT_CACHE_RECORDS_ATTRIBUTES,
-      count: model.count
-    });
+    // R8-B11: Use preserved root attributes instead of hardcoded MS namespaces.
+    // The base xmlns/xmlns:r are always needed; extra attributes (xmlns:mc, mc:Ignorable, etc.)
+    // come from the parsed original if available, otherwise fall back to the hardcoded defaults.
+    const rootAttrs: Record<string, string | number> = {
+      xmlns: PivotCacheRecordsXform.PIVOT_CACHE_RECORDS_ATTRIBUTES.xmlns,
+      "xmlns:r": PivotCacheRecordsXform.PIVOT_CACHE_RECORDS_ATTRIBUTES["xmlns:r"]
+    };
+    if (model.extraRootAttrs) {
+      for (const [k, v] of Object.entries(model.extraRootAttrs)) {
+        rootAttrs[k] = v;
+      }
+    } else {
+      // No preserved attributes — use defaults for new-style rendering
+      rootAttrs["xmlns:mc"] = PivotCacheRecordsXform.PIVOT_CACHE_RECORDS_ATTRIBUTES["xmlns:mc"];
+      rootAttrs["mc:Ignorable"] =
+        PivotCacheRecordsXform.PIVOT_CACHE_RECORDS_ATTRIBUTES["mc:Ignorable"];
+      rootAttrs["xmlns:xr"] = PivotCacheRecordsXform.PIVOT_CACHE_RECORDS_ATTRIBUTES["xmlns:xr"];
+    }
+    rootAttrs.count = model.records.length;
+    xmlStream.openNode(this.tag, rootAttrs);
 
     // Render each record
     for (const record of model.records) {
@@ -130,53 +123,87 @@ class PivotCacheRecordsXform extends BaseXform {
       case "x":
         return `<x v="${value.value}" />`;
       case "n":
+        // Guard against NaN/Infinity — not valid in OOXML, render as missing
+        if (!Number.isFinite(value.value)) {
+          return "<m />";
+        }
         return `<n v="${value.value}" />`;
       case "s":
-        return `<s v="${xmlEncode(String(value.value))}" />`;
+        return `<s v="${xmlEncode(value.value)}" />`;
       case "b":
         return `<b v="${value.value ? "1" : "0"}" />`;
       case "m":
         return "<m />";
       case "d":
-        return `<d v="${(value.value as Date).toISOString()}" />`;
+        return `<d v="${formatDateForExcel(value.value)}" />`;
       case "e":
-        return `<e v="${value.value}" />`;
-      default:
-        return "<m />";
+        return `<e v="${xmlEncode(value.value)}" />`;
+      default: {
+        const _exhaustive: never = value;
+        throw new Error(`Unhandled record value type: ${(_exhaustive as any).type}`);
+      }
     }
   }
 
   // Helper methods for rendering new records
-  private renderTableNew(sourceBodyRows: any[], cacheFields: any[]): string {
+  private renderTableNew(sourceBodyRows: unknown[][], cacheFields: CacheField[]): string {
     const parts: string[] = [];
     for (const row of sourceBodyRows) {
       const realRow = row.slice(1);
       parts.push("\n  <r>");
-      for (let i = 0; i < realRow.length; i++) {
+      const fieldCount = Math.min(realRow.length, cacheFields.length);
+      for (let i = 0; i < fieldCount; i++) {
         parts.push("\n    ");
         parts.push(this.renderCellNew(realRow[i], cacheFields[i].sharedItems));
+      }
+      // Pad missing columns with <m /> so every record has exactly one value per cacheField (OOXML requirement)
+      for (let i = fieldCount; i < cacheFields.length; i++) {
+        parts.push("\n    <m />");
       }
       parts.push("\n  </r>");
     }
     return parts.join("");
   }
 
-  private renderCellNew(value: any, sharedItems: any[] | null): string {
-    // Handle null/undefined values first
-    if (value === null || value === undefined) {
+  private renderCellNew(value: unknown, sharedItems: SharedItemValue[] | null): string {
+    // Handle null/undefined/NaN values first — all treated as missing
+    if (
+      value === null ||
+      value === undefined ||
+      (typeof value === "number" && !Number.isFinite(value))
+    ) {
+      // If no shared items, render as missing value directly
+      if (sharedItems === null) {
+        return "<m />";
+      }
+      // With shared items, look up null (undefined is treated as null)
+      const idx = sharedItems.indexOf(null);
+      if (idx >= 0) {
+        return `<x v="${idx}" />`;
+      }
+      // null not in sharedItems — render as missing
       return "<m />";
     }
 
-    // no shared items
+    // no shared items — render inline by type
     if (sharedItems === null) {
+      if (value instanceof PivotErrorValue) {
+        return `<e v="${xmlEncode(value.code)}" />`;
+      }
+      if (typeof value === "boolean") {
+        return `<b v="${value ? "1" : "0"}" />`;
+      }
+      if (value instanceof Date) {
+        return `<d v="${formatDateForExcel(value)}" />`;
+      }
       if (Number.isFinite(value)) {
         return `<n v="${value}" />`;
       }
       return `<s v="${xmlEncode(String(value))}" />`;
     }
 
-    // shared items - use indexOf for value lookup (works for both string and numeric)
-    const sharedItemsIndex = sharedItems.indexOf(value);
+    // shared items — look up index (type-aware for Date)
+    const sharedItemsIndex = findSharedItemIndex(sharedItems, value);
     if (sharedItemsIndex < 0) {
       throw new PivotTableError(
         `${JSON.stringify(value)} not in sharedItems ${JSON.stringify(sharedItems)}`
@@ -189,15 +216,24 @@ class PivotCacheRecordsXform extends BaseXform {
     const { name, attributes } = node;
 
     switch (name) {
-      case this.tag:
+      case this.tag: {
         // pivotCacheRecords root element
         this.reset();
+        // R8-B11: Collect unknown root attributes for roundtrip preservation
+        const extraRootAttrs: Record<string, string> = {};
+        for (const [k, v] of Object.entries(attributes)) {
+          if (!KNOWN_CACHE_RECORDS_ROOT_KEYS.has(k)) {
+            extraRootAttrs[k] = String(v);
+          }
+        }
         this.model = {
           records: [],
-          count: parseInt(attributes.count || "0", 10),
-          isLoaded: true
+          count: parseInt(attributes.count ?? "0", 10),
+          isLoaded: true,
+          extraRootAttrs: Object.keys(extraRootAttrs).length > 0 ? extraRootAttrs : undefined
         };
         break;
+      }
 
       case "r":
         // Start of a new record
@@ -209,18 +245,22 @@ class PivotCacheRecordsXform extends BaseXform {
         if (this.currentRecord) {
           this.currentRecord.push({
             type: "x",
-            value: parseInt(attributes.v || "0", 10)
+            value: parseInt(attributes.v ?? "0", 10)
           });
         }
         break;
 
       case "n":
-        // Numeric value
+        // Numeric value — missing v → treat as missing to avoid fabricating 0
         if (this.currentRecord) {
-          this.currentRecord.push({
-            type: "n",
-            value: parseFloat(attributes.v || "0")
-          });
+          if (attributes.v === undefined || attributes.v === "") {
+            this.currentRecord.push({ type: "m" });
+          } else {
+            this.currentRecord.push({
+              type: "n",
+              value: parseFloat(attributes.v)
+            });
+          }
         }
         break;
 
@@ -229,7 +269,7 @@ class PivotCacheRecordsXform extends BaseXform {
         if (this.currentRecord) {
           this.currentRecord.push({
             type: "s",
-            value: xmlDecode(attributes.v || "")
+            value: attributes.v ?? ""
           });
         }
         break;
@@ -252,12 +292,23 @@ class PivotCacheRecordsXform extends BaseXform {
         break;
 
       case "d":
-        // Date value
+        // Date value — force UTC parsing (OOXML dates lack "Z" suffix)
+        // Missing/empty v → treat as missing value to avoid Invalid Date
         if (this.currentRecord) {
-          this.currentRecord.push({
-            type: "d",
-            value: new Date(attributes.v || "")
-          });
+          if (!attributes.v) {
+            this.currentRecord.push({ type: "m" });
+          } else {
+            // R8-B13: Guard against Invalid Date from malformed date strings
+            const date = parseOoxmlDate(attributes.v);
+            if (isNaN(date.getTime())) {
+              this.currentRecord.push({ type: "m" });
+            } else {
+              this.currentRecord.push({
+                type: "d",
+                value: date
+              });
+            }
+          }
         }
         break;
 
@@ -266,7 +317,7 @@ class PivotCacheRecordsXform extends BaseXform {
         if (this.currentRecord) {
           this.currentRecord.push({
             type: "e",
-            value: attributes.v || ""
+            value: attributes.v ?? ""
           });
         }
         break;
@@ -297,11 +348,7 @@ class PivotCacheRecordsXform extends BaseXform {
     return true;
   }
 
-  reconcile(_model: any, _options: any): void {
-    // No reconciliation needed
-  }
-
-  static PIVOT_CACHE_RECORDS_ATTRIBUTES = {
+  static readonly PIVOT_CACHE_RECORDS_ATTRIBUTES = {
     xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "xmlns:r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "xmlns:mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
@@ -310,4 +357,33 @@ class PivotCacheRecordsXform extends BaseXform {
   };
 }
 
-export { PivotCacheRecordsXform, type ParsedCacheRecordsModel };
+export { PivotCacheRecordsXform };
+
+/**
+ * Find the index of `value` in `sharedItems`, using type-aware comparison.
+ * - Date objects are compared by timestamp (getTime()) since === uses reference equality.
+ * - PivotErrorValue objects are compared by their code string.
+ * - All other types use strict equality (===) via indexOf.
+ */
+function findSharedItemIndex(sharedItems: SharedItemValue[], value: unknown): number {
+  if (value instanceof Date) {
+    const ts = value.getTime();
+    for (let i = 0; i < sharedItems.length; i++) {
+      const item = sharedItems[i];
+      if (item instanceof Date && item.getTime() === ts) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  if (value instanceof PivotErrorValue) {
+    for (let i = 0; i < sharedItems.length; i++) {
+      const item = sharedItems[i];
+      if (item instanceof PivotErrorValue && item.code === value.code) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  return sharedItems.indexOf(value as SharedItemValue);
+}

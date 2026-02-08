@@ -6,10 +6,9 @@ interface CommentsModel {
   comments: any[];
 }
 
-class CommentsXform extends BaseXform {
+class CommentsXform extends BaseXform<CommentsModel> {
   declare public map: { [key: string]: CommentXform };
   declare public parser: any;
-  declare public model: CommentsModel;
 
   constructor() {
     super();

@@ -44,13 +44,13 @@ class SheetFormatPropertiesXform extends BaseXform {
   parseOpen(node: any): boolean {
     if (node.name === "sheetFormatPr") {
       this.model = {
-        defaultRowHeight: parseFloat(node.attributes.defaultRowHeight || "0"),
+        defaultRowHeight: parseFloat(node.attributes.defaultRowHeight ?? "0"),
         dyDescent:
           node.attributes["x14ac:dyDescent"] !== undefined
             ? parseFloat(node.attributes["x14ac:dyDescent"])
             : undefined,
-        outlineLevelRow: parseInt(node.attributes.outlineLevelRow || "0", 10),
-        outlineLevelCol: parseInt(node.attributes.outlineLevelCol || "0", 10)
+        outlineLevelRow: parseInt(node.attributes.outlineLevelRow ?? "0", 10),
+        outlineLevelCol: parseInt(node.attributes.outlineLevelCol ?? "0", 10)
       };
       if (node.attributes.defaultColWidth) {
         this.model.defaultColWidth = parseFloat(node.attributes.defaultColWidth);

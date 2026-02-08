@@ -295,7 +295,7 @@ class CfRuleXform extends CompositeXform {
 
       case "formula":
         // except - formula is a string and appends to formulae
-        this.model.formulae = this.model.formulae || [];
+        this.model.formulae = this.model.formulae ?? [];
         this.model.formulae.push(parser.model);
         break;
     }

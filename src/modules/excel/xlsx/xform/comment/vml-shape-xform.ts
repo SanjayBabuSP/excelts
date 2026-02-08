@@ -30,7 +30,7 @@ class VmlShapeXform extends BaseXform {
   }
 
   render(xmlStream: any, model: ShapeModel, index?: number): void {
-    xmlStream.openNode("v:shape", VmlShapeXform.V_SHAPE_ATTRIBUTES(model, index || 0));
+    xmlStream.openNode("v:shape", VmlShapeXform.V_SHAPE_ATTRIBUTES(model, index ?? 0));
 
     xmlStream.leafNode("v:fill", { color2: "infoBackground [80]" });
     xmlStream.leafNode("v:shadow", { color: "none [81]", obscured: "t" });

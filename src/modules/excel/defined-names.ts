@@ -250,7 +250,7 @@ class DefinedNames {
     value.forEach(definedName => {
       const matrix = (matrixMap[definedName.name] = new CellMatrix());
       definedName.ranges.forEach(rangeStr => {
-        if (rangeRegexp.test(rangeStr.split("!").pop() || "")) {
+        if (rangeRegexp.test(rangeStr.split("!").pop() ?? "")) {
           matrix.addCell(rangeStr);
         }
       });

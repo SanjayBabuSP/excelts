@@ -197,7 +197,7 @@ class StreamBuf extends EventEmitter {
     super();
     this.bufSize = options?.bufSize || 1024 * 1024;
     this.buffers = [];
-    this.batch = options?.batch || false;
+    this.batch = options?.batch ?? false;
     this.corked = false;
     this.paused = false;
     this.encoding = null;
@@ -434,7 +434,7 @@ class StreamBuf extends EventEmitter {
    * Cross-platform compatible - works identically in Node.js and Browser.
    */
   readString(encoding?: TextEncoding): string {
-    const enc = encoding || (this.encoding as TextEncoding) || "utf-8";
+    const enc = encoding ?? (this.encoding as TextEncoding) ?? "utf-8";
     const buf = this.read();
     if (typeof Buffer !== "undefined" && buf instanceof Buffer) {
       return buf.toString(enc);

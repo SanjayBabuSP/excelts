@@ -51,10 +51,10 @@ class Anchor {
       this.nativeRow = decoded.row + offset;
       this.nativeRowOff = 0;
     } else if (isAnchorModel(address)) {
-      this.nativeCol = address.nativeCol || 0;
-      this.nativeColOff = address.nativeColOff || 0;
-      this.nativeRow = address.nativeRow || 0;
-      this.nativeRowOff = address.nativeRowOff || 0;
+      this.nativeCol = address.nativeCol ?? 0;
+      this.nativeColOff = address.nativeColOff ?? 0;
+      this.nativeRow = address.nativeRow ?? 0;
+      this.nativeRowOff = address.nativeRowOff ?? 0;
     } else if (isSimpleAddress(address)) {
       this.col = address.col + offset;
       this.row = address.row + offset;
