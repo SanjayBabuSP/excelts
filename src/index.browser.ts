@@ -34,10 +34,13 @@ export * from "@excel/types";
 export type {
   PivotTable,
   PivotTableModel,
+  PivotTableValue,
   PivotTableSource,
   CacheField,
+  SharedItemValue,
   DataField,
   PivotTableSubtotal,
+  RecordValue,
   ParsedCacheDefinition,
   ParsedCacheRecords
 } from "@excel/pivot-table";

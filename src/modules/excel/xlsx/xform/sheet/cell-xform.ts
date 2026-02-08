@@ -426,7 +426,7 @@ class CellXform extends BaseXform {
 
       case "r":
         this.model.value = this.model.value || {};
-        this.model.value.richText = this.model.value.richText || [];
+        this.model.value.richText = this.model.value.richText ?? [];
         this.model.value.richText.push(this.parser.model);
         this.parser = undefined;
         this.currentNode = undefined;

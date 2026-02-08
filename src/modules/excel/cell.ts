@@ -853,8 +853,8 @@ class HyperlinkValue {
 
   get value(): CellHyperlinkValue {
     return {
-      text: this.model.text || "",
-      hyperlink: this.model.hyperlink || "",
+      text: this.model.text ?? "",
+      hyperlink: this.model.hyperlink ?? "",
       tooltip: this.model.tooltip
     };
   }
@@ -900,13 +900,13 @@ class HyperlinkValue {
   }
 
   toCsvString(): string {
-    return this.model.hyperlink || "";
+    return this.model.hyperlink ?? "";
   }
 
   release(): void {}
 
   toString(): string {
-    return this.model.text || "";
+    return this.model.text ?? "";
   }
 }
 
@@ -1136,7 +1136,7 @@ class FormulaValue {
   }
 
   toCsvString(): string {
-    return `${this.model.result || ""}`;
+    return `${this.model.result ?? ""}`;
   }
 
   release(): void {}

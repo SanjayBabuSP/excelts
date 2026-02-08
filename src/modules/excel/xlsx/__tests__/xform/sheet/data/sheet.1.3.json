@@ -109,10 +109,6 @@
     }
   ],
   "hyperlinks": [{ "address": "B6", "rId": "rId1" }],
-  "background": null,
-  "mergeCells": null,
-  "dataValidations": null,
-  "drawing": null,
   "headerFooter": {
     "oddHeader": "&C&KCCCCCC&\"Aril\"2 excelts",
     "oddFooter": "&Lexcelts&C&F&RPage &P",
@@ -123,7 +119,6 @@
     "evenHeader": "&C&KCCCCCC&\"Aril\"3 excelts evenHeader",
     "evenFooter": "&Lexcelts&C&F&RPage &P evenHeader"
   },
-  "tables": null,
   "conditionalFormattings": [],
   "rowBreaks": [],
   "colBreaks": []

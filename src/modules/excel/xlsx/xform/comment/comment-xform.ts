@@ -17,8 +17,7 @@ interface CommentModel {
   authorId?: number;
 }
 
-class CommentXform extends BaseXform {
-  declare public model: CommentModel;
+class CommentXform extends BaseXform<CommentModel> {
   declare public parser: any;
   declare private _richTextXform?: RichTextXform;
 

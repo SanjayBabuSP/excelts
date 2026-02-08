@@ -11,7 +11,7 @@ interface ListXformOptions {
   maxItems?: number;
 }
 
-class ListXform extends BaseXform {
+class ListXform<TChild = any> extends BaseXform<TChild[]> {
   declare protected tag: string;
   declare protected always: boolean;
   declare protected count?: boolean;
@@ -21,7 +21,6 @@ class ListXform extends BaseXform {
   declare protected childXform: any;
   declare protected maxItems?: number;
   declare public parser: any;
-  declare public model: any[];
 
   constructor(options: ListXformOptions) {
     super();
@@ -30,7 +29,7 @@ class ListXform extends BaseXform {
     this.always = !!options.always;
     this.count = options.count;
     this.empty = options.empty;
-    this.$count = options.$count || "count";
+    this.$count = options.$count ?? "count";
     this.$ = options.$;
     this.childXform = options.childXform;
     this.maxItems = options.maxItems;
@@ -50,11 +49,11 @@ class ListXform extends BaseXform {
     if (this.always || (model && model.length)) {
       xmlStream.openNode(this.tag, this.$);
       if (this.count) {
-        xmlStream.addAttribute(this.$count, (model && model.length) || 0);
+        xmlStream.addAttribute(this.$count, model?.length ?? 0);
       }
 
       const { childXform } = this;
-      (model || []).forEach((childModel, index) => {
+      (model ?? []).forEach((childModel, index) => {
         childXform.render(xmlStream, childModel, index);
       });
 

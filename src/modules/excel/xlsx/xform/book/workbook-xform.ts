@@ -88,7 +88,7 @@ class WorkbookXform extends BaseXform {
       model.definedNames = model.definedNames.concat(printAreas);
     }
 
-    (model.media || []).forEach((medium: any, i: number) => {
+    (model.media ?? []).forEach((medium: any, i: number) => {
       // assign name
       medium.name = medium.type + (i + 1);
     });
@@ -104,7 +104,19 @@ class WorkbookXform extends BaseXform {
     this.map.sheets.render(xmlStream, model.sheets);
     this.map.definedNames.render(xmlStream, model.definedNames);
     this.map.calcPr.render(xmlStream, model.calcProperties);
-    this.map.pivotCaches.render(xmlStream, model.pivotTables);
+    // R9-B6: Deduplicate pivot caches by cacheId before rendering.
+    // Multiple pivot tables may share the same cache, but workbook.xml should
+    // only list each cache once in <pivotCaches>.
+    const pivotTables = model.pivotTables ?? [];
+    const seenCacheIds = new Set<string>();
+    const uniquePivotCaches = pivotTables.filter((pt: any) => {
+      if (seenCacheIds.has(pt.cacheId)) {
+        return false;
+      }
+      seenCacheIds.add(pt.cacheId);
+      return true;
+    });
+    this.map.pivotCaches.render(xmlStream, uniquePivotCaches);
 
     xmlStream.closeNode();
   }
@@ -162,7 +174,7 @@ class WorkbookXform extends BaseXform {
   }
 
   reconcile(model: any): void {
-    const rels = (model.workbookRels || []).reduce((map: any, rel: any) => {
+    const rels = (model.workbookRels ?? []).reduce((map: any, rel: any) => {
       map[rel.Id] = rel;
       return map;
     }, {});
@@ -172,7 +184,7 @@ class WorkbookXform extends BaseXform {
     let worksheet: any;
     let index = 0;
 
-    (model.sheets || []).forEach((sheet: any) => {
+    (model.sheets ?? []).forEach((sheet: any) => {
       const rel = rels[sheet.rId];
       if (!rel) {
         return;

@@ -8,10 +8,9 @@ interface ExtModel {
   height: number;
 }
 
-class ExtXform extends BaseXform {
+class ExtXform extends BaseXform<ExtModel> {
   declare private tag: string;
   declare public map: { [key: string]: any };
-  declare public model: ExtModel;
 
   constructor(options: { tag: string }) {
     super();
@@ -36,8 +35,8 @@ class ExtXform extends BaseXform {
   parseOpen(node: any): boolean {
     if (node.name === this.tag) {
       this.model = {
-        width: parseInt(node.attributes.cx || "0", 10) / EMU_PER_PIXEL_AT_96_DPI,
-        height: parseInt(node.attributes.cy || "0", 10) / EMU_PER_PIXEL_AT_96_DPI
+        width: parseInt(node.attributes.cx ?? "0", 10) / EMU_PER_PIXEL_AT_96_DPI,
+        height: parseInt(node.attributes.cy ?? "0", 10) / EMU_PER_PIXEL_AT_96_DPI
       };
       return true;
     }

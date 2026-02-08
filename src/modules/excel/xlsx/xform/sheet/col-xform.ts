@@ -54,10 +54,10 @@ class ColXform extends BaseXform {
   parseOpen(node: any): boolean {
     if (node.name === "col") {
       const model: ColModel = (this.model = {
-        min: parseInt(node.attributes.min || "0", 10),
-        max: parseInt(node.attributes.max || "0", 10),
+        min: parseInt(node.attributes.min ?? "0", 10),
+        max: parseInt(node.attributes.max ?? "0", 10),
         width:
-          node.attributes.width === undefined ? undefined : parseFloat(node.attributes.width || "0")
+          node.attributes.width === undefined ? undefined : parseFloat(node.attributes.width ?? "0")
       });
       if (node.attributes.style) {
         model.styleId = parseInt(node.attributes.style, 10);

@@ -22,14 +22,12 @@ import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property
 import { DrawingXform } from "@excel/xlsx/xform/drawing/drawing-xform";
 import { TableXform } from "@excel/xlsx/xform/table/table-xform";
 import { PivotCacheRecordsXform } from "@excel/xlsx/xform/pivot-table/pivot-cache-records-xform";
-import {
-  PivotCacheDefinitionXform,
-  type ParsedCacheDefinitionModel
-} from "@excel/xlsx/xform/pivot-table/pivot-cache-definition-xform";
+import { PivotCacheDefinitionXform } from "@excel/xlsx/xform/pivot-table/pivot-cache-definition-xform";
 import {
   PivotTableXform,
   type ParsedPivotTableModel
 } from "@excel/xlsx/xform/pivot-table/pivot-table-xform";
+import type { PivotTable, PivotTableSubtotal, ParsedCacheDefinition } from "@excel/pivot-table";
 import { CommentsXform } from "@excel/xlsx/xform/comment/comments-xform";
 import { VmlDrawingXform } from "@excel/xlsx/xform/drawing/vml-drawing-xform";
 import { CtrlPropXform } from "@excel/xlsx/xform/drawing/ctrl-prop-xform";
@@ -493,7 +491,6 @@ class XLSX {
       pivotTables: {},
       pivotTableRels: {},
       pivotCacheDefinitions: {},
-      pivotCacheDefinitionRels: {},
       pivotCacheRecords: {},
       // Passthrough storage for unknown/unsupported files (charts, etc.)
       passthrough: {} as Record<string, Uint8Array>
@@ -760,7 +757,7 @@ class XLSX {
           o[rel.Id] = rel;
           return o;
         }, {});
-        (drawing.anchors || []).forEach((anchor: any) => {
+        (drawing.anchors ?? []).forEach((anchor: any) => {
           const hyperlinks = anchor.picture && anchor.picture.hyperlinks;
           if (hyperlinks && drawingOptions.rels[hyperlinks.rId]) {
             hyperlinks.hyperlink = drawingOptions.rels[hyperlinks.rId].Target;
@@ -825,14 +822,13 @@ class XLSX {
     delete model.drawingRels;
     delete model.vmlDrawings;
     delete model.pivotTableRels;
-    delete model.pivotCacheDefinitionRels;
   }
 
   /**
    * Reconcile pivot tables by linking them to worksheets and their cache data.
    */
   protected _reconcilePivotTables(model: any): void {
-    const rawPivotTables = model.pivotTables || {};
+    const rawPivotTables = (model.pivotTables || {}) as Record<string, ParsedPivotTableModel>;
     if (typeof rawPivotTables !== "object" || Object.keys(rawPivotTables).length === 0) {
       model.pivotTables = [];
       model.pivotTablesIndexed = {};
@@ -844,7 +840,7 @@ class XLSX {
     const cacheMap = new Map<
       number,
       {
-        definition: ParsedCacheDefinitionModel;
+        definition: ParsedCacheDefinition;
         records: any;
         definitionName: string;
       }
@@ -864,35 +860,39 @@ class XLSX {
       }
     );
 
-    const loadedPivotTables: any[] = [];
-    const pivotTablesIndexed: Record<string, any> = {};
+    const loadedPivotTables: PivotTable[] = [];
+    const pivotTablesIndexed: Record<string, PivotTable> = {};
 
-    Object.entries(rawPivotTables).forEach(([pivotName, pivotTable]: [string, any]) => {
-      const pt = pivotTable as ParsedPivotTableModel;
+    Object.entries(rawPivotTables).forEach(([pivotName, pt]) => {
       const tableNumber = this._extractTableNumber(pivotName);
       const cacheData = cacheMap.get(pt.cacheId);
 
-      const completePivotTable = {
+      const defaultMetric = this._determineMetric(pt.dataFields);
+      const completePivotTable: PivotTable = {
         ...pt,
         tableNumber,
+        cacheId: String(pt.cacheId),
         cacheDefinition: cacheData?.definition,
         cacheRecords: cacheData?.records,
-        cacheFields: cacheData?.definition?.cacheFields || [],
+        cacheFields: cacheData?.definition?.cacheFields ?? [],
         rows: pt.rowFields.filter(f => f >= 0),
         columns: pt.colFields.filter(f => f >= 0 && f !== -2),
         values: pt.dataFields.map(df => df.fld),
-        metric: this._determineMetric(pt.dataFields),
-        applyWidthHeightFormats: pt.applyWidthHeightFormats || "0"
+        pages: pt.pageFields.map(pf => pf.fld),
+        metric: defaultMetric,
+        valueMetrics: this._determineValueMetrics(pt.dataFields, defaultMetric),
+        applyWidthHeightFormats: pt.applyWidthHeightFormats === "1" ? "1" : "0"
       };
 
       loadedPivotTables.push(completePivotTable);
+      // Key format (e.g., "../pivotTables/pivotTable1.xml") matches worksheet .rels Target values,
+      // allowing worksheet reconciliation to look up pivot tables by their relationship target path.
       pivotTablesIndexed[pivotTableRelTargetFromWorksheetName(pivotName)] = completePivotTable;
     });
 
     loadedPivotTables.sort((a, b) => a.tableNumber - b.tableNumber);
     model.pivotTables = loadedPivotTables;
     model.pivotTablesIndexed = pivotTablesIndexed;
-    model.loadedPivotTables = loadedPivotTables;
   }
 
   protected _extractTableNumber(name: string): number {
@@ -902,7 +902,7 @@ class XLSX {
 
   protected _buildCacheIdMap(model: any): Map<string, number> {
     const rIdToCacheId = new Map<string, number>();
-    const pivotCaches = model.pivotCaches || [];
+    const pivotCaches = model.pivotCaches ?? [];
     for (const cache of pivotCaches) {
       if (cache.cacheId && cache.rId) {
         rIdToCacheId.set(cache.rId, parseInt(cache.cacheId, 10));
@@ -914,7 +914,7 @@ class XLSX {
   protected _buildDefinitionToCacheIdMap(model: any): Map<string, number> {
     const definitionToCacheId = new Map<string, number>();
     const rIdToCacheId = this._buildCacheIdMap(model);
-    const workbookRels = model.workbookRels || [];
+    const workbookRels = model.workbookRels ?? [];
 
     for (const rel of workbookRels) {
       if (rel.Type === XLSX.RelType.PivotCacheDefinition && rel.Target) {
@@ -932,11 +932,18 @@ class XLSX {
     return definitionToCacheId;
   }
 
-  protected _determineMetric(dataFields: Array<{ subtotal?: string }>): "sum" | "count" {
-    if (dataFields.length > 0 && dataFields[0].subtotal === "count") {
-      return "count";
+  protected _determineMetric(dataFields: Array<{ subtotal?: string }>): PivotTableSubtotal {
+    if (dataFields.length > 0 && dataFields[0].subtotal) {
+      return dataFields[0].subtotal as PivotTableSubtotal;
     }
     return "sum";
+  }
+
+  protected _determineValueMetrics(
+    dataFields: Array<{ subtotal?: string }>,
+    defaultMetric: PivotTableSubtotal
+  ): PivotTableSubtotal[] {
+    return dataFields.map(df => (df.subtotal as PivotTableSubtotal) || defaultMetric);
   }
 
   // ===========================================================================
@@ -1123,16 +1130,6 @@ class XLSX {
     }
   }
 
-  async _processPivotCacheDefinitionRelsEntry(
-    stream: IParseStream,
-    model: any,
-    name: string
-  ): Promise<void> {
-    const xform = new RelationshipsXform();
-    const relationships = await xform.parseStream(stream);
-    model.pivotCacheDefinitionRels[name] = relationships;
-  }
-
   async _processPivotCacheRecordsEntry(
     stream: IParseStream,
     model: any,
@@ -1260,9 +1257,11 @@ class XLSX {
       return true;
     }
 
+    // R9-B8: Skip parsing pivotCacheDefinition .rels files — they are never used
+    // during reconciliation and were just deleted at cleanup. The cache definition's
+    // r:id attribute (preserved in ParsedCacheDefinition.rId) is sufficient.
     const pivotCacheDefinitionRelsName = getPivotCacheDefinitionNameFromRelsPath(entryName);
     if (pivotCacheDefinitionRelsName) {
-      await this._processPivotCacheDefinitionRelsEntry(stream, model, pivotCacheDefinitionRelsName);
       return true;
     }
 
@@ -1360,13 +1359,24 @@ class XLSX {
         Target: OOXML_REL_TARGETS.workbookFeaturePropertyBag
       });
     }
-    (model.pivotTables || []).forEach((pivotTable: any) => {
-      pivotTable.rId = `rId${count++}`;
-      relationships.push({
-        Id: pivotTable.rId,
-        Type: XLSX.RelType.PivotCacheDefinition,
-        Target: pivotCacheDefinitionRelTargetFromWorkbook(pivotTable.tableNumber)
-      });
+    // R9-B6: Deduplicate pivot cache relationships by cacheId. When multiple pivot
+    // tables share the same cache, only one workbook relationship should be created.
+    // Also assigns rId to each pivot table (R9-B7: typed on PivotTable interface).
+    const seenCacheIds = new Map<string, string>(); // cacheId → rId
+    (model.pivotTables ?? []).forEach((pivotTable: PivotTable) => {
+      const existing = seenCacheIds.get(pivotTable.cacheId);
+      if (existing) {
+        // Shared cache: reuse the rId from the first pivot table with this cacheId
+        pivotTable.rId = existing;
+      } else {
+        pivotTable.rId = `rId${count++}`;
+        seenCacheIds.set(pivotTable.cacheId, pivotTable.rId);
+        relationships.push({
+          Id: pivotTable.rId,
+          Type: XLSX.RelType.PivotCacheDefinition,
+          Target: pivotCacheDefinitionRelTargetFromWorkbook(pivotTable.tableNumber)
+        });
+      }
     });
     model.worksheets.forEach((worksheet: any, index: number) => {
       worksheet.rId = `rId${count++}`;
@@ -1474,7 +1484,7 @@ class XLSX {
         } else {
           // Use regenerated XML for normal drawings (images, shapes)
           // Filter out invalid anchors (null, undefined, or missing content)
-          const filteredAnchors = (drawing.anchors || []).filter((a: any) => {
+          const filteredAnchors = (drawing.anchors ?? []).filter((a: any) => {
             if (a == null) {
               return false;
             }
@@ -1539,44 +1549,67 @@ class XLSX {
     const pivotTableXform = new PivotTableXform();
     const relsXform = new RelationshipsXform();
 
-    model.pivotTables.forEach((pivotTable: any) => {
+    // R9-B6: Track which cacheIds have already been written to avoid duplicating
+    // shared caches. Maps cacheId → tableNumber used for the cache file names.
+    const writtenCaches = new Map<string, number>();
+
+    model.pivotTables.forEach((pivotTable: PivotTable) => {
       const n = pivotTable.tableNumber;
       const isLoaded = pivotTable.isLoaded;
+      const cacheId = pivotTable.cacheId;
 
-      if (isLoaded) {
-        if (pivotTable.cacheDefinition) {
-          const xml = pivotCacheDefinitionXform.toXml(pivotTable.cacheDefinition);
+      // R9-B6: Only write cache definition/records/rels once per unique cacheId.
+      const cacheAlreadyWritten = writtenCaches.has(cacheId);
+      if (!cacheAlreadyWritten) {
+        writtenCaches.set(cacheId, n);
+
+        if (isLoaded) {
+          if (pivotTable.cacheDefinition) {
+            const xml = pivotCacheDefinitionXform.toXml(pivotTable.cacheDefinition);
+            zip.append(xml, { name: pivotCacheDefinitionPath(n) });
+          }
+          if (pivotTable.cacheRecords) {
+            const xml = pivotCacheRecordsXform.toXml(pivotTable.cacheRecords);
+            zip.append(xml, { name: pivotCacheRecordsPath(n) });
+          }
+        } else {
+          let xml = pivotCacheRecordsXform.toXml(pivotTable);
+          zip.append(xml, { name: pivotCacheRecordsPath(n) });
+
+          xml = pivotCacheDefinitionXform.toXml(pivotTable);
           zip.append(xml, { name: pivotCacheDefinitionPath(n) });
         }
-        if (pivotTable.cacheRecords) {
-          const xml = pivotCacheRecordsXform.toXml(pivotTable.cacheRecords);
-          zip.append(xml, { name: pivotCacheRecordsPath(n) });
-        }
-      } else {
-        let xml = pivotCacheRecordsXform.toXml(pivotTable);
-        zip.append(xml, { name: pivotCacheRecordsPath(n) });
 
-        xml = pivotCacheDefinitionXform.toXml(pivotTable);
-        zip.append(xml, { name: pivotCacheDefinitionPath(n) });
+        // R9-B4: Only write cache definition rels when cache records exist.
+        // For loaded pivot tables without cacheRecords (e.g. OLAP), skip the rels file entirely.
+        // R9-B3: Use the rId from the loaded cache definition to stay consistent with the XML.
+        const hasCacheRecords = isLoaded ? !!pivotTable.cacheRecords : true;
+        if (hasCacheRecords) {
+          const cacheRecordsRId =
+            (isLoaded ? pivotTable.cacheDefinition?.rId : undefined) ?? "rId1";
+          const xml = relsXform.toXml([
+            {
+              Id: cacheRecordsRId,
+              Type: XLSX.RelType.PivotCacheRecords,
+              Target: pivotCacheRecordsRelTarget(n)
+            }
+          ]);
+          zip.append(xml, { name: pivotCacheDefinitionRelsPath(n) });
+        }
       }
 
-      let xml = relsXform.toXml([
-        {
-          Id: "rId1",
-          Type: XLSX.RelType.PivotCacheRecords,
-          Target: pivotCacheRecordsRelTarget(n)
-        }
-      ]);
-      zip.append(xml, { name: pivotCacheDefinitionRelsPath(n) });
-
-      xml = pivotTableXform.toXml(pivotTable);
+      // Pivot table XML is always written (each pivot table has its own file).
+      let xml = pivotTableXform.toXml(pivotTable);
       zip.append(xml, { name: pivotTablePath(n) });
 
+      // Pivot table rels point to the cache definition file. For shared caches,
+      // use the tableNumber of the first pivot table that wrote the cache.
+      const cacheTableNumber = writtenCaches.get(cacheId)!;
       xml = relsXform.toXml([
         {
           Id: "rId1",
           Type: XLSX.RelType.PivotCacheDefinition,
-          Target: pivotCacheDefinitionRelTargetFromPivotTable(n)
+          Target: pivotCacheDefinitionRelTargetFromPivotTable(cacheTableNumber)
         }
       ]);
       zip.append(xml, { name: pivotTableRelsPath(n) });
@@ -1594,10 +1627,10 @@ class XLSX {
   }
 
   prepareModel(model: any, options: any): void {
-    model.creator = model.creator || "ExcelTS";
-    model.lastModifiedBy = model.lastModifiedBy || "ExcelTS";
-    model.created = model.created || new Date();
-    model.modified = model.modified || new Date();
+    model.creator = model.creator ?? "ExcelTS";
+    model.lastModifiedBy = model.lastModifiedBy ?? "ExcelTS";
+    model.created = model.created ?? new Date();
+    model.modified = model.modified ?? new Date();
 
     model.useSharedStrings =
       options.useSharedStrings !== undefined ? options.useSharedStrings : true;

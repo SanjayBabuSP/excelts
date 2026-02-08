@@ -22,10 +22,9 @@ interface RowModel {
   dyDescent?: number;
 }
 
-class RowXform extends BaseXform {
+class RowXform extends BaseXform<RowModel> {
   declare private maxItems?: number;
   declare public map: { [key: string]: any };
-  declare public model: RowModel;
   declare public parser: any;
   declare private numRowsSeen: number;
   declare private lastCellCol: number;

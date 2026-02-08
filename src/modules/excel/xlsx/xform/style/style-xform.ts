@@ -52,13 +52,13 @@ class StyleXform extends BaseXform {
 
   render(xmlStream: any, model: StyleModel): void {
     xmlStream.openNode("xf", {
-      numFmtId: model.numFmtId || 0,
-      fontId: model.fontId || 0,
-      fillId: model.fillId || 0,
-      borderId: model.borderId || 0
+      numFmtId: model.numFmtId ?? 0,
+      fontId: model.fontId ?? 0,
+      fillId: model.fillId ?? 0,
+      borderId: model.borderId ?? 0
     });
     if (this.xfId) {
-      xmlStream.addAttribute("xfId", model.xfId || 0);
+      xmlStream.addAttribute("xfId", model.xfId ?? 0);
     }
 
     if (model.applyNumberFormat || model.numFmtId) {

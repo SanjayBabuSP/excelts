@@ -66,8 +66,6 @@ export interface WorkbookModel {
   themes?: unknown;
   media: WorkbookMedia[];
   pivotTables: PivotTable[];
-  /** Loaded pivot tables from file - used during reconciliation */
-  loadedPivotTables?: any[];
   calcProperties: Partial<CalculationProperties>;
   /** Passthrough files (charts, etc.) preserved for round-trip */
   passthrough?: Record<string, Uint8Array>;
@@ -392,8 +390,8 @@ class Workbook {
 
   get model(): WorkbookModel {
     return {
-      creator: this.creator || "Unknown",
-      lastModifiedBy: this.lastModifiedBy || "Unknown",
+      creator: this.creator ?? "Unknown",
+      lastModifiedBy: this.lastModifiedBy ?? "Unknown",
       lastPrinted: this.lastPrinted,
       created: this.created,
       modified: this.modified,
@@ -458,11 +456,10 @@ class Workbook {
     this._definedNames.model = value.definedNames;
     this.views = value.views;
     this._themes = value.themes;
-    this.media = value.media || [];
+    this.media = value.media ?? [];
 
     // Handle pivot tables - either newly created or loaded from file
-    // Loaded pivot tables come from loadedPivotTables after reconciliation
-    this.pivotTables = value.pivotTables || value.loadedPivotTables || [];
+    this.pivotTables = value.pivotTables ?? [];
 
     // Preserve passthrough files (charts, etc.) for round-trip preservation
     this._passthrough = value.passthrough || {};

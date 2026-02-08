@@ -5,9 +5,7 @@ interface CustomFilterModel {
   operator?: string;
 }
 
-class CustomFilterXform extends BaseXform {
-  declare public model: CustomFilterModel;
-
+class CustomFilterXform extends BaseXform<CustomFilterModel> {
   constructor() {
     super();
     this.model = { val: "" };

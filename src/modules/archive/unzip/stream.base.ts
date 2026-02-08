@@ -144,7 +144,7 @@ export function decodeZipEntryPath(pathBuffer: Uint8Array): string {
 }
 
 export function isZipUnicodeFlag(flags: number | null): boolean {
-  return ((flags || 0) & 0x800) !== 0;
+  return ((flags ?? 0) & 0x800) !== 0;
 }
 
 export function isZipDirectoryPath(path: string): boolean {
@@ -177,8 +177,8 @@ export function resolveZipEntryLastModifiedDateTime(
   vars: ZipEntryVarsMeta,
   extraFields: ZipExtraFields
 ): Date {
-  const dosDate = vars.lastModifiedDate || 0;
-  const dosTime = vars.lastModifiedTime || 0;
+  const dosDate = vars.lastModifiedDate ?? 0;
+  const dosTime = vars.lastModifiedTime ?? 0;
 
   const dosDateTime = parseDosDateTimeUTC(dosDate, dosTime);
 
@@ -193,11 +193,11 @@ export function resolveZipEntryLastModifiedDateTime(
 export const parseExtraField = parseZipExtraFields;
 
 export function hasDataDescriptorFlag(flags: number | null): boolean {
-  return ((flags || 0) & 0x08) !== 0;
+  return ((flags ?? 0) & 0x08) !== 0;
 }
 
 export function isFileSizeKnown(flags: number | null, compressedSize: number | null): boolean {
-  return !hasDataDescriptorFlag(flags) || (compressedSize || 0) > 0;
+  return !hasDataDescriptorFlag(flags) || (compressedSize ?? 0) > 0;
 }
 
 export type DrainStream = Transform & { promise: () => Promise<void> };
@@ -577,8 +577,8 @@ export async function readCrxHeader(pull: PullFn): Promise<CrxHeader> {
   const data = await pull(12);
   const header =
     data.length >= 12 ? parseCrxHeaderFast(data) : parseBuffer<CrxHeader>(data, CRX_HEADER_FORMAT);
-  const pubKeyLength = header.pubKeyLength || 0;
-  const signatureLength = header.signatureLength || 0;
+  const pubKeyLength = header.pubKeyLength ?? 0;
+  const signatureLength = header.signatureLength ?? 0;
 
   const keyAndSig = await pull(pubKeyLength + signatureLength);
   header.publicKey = keyAndSig.subarray(0, pubKeyLength);
@@ -596,8 +596,8 @@ export async function readLocalFileHeader(pull: PullFn): Promise<{
     data.length >= 26
       ? parseLocalFileHeaderVarsFast(data)
       : parseBuffer<EntryVars>(data, LOCAL_FILE_HEADER_FORMAT);
-  const fileNameBuffer = await pull(vars.fileNameLength || 0);
-  const extraFieldData = await pull(vars.extraFieldLength || 0);
+  const fileNameBuffer = await pull(vars.fileNameLength ?? 0);
+  const extraFieldData = await pull(vars.extraFieldLength ?? 0);
   return { vars, fileNameBuffer, extraFieldData };
 }
 
@@ -614,15 +614,15 @@ export async function consumeCentralDirectoryFileHeader(pull: PullFn): Promise<v
     data,
     CENTRAL_DIRECTORY_FILE_HEADER_FORMAT
   );
-  await pull(vars.fileNameLength || 0);
-  await pull(vars.extraFieldLength || 0);
-  await pull(vars.fileCommentLength || 0);
+  await pull(vars.fileNameLength ?? 0);
+  await pull(vars.extraFieldLength ?? 0);
+  await pull(vars.fileCommentLength ?? 0);
 }
 
 export async function consumeEndOfCentralDirectoryRecord(pull: PullFn): Promise<void> {
   const data = await pull(18);
   const vars = parseBuffer<Record<string, number | null>>(data, END_OF_CENTRAL_DIRECTORY_FORMAT);
-  await pull(vars.commentLength || 0);
+  await pull(vars.commentLength ?? 0);
 }
 
 // =============================================================================
@@ -1409,7 +1409,7 @@ async function readFileRecord(
 
   entry.path = fileName;
   entry.props = buildZipEntryProps(fileName, fileNameBuffer, vars.flags) as EntryProps;
-  entry.type = getZipEntryType(fileName, vars.uncompressedSize || 0);
+  entry.type = getZipEntryType(fileName, vars.uncompressedSize ?? 0);
 
   if (opts.verbose) {
     if (entry.type === "Directory") {
@@ -1432,7 +1432,7 @@ async function readFileRecord(
 
   const fileSizeKnown = isFileSizeKnown(vars.flags, vars.compressedSize);
   if (fileSizeKnown) {
-    entry.size = vars.uncompressedSize || 0;
+    entry.size = vars.uncompressedSize ?? 0;
   }
 
   if (opts.forceStream) {
@@ -1461,8 +1461,8 @@ async function readFileRecord(
   // This prevents materializing large highly-compressible files in memory,
   // which can cause massive peak RSS and negate streaming backpressure.
   const sizesTrusted = !hasDataDescriptorFlag(vars.flags);
-  const compressedSize = vars.compressedSize || 0;
-  const uncompressedSize = vars.uncompressedSize || 0;
+  const compressedSize = vars.compressedSize ?? 0;
+  const uncompressedSize = vars.uncompressedSize ?? 0;
 
   const useSmallFileOptimization =
     sizesTrusted &&
@@ -1489,11 +1489,11 @@ async function readFileRecord(
       : new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
 
   if (fileSizeKnown) {
-    await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize || 0);
+    await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize ?? 0);
     return;
   }
 
   await pipeline(io.streamUntilDataDescriptor() as any, inflater as any, entry as any);
   const dd = await readDataDescriptor(async l => io.pull(l));
-  entry.size = dd.uncompressedSize || 0;
+  entry.size = dd.uncompressedSize ?? 0;
 }

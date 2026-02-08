@@ -37,7 +37,7 @@ function slideFormula(formula: string, fromCell: string, toCell: string): string
         if (!rowDollar) {
           row += (to as any).row - (offset as any).row;
         }
-        const res = (sheet || "") + (colDollar || "") + colCache.n2l(col) + (rowDollar || "") + row;
+        const res = (sheet ?? "") + (colDollar ?? "") + colCache.n2l(col) + (rowDollar ?? "") + row;
         return res;
       }
       return refMatch;

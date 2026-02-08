@@ -29,7 +29,7 @@ class CSV extends CSVBrowser {
 
   override async writeFile(filename: string, options?: CsvStreamWriteOptions): Promise<void> {
     const writeStream = fs.createWriteStream(filename, {
-      encoding: (options?.encoding || "utf8") as BufferEncoding,
+      encoding: (options?.encoding ?? "utf8") as BufferEncoding,
       highWaterMark: options?.highWaterMark ?? 64 * 1024
     });
 

@@ -49,7 +49,7 @@ class StringBuf {
   }
 
   reset(position?: number): void {
-    position = position || 0;
+    position = position ?? 0;
     this._buffer = undefined;
     this._inPos = position;
   }

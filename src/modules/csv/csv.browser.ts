@@ -128,10 +128,10 @@ export function createDefaultWriteMapper(dateFormat?: string, dateUTC?: boolean)
   return function mapValue(value: any): any {
     if (value) {
       if (value.text || value.hyperlink) {
-        return value.hyperlink || value.text || "";
+        return value.hyperlink ?? value.text ?? "";
       }
       if (value.formula || value.result) {
-        return value.result || "";
+        return value.result ?? "";
       }
       if (value instanceof Date) {
         return formatter.format(value);

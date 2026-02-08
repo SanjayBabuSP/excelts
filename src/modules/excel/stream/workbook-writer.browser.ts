@@ -154,11 +154,11 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     this.WorksheetWriterClass = WorksheetWriterClass;
     this.created = options.created || new Date();
     this.modified = options.modified || this.created;
-    this.creator = options.creator || "ExcelTS";
-    this.lastModifiedBy = options.lastModifiedBy || "ExcelTS";
+    this.creator = options.creator ?? "ExcelTS";
+    this.lastModifiedBy = options.lastModifiedBy ?? "ExcelTS";
     this.lastPrinted = options.lastPrinted;
 
-    this.useSharedStrings = options.useSharedStrings || false;
+    this.useSharedStrings = options.useSharedStrings ?? false;
     this.sharedStrings = new SharedStrings();
     this.styles = options.useStyles ? new StylesXform(true) : new (StylesXform as any).Mock(true);
     this._definedNames = new DefinedNames();
@@ -321,7 +321,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     }
 
     const id = this.nextId;
-    name = name || `sheet${id}`;
+    name = name ?? `sheet${id}`;
 
     const worksheet = new this.WorksheetWriterClass({
       id,

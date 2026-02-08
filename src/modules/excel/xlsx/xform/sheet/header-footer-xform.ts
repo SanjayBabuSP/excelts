@@ -111,27 +111,27 @@ class HeaderFooterXform extends BaseXform {
   parseText(text: string): void {
     switch (this.currentNode) {
       case "oddHeader":
-        this.model.oddHeader = (this.model.oddHeader || "") + text;
+        this.model.oddHeader = (this.model.oddHeader ?? "") + text;
         break;
 
       case "oddFooter":
-        this.model.oddFooter = (this.model.oddFooter || "") + text;
+        this.model.oddFooter = (this.model.oddFooter ?? "") + text;
         break;
 
       case "evenHeader":
-        this.model.evenHeader = (this.model.evenHeader || "") + text;
+        this.model.evenHeader = (this.model.evenHeader ?? "") + text;
         break;
 
       case "evenFooter":
-        this.model.evenFooter = (this.model.evenFooter || "") + text;
+        this.model.evenFooter = (this.model.evenFooter ?? "") + text;
         break;
 
       case "firstHeader":
-        this.model.firstHeader = (this.model.firstHeader || "") + text;
+        this.model.firstHeader = (this.model.firstHeader ?? "") + text;
         break;
 
       case "firstFooter":
-        this.model.firstFooter = (this.model.firstFooter || "") + text;
+        this.model.firstFooter = (this.model.firstFooter ?? "") + text;
         break;
 
       default:

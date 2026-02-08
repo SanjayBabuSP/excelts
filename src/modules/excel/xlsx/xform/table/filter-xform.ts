@@ -4,9 +4,7 @@ interface FilterModel {
   val: string;
 }
 
-class FilterXform extends BaseXform {
-  declare public model: FilterModel;
-
+class FilterXform extends BaseXform<FilterModel> {
   constructor() {
     super();
     this.model = { val: "" };

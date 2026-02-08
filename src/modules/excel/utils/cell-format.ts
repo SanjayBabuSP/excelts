@@ -112,7 +112,7 @@ export function getFormat(numFmtId: number): string {
   }
   // Check default map
   if (DEFAULT_MAP[numFmtId] !== undefined) {
-    return TABLE_FMT[DEFAULT_MAP[numFmtId]] || "General";
+    return TABLE_FMT[DEFAULT_MAP[numFmtId]] ?? "General";
   }
   return "General";
 }
@@ -376,7 +376,7 @@ function formatGeneral(val: number | string | boolean): string {
  */
 function formatPercentage(val: number, fmt: string): string {
   // Count % signs
-  const percentCount = (fmt.match(/%/g) || []).length;
+  const percentCount = (fmt.match(/%/g) ?? []).length;
   // Multiply value by 100 for each %
   const scaledVal = val * Math.pow(100, percentCount);
 
@@ -639,7 +639,7 @@ function formatNumberPattern(val: number, fmt: string): string {
     }
 
     // Pad integer with leading zeros if needed
-    const minIntDigits = (intFmt.match(/0/g) || []).length;
+    const minIntDigits = (intFmt.match(/0/g) ?? []).length;
     if (formattedInt.length < minIntDigits) {
       formattedInt = "0".repeat(minIntDigits - formattedInt.length) + formattedInt;
     }

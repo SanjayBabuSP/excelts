@@ -200,9 +200,9 @@ class BrowserInflateRaw extends Duplex {
 
   override destroy(error?: Error | null): this {
     if (!this.writeClosed) {
-      this.writer.abort(error || undefined).catch(() => {});
+      this.writer.abort(error ?? undefined).catch(() => {});
     }
-    this.reader.cancel(error || undefined).catch(() => {});
+    this.reader.cancel(error ?? undefined).catch(() => {});
     return super.destroy(error);
   }
 }
@@ -384,7 +384,7 @@ class WorkerInflateRaw extends Duplex {
     };
 
     this.worker.onerror = (e: ErrorEvent) => {
-      const err = new Error(e.message || "Worker error");
+      const err = new Error(e.message ?? "Worker error");
       for (const cb of this._pendingAcks.values()) {
         cb(err);
       }

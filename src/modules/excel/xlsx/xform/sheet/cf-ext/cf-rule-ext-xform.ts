@@ -76,7 +76,7 @@ class CfRuleExtXform extends CompositeXform {
     xmlStream.openNode(this.tag, {
       type: "iconSet",
       priority: model.priority,
-      id: model.x14Id || `{${uuidV4()}}`
+      id: model.x14Id ?? `{${uuidV4()}}`
     });
 
     this.iconSetXform.render(xmlStream, model);

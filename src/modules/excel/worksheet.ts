@@ -183,14 +183,14 @@ class Worksheet {
     this._workbook = options.workbook;
 
     // in a workbook, each sheet will have a number
-    this.id = options.id || 0;
-    this.orderNo = options.orderNo || 0;
+    this.id = options.id ?? 0;
+    this.orderNo = options.orderNo ?? 0;
 
     // and a name - use the setter to ensure validation and truncation
     this.name = options.name || `sheet${this.id}`;
 
     // add a state
-    this.state = options.state || "visible";
+    this.state = options.state ?? "visible";
 
     // rows allows access organised by row. Sparse array of arrays indexed by row-1, col
     // Note: _rows is zero based. Must subtract 1 to go from cell.row to index
@@ -274,9 +274,9 @@ class Worksheet {
     this.dataValidations = new DataValidations();
 
     // for freezepanes, split, zoom, gridlines, etc
-    this.views = options.views || [];
+    this.views = options.views ?? [];
 
-    this.autoFilter = options.autoFilter || null;
+    this.autoFilter = options.autoFilter ?? null;
 
     // for images, etc
     this._media = [];
@@ -473,7 +473,7 @@ class Worksheet {
     if (inserts.length > 0) {
       // must iterate over all rows whether they exist yet or not
       for (let i = 0; i < nRows; i++) {
-        const insertValues = inserts.map(insert => insert[i] || null);
+        const insertValues = inserts.map(insert => insert[i] ?? null);
         const row = this.getRow(i + 1);
         row.splice(start, count, ...insertValues);
       }
@@ -1244,7 +1244,7 @@ class Worksheet {
 
     // =================================================
     // columns
-    model.cols = Column.toModel(this.columns || []);
+    model.cols = Column.toModel(this.columns ?? []);
 
     // ==========================================================
     // Rows
@@ -1299,8 +1299,8 @@ class Worksheet {
     this.properties = value.properties;
     this.pageSetup = value.pageSetup;
     this.headerFooter = value.headerFooter;
-    this.rowBreaks = value.rowBreaks || [];
-    this.colBreaks = value.colBreaks || [];
+    this.rowBreaks = value.rowBreaks ?? [];
+    this.colBreaks = value.colBreaks ?? [];
     this.views = value.views;
     this.autoFilter = value.autoFilter;
     this._media = value.media.map(medium => new Image(this, medium));

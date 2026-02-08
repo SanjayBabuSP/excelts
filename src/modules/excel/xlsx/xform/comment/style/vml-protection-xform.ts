@@ -11,7 +11,7 @@ class VmlProtectionXform extends BaseXform {
   }
 
   get tag(): string {
-    return (this._model && this._model.tag) || "";
+    return this._model?.tag ?? "";
   }
 
   render(xmlStream: any, model: any): void {

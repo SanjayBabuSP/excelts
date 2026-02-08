@@ -6,13 +6,9 @@
 // Re-export all shared utilities
 export {
   delay,
-  nop,
-  inherits,
   dateToExcel,
   excelToDate,
-  toIsoDateString,
-  parsePath,
-  getRelsPath,
+  parseOoxmlDate,
   xmlDecode,
   xmlEncode,
   validInt,
@@ -20,7 +16,6 @@ export {
   parseBoolean,
   range,
   toSortedArray,
-  objectFromProps,
   bufferToString,
   base64ToUint8Array,
   uint8ArrayToBase64,

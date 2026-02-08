@@ -541,7 +541,10 @@ export function parseCsv(
           if (result) {
             validatedRows.push(row);
           } else {
-            invalidRows.push({ row: Object.values(row), reason: "Validation failed" });
+            invalidRows.push({
+              row: Object.values(row),
+              reason: "Validation failed"
+            });
           }
         } else {
           if (result.isValid) {
@@ -549,7 +552,7 @@ export function parseCsv(
           } else {
             invalidRows.push({
               row: Object.values(row),
-              reason: result.reason || "Validation failed"
+              reason: result.reason ?? "Validation failed"
             });
           }
         }
@@ -595,7 +598,7 @@ export function parseCsv(
         if (result.isValid) {
           validatedRows.push(row);
         } else {
-          arrayInvalidRows.push({ row, reason: result.reason || "Validation failed" });
+          arrayInvalidRows.push({ row, reason: result.reason ?? "Validation failed" });
         }
       }
     }
