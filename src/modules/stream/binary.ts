@@ -1,9 +1,8 @@
 /**
- * Shared Utilities
+ * Binary Utilities
  *
- * Common utilities shared across all stream implementations.
- * This module provides cached TextEncoder/TextDecoder instances
- * and core binary operations.
+ * Cached TextEncoder/TextDecoder instances and core Uint8Array operations.
+ * Platform-neutral — used by both Node.js and browser stream implementations.
  */
 
 import { StreamTypeError } from "@stream/errors";
@@ -145,13 +144,6 @@ export function uint8ArrayIndexOf(haystack: Uint8Array, needle: Uint8Array, star
 }
 
 /**
- * Slice Uint8Array (returns a copy)
- */
-export function uint8ArraySlice(arr: Uint8Array, start?: number, end?: number): Uint8Array {
-  return arr.slice(start, end);
-}
-
-/**
  * Convert any buffer-like input to Uint8Array
  */
 export function toUint8Array(input: string | Uint8Array | ArrayBuffer | number[]): Uint8Array {
@@ -173,7 +165,7 @@ export function toUint8Array(input: string | Uint8Array | ArrayBuffer | number[]
 /**
  * Convert any input to string
  */
-export function bufferToString(
+export function anyToString(
   input: string | Uint8Array | ArrayBuffer | number[],
   encoding?: string
 ): string {
@@ -182,4 +174,29 @@ export function bufferToString(
   }
   const arr = toUint8Array(input);
   return getTextDecoder(encoding).decode(arr);
+}
+
+/**
+ * Convert collected chunks to a string.
+ *
+ * Common logic shared by Node.js and browser Collector `toString()`:
+ * - empty → ""
+ * - string chunks → fast path (single return / join)
+ * - binary chunks → decode via the provided `toUint8Array` callback
+ */
+export function chunksToString(chunks: unknown[], toBytes: () => Uint8Array): string {
+  const len = chunks.length;
+  if (len === 0) {
+    return "";
+  }
+
+  const first = chunks[0];
+  if (typeof first === "string") {
+    if (len === 1) {
+      return first;
+    }
+    return (chunks as string[]).join("");
+  }
+
+  return textDecoder.decode(toBytes());
 }

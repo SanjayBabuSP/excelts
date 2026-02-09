@@ -14,7 +14,7 @@
 
 import { describe, it, expect } from "vitest";
 import { zip, unzip, TarArchive, parseTar, TarReader, TAR_TYPE } from "@archive";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 // =============================================================================
 // Types & Constants

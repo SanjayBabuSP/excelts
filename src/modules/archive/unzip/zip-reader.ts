@@ -21,7 +21,7 @@ import {
 } from "@archive/shared/errors";
 import { ProgressEmitter } from "@archive/shared/progress";
 import type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progress";
-import { getTextDecoder } from "@stream/shared";
+import { getTextDecoder } from "@stream/binary";
 import { eventedReadableToAsyncIterableNoDestroy } from "@stream/internal/evented-readable-to-async-iterable";
 import type { ArchiveFormat } from "@archive/formats/types";
 import { isWritableStream } from "@stream/internal/type-guards";

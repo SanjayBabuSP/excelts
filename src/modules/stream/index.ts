@@ -18,6 +18,7 @@
  */
 
 export type {
+  StreamOptions,
   ReadableStreamOptions,
   WritableStreamOptions,
   TransformStreamOptions,
@@ -55,7 +56,7 @@ export {
   PullStream,
   BufferedStream,
   StringChunk,
-  BufferChunk,
+  ByteChunk,
   createReadable,
   createWritable,
   createTransform,
@@ -94,11 +95,11 @@ export {
   getDefaultHighWaterMark,
   setDefaultHighWaterMark,
   duplexPair,
-  normalizeWritable as Writeable,
+  toWritable,
   consumers,
   promises
 } from "@stream/streams";
-export type { PipelineOptions, FinishedOptions } from "@stream/streams";
+export type { PipelineOptions, FinishedOptions, WritableOptions } from "@stream/streams";
 
 export { EventEmitter } from "@stream/event-emitter";
 
@@ -112,11 +113,10 @@ export {
   uint8ArrayToString,
   uint8ArrayEquals,
   uint8ArrayIndexOf,
-  uint8ArraySlice,
   toUint8Array,
-  bufferToString,
+  anyToString,
   concatUint8Arrays
-} from "@stream/shared";
+} from "@stream/binary";
 
 export {
   collect,
@@ -129,3 +129,5 @@ export {
   transform,
   filter
 } from "@stream/utils";
+
+export { StreamStateError, StreamTypeError, UnsupportedStreamTypeError } from "@stream/errors";

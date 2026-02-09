@@ -7,7 +7,8 @@
 
 import { consumers, createReadableFromArray, createTransform } from "@stream/streams";
 import type { IReadable, ITransform } from "@stream/types";
-import { stringToUint8Array as _stringToUint8Array } from "@stream/shared";
+import { stringToUint8Array as _stringToUint8Array } from "@stream/binary";
+import { isReadableStream } from "@stream/internal/type-guards";
 
 // =============================================================================
 // High-Level Stream Consumers
@@ -82,11 +83,12 @@ export function filter<T>(predicate: (chunk: T) => boolean | Promise<boolean>): 
 // =============================================================================
 
 /**
- * Type guard for browser ReadableStream-like objects
+ * Type guard for browser ReadableStream-like objects.
+ * Re-exported from internal/type-guards for public API compatibility.
  */
-export function isReadableStreamLike(value: unknown): value is { getReader: () => any } {
-  return Boolean(value && typeof (value as any).getReader === "function");
-}
+export const isReadableStreamLike = isReadableStream as (
+  value: unknown
+) => value is { getReader: () => any };
 
 /**
  * Convert a browser ReadableStream to an AsyncIterable.

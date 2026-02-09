@@ -25,7 +25,7 @@ export interface StreamModuleImports {
   BufferedStream: new (options?: any) => any;
   PullStream: new (options?: any) => any;
   StringChunk: new (data: string) => any;
-  BufferChunk: new (data: Uint8Array) => any;
+  ByteChunk: new (data: Uint8Array) => any;
   ChunkedBuilder: new (options?: any) => any;
   TransactionalChunkedBuilder: new (options?: any) => any;
 
@@ -108,7 +108,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
     BufferedStream,
     PullStream,
     StringChunk,
-    BufferChunk,
+    ByteChunk,
     ChunkedBuilder,
     TransactionalChunkedBuilder,
     createTransform,
@@ -425,9 +425,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
   });
 
   // ==========================================================================
-  // StringChunk and BufferChunk Tests
+  // StringChunk and ByteChunk Tests
   // ==========================================================================
-  describe("StringChunk and BufferChunk", () => {
+  describe("StringChunk and ByteChunk", () => {
     it("StringChunk should convert to Uint8Array", () => {
       const chunk = new StringChunk("hello");
       const arr = chunk.toUint8Array();
@@ -436,9 +436,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(uint8ArrayToString(arr)).toBe("hello");
     });
 
-    it("BufferChunk should wrap Uint8Array", () => {
+    it("ByteChunk should wrap Uint8Array", () => {
       const data = stringToUint8Array("world");
-      const chunk = new BufferChunk(data);
+      const chunk = new ByteChunk(data);
 
       expect(chunk.length).toBe(data.length);
       expect(chunk.toUint8Array()).toEqual(data);

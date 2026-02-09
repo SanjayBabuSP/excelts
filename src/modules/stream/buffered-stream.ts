@@ -7,7 +7,7 @@
 
 import { EventEmitter } from "@stream/event-emitter";
 import { StreamStateError } from "@stream/errors";
-import { textEncoder } from "@stream/shared";
+import { textEncoder } from "@stream/binary";
 import type { BufferedStreamOptions, DataChunk } from "@stream/types";
 
 export type { BufferedStreamOptions, DataChunk } from "@stream/types";
@@ -46,7 +46,7 @@ export class StringChunk implements DataChunk {
 /**
  * Uint8Array chunk implementation
  */
-export class BufferChunk implements DataChunk {
+export class ByteChunk implements DataChunk {
   private readonly _data: Uint8Array;
 
   constructor(data: Uint8Array) {
@@ -154,7 +154,7 @@ export class BufferedStream extends EventEmitter {
       return false;
     }
 
-    const dataChunk = typeof chunk === "string" ? new StringChunk(chunk) : new BufferChunk(chunk);
+    const dataChunk = typeof chunk === "string" ? new StringChunk(chunk) : new ByteChunk(chunk);
     this._chunks.push(dataChunk);
     this._totalLength += dataChunk.length;
     return true;

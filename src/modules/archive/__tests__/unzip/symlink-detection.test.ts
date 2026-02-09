@@ -3,7 +3,7 @@ import { createZipSync } from "@archive/zip/zip-bytes";
 import { ZipParser } from "@archive/unzip/zip-parser";
 import { extractAll } from "@archive/unzip/extract";
 import { ZipReader } from "@archive/unzip/zip-reader";
-import { textEncoder } from "@stream/shared";
+import { textEncoder } from "@stream/binary";
 
 describe("Symlink detection", () => {
   describe("ZipParser", () => {

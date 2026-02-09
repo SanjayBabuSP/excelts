@@ -19,7 +19,7 @@ import {
   hasDeflateCompressionStream,
   hasDeflateDecompressionStream
 } from "@archive/compression/compress.base";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 import type { WorkerPool, WorkerTaskType } from "@archive/compression/worker-pool/index.browser";
 import {

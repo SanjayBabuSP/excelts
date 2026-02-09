@@ -13,7 +13,7 @@
  */
 
 import { crc32UpdateByte } from "@archive/compression/crc32.base";
-import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import { stringToUint8Array as encodeUtf8 } from "@stream/binary";
 
 /**
  * ZipCrypto encryption header size.

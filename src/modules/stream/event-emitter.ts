@@ -5,7 +5,9 @@
  * Kept lightweight and allocation-lean for hot paths.
  */
 
-export type EventListener = (...args: any[]) => void;
+import type { EventListener } from "@stream/types";
+
+export type { EventListener };
 
 type ListenerList = EventListener[];
 type ListenerValue = EventListener | ListenerList;

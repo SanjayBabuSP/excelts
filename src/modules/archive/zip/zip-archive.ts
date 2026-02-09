@@ -23,7 +23,7 @@ import {
   toError
 } from "@archive/shared/errors";
 import { ProgressEmitter } from "@archive/shared/progress";
-import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import { stringToUint8Array as encodeUtf8 } from "@stream/binary";
 import {
   buildDataDescriptor,
   FLAG_DATA_DESCRIPTOR,

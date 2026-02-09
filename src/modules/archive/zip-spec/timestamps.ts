@@ -1,4 +1,4 @@
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 export const EXTENDED_TIMESTAMP_ID = 0x5455;
 export const NTFS_TIMESTAMP_ID = 0x000a;

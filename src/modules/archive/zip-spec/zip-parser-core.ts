@@ -15,7 +15,7 @@ import {
   type ZipStringEncoding,
   type ZipStringCodec
 } from "@archive/shared/text";
-import { uint8ArrayToString as decodeUtf8 } from "@stream/shared";
+import { uint8ArrayToString as decodeUtf8 } from "@stream/binary";
 import type { ZipEntryInfo, ZipEntryEncryptionMethod } from "./zip-entry-info";
 import {
   CENTRAL_DIR_HEADER_SIG,

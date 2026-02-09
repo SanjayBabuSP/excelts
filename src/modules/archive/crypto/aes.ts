@@ -14,7 +14,7 @@
  * Works in both Node.js and browsers using the Web Crypto API.
  */
 
-import { stringToUint8Array as encodeUtf8 } from "@stream/shared";
+import { stringToUint8Array as encodeUtf8 } from "@stream/binary";
 import { toArrayBuffer } from "@archive/shared/text";
 
 /**

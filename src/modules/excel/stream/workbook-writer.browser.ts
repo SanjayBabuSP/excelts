@@ -25,7 +25,7 @@ import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xfo
 import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property-bag-xform";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import type { Writable } from "@stream";
-import { Writeable, stringToUint8Array } from "@stream";
+import { toWritable, stringToUint8Array } from "@stream";
 import {
   mediaPath,
   OOXML_PATHS,
@@ -209,7 +209,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
    */
   protected _createOutputStream(options: WorkbookWriterOptions): OutputStreamLike {
     if (options.stream) {
-      return Writeable(options.stream);
+      return toWritable(options.stream);
     }
     return new StreamBuf();
   }

@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { createDeflateStream, createInflateStream, hasDeflateRaw } from "@archive";
 import { Zip as _Zip, ZipDeflate as _ZipDeflate } from "@archive/zip/stream";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 // Keep the rest of the test unchanged while sourcing Zip/ZipDeflate from the streaming-zip module.
 const Zip = _Zip;

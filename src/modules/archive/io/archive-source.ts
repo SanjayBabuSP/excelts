@@ -1,4 +1,4 @@
-import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@stream/shared";
+import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@stream/binary";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
 import { createAbortError } from "@archive/shared/errors";
 

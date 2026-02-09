@@ -11,7 +11,7 @@
  * - Chrome < 103
  */
 
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 // ============================================================================
 // DEFLATE Decompression (Full implementation)

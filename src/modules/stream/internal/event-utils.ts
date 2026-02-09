@@ -5,14 +5,9 @@
  * modules (e.g. archive) can reuse it without pulling in the whole stream API.
  */
 
-type NodeStyleEmitter = {
-  on?: (event: string, listener: (...args: any[]) => void) => any;
-  once?: (event: string, listener: (...args: any[]) => void) => any;
-  off?: (event: string, listener: (...args: any[]) => void) => any;
-  removeListener?: (event: string, listener: (...args: any[]) => void) => any;
-};
+import type { EventEmitterLike } from "@stream/types";
 
-function off(emitter: NodeStyleEmitter, event: string, listener: (...args: any[]) => void): void {
+function off(emitter: EventEmitterLike, event: string, listener: (...args: any[]) => void): void {
   if (typeof emitter.off === "function") {
     emitter.off(event, listener);
   } else if (typeof emitter.removeListener === "function") {
@@ -23,7 +18,7 @@ function off(emitter: NodeStyleEmitter, event: string, listener: (...args: any[]
 /**
  * Resolve when an emitter fires `event`, reject on `error`.
  */
-export function onceEvent(emitter: NodeStyleEmitter, event: string): Promise<void> {
+export function onceEvent(emitter: EventEmitterLike, event: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (err: unknown): void => {
       cleanup();

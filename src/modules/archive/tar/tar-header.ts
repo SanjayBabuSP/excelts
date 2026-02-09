@@ -19,7 +19,7 @@ import {
   type TarType
 } from "./tar-constants";
 import type { TarEntryInfo } from "./tar-entry-info";
-import { textEncoder, textDecoder } from "@stream/shared";
+import { textEncoder, textDecoder } from "@stream/binary";
 import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 /**

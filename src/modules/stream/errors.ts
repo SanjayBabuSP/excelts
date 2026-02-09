@@ -6,20 +6,8 @@
 
 import { BaseError, type BaseErrorOptions } from "@utils/errors";
 
-// Re-export common utilities from base
-export {
-  AbortError,
-  createAbortError,
-  isAbortError,
-  throwIfAborted,
-  createLinkedAbortController,
-  toError,
-  asError,
-  errorToJSON,
-  getErrorChain,
-  getRootCause,
-  type BaseErrorOptions
-} from "@utils/errors";
+// Re-export abort utility used by browser/readable
+export { createAbortError } from "@utils/errors";
 
 /**
  * Base class for all stream-related errors.
@@ -29,13 +17,6 @@ export class StreamError extends BaseError {
     super(message, options);
     this.name = "StreamError";
   }
-}
-
-/**
- * Check if an error is a stream error.
- */
-export function isStreamError(err: unknown): err is StreamError {
-  return err instanceof StreamError;
 }
 
 /**

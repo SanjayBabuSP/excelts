@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { RemoteZipReader, Crc32MismatchError } from "@archive/io/remote-zip-reader";
 import { BufferReader } from "@archive/io/random-access";
 import { createZip, type ZipEntry } from "@archive/zip/zip-bytes";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 // Helper to convert object to ZipEntry array
 function toEntries(files: Record<string, Uint8Array | string>): ZipEntry[] {

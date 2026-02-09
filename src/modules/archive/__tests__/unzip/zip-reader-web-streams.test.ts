@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ZipReader } from "@archive/unzip";
 import { createZip } from "@archive/zip/zip-bytes";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 async function readAllFromStream<T>(stream: ReadableStream<T>): Promise<T[]> {
   const reader = stream.getReader();

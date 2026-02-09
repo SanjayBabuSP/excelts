@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 import { parseZipExtraFields } from "@archive/zip-spec/zip-extra-fields";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 import {
   CENTRAL_DIR_HEADER_SIG,
   DATA_DESCRIPTOR_SIG,

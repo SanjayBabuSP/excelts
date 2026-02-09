@@ -1,34 +1,9 @@
 /**
- * True Streaming CSV Tests - Browser Implementation
+ * True Streaming CSV Tests - Browser Runner
  *
- * Uses Browser-specific APIs to verify TRUE streaming behavior for CSV.
+ * Identical to the Node.js runner. Both call the same shared test suite.
  */
 
-import { createTrueStreamingCsvTests } from "@stream/__tests__/streaming/true-streaming-csv-tests";
-import { CsvParserStream, CsvFormatterStream } from "@csv/index";
+import { runTrueStreamingCsvTests } from "@stream/__tests__/streaming/true-streaming-csv-tests";
 
-// ============================================================================
-// Browser-Specific Test Context
-// ============================================================================
-
-function getBrowserContext() {
-  return {
-    isBrowser: true,
-
-    // CSV Parser
-    createCsvParser: (options?: { headers?: boolean }) => {
-      return new CsvParserStream(options);
-    },
-
-    // CSV Formatter
-    createCsvFormatter: () => {
-      return new CsvFormatterStream();
-    }
-  };
-}
-
-// ============================================================================
-// Run Shared Tests
-// ============================================================================
-
-createTrueStreamingCsvTests(getBrowserContext);
+runTrueStreamingCsvTests();

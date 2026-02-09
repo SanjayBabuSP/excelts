@@ -5,7 +5,7 @@
  */
 
 import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
-import { concatUint8Arrays } from "@stream/shared";
+import { concatUint8Arrays } from "@stream/binary";
 
 // =============================================================================
 // ZIP64 mode type

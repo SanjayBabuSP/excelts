@@ -203,11 +203,8 @@ type _NonClassExport_isTransform = Assert<
 type _NonClassExport_isWritable = Assert<
   IsEqualStrict<NodeRuntimeNonClass["isWritable"], BrowserRuntimeNonClass["isWritable"]>
 >;
-type _NonClassExport_normalizeWritable = Assert<
-  IsEqualStrict<
-    NodeRuntimeNonClass["normalizeWritable"],
-    BrowserRuntimeNonClass["normalizeWritable"]
-  >
+type _NonClassExport_toWritable = Assert<
+  IsEqualStrict<NodeRuntimeNonClass["toWritable"], BrowserRuntimeNonClass["toWritable"]>
 >;
 type _NonClassExport_once = Assert<
   IsEqualStrict<NodeRuntimeNonClass["once"], BrowserRuntimeNonClass["once"]>
@@ -353,7 +350,7 @@ type _NonClassExport_streamToUint8Array = Assert<
 // ============================================================================
 
 type _NormalizeWritableParams = Assert<
-  ParamsEqual<typeof NodeStreams.normalizeWritable, typeof BrowserStreams.normalizeWritable>
+  ParamsEqual<typeof NodeStreams.toWritable, typeof BrowserStreams.toWritable>
 >;
 
 type _CreateReadableParams = Assert<
