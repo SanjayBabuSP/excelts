@@ -468,6 +468,20 @@ class Worksheet {
    * the rows will still be shifted as if the values existed
    */
   spliceColumns(start: number, count: number, ...inserts: CellValue[][]): void {
+    // Before splicing cells, release all cell-level merge references so that
+    // row.splice copies plain values instead of merge proxies.
+    // _spliceMerges (called later) will rebuild cell-level refs at new coordinates.
+    for (const merge of Object.values(this._merges)) {
+      for (let r = merge.top; r <= merge.bottom; r++) {
+        for (let c = merge.left; c <= merge.right; c++) {
+          const cell = this.findCell(r, c);
+          if (cell && cell.type === Enums.ValueType.Merge) {
+            cell.unmerge();
+          }
+        }
+      }
+    }
+
     const rows = this._rows;
     const nRows = rows.length;
     if (inserts.length > 0) {
@@ -520,6 +534,9 @@ class Worksheet {
         }
       }
     }
+
+    // account for merges
+    this._spliceMerges("col", start, count, inserts.length);
   }
 
   /**
@@ -713,6 +730,16 @@ class Worksheet {
 
     const rSrc = this._rows[rowNum - 1];
     const inserts = Array.from<RowValues>({ length: count }).fill(rSrc.values);
+
+    // Collect single-row merges from the source row before splicing
+    // (only merges where top == bottom == rowNum, i.e. horizontal merges within one row)
+    const srcMerges: Range[] = [];
+    for (const merge of Object.values(this._merges)) {
+      if (merge.top === rowNum && merge.bottom === rowNum) {
+        srcMerges.push(merge);
+      }
+    }
+
     this.spliceRows(rowNum + 1, insert ? 0 : count, ...inserts);
 
     // now copy styles...
@@ -724,6 +751,30 @@ class Worksheet {
         rDst.getCell(colNumber).style = cell.style;
       });
     }
+
+    // Duplicate single-row merges from source row into each new row
+    if (srcMerges.length > 0) {
+      for (let i = 0; i < count; i++) {
+        const dstRow = rowNum + 1 + i;
+
+        // In overwrite mode, clear any existing merges in the target row
+        if (!insert) {
+          const toRemove: string[] = [];
+          for (const [key, merge] of Object.entries(this._merges)) {
+            if (merge.top <= dstRow && merge.bottom >= dstRow) {
+              toRemove.push(key);
+            }
+          }
+          for (const key of toRemove) {
+            this._unMergeMaster(this.getCell(key));
+          }
+        }
+
+        for (const srcMerge of srcMerges) {
+          this.mergeCellsWithoutStyle(dstRow, srcMerge.left, dstRow, srcMerge.right);
+        }
+      }
+    }
   }
 
   /**
@@ -734,6 +785,21 @@ class Worksheet {
    */
   spliceRows(start: number, count: number, ...inserts: RowValues[]): void {
     // same problem as row.splice, except worse.
+
+    // Before splicing rows, release all cell-level merge references so that
+    // row value copies work on plain values instead of merge proxies.
+    // _spliceMerges (called later) will rebuild cell-level refs at new coordinates.
+    for (const merge of Object.values(this._merges)) {
+      for (let r = merge.top; r <= merge.bottom; r++) {
+        for (let c = merge.left; c <= merge.right; c++) {
+          const cell = this.findCell(r, c);
+          if (cell && cell.type === Enums.ValueType.Merge) {
+            cell.unmerge();
+          }
+        }
+      }
+    }
+
     const nKeep = start + count;
     const nInserts = inserts.length;
     const nExpand = nInserts - count;
@@ -771,14 +837,6 @@ class Worksheet {
           rDst.height = rSrc.height;
           rSrc.eachCell({ includeEmpty: true }, (cell: Cell, colNumber: number) => {
             rDst.getCell(colNumber).style = cell.style;
-
-            // remerge cells accounting for insert offset
-            if (cell.type === Enums.ValueType.Merge) {
-              const cellToBeMerged = this.getRow(cell.row + nInserts).getCell(colNumber);
-              const prevMaster = cell.master;
-              const newMaster = this.getRow(prevMaster.row + nInserts).getCell(prevMaster.col);
-              cellToBeMerged.merge(newMaster);
-            }
           });
         } else {
           this._rows[i + nExpand - 1] = undefined;
@@ -810,6 +868,9 @@ class Worksheet {
         }
       }
     }
+
+    // account for merges
+    this._spliceMerges("row", start, count, nInserts);
   }
 
   /**
@@ -935,6 +996,99 @@ class Worksheet {
         }
       }
       delete this._merges[master.address];
+    }
+  }
+
+  /**
+   * Update _merges dictionary and cell-level merge references after a row or column splice.
+   */
+  private _spliceMerges(axis: "row" | "col", start: number, count: number, nInserts: number): void {
+    const nExpand = nInserts - count;
+    if (nExpand === 0 && count === 0) {
+      return;
+    }
+    const nKeep = start + count;
+    const isRow = axis === "row";
+
+    const newMerges: Record<string, Range> = {};
+
+    for (const merge of Object.values(this._merges)) {
+      const { top, left, bottom, right } = merge.model;
+      // For row axis: lo=top, hi=bottom. For col axis: lo=left, hi=right.
+      const lo = isRow ? top : left;
+      const hi = isRow ? bottom : right;
+
+      if (nExpand <= 0 && count > 0) {
+        // Deleting rows/columns
+        const deleteEnd = nKeep - 1;
+        if (lo > deleteEnd) {
+          // Entirely after deleted range — shift
+          const newRange = isRow
+            ? new Range(top + nExpand, left, bottom + nExpand, right)
+            : new Range(top, left + nExpand, bottom, right + nExpand);
+          newMerges[colCache.encodeAddress(newRange.top, newRange.left)] = newRange;
+        } else if (hi < start) {
+          // Entirely before deleted range — unchanged
+          newMerges[colCache.encodeAddress(top, left)] = merge;
+        } else if (lo >= start && hi <= deleteEnd) {
+          // Entirely within deleted range — remove
+        } else {
+          // Spans splice boundary — shrink
+          let newTop = top;
+          let newLeft = left;
+          let newBottom = bottom;
+          let newRight = right;
+          if (isRow) {
+            newTop = top < start ? top : start;
+            newBottom = Math.max(newTop, bottom + nExpand);
+          } else {
+            newLeft = left < start ? left : start;
+            newRight = Math.max(newLeft, right + nExpand);
+          }
+          const newRange = new Range(newTop, newLeft, newBottom, newRight);
+          if (newTop === newBottom && newLeft === newRight) {
+            // Degenerate 1x1 merge — remove instead of keeping
+          } else {
+            newMerges[colCache.encodeAddress(newRange.top, newRange.left)] = newRange;
+          }
+        }
+      } else {
+        // Inserting rows/columns: shift items at/after nKeep
+        if (lo >= nKeep) {
+          // Entirely at or after splice — shift
+          const newRange = isRow
+            ? new Range(top + nExpand, left, bottom + nExpand, right)
+            : new Range(top, left + nExpand, bottom, right + nExpand);
+          newMerges[colCache.encodeAddress(newRange.top, newRange.left)] = newRange;
+        } else if (hi < nKeep) {
+          // Entirely before splice — unchanged
+          newMerges[colCache.encodeAddress(top, left)] = merge;
+        } else {
+          // Spans splice boundary — stretch
+          if (isRow) {
+            merge.model.bottom = bottom + nExpand;
+          } else {
+            merge.model.right = right + nExpand;
+          }
+          newMerges[colCache.encodeAddress(top, left)] = merge;
+        }
+      }
+    }
+
+    this._merges = newMerges;
+
+    // Rebuild cell-level merge references for all merges.
+    // Pre-unmerge in spliceRows/spliceColumns clears all cell refs,
+    // so we must rebuild every merge, not just moved/resized ones.
+    for (const m of Object.values(newMerges)) {
+      const master = this.getCell(m.top, m.left);
+      for (let r = m.top; r <= m.bottom; r++) {
+        for (let c = m.left; c <= m.right; c++) {
+          if (r > m.top || c > m.left) {
+            this.getCell(r, c).merge(master, true);
+          }
+        }
+      }
     }
   }
 
