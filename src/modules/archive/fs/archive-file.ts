@@ -34,7 +34,7 @@ import * as path from "node:path";
 
 import { TarArchive, TarReader } from "@archive/tar/tar-archive";
 import { isDirectory as isTarDirectory } from "@archive/tar/tar-entry-info";
-import { textEncoder as utf8Encoder } from "@stream/binary";
+import { textEncoder as utf8Encoder } from "@utils/binary";
 import { gzipSync, gunzipSync } from "@archive/compression/compress";
 import { createGzipStream } from "@archive/compression/streaming-compress";
 import { ZipParser, type ZipEntryInfo as ParserEntryInfo } from "@archive/unzip/zip-parser";

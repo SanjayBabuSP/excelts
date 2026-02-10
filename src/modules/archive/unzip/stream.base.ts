@@ -8,7 +8,7 @@ import {
   type Readable
 } from "@stream";
 import { ByteQueue } from "@archive/shared/byte-queue";
-import { textEncoder as utf8Encoder } from "@stream/binary";
+import { textEncoder as utf8Encoder } from "@utils/binary";
 import { decodeZipPath, resolveZipStringCodec } from "@archive/shared/text";
 import { PatternScanner } from "@archive/unzip/pattern-scanner";
 

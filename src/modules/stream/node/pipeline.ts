@@ -1,7 +1,7 @@
 /**
- * Node.js Stream - Pipeline
+ * Node.js Stream - Pipeline & Finished
  *
- * Pipeline and stream normalization for Node.js.
+ * Pipeline, stream normalization, and stream completion for Node.js.
  */
 
 import {
@@ -9,10 +9,11 @@ import {
   Writable as NodeWritable,
   Transform,
   Duplex,
-  pipeline as nodePipeline
+  pipeline as nodePipeline,
+  finished as nodeFinished
 } from "stream";
 import type { PipelineStreamLike } from "@stream/types";
-import type { PipelineOptions, PipelineCallback } from "@stream/common/options";
+import type { PipelineOptions, PipelineCallback, FinishedOptions } from "@stream/common/options";
 import { isPipelineOptions } from "@stream/common/options";
 import {
   isReadableStream,
@@ -21,7 +22,7 @@ import {
 } from "@stream/internal/type-guards";
 
 // Re-export for consumers
-export type { PipelineOptions } from "@stream/common/options";
+export type { PipelineOptions, FinishedOptions } from "@stream/common/options";
 export { isPipelineOptions } from "@stream/common/options";
 
 // =============================================================================
@@ -105,4 +106,66 @@ export function pipeline(
   }
 
   return promise;
+}
+
+// =============================================================================
+// Finished
+// =============================================================================
+
+/**
+ * Wait for a stream to finish, close, or error.
+ * Node.js compatible with support for options and callbacks.
+ */
+export function finished(
+  stream: PipelineStreamLike,
+  optionsOrCallback?: FinishedOptions | PipelineCallback,
+  callback?: PipelineCallback
+): Promise<void> {
+  let options: FinishedOptions | undefined;
+  let cb: PipelineCallback | undefined;
+
+  if (typeof optionsOrCallback === "function") {
+    cb = optionsOrCallback;
+  } else {
+    options = optionsOrCallback;
+    cb = callback;
+  }
+
+  const promise = new Promise<void>((resolve, reject) => {
+    const normalizedStream = toNodePipelineStream(stream);
+    (nodeFinished as any)(normalizedStream, options, (err: Error | null) => {
+      // Node.js semantics: options.error defaults to true (report errors).
+      // If options.error === false, ignore errors and resolve.
+      if (err && options?.error !== false) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+
+  if (cb) {
+    promise.then(() => cb!()).catch(err => cb!(err));
+  }
+
+  return promise;
+}
+
+/**
+ * Wait for multiple streams to finish
+ */
+export async function finishedAll(streams: ReadonlyArray<PipelineStreamLike>): Promise<void> {
+  const len = streams.length;
+  if (len === 0) {
+    return;
+  }
+  if (len === 1) {
+    await finished(streams[0]);
+    return;
+  }
+  const promises = new Array<Promise<void>>(len);
+  for (let i = 0; i < len; i++) {
+    promises[i] = finished(streams[i]);
+  }
+  await Promise.all(promises);
 }

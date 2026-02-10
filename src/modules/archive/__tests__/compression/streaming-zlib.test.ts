@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { createZlibStream, createUnzlibStream } from "@archive/compression/streaming-compress";
 import { unzlibSync, isZlibData } from "@archive/compression/compress";
-import { concatUint8Arrays } from "@stream/binary";
+import { concatUint8Arrays } from "@utils/binary";
 
 // Helper to convert Buffer to Uint8Array for comparison
 function toUint8Array(data: Uint8Array | Buffer): Uint8Array {

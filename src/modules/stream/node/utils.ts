@@ -11,26 +11,26 @@ import type {
   DuplexStreamOptions,
   IDuplex,
   ITransform,
-  PipelineStreamLike,
   ReadableLike,
   WritableLike
 } from "@stream/types";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
+import { createConsumers } from "@stream/common/consumers";
+import { createAddAbortSignal } from "@stream/common/add-abort-signal";
+import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
 
 import { Writable } from "./writable";
-import { pipeline } from "./pipeline";
-import { finished } from "./finished";
+import { pipeline, finished } from "./pipeline";
 
 // =============================================================================
 // Utility Functions
 // =============================================================================
 
-/**
- * Convert a stream to a promise that resolves when finished
- */
-export async function streamToPromise(stream: PipelineStreamLike): Promise<void> {
-  return finished(stream);
-}
+/** Convert a stream to a promise that resolves when finished */
+export const streamToPromise = finished;
+
+/** Copy from a readable stream to a writable stream */
+export const copyStream = pipeline;
 
 /**
  * Collect all data from a readable stream into a Uint8Array
@@ -108,60 +108,19 @@ export async function drainStream(
   }
 }
 
-/**
- * Copy from a readable stream to a writable stream
- */
-export async function copyStream(
-  source: PipelineStreamLike,
-  destination: PipelineStreamLike
-): Promise<void> {
-  return pipeline(source as any, destination as any);
-}
-
 // =============================================================================
 // Additional Utility Functions
 // =============================================================================
 
-/**
- * Add abort signal handling to any stream
- */
-export function addAbortSignal<
-  T extends (ReadableLike | WritableLike) & { destroy(error?: Error): any }
->(signal: AbortSignal, stream: T): T {
-  if (signal.aborted) {
-    stream.destroy(new Error("Aborted"));
-    return stream;
+/** Add abort signal handling to any stream */
+export const addAbortSignal = createAddAbortSignal({
+  add(emitter, event, listener) {
+    (emitter as any).once?.(event, listener);
+  },
+  remove(emitter, event, listener) {
+    (emitter as any).off?.(event, listener);
   }
-
-  const cleanup = (): void => {
-    signal.removeEventListener("abort", onAbort);
-    (stream as any).off?.("close", onDone);
-    (stream as any).off?.("end", onDone);
-    (stream as any).off?.("finish", onDone);
-    (stream as any).off?.("error", onError);
-  };
-
-  const onAbort = (): void => {
-    cleanup();
-    stream.destroy(new Error("Aborted"));
-  };
-
-  const onDone = (): void => {
-    cleanup();
-  };
-
-  const onError = (): void => {
-    cleanup();
-  };
-
-  signal.addEventListener("abort", onAbort, { once: true });
-  (stream as any).once?.("close", onDone);
-  (stream as any).once?.("end", onDone);
-  (stream as any).once?.("finish", onDone);
-  (stream as any).once?.("error", onError);
-
-  return stream;
-}
+});
 
 // =============================================================================
 // Type Guards
@@ -195,60 +154,18 @@ export function isWritable(obj: unknown): obj is WritableLike {
   return typeof o.write === "function" && typeof o.end === "function";
 }
 
-/**
- * Check if an object is a transform stream
- */
-export function isTransform(obj: unknown): obj is ITransform<any, any> {
-  if (obj == null) {
-    return false;
-  }
-  if (obj instanceof Transform) {
-    return true;
-  }
-  const o = obj as Record<string, unknown>;
-  return (
-    typeof o.read === "function" &&
-    typeof o.pipe === "function" &&
-    typeof o.write === "function" &&
-    typeof o._transform === "function"
-  );
-}
+/** Check if an object is a transform stream */
+export const isTransform: (obj: unknown) => obj is ITransform<any, any> =
+  createIsTransform(Transform);
 
-/**
- * Check if an object is a duplex stream
- */
-export function isDuplex(obj: unknown): obj is IDuplex<any, any> {
-  if (obj == null) {
-    return false;
-  }
-  if (obj instanceof Duplex) {
-    return true;
-  }
-  const o = obj as Record<string, unknown>;
-  return (
-    typeof o.read === "function" &&
-    typeof o.pipe === "function" &&
-    typeof o.write === "function" &&
-    typeof o.end === "function"
-  );
-}
+/** Check if an object is a duplex stream */
+export const isDuplex: (obj: unknown) => obj is IDuplex<any, any> = createIsDuplex(Duplex);
 
-/**
- * Check if an object is any kind of stream
- */
-export function isStream(obj: unknown): obj is ReadableLike | WritableLike {
-  if (obj == null) {
-    return false;
-  }
-  if (obj instanceof Readable || obj instanceof Writable) {
-    return true;
-  }
-  const o = obj as Record<string, unknown>;
-  return (
-    (typeof o.read === "function" && typeof o.pipe === "function") ||
-    (typeof o.write === "function" && typeof o.end === "function")
-  );
-}
+/** Check if an object is any kind of stream */
+export const isStream: (obj: unknown) => obj is ReadableLike | WritableLike = createIsStream(
+  Readable,
+  Writable
+);
 
 // =============================================================================
 // Stream State Inspection Functions
@@ -340,46 +257,10 @@ export function duplexPair<T = Uint8Array>(options?: DuplexStreamOptions): [Dupl
 // Stream Consumers (like stream/consumers in Node.js)
 // =============================================================================
 
-export const consumers = {
-  async arrayBuffer(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
-  ): Promise<ArrayBuffer> {
-    const bytes = await streamToUint8Array(stream);
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  },
-
-  async blob(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
-    options?: BlobPropertyBag
-  ): Promise<Blob> {
-    const bytes = await streamToUint8Array(stream);
-    return new Blob([bytes as BlobPart], options);
-  },
-
-  async buffer(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
-  ): Promise<Uint8Array> {
-    return streamToUint8Array(stream);
-  },
-
-  async json(stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>): Promise<any> {
-    const text = await consumers.text(stream);
-    return JSON.parse(text);
-  },
-
-  async text(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
-    encoding?: string
-  ): Promise<string> {
-    return streamToString(stream, encoding);
-  }
-};
+export const consumers = createConsumers({ streamToUint8Array, streamToString });
 
 // =============================================================================
 // Promises API (like stream/promises in Node.js)
 // =============================================================================
 
-export const promises = {
-  pipeline,
-  finished
-};
+export const promises = { pipeline, finished };

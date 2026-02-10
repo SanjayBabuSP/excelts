@@ -6,7 +6,7 @@
 
 import { StreamTypeError } from "@stream/errors";
 import type { WritableStreamOptions, ICollector } from "@stream/types";
-import { chunksToString } from "@stream/binary";
+import { chunksToString } from "@utils/binary";
 
 import { Writable } from "./writable";
 

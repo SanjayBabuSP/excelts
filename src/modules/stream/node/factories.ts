@@ -20,11 +20,21 @@ import type {
   IPassThrough
 } from "@stream/types";
 
-import { BufferedStream, ByteChunk, StringChunk } from "@stream/buffered-stream";
 import { PullStream } from "@stream/pull-stream";
+import { BufferedStream, StringChunk, ByteChunk } from "@stream/buffered-stream";
 
-// Re-export standalone helpers
+// Re-export shared stream classes
 export { PullStream, BufferedStream, StringChunk, ByteChunk };
+
+/** Create a pull stream */
+export function createPullStream(options?: PullStreamOptions): PullStream {
+  return new PullStream(options);
+}
+
+/** Create a buffered stream */
+export function createBufferedStream(options?: BufferedStreamOptions): BufferedStream {
+  return new BufferedStream(options);
+}
 
 import { Writable } from "./writable";
 
@@ -197,20 +207,6 @@ export function createPassThrough<_T = any>(options?: TransformStreamOptions): I
     highWaterMark: options?.highWaterMark,
     objectMode: options?.objectMode
   });
-}
-
-/**
- * Create a pull stream
- */
-export function createPullStream(options?: PullStreamOptions): PullStream {
-  return new PullStream(options);
-}
-
-/**
- * Create a buffered stream
- */
-export function createBufferedStream(options?: BufferedStreamOptions): BufferedStream {
-  return new BufferedStream(options);
 }
 
 /**

@@ -1,6 +1,5 @@
-import { concatUint8Arrays } from "@stream/binary";
-import { onceEvent } from "@stream/internal/event-utils";
-import { isWritableStream } from "@stream/internal/type-guards";
+import { concatUint8Arrays } from "@utils/binary";
+import { onceEvent, isWritableStream } from "@stream";
 
 export type ArchiveSink =
   | WritableStream<Uint8Array>

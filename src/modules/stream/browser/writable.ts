@@ -3,7 +3,7 @@
  */
 
 import type { WritableStreamOptions, WritableLike } from "@stream/types";
-import { EventEmitter } from "@stream/event-emitter";
+import { EventEmitter } from "@utils/event-emitter";
 
 import type { Writable as NodeWritable } from "stream";
 

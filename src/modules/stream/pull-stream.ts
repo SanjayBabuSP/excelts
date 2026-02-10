@@ -5,8 +5,8 @@
  * Works identically in both browser and Node.js environments.
  */
 
-import { EventEmitter } from "@stream/event-emitter";
-import { uint8ArrayIndexOf } from "@stream/binary";
+import { EventEmitter } from "@utils/event-emitter";
+import { uint8ArrayIndexOf } from "@utils/binary";
 import type { PullStreamOptions } from "@stream/types";
 
 export type { PullStreamOptions } from "@stream/types";
@@ -300,6 +300,6 @@ export class PullStream extends EventEmitter {
    * Find pattern in Uint8Array (like Buffer.indexOf)
    */
   private _indexOf(haystack: Uint8Array, start: number, end: number, needle: Uint8Array): number {
-    return uint8ArrayIndexOf(haystack.subarray(0, end), needle, start);
+    return uint8ArrayIndexOf(haystack, needle, start, end);
   }
 }

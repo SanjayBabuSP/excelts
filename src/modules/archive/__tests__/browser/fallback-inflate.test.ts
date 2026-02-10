@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 import { Parse } from "@archive/unzip/stream.browser";
-import { concatUint8Arrays } from "@stream/binary";
+import { concatUint8Arrays } from "@utils/binary";
 
 // Type helper for browser Parse which has different methods than Node version
 type BrowserParse = Parse & {

@@ -4,7 +4,7 @@
 
 import type { DuplexStreamOptions } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
-import { EventEmitter } from "@stream/event-emitter";
+import { EventEmitter } from "@utils/event-emitter";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";

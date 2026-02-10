@@ -14,7 +14,6 @@ export {
   throwIfAborted,
   createLinkedAbortController,
   toError,
-  asError,
   suppressUnhandledRejection,
   errorToJSON,
   getErrorChain,

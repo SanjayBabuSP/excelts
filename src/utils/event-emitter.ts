@@ -5,9 +5,8 @@
  * Kept lightweight and allocation-lean for hot paths.
  */
 
-import type { EventListener } from "@stream/types";
-
-export type { EventListener };
+/** Generic event listener signature. */
+type EventListener = (...args: any[]) => void;
 
 type ListenerList = EventListener[];
 type ListenerValue = EventListener | ListenerList;

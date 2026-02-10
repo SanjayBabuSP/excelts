@@ -175,16 +175,10 @@ export function createLinkedAbortController(parentSignal?: AbortSignal): {
  * If the value is already an Error, it's returned as-is.
  * Otherwise, it's converted to a string and wrapped in an Error.
  *
- * Also exported as `asError` for semantic clarity.
  */
 export function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
 }
-
-/**
- * Alias for `toError` - used when the semantic intent is converting a catch value to Error.
- */
-export const asError = toError;
 
 // =============================================================================
 // Promise Utilities

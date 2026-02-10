@@ -26,20 +26,20 @@ type ReturnsEqual<A extends (...args: any[]) => any, B extends (...args: any[]) 
 type ReturnExtends<A extends (...args: any[]) => any, Base> =
   ReturnType<A> extends Base ? true : false;
 
-import type * as NodeStreams from "@stream/streams";
-import type * as BrowserStreams from "@stream/streams.browser";
+import type * as NodeStreams from "@stream/index";
+import type * as BrowserStreams from "@stream/index.browser";
 
 import type {
   FinishedOptions as NodeFinishedOptions,
   PipelineOptions as NodePipelineOptions
-} from "@stream/streams";
+} from "@stream/index";
 import type {
   FinishedOptions as BrowserFinishedOptions,
   PipelineOptions as BrowserPipelineOptions
-} from "@stream/streams.browser";
+} from "@stream/index.browser";
 
-import type * as NodeRuntimeModule from "@stream/streams";
-import type * as BrowserRuntimeModule from "@stream/streams.browser";
+import type * as NodeRuntimeModule from "@stream/index";
+import type * as BrowserRuntimeModule from "@stream/index.browser";
 import type { ICollector, IDuplex, IReadable, ITransform, IWritable } from "@stream/types";
 
 type NodeRuntime = typeof NodeRuntimeModule;
@@ -205,9 +205,6 @@ type _NonClassExport_isWritable = Assert<
 >;
 type _NonClassExport_toWritable = Assert<
   IsEqualStrict<NodeRuntimeNonClass["toWritable"], BrowserRuntimeNonClass["toWritable"]>
->;
-type _NonClassExport_once = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["once"], BrowserRuntimeNonClass["once"]>
 >;
 type _NonClassExport_pipeline = Assert<
   IsEqualStrict<NodeRuntimeNonClass["pipeline"], BrowserRuntimeNonClass["pipeline"]>

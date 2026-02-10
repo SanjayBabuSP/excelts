@@ -12,7 +12,7 @@
  * to prevent UI blocking for large files.
  */
 
-import { concatUint8Arrays } from "@stream/binary";
+import { concatUint8Arrays } from "@utils/binary";
 import {
   type CompressOptions,
   compressWithStream,

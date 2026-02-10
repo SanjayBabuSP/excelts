@@ -1,13 +1,12 @@
 /**
- * Stream Utilities
+ * Stream Utilities (browser)
  *
- * Small, cross-platform helpers built on top of the platform stream
- * implementation. This file is swapped for `utils.browser.ts` in browser
- * builds via the `preferBrowserFilesPlugin()` mechanism.
+ * Browser counterpart of `utils.ts`, selected automatically
+ * by the `preferBrowserFilesPlugin()` mechanism.
  */
 
-import { createReadableFromArray, createTransform } from "@stream/node/factories";
-import { consumers } from "@stream/node/utils";
+import { createReadableFromArray, createTransform } from "@stream/browser/factories";
+import { consumers } from "@stream/browser/utils";
 import type { IReadable, ITransform } from "@stream/types";
 import { stringToUint8Array as _stringToUint8Array } from "@utils/binary";
 import { isReadableStream } from "@stream/internal/type-guards";

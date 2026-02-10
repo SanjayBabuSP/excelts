@@ -8,7 +8,7 @@
 import { TAR_BLOCK_SIZE, TAR_TYPE } from "./tar-constants";
 import type { TarEntryInfo } from "./tar-entry-info";
 import { decodeHeader, isZeroBlock, calculatePadding } from "./tar-header";
-import { textDecoder } from "@stream/binary";
+import { textDecoder } from "@utils/binary";
 
 // Helper to strip trailing null characters without using control char regex
 const NULL_CHAR = String.fromCharCode(0);

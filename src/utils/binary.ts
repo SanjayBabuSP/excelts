@@ -2,10 +2,8 @@
  * Binary Utilities
  *
  * Cached TextEncoder/TextDecoder instances and core Uint8Array operations.
- * Platform-neutral — used by both Node.js and browser stream implementations.
+ * Platform-neutral — used across the entire codebase.
  */
-
-import { StreamTypeError } from "@stream/errors";
 
 // =============================================================================
 // Cached TextEncoder/TextDecoder instances
@@ -110,23 +108,34 @@ export function uint8ArrayEquals(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * Find pattern in Uint8Array
+ * Find pattern in Uint8Array.
+ *
+ * @param haystack  The array to search in
+ * @param needle    The pattern to search for
+ * @param start     Start index (inclusive, default 0)
+ * @param end       End index (exclusive, default haystack.length) — limits the search
+ *                  region without creating a subarray view
  */
-export function uint8ArrayIndexOf(haystack: Uint8Array, needle: Uint8Array, start = 0): number {
+export function uint8ArrayIndexOf(
+  haystack: Uint8Array,
+  needle: Uint8Array,
+  start = 0,
+  end?: number
+): number {
   const needleLen = needle.length;
   if (needleLen === 0) {
     return start;
   }
 
-  const haystackLen = haystack.length;
+  const haystackLen = end ?? haystack.length;
   if (needleLen > haystackLen) {
     return -1;
   }
 
   const firstByte = needle[0];
-  const end = haystackLen - needleLen;
+  const last = haystackLen - needleLen;
 
-  outer: for (let i = start; i <= end; i++) {
+  outer: for (let i = start; i <= last; i++) {
     // Quick check first byte
     if (haystack[i] !== firstByte) {
       continue;
@@ -159,7 +168,7 @@ export function toUint8Array(input: string | Uint8Array | ArrayBuffer | number[]
   if (Array.isArray(input)) {
     return new Uint8Array(input);
   }
-  throw new StreamTypeError("Uint8Array", typeof input);
+  throw new TypeError(`Expected Uint8Array, got ${typeof input}`);
 }
 
 /**

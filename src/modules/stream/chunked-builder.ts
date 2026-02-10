@@ -5,7 +5,7 @@
  * This file provides the same API but works in browser environments.
  */
 
-import { textEncoder } from "@stream/binary";
+import { textEncoder } from "@utils/binary";
 import { StreamStateError } from "@stream/errors";
 
 /**

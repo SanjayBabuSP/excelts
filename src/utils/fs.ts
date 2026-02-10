@@ -40,7 +40,7 @@ let _fsp: FsPromisesModule = nodeFsp;
  * @example
  * ```ts
  * import originalFs from "original-fs";
- * import { useFs } from "@aspect/archive";
+ * import { useFs } from "@utils/fs";
  *
  * // Use Electron's original-fs
  * useFs(originalFs);

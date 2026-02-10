@@ -1,5 +1,5 @@
-import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@stream/binary";
-import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
+import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@utils/binary";
+import { isAsyncIterable, isReadableStream } from "@stream";
 import { createAbortError } from "@archive/shared/errors";
 
 export type ArchiveSource =

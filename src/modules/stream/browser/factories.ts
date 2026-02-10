@@ -16,8 +16,6 @@ import type {
   ICollector,
   IPassThrough
 } from "@stream/types";
-import { PullStream } from "@stream/pull-stream";
-import { BufferedStream, ByteChunk, StringChunk } from "@stream/buffered-stream";
 
 import { Readable, pumpAsyncIterableToReadable } from "./readable";
 import { Writable } from "./writable";
@@ -27,11 +25,21 @@ import { PassThrough } from "./passthrough";
 import { Collector } from "./collector";
 import { addEmitterListener } from "./helpers";
 
-// =============================================================================
-// Re-exports
-// =============================================================================
+import { PullStream } from "@stream/pull-stream";
+import { BufferedStream, StringChunk, ByteChunk } from "@stream/buffered-stream";
 
+// Re-export shared stream classes
 export { PullStream, BufferedStream, StringChunk, ByteChunk };
+
+/** Create a pull stream */
+export function createPullStream(options?: PullStreamOptions): PullStream {
+  return new PullStream(options);
+}
+
+/** Create a buffered stream */
+export function createBufferedStream(options?: BufferedStreamOptions): BufferedStream {
+  return new BufferedStream(options);
+}
 
 // =============================================================================
 // Stream Creation Functions
@@ -134,20 +142,6 @@ export function createCollector<T = Uint8Array>(options?: WritableStreamOptions)
  */
 export function createPassThrough<T = any>(options?: TransformStreamOptions): IPassThrough<T> {
   return new PassThrough(options);
-}
-
-/**
- * Create a pull stream
- */
-export function createPullStream(options?: PullStreamOptions): PullStream {
-  return new PullStream(options);
-}
-
-/**
- * Create a buffered stream
- */
-export function createBufferedStream(options?: BufferedStreamOptions): BufferedStream {
-  return new BufferedStream(options);
 }
 
 /**

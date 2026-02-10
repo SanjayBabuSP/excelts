@@ -60,7 +60,6 @@ export interface StreamModuleImports {
   addAbortSignal: (signal: AbortSignal, stream: any) => any;
   compose: (...transforms: any[]) => any;
   finishedAll: (streams: readonly any[]) => Promise<void>;
-  once: (emitter: any, event: string, options?: any) => Promise<any[]>;
   promisify: <T>(fn: (callback: (error?: Error | null, result?: T) => void) => void) => Promise<T>;
 
   // Type Guards
@@ -93,7 +92,12 @@ export interface StreamModuleImports {
   stringToUint8Array: (str: string) => Uint8Array;
   uint8ArrayToString: (arr: Uint8Array) => string;
   uint8ArrayEquals: (a: Uint8Array, b: Uint8Array) => boolean;
-  uint8ArrayIndexOf: (haystack: Uint8Array, needle: Uint8Array, start?: number) => number;
+  uint8ArrayIndexOf: (
+    haystack: Uint8Array,
+    needle: Uint8Array,
+    start?: number,
+    end?: number
+  ) => number;
 }
 
 /**
@@ -131,7 +135,6 @@ export function runStreamTests(imports: StreamModuleImports): void {
     addAbortSignal,
     compose,
     finishedAll,
-    once,
     promisify,
     isReadable,
     isWritable,
@@ -1080,40 +1083,6 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       expect(readable1.readableEnded).toBe(true);
       expect(readable2.readableEnded).toBe(true);
-    });
-  });
-
-  // ==========================================================================
-  // Once Tests
-  // ==========================================================================
-  describe("Once", () => {
-    it("should resolve with event arguments", async () => {
-      const emitter = new EventEmitter();
-
-      const promise = once(emitter, "test");
-      emitter.emit("test", "arg1", "arg2");
-
-      const args = await promise;
-      expect(args).toEqual(["arg1", "arg2"]);
-    });
-
-    it("should reject on error event", async () => {
-      const emitter = new EventEmitter();
-
-      const promise = once(emitter, "data");
-      emitter.emit("error", new Error("test error"));
-
-      await expect(promise).rejects.toThrow("test error");
-    });
-
-    it("should handle abort signal", async () => {
-      const emitter = new EventEmitter();
-      const controller = new AbortController();
-
-      const promise = once(emitter, "test", { signal: controller.signal });
-      controller.abort();
-
-      await expect(promise).rejects.toThrow("Aborted");
     });
   });
 
@@ -2137,24 +2106,6 @@ export function runStreamTests(imports: StreamModuleImports): void {
           const encoded = stringToUint8Array(str);
           const decoded = uint8ArrayToString(encoded);
           expect(decoded).toBe(str);
-        });
-      });
-
-      describe("Once Edge Cases", () => {
-        it("should handle once with immediate emit", async () => {
-          const emitter = new EventEmitter();
-          const promise = once(emitter, "immediate");
-          queueMicrotask(() => emitter.emit("immediate", "fast"));
-          const result = await promise;
-          expect(result).toEqual(["fast"]);
-        });
-
-        it("should handle once with multiple arguments", async () => {
-          const emitter = new EventEmitter();
-          const promise = once(emitter, "multi");
-          setTimeout(() => emitter.emit("multi", 1, 2, 3), 5);
-          const result = await promise;
-          expect(result).toEqual([1, 2, 3]);
         });
       });
 

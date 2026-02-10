@@ -10,7 +10,6 @@ import {
   isAbortError,
   throwIfAborted,
   toError,
-  asError,
   errorToJSON,
   getErrorChain,
   getRootCause
@@ -159,11 +158,10 @@ describe("throwIfAborted", () => {
   });
 });
 
-describe("toError / asError", () => {
+describe("toError", () => {
   it("should return Error as-is", () => {
     const error = new Error("test");
     expect(toError(error)).toBe(error);
-    expect(asError(error)).toBe(error);
   });
 
   it("should wrap string in Error", () => {

@@ -311,11 +311,3 @@ export interface DataChunk {
   copy(target: Uint8Array, targetOffset: number, offset: number, length: number): number;
   toUint8Array(): Uint8Array;
 }
-
-/**
- * Read-write buffer options
- */
-export interface ReadWriteBufferOptions {
-  /** Initial buffer size */
-  size?: number;
-}

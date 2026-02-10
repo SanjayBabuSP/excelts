@@ -5,9 +5,9 @@
  * Works identically in both browser and Node.js environments.
  */
 
-import { EventEmitter } from "@stream/event-emitter";
+import { EventEmitter } from "@utils/event-emitter";
 import { StreamStateError } from "@stream/errors";
-import { textEncoder } from "@stream/binary";
+import { textEncoder } from "@utils/binary";
 import type { BufferedStreamOptions, DataChunk } from "@stream/types";
 
 export type { BufferedStreamOptions, DataChunk } from "@stream/types";

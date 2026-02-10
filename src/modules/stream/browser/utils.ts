@@ -5,33 +5,33 @@
 import type {
   IDuplex,
   ITransform,
-  PipelineStreamLike,
   ReadableLike,
   WritableLike,
   DuplexStreamOptions
 } from "@stream/types";
 import { UnsupportedStreamTypeError } from "@stream/errors";
-import { concatUint8Arrays, getTextDecoder, textDecoder } from "@stream/binary";
+import { concatUint8Arrays, getTextDecoder, textDecoder } from "@utils/binary";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
+import { createConsumers } from "@stream/common/consumers";
+import { createAddAbortSignal } from "@stream/common/add-abort-signal";
+import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";
 import { Transform } from "./transform";
 import { Duplex } from "./duplex";
 import { removeEmitterListener, addEmitterListener } from "./helpers";
-import { pipeline } from "./pipeline";
-import { finished } from "./finished";
+import { pipeline, finished } from "./pipeline";
 
 // =============================================================================
 // Utility Functions
 // =============================================================================
 
-/**
- * Convert a stream to a promise that resolves when finished
- */
-export async function streamToPromise(stream: PipelineStreamLike): Promise<void> {
-  return finished(stream);
-}
+/** Convert a stream to a promise that resolves when finished */
+export const streamToPromise = finished;
+
+/** Copy from a readable stream to a writable stream */
+export const copyStream = pipeline;
 
 /**
  * Collect all data from a readable stream into a Uint8Array
@@ -79,121 +79,37 @@ export async function drainStream(
   }
 }
 
-/**
- * Copy from a readable stream to a writable stream
- */
-export async function copyStream(
-  source: PipelineStreamLike,
-  destination: PipelineStreamLike
-): Promise<void> {
-  return pipeline(source, destination);
-}
-
 // =============================================================================
 // Type Guards
 // =============================================================================
 
-/**
- * Check if an object is a transform stream
- */
-export function isTransform(obj: unknown): obj is ITransform<any, any> {
-  if (obj == null) {
-    return false;
-  }
-  if (obj instanceof Transform) {
-    return true;
-  }
-  const o = obj as Record<string, unknown>;
-  return (
-    typeof o.read === "function" &&
-    typeof o.pipe === "function" &&
-    typeof o.write === "function" &&
-    typeof o.end === "function" &&
-    typeof o._transform === "function"
-  );
-}
+/** Check if an object is a transform stream */
+export const isTransform: (obj: unknown) => obj is ITransform<any, any> =
+  createIsTransform(Transform);
 
-/**
- * Check if an object is a duplex stream
- * Note: In Node.js, Transform extends Duplex, so Transform is also a Duplex
- */
-export function isDuplex(obj: unknown): obj is IDuplex<any, any> {
-  if (obj == null) {
-    return false;
-  }
-  if (obj instanceof Duplex || obj instanceof Transform) {
-    return true;
-  }
-  const o = obj as Record<string, unknown>;
-  return (
-    typeof o.read === "function" &&
-    typeof o.pipe === "function" &&
-    typeof o.write === "function" &&
-    typeof o.end === "function"
-  );
-}
+/** Check if an object is a duplex stream */
+export const isDuplex: (obj: unknown) => obj is IDuplex<any, any> = createIsDuplex(
+  Duplex,
+  Transform
+);
 
-/**
- * Check if an object is any kind of stream
- */
-export function isStream(obj: unknown): obj is ReadableLike | WritableLike {
-  if (obj == null) {
-    return false;
-  }
-  if (obj instanceof Readable || obj instanceof Writable) {
-    return true;
-  }
-  const o = obj as Record<string, unknown>;
-  return (
-    (typeof o.read === "function" && typeof o.pipe === "function") ||
-    (typeof o.write === "function" && typeof o.end === "function")
-  );
-}
+/** Check if an object is any kind of stream */
+export const isStream: (obj: unknown) => obj is ReadableLike | WritableLike = createIsStream(
+  Readable,
+  Writable
+);
 
 // =============================================================================
 // Additional Utility Functions (Node.js Compatibility)
 // =============================================================================
 
-/**
- * Add abort signal handling to any stream
- */
-export function addAbortSignal<
-  T extends (ReadableLike | WritableLike) & { destroy(error?: Error): any }
->(signal: AbortSignal, stream: T): T {
-  if (signal.aborted) {
-    stream.destroy(new Error("Aborted"));
-    return stream;
-  }
-
-  const cleanup = (): void => {
-    signal.removeEventListener("abort", onAbort);
-    removeEmitterListener(stream, "close", onDone);
-    removeEmitterListener(stream, "end", onDone);
-    removeEmitterListener(stream, "finish", onDone);
-    removeEmitterListener(stream, "error", onError);
-  };
-
-  const onAbort = (): void => {
-    cleanup();
-    stream.destroy(new Error("Aborted"));
-  };
-
-  const onDone = (): void => {
-    cleanup();
-  };
-
-  const onError = (): void => {
-    cleanup();
-  };
-
-  signal.addEventListener("abort", onAbort, { once: true });
-  addEmitterListener(stream, "close", onDone, { once: true });
-  addEmitterListener(stream, "end", onDone, { once: true });
-  addEmitterListener(stream, "finish", onDone, { once: true });
-  addEmitterListener(stream, "error", onError, { once: true });
-
-  return stream;
-}
+/** Add abort signal handling to any stream */
+export const addAbortSignal = createAddAbortSignal({
+  add(emitter, event, listener) {
+    addEmitterListener(emitter, event, listener, { once: true });
+  },
+  remove: removeEmitterListener
+});
 
 // =============================================================================
 // Stream State Inspection Functions
@@ -304,7 +220,7 @@ export function duplexPair<T = Uint8Array>(
 }
 
 // =============================================================================
-// Stream Consumers (like stream.consumers in Node.js)
+// Private Helpers
 // =============================================================================
 
 // Helper function to collect stream chunks with total length tracking
@@ -338,60 +254,14 @@ function toReadableAsyncIterable<T>(
   throw new UnsupportedStreamTypeError(name, typeof stream);
 }
 
-export const consumers = {
-  /**
-   * Consume entire stream as ArrayBuffer
-   */
-  async arrayBuffer(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
-  ): Promise<ArrayBuffer> {
-    const bytes = await streamToUint8Array(stream);
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  },
+// =============================================================================
+// Stream Consumers (like stream.consumers in Node.js)
+// =============================================================================
 
-  /**
-   * Consume entire stream as Blob
-   */
-  async blob(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
-    options?: BlobPropertyBag
-  ): Promise<Blob> {
-    const [chunks] = await collectStreamChunks(stream);
-    return new Blob(chunks as any, options);
-  },
-
-  /**
-   * Consume entire stream as Buffer (Uint8Array in browser)
-   */
-  async buffer(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>
-  ): Promise<Uint8Array> {
-    return streamToUint8Array(stream);
-  },
-
-  /**
-   * Consume entire stream as JSON
-   */
-  async json(stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>): Promise<any> {
-    return JSON.parse(await streamToString(stream));
-  },
-
-  /**
-   * Consume entire stream as text
-   */
-  async text(
-    stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
-    encoding?: string
-  ): Promise<string> {
-    return streamToString(stream, encoding);
-  }
-};
+export const consumers = createConsumers({ streamToUint8Array, streamToString });
 
 // =============================================================================
 // Promises API (like stream/promises in Node.js)
 // =============================================================================
 
-export const promises = {
-  pipeline,
-  finished
-};
+export const promises = { pipeline, finished };

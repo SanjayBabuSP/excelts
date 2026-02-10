@@ -42,66 +42,78 @@ export type {
   EventListener,
   PipelineSource,
   PipelineTransform,
-  PipelineDestination,
-  ReadWriteBufferOptions
+  PipelineDestination
 } from "@stream/types";
 
+// Core stream classes (native Node.js)
+import { Readable, Transform, Duplex, PassThrough } from "stream";
+export { Readable, Transform, Duplex, PassThrough };
+
+// Writable (extended with browser-compatible API)
+export { Writable, toWritable } from "@stream/node/writable";
+export type { WritableOptions } from "@stream/node/writable";
+
+// Collector
+export { Collector, createCollector } from "@stream/node/collector";
+
+// Factory functions + re-exported helpers
 export {
-  Readable,
-  Writable,
-  Transform,
-  Duplex,
-  PassThrough,
-  Collector,
   PullStream,
   BufferedStream,
   StringChunk,
   ByteChunk,
   createReadable,
+  createReadableFromAsyncIterable,
+  createReadableFromArray,
   createWritable,
   createTransform,
-  createCollector,
   createPassThrough,
   createPullStream,
   createBufferedStream,
-  createReadableFromArray,
-  createReadableFromAsyncIterable,
+  createDuplex,
   createReadableFromGenerator,
   createReadableFromPromise,
-  createDuplex,
   createEmptyReadable,
-  createNullWritable,
-  pipeline,
-  finished,
+  createNullWritable
+} from "@stream/node/factories";
+
+// Pipeline & Finished
+export { pipeline, finished, finishedAll } from "@stream/node/pipeline";
+
+// Compose
+export { compose } from "@stream/node/compose";
+
+// Utilities
+export {
   streamToPromise,
   streamToUint8Array,
   streamToBuffer,
   streamToString,
   drainStream,
   copyStream,
-  addAbortSignal,
-  compose,
-  finishedAll,
-  once,
-  promisify,
-  isReadable,
-  isWritable,
   isTransform,
   isDuplex,
   isStream,
-  isDestroyed,
+  addAbortSignal,
   isDisturbed,
+  isReadable,
+  isWritable,
+  duplexPair,
+  consumers,
+  promises
+} from "@stream/node/utils";
+
+// Common re-exports (shared between Node.js and browser)
+export {
+  isDestroyed,
   isErrored,
   getDefaultHighWaterMark,
   setDefaultHighWaterMark,
-  duplexPair,
-  toWritable,
-  consumers,
-  promises
-} from "@stream/streams";
-export type { PipelineOptions, FinishedOptions, WritableOptions } from "@stream/streams";
+  promisify
+} from "@stream/common/utils";
+export type { PipelineOptions, FinishedOptions } from "@stream/common/options";
 
-export { EventEmitter } from "@stream/event-emitter";
+export { EventEmitter } from "@utils/event-emitter";
 
 export { ChunkedBuilder, TransactionalChunkedBuilder } from "@stream/chunked-builder";
 export type { ChunkedBuilderOptions, BuilderSnapshot } from "@stream/chunked-builder";
@@ -116,7 +128,7 @@ export {
   toUint8Array,
   anyToString,
   concatUint8Arrays
-} from "@stream/binary";
+} from "@utils/binary";
 
 export {
   collect,
@@ -127,7 +139,23 @@ export {
   fromJSON,
   fromBytes,
   transform,
-  filter
+  filter,
+  isReadableStreamLike,
+  readableStreamToAsyncIterable
 } from "@stream/utils";
 
 export { StreamStateError, StreamTypeError, UnsupportedStreamTypeError } from "@stream/errors";
+
+// Internal utilities exposed for cross-module use (e.g. archive)
+export {
+  isReadableStream,
+  isWritableStream,
+  isAsyncIterable,
+  isTransformStream
+} from "@stream/internal/type-guards";
+export { onceEvent } from "@stream/internal/event-utils";
+export {
+  eventedReadableToAsyncIterableNoDestroy,
+  type EventedReadableLike
+} from "@stream/internal/evented-readable-to-async-iterable";
+export type { EventEmitterLike } from "@stream/types";

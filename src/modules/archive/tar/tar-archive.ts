@@ -9,7 +9,7 @@ import type { ArchiveSource } from "@archive/io/archive-source";
 import { toAsyncIterable, toUint8Array, isInMemoryArchiveSource } from "@archive/io/archive-source";
 import { collect, pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
 import { createLinkedAbortController } from "@archive/shared/errors";
-import { concatUint8Arrays, textEncoder, getTextDecoder } from "@stream/binary";
+import { concatUint8Arrays, textEncoder, getTextDecoder } from "@utils/binary";
 import type {
   ArchiveProgressPhase,
   ArchiveStreamOptions,

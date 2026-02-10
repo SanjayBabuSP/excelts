@@ -23,7 +23,7 @@ import {
   toError
 } from "@archive/shared/errors";
 import { ProgressEmitter } from "@archive/shared/progress";
-import { stringToUint8Array as encodeUtf8 } from "@stream/binary";
+import { stringToUint8Array as encodeUtf8 } from "@utils/binary";
 import {
   buildDataDescriptor,
   FLAG_DATA_DESCRIPTOR,
@@ -35,7 +35,7 @@ import {
 import type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 import type { ArchiveFormat } from "@archive/formats/types";
-import { isBrowser } from "@utils/env";
+import { isNode } from "@utils/env";
 import { ByteQueue } from "@archive/shared/byte-queue";
 import { encodeZipString, type ZipStringEncoding } from "@archive/shared/text";
 import { buildZipDeflateFileOptions } from "@archive/zip/zip-entry-options";
@@ -570,7 +570,7 @@ export class ZipArchive {
 
     // Browser fast path: stream Blob sources through CompressionStream
     const canUseBrowserFastPath =
-      isBrowser() &&
+      !isNode() &&
       hasBlobSource &&
       this._options.smartStore === false &&
       this._options.zip64 !== true &&

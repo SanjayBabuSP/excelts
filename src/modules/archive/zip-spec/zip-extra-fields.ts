@@ -13,7 +13,7 @@ import {
 } from "@archive/crypto/aes";
 import { EXTENDED_TIMESTAMP_ID, NTFS_TIMESTAMP_ID } from "@archive/zip-spec/timestamps";
 import { crc32 } from "@archive/compression/crc32";
-import { stringToUint8Array as encodeUtf8, uint8ArrayToString as decodeUtf8 } from "@stream/binary";
+import { stringToUint8Array as encodeUtf8, uint8ArrayToString as decodeUtf8 } from "@utils/binary";
 
 // =============================================================================
 // Extra Field IDs

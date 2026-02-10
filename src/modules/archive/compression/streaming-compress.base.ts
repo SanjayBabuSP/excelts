@@ -6,7 +6,7 @@
  */
 
 // Re-export error helper for browser use
-export { asError } from "@archive/shared/errors";
+export { toError } from "@archive/shared/errors";
 
 export interface StreamCompressOptions {
   level?: number;

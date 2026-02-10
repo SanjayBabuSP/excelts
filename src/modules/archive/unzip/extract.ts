@@ -6,7 +6,7 @@
 
 import { ZipParser, type ZipEntryInfo } from "@archive/unzip/zip-parser";
 import { type ZipEntryType, isSymlink as isSymlinkType } from "@archive/zip-spec/zip-entry-info";
-import { getTextDecoder } from "@stream/binary";
+import { getTextDecoder } from "@utils/binary";
 
 /**
  * Extracted file entry

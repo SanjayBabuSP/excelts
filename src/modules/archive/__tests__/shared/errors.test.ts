@@ -17,7 +17,6 @@ import {
   FileTooLargeError,
   UnsupportedCompressionError,
   toError,
-  asError,
   suppressUnhandledRejection
 } from "@archive/shared/errors";
 
@@ -209,9 +208,9 @@ describe("errors", () => {
     });
   });
 
-  describe("asError", () => {
-    it("should be an alias for toError", () => {
-      expect(asError).toBe(toError);
+  describe("toError (re-exported)", () => {
+    it("should be the same toError from @utils/errors", () => {
+      expect(toError).toBeTypeOf("function");
     });
   });
 

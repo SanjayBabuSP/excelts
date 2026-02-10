@@ -4,7 +4,7 @@
  */
 
 import { decodeCp437 } from "@archive/shared/text";
-import { uint8ArrayToString as decodeUtf8 } from "@stream/binary";
+import { uint8ArrayToString as decodeUtf8 } from "@utils/binary";
 
 export function writeUint32LE(value: number): Uint8Array {
   const out = new Uint8Array(4);

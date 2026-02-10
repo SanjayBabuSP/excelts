@@ -10,11 +10,3 @@
 export function isNode(): boolean {
   return typeof process !== "undefined" && !!process.versions?.node;
 }
-
-/**
- * Check if running in a browser environment
- * Returns true if NOT running in Node.js
- */
-export function isBrowser(): boolean {
-  return !isNode();
-}

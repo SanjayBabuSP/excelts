@@ -19,19 +19,14 @@ import {
   hasDeflateCompressionStream,
   hasDeflateDecompressionStream
 } from "@archive/compression/compress.base";
-import { concatUint8Arrays } from "@stream/binary";
+import { concatUint8Arrays } from "@utils/binary";
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
 import type { WorkerPool, WorkerTaskType } from "@archive/compression/worker-pool/index.browser";
 import {
   hasWorkerSupport,
   getDefaultWorkerPool
 } from "@archive/compression/worker-pool/index.browser";
-import {
-  gzipSync,
-  gunzipSync,
-  zlibSync,
-  unzlibSync
-} from "@archive/compression/compress.browser";
+import { gzipSync, gunzipSync, zlibSync, unzlibSync } from "@archive/compression/compress.browser";
 
 export type {
   DeflateStream,
@@ -40,7 +35,7 @@ export type {
   StreamCompressOptions
 } from "@archive/compression/streaming-compress.base";
 import {
-  asError,
+  toError,
   type DeflateStream,
   type InflateStream,
   type StreamCallback,
@@ -54,7 +49,7 @@ const WRITE_AFTER_END_ERROR = "write after end";
 
 /** Helper to handle errors with optional callback */
 function handleError(emitter: EventEmitter, err: unknown, callback?: StreamCallback): void {
-  const error = asError(err);
+  const error = toError(err);
   if (callback) {
     callback(error);
   } else {
@@ -202,7 +197,7 @@ function createNativeWebStreamCodec(
         }
       }
     } catch (err) {
-      codec.emit("error", asError(err));
+      codec.emit("error", toError(err));
     }
   })();
 

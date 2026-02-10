@@ -4,7 +4,7 @@
 
 import type { WritableStreamOptions } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
-import { concatUint8Arrays, chunksToString } from "@stream/binary";
+import { concatUint8Arrays, chunksToString } from "@utils/binary";
 
 import { Writable } from "./writable";
 
