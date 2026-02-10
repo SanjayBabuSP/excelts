@@ -636,7 +636,54 @@ describe("Worksheet", () => {
       expect(ws.getCell("B3").master.address).toBe("A1");
     });
 
-    it("Bug #5: duplicateRow overwrite cleans multi-row merges on target rows", () => {
+    it("Bug #5: insertRow preserves style of merged cells", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("sheet");
+
+      ws.mergeCells("A1:B1");
+      const borderStyle = {
+        border: {
+          bottom: {
+            style: "medium" as const,
+            color: { argb: "FF000000" }
+          }
+        }
+      };
+      ws.getCell("A1").style = borderStyle;
+      ws.getCell("B1").style = borderStyle;
+
+      ws.insertRow(2, []);
+
+      // A1 (master) style should be preserved
+      expect(ws.getCell("A1").style.border).toEqual(borderStyle.border);
+      // B1 (merge slave) style should also be preserved
+      expect(ws.getCell("B1").style.border).toEqual(borderStyle.border);
+    });
+
+    it("Bug #5: spliceColumns preserves style of merged cells", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("sheet");
+
+      ws.mergeCells("A1:A2");
+      const fillStyle = {
+        fill: {
+          type: "pattern" as const,
+          pattern: "solid" as const,
+          fgColor: { argb: "FFFF0000" }
+        }
+      };
+      ws.getCell("A1").style = fillStyle;
+      ws.getCell("A2").style = fillStyle;
+
+      ws.spliceColumns(2, 0, []);
+
+      // A1 (master) style should be preserved
+      expect(ws.getCell("A1").style.fill).toEqual(fillStyle.fill);
+      // A2 (merge slave) style should also be preserved
+      expect(ws.getCell("A2").style.fill).toEqual(fillStyle.fill);
+    });
+
+    it("Bug #6: duplicateRow overwrite cleans multi-row merges on target rows", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("sheet");
 
