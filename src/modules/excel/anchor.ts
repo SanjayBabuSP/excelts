@@ -125,6 +125,10 @@ class Anchor {
     this.nativeRow = value.nativeRow;
     this.nativeRowOff = value.nativeRowOff;
   }
+
+  clone(worksheet?: Worksheet): Anchor {
+    return new Anchor(worksheet ?? this.worksheet, this.model);
+  }
 }
 
 export { Anchor };
