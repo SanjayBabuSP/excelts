@@ -226,16 +226,33 @@ class WorkSheetXform extends BaseXform {
       });
     }
 
-    // Handle pre-loaded drawing (from file read) that may contain charts or other non-image content
-    // This preserves drawings through round-trip even if they don't contain images
-    // Note: Always assign a new rId since rels are rebuilt during write
+    // Handle pre-loaded drawing (from file read) that may contain charts or other non-image content.
+    // Reset anchors and rels so they are rebuilt cleanly from model.media (images) and
+    // model.formControls (shapes) below.  Without this reset, every read-write cycle would
+    // duplicate image anchors because the same images exist in both model.drawing.anchors
+    // (preserved for round-trip) and model.media (the canonical image list).
+    // For chart drawings, rels are preserved because the raw XML passthrough references
+    // original rIds; anchors are still cleared since they are unused for chart drawings.
     if (model.drawing && model.drawing.anchors) {
-      // This is a loaded drawing that needs to be added to relationships
       const drawing = model.drawing;
       drawing.rId = nextRid(rels);
       if (!drawing.name) {
         drawing.name = `drawing${++options.drawingsCount}`;
       }
+
+      const hasChartRels = (drawing.rels ?? []).some(
+        (rel: any) => rel.Target && rel.Target.includes("/charts/")
+      );
+      // Anchors are always reset: for chart drawings they are unused (raw XML passthrough),
+      // for normal drawings they are rebuilt from model.media below.
+      drawing.anchors = [];
+      if (!hasChartRels) {
+        // Non-chart drawings: clear rels so image rels are rebuilt from scratch.
+        drawing.rels = [];
+      }
+      // Chart drawings keep their original rels intact since the raw drawing XML
+      // references those rIds directly.
+
       options.drawings.push(drawing);
       rels.push({
         Id: drawing.rId,

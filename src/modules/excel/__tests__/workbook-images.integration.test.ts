@@ -295,6 +295,114 @@ describe("Workbook", () => {
         });
     });
 
+    describe("read-write round-trip (issue #58)", () => {
+      it("does not duplicate images after read-write cycles", async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, { tl: { col: 1, row: 0 }, br: { col: 2, row: 1 } });
+
+        // First write
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        // Read back and write again
+        await wb.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        // Read the final file and verify images are not duplicated
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("Sheet1");
+        expect(ws2).toBeDefined();
+
+        const images = ws2!.getImages();
+        expect(images.length).toBe(1);
+      });
+
+      it("does not duplicate images after multiple read-write cycles", async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, "B2:D4");
+
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        // Perform 3 read-write cycles on the same workbook
+        for (let i = 0; i < 3; i++) {
+          await wb.xlsx.readFile(TEST_XLSX_FILE_NAME);
+          await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        }
+
+        // Read the final file with a fresh workbook
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("Sheet1");
+        expect(ws2).toBeDefined();
+
+        const images = ws2!.getImages();
+        expect(images.length).toBe(1);
+      });
+
+      it("does not duplicate when multiple images exist", async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId1 = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        const imgId2 = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId1, "A1:B2");
+        ws.addImage(imgId2, "C3:D4");
+
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        // Read-write cycle
+        await wb.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("Sheet1");
+        expect(ws2).toBeDefined();
+
+        const images = ws2!.getImages();
+        expect(images.length).toBe(2);
+      });
+
+      it("preserves image data through read-write cycle", async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        const imgId = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        ws.addImage(imgId, "C3:E6");
+
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        await wb.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("Sheet1");
+        const images = ws2!.getImages();
+        expect(images.length).toBe(1);
+
+        const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+        const image = wb2.getImage(images[0].imageId);
+        expect(Buffer.compare(imageData, image!.buffer)).toBe(0);
+      });
+    });
+
     describe("image range updates on row/column splice", () => {
       it("updates image range after insertRow", () => {
         const wb = new Workbook();
