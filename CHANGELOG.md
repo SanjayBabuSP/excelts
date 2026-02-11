@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.3](https://github.com/cjnoname/excelts/compare/v5.1.2...v5.1.3) (2026-02-11)
+
+
+### Bug Fixes
+
+* clone images when duplicating rows ([#57](https://github.com/cjnoname/excelts/issues/57)) ([bd7d949](https://github.com/cjnoname/excelts/commit/bd7d949694641f2968a94424f14123827c5634c3))
+* prevent image duplication on read-write round-trips ([#58](https://github.com/cjnoname/excelts/issues/58)) ([3da3461](https://github.com/cjnoname/excelts/commit/3da3461c68bd751e2b43527e458e4ee847b5a9b4))
+
 ## [5.1.2](https://github.com/cjnoname/excelts/compare/v5.1.1...v5.1.2) (2026-02-10)
 
 
