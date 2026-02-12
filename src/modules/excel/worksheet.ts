@@ -741,6 +741,18 @@ class Worksheet {
       }
     }
 
+    // Collect images anchored to the source row before splicing
+    // (images whose top-left anchor is on the source row)
+    const srcImages: Image[] = [];
+    const srcRow0 = rowNum - 1; // 0-based source row
+    for (const image of this._media) {
+      if (image.type === "image" && image.range) {
+        if (image.range.tl.nativeRow === srcRow0) {
+          srcImages.push(image);
+        }
+      }
+    }
+
     this.spliceRows(rowNum + 1, insert ? 0 : count, ...inserts);
 
     // now copy styles...
@@ -774,6 +786,34 @@ class Worksheet {
         for (const srcMerge of srcMerges) {
           this.mergeCellsWithoutStyle(dstRow, srcMerge.left, dstRow, srcMerge.right);
         }
+      }
+    }
+
+    // Duplicate images from source row into each new row.
+    // In overwrite mode, first remove any images anchored to the target rows
+    // so they don't coexist with the clones (mirrors merge cleanup above).
+    if (!insert) {
+      const dstStart0 = rowNum; // first target row, 0-based (1-based rowNum + 1 → 0-based rowNum)
+      const dstEnd0 = rowNum + count - 1; // last target row, 0-based
+      this._media = this._media.filter(image => {
+        if (image.type === "image" && image.range) {
+          const row0 = image.range.tl.nativeRow;
+          return row0 < dstStart0 || row0 > dstEnd0;
+        }
+        return true;
+      });
+    }
+
+    for (let i = 0; i < count; i++) {
+      const rowDelta = i + 1; // offset from source row to target row
+      for (const srcImage of srcImages) {
+        const cloned = srcImage.clone();
+        cloned.range!.tl.nativeRow = srcRow0 + rowDelta;
+        if (cloned.range!.br) {
+          const brDelta = srcImage.range!.br!.nativeRow - srcRow0;
+          cloned.range!.br.nativeRow = srcRow0 + rowDelta + brDelta;
+        }
+        this._media.push(cloned);
       }
     }
   }

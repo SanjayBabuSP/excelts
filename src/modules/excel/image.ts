@@ -121,6 +121,25 @@ class Image {
       }
     }
   }
+
+  clone(worksheet?: Worksheet): Image {
+    const target = worksheet ?? this.worksheet;
+    const cloned = new Image(target);
+    cloned.type = this.type;
+    cloned.imageId = this.imageId;
+
+    if (this.range) {
+      cloned.range = {
+        tl: this.range.tl.clone(target),
+        br: this.range.br ? this.range.br.clone(target) : undefined,
+        ext: this.range.ext ? { ...this.range.ext } : undefined,
+        editAs: this.range.editAs,
+        hyperlinks: this.range.hyperlinks ? { ...this.range.hyperlinks } : undefined
+      };
+    }
+
+    return cloned;
+  }
 }
 
 export { Image, type Model as ImageModel, type ImageModelInput };

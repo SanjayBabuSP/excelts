@@ -323,7 +323,7 @@ class Cell {
     if (this.type === Cell.Types.Merge) {
       this._value.release();
       this._value = Value.create(Cell.Types.Null, this);
-      this.style = this._mergeStyle(this._row.style, this._column.style, {});
+      this.style = this._mergeStyle(this._row.style, this._column.style, { ...this.style });
     }
   }
 
