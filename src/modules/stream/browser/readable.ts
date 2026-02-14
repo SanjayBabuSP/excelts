@@ -3,13 +3,15 @@
  */
 
 import type { ReadableStreamOptions, WritableLike } from "@stream/types";
-import { StreamTypeError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
-import { getTextDecoder, textDecoder } from "@utils/binary";
+import { getTextDecoder } from "@utils/binary";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 import type { Writable } from "./writable";
 import type { Transform } from "./transform";
 import type { Duplex } from "./duplex";
+import { ChunkBuffer } from "./chunk-buffer";
+import { PipeManager } from "./pipe-manager";
 
 // =============================================================================
 // Readable Stream Wrapper
@@ -21,33 +23,20 @@ import type { Duplex } from "./duplex";
 export class Readable<T = Uint8Array> extends EventEmitter {
   private _stream: ReadableStream<T> | null;
   private _reader: ReadableStreamDefaultReader<T> | null = null;
-  private _buffer: T[] = [];
-  private _bufferIndex: number = 0;
-  private _unshiftBuffer: T[] = [];
-  private _bufferSize: number = 0;
+  private _buf!: ChunkBuffer<T>;
   private _reading: boolean = false;
   private _ended: boolean = false;
   private _endEmitted: boolean = false;
   private _destroyed: boolean = false;
   private _errored: Error | null = null;
   private _closed: boolean = false;
-  private _paused: boolean = true;
+  private _paused: boolean = false;
   private _flowing: boolean = false;
-  private _pipeTo: WritableLike[] = [];
-  private _pipeListeners: Map<
-    WritableLike,
-    {
-      data: (chunk: T) => void;
-      end: () => void;
-      error: (err: Error) => void;
-      drain?: () => void;
-      eventTarget: any;
-    }
-  > = new Map();
+  private _hasFlowed: boolean = false;
+  private _pipes!: PipeManager<T>;
   private _encoding: string | null = null;
   private _decoder: TextDecoder | null = null;
   private _didRead: boolean = false;
-  private _aborted: boolean = false;
   // Whether this stream uses push() mode (true) or Web Stream mode (false)
   private _pushMode: boolean = false;
   // Whether this stream was created from an external Web Stream (true) or is controllable (false)
@@ -69,7 +58,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ) {
     super();
     this.objectMode = options?.objectMode ?? false;
-    this.readableHighWaterMark = options?.highWaterMark ?? 16384;
+    this.readableHighWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this.objectMode);
+    this._buf = new ChunkBuffer<T>(this.objectMode);
+    this._pipes = new PipeManager<T>(this);
     this.autoDestroy = options?.autoDestroy ?? true;
     this.emitClose = options?.emitClose ?? true;
 
@@ -98,7 +89,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Readable<T> {
     const readable = new Readable<T>({ ...options, objectMode: options?.objectMode ?? true });
 
-    pumpAsyncIterableToReadable(readable, toAsyncIterable(iterable));
+    // Node.js treats strings as a single chunk, not as Iterable<char>.
+    // Match that behavior by wrapping strings in an array.
+    const source =
+      typeof iterable === "string"
+        ? toAsyncIterable([iterable] as Iterable<T>)
+        : toAsyncIterable(iterable);
+    pumpAsyncIterableToReadable(readable, source);
 
     return readable;
   }
@@ -121,7 +118,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Convert a Node.js Readable to Web ReadableStream
    */
   static toWeb<T>(nodeStream: Readable<T>): ReadableStream<T> {
-    return nodeStream.webStream;
+    return nodeStream._webStream;
   }
 
   /**
@@ -144,7 +141,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
       // Emit 'end' only after buffered data is fully drained.
       // This avoids premature 'end' when producers push null while paused.
-      if (this._bufferedLength() === 0) {
+      if (this._buf.length === 0) {
         this._emitEndOnce();
       }
       // Note: Don't call destroy() here, let the stream be consumed naturally
@@ -171,11 +168,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       return true;
     } else {
       // In paused mode, buffer for later
-      const wasEmpty = this._bufferedLength() === 0;
-      this._buffer.push(chunk);
-      if (!this.objectMode) {
-        this._bufferSize += this._getChunkSize(chunk);
-      }
+      const wasEmpty = this._buf.length === 0;
+      this._buf.push(chunk);
 
       // Emit readable event when buffer goes from empty to having data
       if (wasEmpty) {
@@ -184,10 +178,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // Return false if buffer exceeds high water mark (backpressure signal)
       // Fast path for object mode - just count items
       if (this.objectMode) {
-        return this._bufferedLength() < this.readableHighWaterMark;
+        return this._buf.length < this.readableHighWaterMark;
       }
       // For binary mode, use tracked buffer size (O(1))
-      return this._bufferSize < this.readableHighWaterMark;
+      return this._buf.byteSize < this.readableHighWaterMark;
     }
   }
 
@@ -206,101 +200,29 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Put a chunk back at the front of the buffer
-   * Note: unshift is allowed even after end, as it's used to put back already read data
    */
   unshift(chunk: T): void {
     if (this._destroyed) {
       return;
     }
-    this._bufferUnshift(chunk);
-    if (!this.objectMode) {
-      this._bufferSize += this._getChunkSize(chunk);
-    }
+    this._buf.unshift(chunk);
   }
 
   /**
    * Read data from the stream
    */
-  read(size?: number): T | null {
+  read(_size?: number): T | null {
     this._didRead = true;
 
-    if (this._bufferedLength() > 0) {
-      if (this.objectMode || size === undefined) {
-        const chunk = this._bufferShift();
-        if (!this.objectMode) {
-          this._bufferSize -= this._getChunkSize(chunk);
-        }
-        const decoded = this._applyEncoding(chunk);
-        if (this._ended && this._bufferedLength() === 0) {
-          queueMicrotask(() => this._emitEndOnce());
-        }
-        return decoded;
-      }
-      // For binary mode, handle size
-      const chunk = this._bufferShift();
-      if (!this.objectMode) {
-        this._bufferSize -= this._getChunkSize(chunk);
-      }
+    if (this._buf.length > 0) {
+      const chunk = this._buf.shift();
       const decoded = this._applyEncoding(chunk);
-      if (this._ended && this._bufferedLength() === 0) {
+      if (this._ended && this._buf.length === 0) {
         queueMicrotask(() => this._emitEndOnce());
       }
       return decoded;
     }
     return null;
-  }
-
-  private _bufferedLength(): number {
-    return this._unshiftBuffer.length + (this._buffer.length - this._bufferIndex);
-  }
-
-  private _bufferPeek(): T | null {
-    const unshiftLen = this._unshiftBuffer.length;
-    if (unshiftLen > 0) {
-      return this._unshiftBuffer[unshiftLen - 1]!;
-    }
-    return this._bufferIndex < this._buffer.length ? this._buffer[this._bufferIndex] : null;
-  }
-
-  private _bufferShift(): T {
-    if (this._unshiftBuffer.length > 0) {
-      return this._unshiftBuffer.pop()!;
-    }
-    const chunk = this._buffer[this._bufferIndex++]!;
-
-    // Fast reset when emptied
-    if (this._bufferIndex === this._buffer.length) {
-      this._buffer.length = 0;
-      this._bufferIndex = 0;
-      return chunk;
-    }
-
-    // Occasionally compact to avoid unbounded growth of the unused prefix
-    if (this._bufferIndex > 1024 && this._bufferIndex * 2 > this._buffer.length) {
-      this._buffer = this._buffer.slice(this._bufferIndex);
-      this._bufferIndex = 0;
-    }
-
-    return chunk;
-  }
-
-  private _bufferUnshift(chunk: T): void {
-    if (this._bufferIndex === 0) {
-      // Avoid O(n) Array.unshift() by using a small front stack.
-      // Semantics: last unshifted chunk is returned first.
-      this._unshiftBuffer.push(chunk);
-      return;
-    }
-
-    this._bufferIndex--;
-    this._buffer[this._bufferIndex] = chunk;
-  }
-
-  private _getChunkSize(chunk: T): number {
-    // Keep semantics aligned with previous implementation:
-    // - Uint8Array counts by byteLength
-    // - other types count as 1
-    return chunk instanceof Uint8Array ? chunk.byteLength : 1;
   }
 
   /**
@@ -310,7 +232,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this._encoding = encoding;
     // Fast path: reuse cached utf-8 decoder; otherwise lazy-create on first decode.
     if (encoding === "utf-8" || encoding === "utf8") {
-      this._decoder = textDecoder;
+      this._decoder = getTextDecoder("utf-8");
     } else {
       this._decoder = null;
     }
@@ -347,8 +269,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Pause the stream
    */
   pause(): this {
-    this._paused = true;
-    this._flowing = false;
+    if (this._flowing) {
+      this._paused = true;
+      this._flowing = false;
+      this.emit("pause");
+    }
     return this;
   }
 
@@ -356,20 +281,26 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Resume the stream
    */
   resume(): this {
-    this._paused = false;
-    this._flowing = true;
+    if (!this._flowing) {
+      const wasPaused = this._paused;
+      this._paused = false;
+      this._flowing = true;
+      this._hasFlowed = true;
+
+      if (wasPaused) {
+        // Emit asynchronously to match Node.js process.nextTick timing
+        queueMicrotask(() => this.emit("resume"));
+      }
+    }
 
     // Emit any buffered data first
-    while (this._bufferedLength() > 0 && this._flowing) {
-      const chunk = this._bufferShift();
-      if (!this.objectMode) {
-        this._bufferSize -= this._getChunkSize(chunk);
-      }
+    while (this._buf.length > 0 && this._flowing) {
+      const chunk = this._buf.shift();
       this.emit("data", this._applyEncoding(chunk));
     }
 
     // If already ended, emit end event
-    if (this._ended && this._bufferedLength() === 0) {
+    if (this._ended && this._buf.length === 0) {
       this._emitEndOnce();
     } else if (this._read) {
       // Call user-provided read function asynchronously
@@ -416,150 +347,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Pipe to a writable stream, transform stream, or duplex stream
    */
   pipe<W extends Writable<T> | Transform<T, any> | Duplex<any, T>>(destination: W): W {
-    // IMPORTANT:
-    // Do not rely on `instanceof` here.
-    // In bundled/minified builds, multiple copies of this module can exist,
-    // causing `instanceof Transform/Writable/Duplex` to fail even when the object
-    // is a valid destination.
-    const dest = destination;
-
-    // For event handling (drain, once, off), we need the object that emits events.
-    // For write/end, we must call the destination's own write()/end() methods,
-    // NOT the internal _writable, because Transform.write() has important logic
-    // (like auto-consume) that _writable.write() bypasses.
-    const eventTarget: any = dest;
-
-    const hasWrite = typeof dest?.write === "function";
-    const hasEnd = typeof dest?.end === "function";
-    const hasOn = typeof eventTarget?.on === "function";
-    const hasOnce = typeof eventTarget?.once === "function";
-    const hasOff = typeof eventTarget?.off === "function";
-
-    if (!hasWrite || !hasEnd || (!hasOnce && !hasOn) || (!hasOff && !eventTarget?.removeListener)) {
-      throw new StreamTypeError("Writable", typeof dest);
-    }
-
-    this._pipeTo.push(dest);
-
-    // Create listeners that we can later remove
-    let drainListener: (() => void) | undefined;
-
-    const removeDrainListener = (): void => {
-      if (!drainListener) {
-        return;
-      }
-      if (typeof eventTarget.off === "function") {
-        eventTarget.off("drain", drainListener);
-      } else if (typeof eventTarget.removeListener === "function") {
-        eventTarget.removeListener("drain", drainListener);
-      }
-      drainListener = undefined;
-    };
-
-    const dataListener = (chunk: T): void => {
-      // Call destination's write() method (not internal _writable.write())
-      // This ensures Transform.write() logic runs properly
-      const canWrite = dest.write(chunk);
-      if (!canWrite) {
-        this.pause();
-
-        // Install a removable, once-style drain listener.
-        if (!drainListener) {
-          drainListener = () => {
-            removeDrainListener();
-            this.resume();
-          };
-          eventTarget.on("drain", drainListener);
-          const entry = this._pipeListeners.get(dest);
-          if (entry) {
-            entry.drain = drainListener;
-          }
-        }
-      }
-    };
-
-    const endListener = (): void => {
-      dest.end();
-    };
-
-    const errorListener = (err: Error): void => {
-      if (typeof dest.destroy === "function") {
-        dest.destroy(err);
-      } else {
-        // Best-effort: forward error to the destination if it supports events.
-        eventTarget.emit?.("error", err);
-      }
-    };
-
-    // Store listeners for later removal in unpipe
-    this._pipeListeners.set(dest, {
-      data: dataListener,
-      end: endListener,
-      error: errorListener,
-      eventTarget
-    });
-
-    this.on("data", dataListener);
-    this.once("end", endListener);
-    this.once("error", errorListener);
-
-    this.resume();
-    return destination;
+    return this._pipes.pipe(destination) as W;
   }
 
   /**
    * Unpipe from destination
    */
   unpipe(destination?: WritableLike): this {
-    if (destination) {
-      const idx = this._pipeTo.indexOf(destination);
-      if (idx !== -1) {
-        this._pipeTo.splice(idx, 1);
-      }
-
-      // Remove the listeners
-      const listeners = this._pipeListeners.get(destination);
-      if (listeners) {
-        this.off("data", listeners.data);
-        this.off("end", listeners.end);
-        this.off("error", listeners.error);
-
-        if (listeners.drain) {
-          if (typeof listeners.eventTarget?.off === "function") {
-            listeners.eventTarget.off("drain", listeners.drain);
-          } else if (typeof listeners.eventTarget?.removeListener === "function") {
-            listeners.eventTarget.removeListener("drain", listeners.drain);
-          }
-        }
-
-        this._pipeListeners.delete(destination);
-      }
-    } else {
-      // Unpipe all
-      for (const target of this._pipeTo) {
-        const listeners = this._pipeListeners.get(target);
-        if (listeners) {
-          this.off("data", listeners.data);
-          this.off("end", listeners.end);
-          this.off("error", listeners.error);
-
-          if (listeners.drain) {
-            if (typeof listeners.eventTarget?.off === "function") {
-              listeners.eventTarget.off("drain", listeners.drain);
-            } else if (typeof listeners.eventTarget?.removeListener === "function") {
-              listeners.eventTarget.removeListener("drain", listeners.drain);
-            }
-          }
-
-          this._pipeListeners.delete(target);
-        }
-      }
-      this._pipeTo = [];
-    }
-
-    // Pause the stream after unpipe
-    this.pause();
-
+    this._pipes.unpipe(destination);
     return this;
   }
 
@@ -577,11 +372,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // Ensure we detach from destinations to avoid leaking listeners.
     this.unpipe();
 
-    if (error) {
-      this._errored = error;
-      this.emit("error", error);
-    }
-
     if (this._reader) {
       const reader = this._reader;
       this._reader = null;
@@ -597,24 +387,38 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         });
     }
 
+    // Set state synchronously (matches Node.js), defer event emission via queueMicrotask
+    // to match Node.js process.nextTick behavior
+    if (error) {
+      this._errored = error;
+    }
     this._closed = true;
-    this.emit("close");
+
+    queueMicrotask(() => {
+      if (error) {
+        this.emit("error", error);
+      }
+      this.emit("close");
+    });
     return this;
   }
 
   /**
-   * Get a Web ReadableStream view of this stream.
+   * Get a Web ReadableStream view of this stream (internal).
    *
    * For external Web Streams (_webStreamMode), returns the original stream.
    * For controllable streams, creates a ReadableStream that mirrors data/end/error events.
+   * @internal
    */
-  get webStream(): ReadableStream<T> {
+  private get _webStream(): ReadableStream<T> {
     if (this._stream) {
       return this._stream;
     }
 
-    // Create a Web ReadableStream that forwards data from Node-side events
-    return new ReadableStream<T>({
+    // Create a Web ReadableStream that forwards data from Node-side events.
+    // Cache it on `_stream` so subsequent accesses return the same instance
+    // instead of duplicating listeners and data.
+    const ws = new ReadableStream<T>({
       start: controller => {
         this.on("data", (chunk: T) => {
           try {
@@ -643,10 +447,19 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       }
     });
+    this._stream = ws;
+    return ws;
   }
 
   get readable(): boolean {
     return !this._destroyed && !this._ended;
+  }
+
+  set readable(val: boolean) {
+    // Node.js allows overriding the readable state directly
+    if (!val) {
+      this._ended = true;
+    }
   }
 
   get readableEnded(): boolean {
@@ -654,12 +467,16 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   get readableLength(): number {
-    return this._bufferedLength();
+    return this.objectMode ? this._buf.length : this._buf.byteSize;
   }
 
   /** Whether the stream has been destroyed */
   get destroyed(): boolean {
     return this._destroyed;
+  }
+
+  set destroyed(val: boolean) {
+    this._destroyed = val;
   }
 
   /** The error that destroyed the stream, or null */
@@ -674,15 +491,30 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /** Whether the stream is in flowing mode */
   get readableFlowing(): boolean | null {
-    if (!this._paused && !this._ended) {
-      return this._flowing;
+    if (this._flowing) {
+      return true;
     }
-    return this._flowing ? true : null;
+    // Distinguish between "never flowed" (null) and "paused after flowing" (false)
+    return this._hasFlowed ? false : null;
   }
 
-  /** Whether the stream was aborted */
+  set readableFlowing(val: boolean | null) {
+    if (val === true) {
+      this._flowing = true;
+      this._hasFlowed = true;
+    } else if (val === false) {
+      this._flowing = false;
+      this._hasFlowed = true;
+    } else {
+      // null — reset to "never flowed"
+      this._flowing = false;
+      this._hasFlowed = false;
+    }
+  }
+
+  /** Whether the stream was aborted (destroyed before 'end' was emitted) */
   get readableAborted(): boolean {
-    return this._aborted;
+    return this._destroyed && !this._endEmitted;
   }
 
   /** Whether read() has ever been called */
@@ -701,14 +533,26 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Get the internal buffer state (for debugging)
-   * Returns array of objects with length and chunk info
+   * Get the internal buffer contents as an array (matches Node.js BufferList behavior)
    */
-  get readableBuffer(): { length: number; head: T | null } {
-    return {
-      length: this._bufferedLength(),
-      head: this._bufferPeek()
-    };
+  get readableBuffer(): T[] {
+    return this._buf.toArray();
+  }
+
+  /**
+   * Release the internal reader lock, clearing _reader.
+   * Safe to call even when no reader is held.
+   */
+  private _releaseReader(): void {
+    if (this._reader) {
+      const reader = this._reader;
+      this._reader = null;
+      try {
+        reader.releaseLock();
+      } catch {
+        // Ignore if a read is still pending
+      }
+    }
   }
 
   private async _startReading(): Promise<void> {
@@ -728,31 +572,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
         // Check _pushMode again after async read - if push() was called, stop reading
         if (this._pushMode) {
-          if (this._reader) {
-            const reader = this._reader;
-            this._reader = null;
-            try {
-              reader.releaseLock();
-            } catch {
-              // Ignore if a read is still pending
-            }
-          }
+          this._releaseReader();
           break;
         }
 
         if (done) {
           this._ended = true;
           this._emitEndOnce();
-
-          if (this._reader) {
-            const reader = this._reader;
-            this._reader = null;
-            try {
-              reader.releaseLock();
-            } catch {
-              // Ignore if a read is still pending
-            }
-          }
+          this._releaseReader();
           break;
         }
 
@@ -762,25 +589,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           if (this._flowing) {
             this.emit("data", this._applyEncoding(value));
           } else {
-            this._buffer.push(value);
-            if (!this.objectMode) {
-              this._bufferSize += this._getChunkSize(value);
-            }
+            this._buf.push(value);
           }
         }
       }
     } catch (err) {
       this.emit("error", err);
-
-      if (this._reader) {
-        const reader = this._reader;
-        this._reader = null;
-        try {
-          reader.releaseLock();
-        } catch {
-          // Ignore if a read is still pending
-        }
-      }
+      this._releaseReader();
     } finally {
       this._reading = false;
     }
@@ -793,12 +608,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   async *[Symbol.asyncIterator](): AsyncIterableIterator<T> {
     // First yield any buffered data
-    while (this._bufferedLength() > 0) {
-      const chunk = this._bufferShift();
-      if (!this.objectMode) {
-        this._bufferSize -= this._getChunkSize(chunk);
-      }
-      yield this._applyEncoding(chunk);
+    while (this._buf.length > 0) {
+      yield this._applyEncoding(this._buf.shift());
     }
 
     if (this._ended) {
@@ -848,16 +659,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       }
     };
 
-    const endHandler = (): void => {
-      done = true;
-      if (resolveNext) {
-        resolveNext(null);
-        resolveNext = null;
-        rejectNext = null;
-      }
-    };
-
-    const closeHandler = (): void => {
+    const doneHandler = (): void => {
       done = true;
       if (resolveNext) {
         resolveNext(null);
@@ -877,9 +679,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     };
 
     this.on("data", dataHandler);
-    this.on("end", endHandler);
+    this.on("end", doneHandler);
     this.on("error", errorHandler);
-    this.on("close", closeHandler);
+    this.on("close", doneHandler);
 
     try {
       // Iterator consumption should drive the stream.
@@ -928,9 +730,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       }
     } finally {
       this.off("data", dataHandler);
-      this.off("end", endHandler);
+      this.off("end", doneHandler);
       this.off("error", errorHandler);
-      this.off("close", closeHandler);
+      this.off("close", doneHandler);
     }
   }
 
@@ -980,17 +782,34 @@ export function pumpAsyncIterableToReadable<T>(
   readable: Readable<T>,
   iterable: AsyncIterable<T>
 ): void {
-  (async () => {
-    try {
-      for await (const chunk of iterable) {
-        if (!readable.push(chunk)) {
-          // Simple backpressure: yield to consumer.
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-      }
-      readable.push(null);
-    } catch (err) {
-      readable.destroy(err as Error);
+  const iterator = iterable[Symbol.asyncIterator]();
+  let reading = false;
+
+  // Pull-based: advance the iterator one chunk per _read() call,
+  // matching Node.js Readable.from() behavior.
+  (readable as any)._read = function () {
+    if (reading) {
+      return;
     }
-  })();
+    reading = true;
+
+    (async () => {
+      try {
+        if (readable.destroyed) {
+          return;
+        }
+        const { value, done } = await iterator.next();
+        if (done) {
+          readable.push(null);
+          return;
+        }
+        readable.push(value);
+      } catch (err) {
+        readable.destroy(err as Error);
+      } finally {
+        reading = false;
+      }
+    })();
+  };
+  (readable as any)._pushMode = true;
 }

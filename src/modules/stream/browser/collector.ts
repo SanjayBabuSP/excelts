@@ -19,7 +19,7 @@ export class Collector<T = Uint8Array> extends Writable<T> {
   public chunks: T[] = [];
 
   constructor(options?: WritableStreamOptions) {
-    super(options);
+    super({ ...options, objectMode: options?.objectMode ?? true });
   }
 
   // Override write to be synchronous - Collector doesn't need async behavior
@@ -31,7 +31,7 @@ export class Collector<T = Uint8Array> extends Writable<T> {
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
-    if (this.writableEnded || this.writableFinished) {
+    if (this.destroyed || this.writableEnded || this.writableFinished) {
       const err = new Error("write after end");
       this.emit("error", err);
       return false;
@@ -63,7 +63,7 @@ export class Collector<T = Uint8Array> extends Writable<T> {
       return concatUint8Arrays(chunks as Uint8Array[]);
     }
 
-    throw new StreamTypeError("Uint8Array", typeof chunks[0]);
+    throw new StreamTypeError("Uint8Array", "non-binary data");
   }
 
   /**

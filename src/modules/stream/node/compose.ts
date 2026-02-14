@@ -4,7 +4,7 @@
  * Compose multiple transform streams into one.
  */
 
-import { Transform, PassThrough } from "stream";
+import { Transform } from "stream";
 import type { TransformCallback as NodeTransformCallback } from "stream";
 import type { ITransform } from "@stream/types";
 
@@ -18,7 +18,12 @@ import type { ITransform } from "@stream/types";
 export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any, any>>): Transform {
   const len = transforms.length;
   if (len === 0) {
-    return new PassThrough();
+    return new Transform({
+      objectMode: true,
+      transform(chunk: any, _encoding: BufferEncoding, callback: NodeTransformCallback) {
+        callback(null, chunk);
+      }
+    });
   }
 
   const isNativeTransform = (stream: ITransform<any, any>): stream is Transform =>
@@ -36,26 +41,8 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
   const first = transforms[0]!;
   const last = transforms[len - 1]!;
 
-  // Use a private output stream so we don't have to monkey-patch `write()` on the
-  // public composed stream (which would break piping into it).
-  const output = new PassThrough({ objectMode: (last as any).readableObjectMode ?? true });
-  last.pipe(output);
-
-  let outputEnded = false;
-  const pumpOutput = (target: Transform): void => {
-    if (outputEnded) {
-      return;
-    }
-    while (true) {
-      const chunk = output.read();
-      if (chunk === null) {
-        break;
-      }
-      if (!target.push(chunk)) {
-        break;
-      }
-    }
-  };
+  // Track whether last is paused due to backpressure from composed.
+  let lastPaused = false;
 
   const composed = new Transform({
     readableObjectMode: (last as any).readableObjectMode,
@@ -69,8 +56,12 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
       }
     },
     flush(callback: NodeTransformCallback) {
-      // End the head of the chain; readable completion is driven by `output` ending.
-      const onFinish = (): void => {
+      flushing = true;
+      // End the head of the chain and wait for `last` to finish emitting all
+      // data.  We must wait for `last`'s "end" (readable exhaustion) — not
+      // `first`'s "finish" (writable flush) — because data may still be
+      // flowing through intermediate transforms after `first` finishes.
+      const onEnd = (): void => {
         cleanupFlush();
         callback();
       };
@@ -79,20 +70,24 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
         callback(err);
       };
       const cleanupFlush = (): void => {
-        (first as any).off?.("finish", onFinish);
-        (first as any).off?.("error", onError);
+        (last as any).off?.("end", onEnd);
+        (last as any).off?.("error", onError);
       };
 
-      (first as any).once?.("finish", onFinish);
-      (first as any).once?.("error", onError);
+      (last as any).once?.("end", onEnd);
+      (last as any).once?.("error", onError);
       (first as any).end();
     },
-    read(this: Transform) {
-      pumpOutput(this);
+    read(this: Transform, size: number) {
+      // Resume last if it was paused due to backpressure.
+      if (lastPaused) {
+        lastPaused = false;
+        (last as any).resume?.();
+      }
+      Transform.prototype._read.call(this, size);
     },
     destroy(this: Transform, err: Error | null, callback: (error: Error | null) => void) {
       try {
-        output.destroy(err ?? undefined);
         for (const t of transforms) {
           (t as any).destroy?.(err ?? undefined);
         }
@@ -102,14 +97,26 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
     }
   });
 
-  const onOutputReadable = (): void => {
-    pumpOutput(composed);
+  // Forward data from last directly to composed, with backpressure.
+  const onLastData = (chunk: any): void => {
+    if (!composed.push(chunk)) {
+      lastPaused = true;
+      (last as any).pause?.();
+    }
   };
-  const onOutputEnd = (): void => {
+
+  // Track whether flush is handling the end sequence.
+  let flushing = false;
+
+  const onLastEnd = (): void => {
     cleanupListeners();
-    outputEnded = true;
-    composed.push(null);
+    // When flushing, the flush callback handles stream termination.
+    // Otherwise (e.g. last ended independently), we must push(null) ourselves.
+    if (!flushing) {
+      composed.push(null);
+    }
   };
+
   const onAnyError = (err: Error): void => {
     cleanupListeners();
     composed.destroy(err);
@@ -117,19 +124,24 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
 
   const transformErrorListeners: Array<{ t: any; fn: (err: Error) => void }> = [];
   const cleanupListeners = (): void => {
-    output.off("readable", onOutputReadable);
-    output.off("end", onOutputEnd);
-    output.off("error", onAnyError);
+    (last as any).off?.("data", onLastData);
+    (last as any).off?.("end", onLastEnd);
+    (last as any).off?.("error", onAnyError);
     for (const { t, fn } of transformErrorListeners) {
       t.off?.("error", fn);
     }
     transformErrorListeners.length = 0;
   };
 
-  output.on("readable", onOutputReadable);
-  output.once("end", onOutputEnd);
-  output.once("error", onAnyError);
+  (last as any).on?.("data", onLastData);
+  (last as any).once?.("end", onLastEnd);
+  (last as any).once?.("error", onAnyError);
+
+  // Forward errors from all intermediate transforms.
   for (const t of transforms) {
+    if (t === last) {
+      continue;
+    }
     const tt = t as any;
     tt.once?.("error", onAnyError);
     transformErrorListeners.push({ t: tt, fn: onAnyError });

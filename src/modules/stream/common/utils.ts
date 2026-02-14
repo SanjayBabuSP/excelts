@@ -50,7 +50,7 @@ export function promisify<T>(
 // High Water Mark
 // =============================================================================
 
-let _defaultHighWaterMark = 16 * 1024; // 16KB default
+let _defaultHighWaterMark = 65536; // 64KB default (matches Node.js 25)
 let _defaultHighWaterMarkObjectMode = 16; // 16 objects default
 
 /**

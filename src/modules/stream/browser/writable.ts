@@ -4,6 +4,9 @@
 
 import type { WritableStreamOptions, WritableLike } from "@stream/types";
 import { EventEmitter } from "@utils/event-emitter";
+import { parseEndArgs } from "@stream/common/end-args";
+import { StreamStateError } from "@stream/errors";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 import type { Writable as NodeWritable } from "stream";
 
@@ -32,21 +35,35 @@ export interface WritableOptions<T = Uint8Array> extends WritableStreamOptions {
  * A wrapper around Web WritableStream that provides Node.js-like API
  */
 export class Writable<T = Uint8Array> extends EventEmitter {
-  private _stream: WritableStream<T>;
+  private _stream: WritableStream<T> | null = null;
   private _writer: WritableStreamDefaultWriter<T> | null = null;
   private _ended: boolean = false;
   private _finished: boolean = false;
   private _destroyed: boolean = false;
   private _errored: Error | null = null;
   private _closed: boolean = false;
-  private _pendingWrites: number = 0;
   private _writableLength: number = 0;
   private _needDrain: boolean = false;
   private _corked: number = 0;
   private _corkedChunks: Array<{ chunk: T; callback?: (error?: Error | null) => void }> = [];
   private _defaultEncoding: string = "utf8";
-  private _aborted: boolean = false;
   private _ownsStream: boolean = false;
+  /** When true, _doWrite calls _writeFunc directly (no Web WritableStream). */
+  private _directWrite: boolean = false;
+  /**
+   * Write queue for direct-write mode.  When a _writeFunc callback is pending
+   * (async), subsequent writes are buffered here and drained one-at-a-time,
+   * matching Node.js Writable semantics.
+   */
+  private _writeQueue: Array<{
+    chunk: T;
+    chunkSize: number;
+    callback?: (error?: Error | null) => void;
+  }> = [];
+  /** Whether a _writeFunc call is currently in-flight (callback not yet invoked). */
+  private _writing: boolean = false;
+  /** Pending end() operation waiting for the write queue to drain. */
+  private _pendingEnd: { cb?: () => void } | null = null;
   // User-provided write function (Node.js compatibility)
   private _writeFunc?: (
     chunk: T,
@@ -63,7 +80,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   constructor(options?: WritableOptions<T>) {
     super();
     this.objectMode = options?.objectMode ?? false;
-    this.writableHighWaterMark = options?.highWaterMark ?? 16384;
+    this.writableHighWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this.objectMode);
     this.autoDestroy = options?.autoDestroy ?? true;
     this.emitClose = options?.emitClose ?? true;
     this._defaultEncoding = options?.defaultEncoding ?? "utf8";
@@ -80,66 +97,38 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     if (options?.stream) {
       this._stream = options.stream;
       this._ownsStream = false;
+      this._directWrite = false;
     } else {
       this._ownsStream = true;
-      // Create bound references to instance properties/methods for use in WritableStream callbacks
-      const getWriteFunc = (): typeof this._writeFunc => this._writeFunc;
-      const getFinalFunc = (): typeof this._finalFunc => this._finalFunc;
-      const getDefaultEncoding = (): string => this._defaultEncoding;
-      const setFinished = (value: boolean): void => {
-        this._finished = value;
-      };
-      const setAborted = (value: boolean): void => {
-        this._aborted = value;
-      };
-      const emitEvent = this.emit.bind(this);
-      const getEmitClose = (): boolean => this.emitClose;
-      const callWrite = (chunk: T): any => (this as any)._write?.(chunk);
 
-      this._stream = new WritableStream<T>({
-        write: async chunk => {
-          // Use user-provided write function or default behavior
-          const writeFunc = getWriteFunc();
-          if (writeFunc) {
-            await new Promise<void>((resolve, reject) => {
-              writeFunc(chunk, getDefaultEncoding(), err => {
-                if (err) {
-                  reject(err);
-                } else {
-                  resolve();
-                }
-              });
-            });
-          } else {
-            // Override this in subclasses
-            callWrite(chunk);
+      // When we own the stream AND have a user-provided _writeFunc, we bypass
+      // Web WritableStream entirely and call _writeFunc directly with a
+      // Node.js-style write queue.  This ensures:
+      //  - Synchronous callbacks execute synchronously (fixes cork/uncork, write-during-data)
+      //  - Async callbacks are properly serialized (fixes Transform async pipeline)
+      //  - end()/final waits for all in-flight writes (fixes premature end)
+      if (this._writeFunc) {
+        this._directWrite = true;
+        this._stream = null;
+      } else {
+        this._directWrite = false;
+        this._stream = new WritableStream<T>({
+          write: async chunk => {
+            // Subclass _write path (no user-provided _writeFunc)
+            (this as any)._write?.(chunk);
+          },
+          close: async () => {
+            this._finished = true;
+            this.emit("finish");
+            if (this.emitClose) {
+              this.emit("close");
+            }
+          },
+          abort: reason => {
+            this.emit("error", reason);
           }
-        },
-        close: async () => {
-          // Call final function if provided
-          const finalFunc = getFinalFunc();
-          if (finalFunc) {
-            await new Promise<void>((resolve, reject) => {
-              finalFunc(err => {
-                if (err) {
-                  reject(err);
-                } else {
-                  resolve();
-                }
-              });
-            });
-          }
-          setFinished(true);
-          emitEvent("finish");
-          if (getEmitClose()) {
-            emitEvent("close");
-          }
-        },
-        abort: reason => {
-          setAborted(true);
-          emitEvent("error", reason);
-        }
-      });
+        });
+      }
     }
   }
 
@@ -167,9 +156,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
 
     if (this._corked === 0) {
-      // Flush all corked chunks
+      // Flush all corked chunks.
+      // Reset _writableLength for corked chunks first — _doWrite will re-add
+      // each chunk's size, so we must subtract the corked total to avoid
+      // double-counting (write() already added the size when buffering).
       const chunks = this._corkedChunks;
       this._corkedChunks = [];
+      for (const { chunk } of chunks) {
+        this._writableLength -= this._getChunkSize(chunk);
+      }
       for (const { chunk, callback } of chunks) {
         this._doWrite(chunk, callback);
       }
@@ -211,35 +206,155 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   }
 
   private _doWrite(chunk: T, callback?: (error?: Error | null) => void): boolean {
-    // Track pending writes for writableLength
     const chunkSize = this._getChunkSize(chunk);
-    this._pendingWrites++;
     this._writableLength += chunkSize;
-    const writer = this._getWriter();
-    writer
-      .write(chunk)
-      .then(() => {
-        this._pendingWrites--;
+
+    if (this._directWrite) {
+      // Direct-write path: call _writeFunc directly, with Node.js-style
+      // serialization — only one _writeFunc is in-flight at a time.
+      if (this._writing) {
+        // Queue the write for later — will be drained when the current
+        // _writeFunc callback fires.
+        this._writeQueue.push({ chunk, chunkSize, callback });
+      } else {
+        this._writing = true;
+        this._callWriteFunc(chunk, chunkSize, callback);
+      }
+    } else {
+      // Async path: use Web WritableStream (external stream or subclass _write)
+      const writer = this._getWriter();
+      writer
+        .write(chunk)
+        .then(() => {
+          this._writableLength -= chunkSize;
+          if (this._needDrain && this._writableLength < this.writableHighWaterMark) {
+            this._needDrain = false;
+            this.emit("drain");
+          }
+          callback?.(null);
+        })
+        .catch(err => {
+          this._writableLength -= chunkSize;
+          if (!this._destroyed) {
+            this._errored = err;
+            this.emit("error", err);
+          }
+          callback?.(err);
+        });
+    }
+
+    // Return false if we've exceeded high water mark (for backpressure)
+    return this._writableLength < this.writableHighWaterMark;
+  }
+
+  /**
+   * Call _writeFunc for a single chunk. When the callback fires (sync or async),
+   * drain the next entry from _writeQueue, or run the pending end() if the
+   * queue is empty.
+   */
+  private _callWriteFunc(
+    chunk: T,
+    chunkSize: number,
+    callback?: (error?: Error | null) => void
+  ): void {
+    try {
+      this._writeFunc!(chunk, this._defaultEncoding, err => {
+        if (err) {
+          this._writableLength -= chunkSize;
+          if (!this._destroyed) {
+            this._errored = err;
+            this.emit("error", err);
+          }
+          callback?.(err);
+          // On error, drain remaining queued writes with the error and
+          // don't process pending end.
+          this._writing = false;
+          this._flushWriteQueueOnError(err);
+          return;
+        }
+
         this._writableLength -= chunkSize;
         if (this._needDrain && this._writableLength < this.writableHighWaterMark) {
           this._needDrain = false;
           this.emit("drain");
         }
         callback?.(null);
-      })
-      .catch(err => {
-        this._pendingWrites--;
-        this._writableLength -= chunkSize;
-        // Avoid double-emitting if we're already in an errored/destroyed state.
-        if (!this._destroyed) {
-          this._errored = err;
-          this.emit("error", err);
-        }
-        callback?.(err);
-      });
 
-    // Return false if we've exceeded high water mark (for backpressure)
-    return this._writableLength < this.writableHighWaterMark;
+        // Drain next queued write, or finalize if end() is pending.
+        this._drainWriteQueue();
+      });
+    } catch (err) {
+      this._writableLength -= chunkSize;
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (!this._destroyed) {
+        this._errored = error;
+        this.emit("error", error);
+      }
+      callback?.(error);
+      this._writing = false;
+      this._flushWriteQueueOnError(error);
+    }
+  }
+
+  /** Process the next queued write, or run pending end(). */
+  private _drainWriteQueue(): void {
+    const next = this._writeQueue.shift();
+    if (next) {
+      this._callWriteFunc(next.chunk, next.chunkSize, next.callback);
+    } else {
+      this._writing = false;
+      // If end() was called while writes were in-flight, finalize now.
+      if (this._pendingEnd) {
+        const { cb } = this._pendingEnd;
+        this._pendingEnd = null;
+        this._doFinish(cb);
+      }
+    }
+  }
+
+  /** Discard queued writes after an error. */
+  private _flushWriteQueueOnError(err: Error): void {
+    const queue = this._writeQueue;
+    this._writeQueue = [];
+    for (const entry of queue) {
+      this._writableLength -= entry.chunkSize;
+      entry.callback?.(err);
+    }
+  }
+
+  /**
+   * Run _finalFunc and emit finish/close.
+   * Events are deferred via queueMicrotask to match Node.js process.nextTick
+   * behavior, so listeners registered after end() can still receive them.
+   */
+  private _doFinish(cb?: () => void): void {
+    if (this._finalFunc) {
+      this._finalFunc(err => {
+        if (err) {
+          this.emit("error", err);
+          return;
+        }
+        this._finished = true;
+        queueMicrotask(() => {
+          this.emit("finish");
+          this._closed = true;
+          if (this.emitClose) {
+            this.emit("close");
+          }
+          cb?.();
+        });
+      });
+    } else {
+      this._finished = true;
+      queueMicrotask(() => {
+        this.emit("finish");
+        this._closed = true;
+        if (this.emitClose) {
+          this.emit("close");
+        }
+        cb?.();
+      });
+    }
   }
 
   private _getChunkSize(chunk: T): number {
@@ -272,14 +387,25 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
     this._ended = true;
 
-    const chunk = typeof chunkOrCallback !== "function" ? chunkOrCallback : undefined;
-    const cb: (() => void) | undefined =
-      typeof chunkOrCallback === "function"
-        ? (chunkOrCallback as () => void)
-        : typeof encodingOrCallback === "function"
-          ? (encodingOrCallback as () => void)
-          : callback;
+    const { chunk, cb } = parseEndArgs<T>(chunkOrCallback, encodingOrCallback, callback);
 
+    if (this._directWrite) {
+      // Direct-write path: enqueue final chunk (if any), then wait for the
+      // write queue to drain before running _finalFunc + emitting finish.
+      if (chunk !== undefined) {
+        this._doWrite(chunk);
+      }
+
+      // If writes are still in-flight or queued, defer finalization.
+      if (this._writing || this._writeQueue.length > 0) {
+        this._pendingEnd = { cb };
+      } else {
+        this._doFinish(cb);
+      }
+      return this;
+    }
+
+    // Async end path — uses Web WritableStream.
     const finish = async (): Promise<void> => {
       try {
         const writer = this._getWriter();
@@ -329,9 +455,10 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     this._destroyed = true;
     this._ended = true;
 
+    // Set state synchronously (matches Node.js), defer event emission via queueMicrotask
+    // to match Node.js process.nextTick behavior
     if (error && !this._errored) {
       this._errored = error;
-      this.emit("error", error);
     }
 
     if (this._writer) {
@@ -350,19 +477,63 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
 
     this._closed = true;
-    this.emit("close");
+
+    queueMicrotask(() => {
+      if (error && this._errored === error) {
+        this.emit("error", error);
+      }
+      this.emit("close");
+    });
     return this;
   }
 
   /**
-   * Get the underlying Web WritableStream
+   * Get the underlying Web WritableStream (internal).
+   * @internal
    */
-  get webStream(): WritableStream<T> {
+  private get _webStream(): WritableStream<T> {
+    if (!this._stream) {
+      // Lazily create a Web WritableStream for sync-write Writables that need interop.
+      this._stream = new WritableStream<T>({
+        write: chunk =>
+          new Promise<void>((resolve, reject) => {
+            this._writeFunc!(chunk, this._defaultEncoding, err => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve();
+              }
+            });
+          }),
+        close: async () => {
+          if (this._finalFunc) {
+            await new Promise<void>((resolve, reject) => {
+              this._finalFunc!(err => {
+                if (err) {
+                  reject(err);
+                } else {
+                  resolve();
+                }
+              });
+            });
+          }
+        },
+        abort: reason => {
+          this.emit("error", reason);
+        }
+      });
+    }
     return this._stream;
   }
 
   get writable(): boolean {
     return !this._destroyed && !this._ended;
+  }
+
+  set writable(val: boolean) {
+    if (!val) {
+      this._ended = true;
+    }
   }
 
   get writableEnded(): boolean {
@@ -380,6 +551,10 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   /** Whether the stream has been destroyed */
   get destroyed(): boolean {
     return this._destroyed;
+  }
+
+  set destroyed(val: boolean) {
+    this._destroyed = val;
   }
 
   /** The error that destroyed the stream, or null */
@@ -402,9 +577,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     return this._corked;
   }
 
-  /** Whether the stream was aborted */
+  /** Whether the stream was destroyed before finishing */
   get writableAborted(): boolean {
-    return this._aborted;
+    return this._destroyed && !this._finished;
   }
 
   /** Whether the stream is in object mode */
@@ -412,74 +587,26 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     return this.objectMode;
   }
 
-  /** Get default encoding */
-  get defaultEncoding(): string {
-    return this._defaultEncoding;
+  /**
+   * Get the internal buffer contents as an array (matches Node.js behavior)
+   */
+  get writableBuffer(): T[] {
+    return this._corkedChunks.map(entry => entry.chunk);
   }
 
   /**
-   * Get the internal buffer state (for debugging)
-   * Returns array of objects with length and chunk info
+   * Pipe is not supported on Writable streams (matches Node.js behavior).
+   * Node's Writable inherits pipe() from Stream, but it always throws.
    */
-  get writableBuffer(): { length: number; head: T | null } {
-    return {
-      length: this._corkedChunks.length,
-      head: this._corkedChunks.length > 0 ? this._corkedChunks[0].chunk : null
-    };
-  }
-
-  /**
-   * Write multiple chunks at once (batch write).
-   * Override in subclass to implement custom batch write logic.
-   */
-  _writev(
-    chunks: Array<{ chunk: T; encoding?: string }>,
-    callback: (error?: Error | null) => void
-  ): void {
-    // Default implementation: write each chunk individually
-    let i = 0;
-    const writeNext = (): void => {
-      if (i >= chunks.length) {
-        callback(null);
-        return;
-      }
-
-      const { chunk } = chunks[i++];
-      this._doWrite(chunk, err => {
-        if (err) {
-          callback(err);
-          return;
-        }
-        // Continue to next chunk
-        writeNext();
-      });
-    };
-
-    writeNext();
-  }
-
-  /**
-   * Batch write multiple chunks
-   */
-  writev(
-    chunks: Array<{ chunk: T; encoding?: string }>,
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    if (this._destroyed || this._ended) {
-      const err = new Error("Cannot write after stream destroyed/ended");
-      callback?.(err);
-      return false;
-    }
-
-    this._writev(chunks, callback ?? (() => {}));
-
-    // Return backpressure indicator
-    return this._writableLength < this.writableHighWaterMark;
+  pipe(): never {
+    const err = new StreamStateError("pipe", "not readable");
+    this.emit("error", err);
+    throw err;
   }
 
   private _getWriter(): WritableStreamDefaultWriter<T> {
     if (!this._writer) {
-      this._writer = this._stream.getWriter();
+      this._writer = this._webStream.getWriter();
     }
     return this._writer;
   }
@@ -499,7 +626,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    * Convert a Node.js Writable to Web WritableStream
    */
   static toWeb<T>(nodeStream: Writable<T>): WritableStream<T> {
-    return nodeStream.webStream;
+    return nodeStream._webStream;
   }
 }
 

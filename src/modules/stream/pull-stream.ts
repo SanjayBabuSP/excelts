@@ -32,6 +32,13 @@ export class PullStream extends EventEmitter {
     super();
   }
 
+  /** Reset the internal buffer to empty. */
+  private _resetBuffer(): void {
+    this._buffer = EMPTY_U8;
+    this._bufferReadIndex = 0;
+    this._bufferWriteIndex = 0;
+  }
+
   // Maintain legacy protected accessor for subclasses.
   // Returned value is a view of the readable region.
   protected get buffer(): Uint8Array {
@@ -43,9 +50,7 @@ export class PullStream extends EventEmitter {
 
   protected set buffer(buf: Uint8Array) {
     if (buf.length === 0) {
-      this._buffer = EMPTY_U8;
-      this._bufferReadIndex = 0;
-      this._bufferWriteIndex = 0;
+      this._resetBuffer();
       return;
     }
 
@@ -107,6 +112,10 @@ export class PullStream extends EventEmitter {
    * Signal end of input
    */
   end(chunk?: Uint8Array): void {
+    if (this._destroyed || this.finished) {
+      return;
+    }
+
     if (chunk !== undefined) {
       this.write(chunk);
     }
@@ -125,15 +134,19 @@ export class PullStream extends EventEmitter {
     }
 
     this._destroyed = true;
-    this._buffer = EMPTY_U8;
-    this._bufferReadIndex = 0;
-    this._bufferWriteIndex = 0;
+    this._resetBuffer();
 
-    if (error) {
-      this.emit("error", error);
-    }
+    // Wake up any pending pull() promises so they can see _destroyed and reject.
+    // This MUST be synchronous — pending pull() promises depend on immediate wakeup.
+    this.emit("chunk");
 
-    this.emit("close");
+    // Defer error/close emission via queueMicrotask to match Node.js process.nextTick behavior
+    queueMicrotask(() => {
+      if (error) {
+        this.emit("error", error);
+      }
+      this.emit("close");
+    });
   }
 
   /**
@@ -176,9 +189,7 @@ export class PullStream extends EventEmitter {
           this._bufferReadIndex = end;
 
           if (this._bufferReadIndex === this._bufferWriteIndex) {
-            this._buffer = EMPTY_U8;
-            this._bufferReadIndex = 0;
-            this._bufferWriteIndex = 0;
+            this._resetBuffer();
           }
 
           resolve(result);
@@ -191,9 +202,7 @@ export class PullStream extends EventEmitter {
             this._bufferReadIndex === this._bufferWriteIndex
               ? EMPTY_U8
               : this._buffer.subarray(this._bufferReadIndex, this._bufferWriteIndex);
-          this._buffer = EMPTY_U8;
-          this._bufferReadIndex = 0;
-          this._bufferWriteIndex = 0;
+          this._resetBuffer();
           resolve(result);
           return;
         }
@@ -208,6 +217,12 @@ export class PullStream extends EventEmitter {
 
   private _pullPattern(pattern: Uint8Array, includePattern: boolean): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
+      const patternLen = pattern.length;
+      // Track where the next scan should start to avoid re-scanning bytes
+      // that were already checked.  A match can straddle old and new data, so
+      // we back up by (patternLen - 1) when resuming.
+      let scanFrom = this._bufferReadIndex;
+
       const tryPull = (): void => {
         if (this._destroyed) {
           reject(new Error("Stream destroyed"));
@@ -215,23 +230,22 @@ export class PullStream extends EventEmitter {
         }
 
         // Match empty pattern without consuming anything.
-        if (pattern.length === 0) {
+        if (patternLen === 0) {
           this._match = 0;
           resolve(this._buffer.subarray(this._bufferReadIndex, this._bufferReadIndex));
           return;
         }
 
-        const matchIndexAbs = this._indexOf(
+        const matchIndexAbs = uint8ArrayIndexOf(
           this._buffer,
-          this._bufferReadIndex,
-          this._bufferWriteIndex,
-          pattern
+          pattern,
+          scanFrom,
+          this._bufferWriteIndex
         );
 
         if (matchIndexAbs !== -1) {
           this._match = matchIndexAbs - this._bufferReadIndex;
 
-          const patternLen = pattern.length;
           const resultEndAbs = includePattern ? matchIndexAbs + patternLen : matchIndexAbs;
           const consumeTo = matchIndexAbs + patternLen;
 
@@ -239,13 +253,15 @@ export class PullStream extends EventEmitter {
 
           this._bufferReadIndex = consumeTo;
           if (this._bufferReadIndex === this._bufferWriteIndex) {
-            this._buffer = EMPTY_U8;
-            this._bufferReadIndex = 0;
-            this._bufferWriteIndex = 0;
+            this._resetBuffer();
           }
           resolve(result);
           return;
         }
+
+        // No match yet — advance scanFrom so the next retry only scans new
+        // bytes (minus overlap for cross-boundary matches).
+        scanFrom = Math.max(this._bufferReadIndex, this._bufferWriteIndex - (patternLen - 1));
 
         if (this.finished) {
           // Pattern not found, return everything
@@ -253,9 +269,7 @@ export class PullStream extends EventEmitter {
             this._bufferReadIndex === this._bufferWriteIndex
               ? EMPTY_U8
               : this._buffer.subarray(this._bufferReadIndex, this._bufferWriteIndex);
-          this._buffer = EMPTY_U8;
-          this._bufferReadIndex = 0;
-          this._bufferWriteIndex = 0;
+          this._resetBuffer();
           resolve(result);
           return;
         }
@@ -294,12 +308,5 @@ export class PullStream extends EventEmitter {
    */
   get destroyed(): boolean {
     return this._destroyed;
-  }
-
-  /**
-   * Find pattern in Uint8Array (like Buffer.indexOf)
-   */
-  private _indexOf(haystack: Uint8Array, start: number, end: number, needle: Uint8Array): number {
-    return uint8ArrayIndexOf(haystack, needle, start, end);
   }
 }

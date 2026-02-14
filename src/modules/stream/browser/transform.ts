@@ -5,6 +5,7 @@
 import type { TransformStreamOptions } from "@stream/types";
 import { StreamStateError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
+import { parseEndArgs } from "@stream/common/end-args";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";
@@ -31,11 +32,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   private _errored: boolean = false;
   private _dataForwardingSetup: boolean = false;
 
-  private _endTimer: ReturnType<typeof setTimeout> | null = null;
+  private _endGeneration: number = 0;
 
   private _webStream: TransformStream<TInput, TOutput> | null = null;
 
   private _sideForwardingCleanup: (() => void) | null = null;
+
+  /** Cached result of _hasSubclassTransform (called per-chunk, so worth caching) */
+  private _isSubclassTransform: boolean | undefined;
 
   private _transformImpl:
     | ((chunk: TInput) => TOutput | Promise<TOutput>)
@@ -93,9 +97,21 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     this._writable = new Writable<TInput>({
       objectMode: this.objectMode,
       write: (chunk, _encoding, callback) => {
-        this._runTransform(chunk)
-          .then(() => callback(null))
-          .catch(err => callback(err));
+        // Try synchronous transform first.  If the transform completes
+        // synchronously we MUST call the callback synchronously so that
+        // the Writable write-queue drains in the same microtask, preventing
+        // _scheduleEnd from racing ahead of dynamically-added writes.
+        const maybePromise = this._runTransformSync(chunk);
+        if (maybePromise === undefined) {
+          // Completed synchronously
+          callback(null);
+        } else {
+          // Async – wait for the promise
+          maybePromise.then(
+            () => callback(null),
+            err => callback(err)
+          );
+        }
       },
       final: callback => {
         this._runFlush()
@@ -136,13 +152,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return;
     }
 
-    if (this._endTimer) {
-      clearTimeout(this._endTimer);
-    }
+    const gen = ++this._endGeneration;
 
-    // Defer closing to allow writes triggered during 'data' callbacks.
-    this._endTimer = setTimeout(() => {
-      this._endTimer = null;
+    // Defer to the next macrotask so that all microtasks (Promise .then()
+    // chains, pipe end propagation, etc.) settle before we close the writable.
+    // Using queueMicrotask here would race ahead of async pipe chains and
+    // cause hangs in complex pipe topologies (e.g. archive unzip).
+    setTimeout(() => {
+      if (gen !== this._endGeneration) {
+        return;
+      }
       if (this._destroyed || this._errored || this._writable.writableEnded) {
         return;
       }
@@ -166,11 +185,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   private _hasSubclassTransform(): boolean {
+    if (this._isSubclassTransform !== undefined) {
+      return this._isSubclassTransform;
+    }
     if (this._transformImpl) {
+      this._isSubclassTransform = false;
       return false;
     }
     const proto = Object.getPrototypeOf(this);
-    return proto._transform !== Transform.prototype._transform;
+    this._isSubclassTransform = proto._transform !== Transform.prototype._transform;
+    return this._isSubclassTransform;
   }
 
   private _hasSubclassFlush(): boolean {
@@ -179,6 +203,109 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
     const proto = Object.getPrototypeOf(this);
     return proto._flush !== Transform.prototype._flush;
+  }
+
+  /**
+   * Run the transform function.  Returns `undefined` when the transform
+   * completed synchronously, or a `Promise<void>` when it is async.
+   * Keeping the sync path truly synchronous is critical so that the Writable
+   * write-queue callback fires synchronously and _scheduleEnd cannot race
+   * ahead of writes added during 'data' callbacks.
+   */
+  private _runTransformSync(chunk: TInput): Promise<void> | undefined {
+    if (this._destroyed || this._errored) {
+      throw new StreamStateError("write", this._errored ? "stream errored" : "stream destroyed");
+    }
+
+    try {
+      if (this._hasSubclassTransform()) {
+        return new Promise<void>((resolve, reject) => {
+          this._transform(chunk, "utf8", (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+      }
+
+      const userTransform = this._transformImpl;
+      if (!userTransform) {
+        this.push(chunk as any as TOutput);
+        return undefined; // sync
+      }
+
+      const paramCount = userTransform.length;
+
+      if (paramCount >= 3) {
+        return new Promise<void>((resolve, reject) => {
+          (
+            userTransform as (
+              this: Transform<TInput, TOutput>,
+              chunk: TInput,
+              encoding: string,
+              callback: (error?: Error | null, data?: TOutput) => void
+            ) => void
+          ).call(this, chunk, "utf8", (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+      }
+
+      if (paramCount === 2) {
+        return new Promise<void>((resolve, reject) => {
+          (
+            userTransform as (
+              this: Transform<TInput, TOutput>,
+              chunk: TInput,
+              callback: (error?: Error | null, data?: TOutput) => void
+            ) => void
+          ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            if (data !== undefined) {
+              this.push(data);
+            }
+            resolve();
+          });
+        });
+      }
+
+      // paramCount 0 or 1: simple function, may return sync or async
+      const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
+        this,
+        chunk
+      );
+
+      if (result && typeof (result as any).then === "function") {
+        return (result as Promise<TOutput>).then(awaited => {
+          if (awaited !== undefined) {
+            this.push(awaited);
+          }
+        });
+      }
+
+      if (result !== undefined) {
+        this.push(result as TOutput);
+      }
+      return undefined; // sync
+    } catch (err) {
+      this._emitErrorOnce(err);
+      throw err;
+    }
   }
 
   private async _runTransform(chunk: TInput): Promise<void> {
@@ -350,11 +477,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    * Avoids starting flowing mode unless requested.
    */
   override on(event: string | symbol, listener: (...args: any[]) => void): this {
+    // Register the listener FIRST so that when _readable.on("data") triggers
+    // resume() and synchronously drains buffered data, the forwarding handler
+    // can find the listener already in place on this Transform.
+    super.on(event, listener);
+
     if (event === "data" && !this._dataForwardingSetup) {
       this._dataForwardingSetup = true;
       this._readable.on("data", chunk => this.emit("data", chunk));
     }
-    return super.on(event, listener);
+    return this;
   }
 
   /**
@@ -378,8 +510,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   /**
-   * End the transform stream
-   * Delays closing to allow writes during data events to complete
+   * End the transform stream.
+   * Defers closing via _scheduleEnd to allow writes triggered during
+   * 'data' callbacks to complete before the writable side is ended.
    */
   end(callback?: () => void): this;
   end(chunk: TInput, callback?: () => void): this;
@@ -394,13 +527,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
     this._ended = true;
 
-    const chunk = typeof chunkOrCallback === "function" ? undefined : chunkOrCallback;
-    const cb: (() => void) | undefined =
-      typeof chunkOrCallback === "function"
-        ? (chunkOrCallback as () => void)
-        : typeof encodingOrCallback === "function"
-          ? (encodingOrCallback as () => void)
-          : callback;
+    const { chunk, cb } = parseEndArgs<TInput>(chunkOrCallback, encodingOrCallback, callback);
 
     if (cb) {
       this.once("finish", cb);
@@ -464,11 +591,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   /**
    * Destroy the stream
    */
-  destroy(error?: Error): void {
+  destroy(error?: Error): this {
     if (this._destroyed) {
-      return;
+      return this;
     }
     this._destroyed = true;
+
+    // Invalidate any pending _scheduleEnd
+    this._endGeneration++;
 
     if (this._sideForwardingCleanup) {
       this._sideForwardingCleanup();
@@ -478,12 +608,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     this._readable.destroy(error);
     this._writable.destroy(error);
     queueMicrotask(() => this.emit("close"));
+    return this;
   }
 
   /**
-   * Get the underlying Web TransformStream
+   * Get the underlying Web TransformStream (internal).
+   * @internal
    */
-  get webStream(): TransformStream<TInput, TOutput> {
+  private _getWebStream(): TransformStream<TInput, TOutput> {
     if (this._webStream) {
       return this._webStream;
     }
@@ -533,8 +665,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     return this._readable.readable;
   }
 
+  set readable(val: boolean) {
+    this._readable.readable = val;
+  }
+
   get writable(): boolean {
     return this._writable.writable;
+  }
+
+  set writable(val: boolean) {
+    this._writable.writable = val;
   }
 
   get readableEnded(): boolean {
@@ -573,8 +713,116 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     return this._readable.readableFlowing;
   }
 
+  set readableFlowing(val: boolean | null) {
+    this._readable.readableFlowing = val;
+  }
+
   get destroyed(): boolean {
     return this._destroyed;
+  }
+
+  set destroyed(val: boolean) {
+    this._destroyed = val;
+  }
+
+  // =========================================================================
+  // Delegated methods (Node.js Transform compatibility)
+  // =========================================================================
+
+  /**
+   * Cork the writable side
+   */
+  cork(): void {
+    this._writable.cork();
+  }
+
+  /**
+   * Uncork the writable side
+   */
+  uncork(): void {
+    this._writable.uncork();
+  }
+
+  /**
+   * Set encoding for the readable side
+   */
+  setEncoding(encoding: string): this {
+    this._readable.setEncoding(encoding);
+    return this;
+  }
+
+  /**
+   * Set default encoding for the writable side
+   */
+  setDefaultEncoding(encoding: string): this {
+    this._writable.setDefaultEncoding(encoding);
+    return this;
+  }
+
+  /**
+   * Put a chunk back at the front of the readable buffer
+   */
+  unshift(chunk: TOutput): void {
+    this._readable.unshift(chunk);
+  }
+
+  /**
+   * Wrap a legacy stream
+   */
+  wrap(stream: any): this {
+    this._readable.wrap(stream);
+    return this;
+  }
+
+  /**
+   * Create an async iterator with options
+   */
+  iterator(options?: { destroyOnReturn?: boolean }): AsyncIterableIterator<TOutput> {
+    return this._readable.iterator(options);
+  }
+
+  // =========================================================================
+  // Delegated getters (Node.js Transform compatibility)
+  // =========================================================================
+
+  get writableCorked(): number {
+    return this._writable.writableCorked;
+  }
+
+  get writableNeedDrain(): boolean {
+    return this._writable.writableNeedDrain;
+  }
+
+  get writableObjectMode(): boolean {
+    return this._writable.writableObjectMode ?? this._writable.objectMode;
+  }
+
+  get readableAborted(): boolean {
+    return this._readable.readableAborted;
+  }
+
+  get readableDidRead(): boolean {
+    return this._readable.readableDidRead;
+  }
+
+  get readableEncoding(): string | null {
+    return this._readable.readableEncoding;
+  }
+
+  get errored(): Error | null {
+    return this._readable.errored ?? this._writable.errored;
+  }
+
+  get closed(): boolean {
+    return this._readable.closed && this._writable.closed;
+  }
+
+  get readableBuffer(): TOutput[] {
+    return this._readable.readableBuffer;
+  }
+
+  get writableBuffer(): TInput[] {
+    return this._writable.writableBuffer;
   }
 
   /**
@@ -622,7 +870,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   static toWeb<TIn = Uint8Array, TOut = Uint8Array>(
     nodeStream: Transform<TIn, TOut>
   ): TransformStream<TIn, TOut> {
-    return nodeStream.webStream;
+    return nodeStream._getWebStream();
   }
 
   // =========================================================================

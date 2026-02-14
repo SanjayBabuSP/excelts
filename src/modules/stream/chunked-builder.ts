@@ -58,9 +58,10 @@ export class ChunkedBuilder {
   }
 
   /**
-   * Consolidate pieces into chunks
+   * Consolidate pieces into chunks.
+   * Subclasses may override to guard against consolidation (e.g. during active snapshots).
    */
-  private _consolidate(): void {
+  protected _consolidate(): void {
     if (this._pieces.length > 0) {
       this._chunks.push(this._pieces.join(""));
       this._pieces.length = 0;
@@ -158,6 +159,18 @@ export interface BuilderSnapshot {
  */
 export class TransactionalChunkedBuilder extends ChunkedBuilder {
   private _snapshots: BuilderSnapshot[] = [];
+
+  /**
+   * Skip consolidation while snapshots are active.
+   * Consolidation joins pieces into a chunk and clears the pieces array,
+   * which makes it impossible to rollback to a previous pieces position.
+   */
+  protected override _consolidate(): void {
+    if (this._snapshots.length > 0) {
+      return;
+    }
+    super._consolidate();
+  }
 
   /**
    * Create a rollback point

@@ -202,14 +202,9 @@ export interface IDuplex<TRead = any, TWrite = any> extends IReadable<TRead>, IW
 // =============================================================================
 
 /**
- * Options for pull stream
+ * Options for pull stream (reserved for future use)
  */
-export interface PullStreamOptions {
-  /** Enable object mode */
-  objectMode?: boolean;
-  /** High water mark for internal buffer */
-  highWaterMark?: number;
-}
+export type PullStreamOptions = object;
 
 /**
  * Pull stream interface - allows pulling data on demand

@@ -184,16 +184,28 @@ export function duplexPair<T = Uint8Array>(
   const stream2 = new Duplex<T, T>(options);
 
   // Override write to push to the other stream's readable
-  stream1.write = function (chunk: T): boolean {
+  stream1.write = function (
+    chunk: T,
+    encodingOrCallback?: string | ((error?: Error | null) => void),
+    callback?: (error?: Error | null) => void
+  ): boolean {
+    const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
     // Push to stream2's readable side
-    stream2.push(chunk);
-    return true;
+    const ok = stream2.push(chunk);
+    cb?.(null);
+    return ok;
   };
 
-  stream2.write = function (chunk: T): boolean {
+  stream2.write = function (
+    chunk: T,
+    encodingOrCallback?: string | ((error?: Error | null) => void),
+    callback?: (error?: Error | null) => void
+  ): boolean {
+    const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
     // Push to stream1's readable side
-    stream1.push(chunk);
-    return true;
+    const ok = stream1.push(chunk);
+    cb?.(null);
+    return ok;
   };
 
   // Override end to signal EOF to the other stream

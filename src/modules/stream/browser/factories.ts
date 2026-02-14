@@ -239,7 +239,8 @@ export function createDuplex<TRead = Uint8Array, TWrite = Uint8Array>(
     duplex.destroy = function (error?: Error): Duplex<TRead, TWrite> {
       options.destroy!.call(duplex, error ?? null, (err: Error | null) => {
         if (err) {
-          duplex.emit("error", err);
+          // Defer error emission to match Node.js process.nextTick behavior
+          queueMicrotask(() => duplex.emit("error", err));
           originalDestroy(err);
         } else {
           originalDestroy(error);
@@ -287,18 +288,19 @@ export function createReadableFromPromise<T>(
   return readable;
 }
 
-// Reusable empty push callback for createEmptyReadable
-const pushNull = (readable: Readable<any>): void => {
-  readable.push(null);
-};
+// Reusable read callback for createEmptyReadable (pull-based, matches Node behavior)
+function emptyRead(this: Readable<any>): void {
+  this.push(null);
+}
 
 /**
  * Create a readable stream that emits nothing and immediately ends
  */
 export function createEmptyReadable<T = Uint8Array>(options?: ReadableStreamOptions): IReadable<T> {
-  const readable = new Readable<T>(options);
-  queueMicrotask(() => pushNull(readable));
-  return readable;
+  return new Readable<T>({
+    ...options,
+    read: emptyRead
+  });
 }
 
 // Reusable null write handler

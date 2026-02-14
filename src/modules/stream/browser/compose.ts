@@ -3,6 +3,7 @@
  */
 
 import type { ITransform } from "@stream/types";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 import type { Writable } from "./writable";
 import { Transform } from "./transform";
@@ -159,6 +160,14 @@ export function compose<T = any, R = any>(
     return typeof lastAny.read === "function" ? (lastAny.read(size) as R | null) : null;
   };
 
+  // Delegate cork/uncork to the head of the chain.
+  (composed as any).cork = (): void => {
+    firstAny.cork?.();
+  };
+  (composed as any).uncork = (): void => {
+    firstAny.uncork?.();
+  };
+
   (composed as any)[Symbol.asyncIterator] = async function* (): AsyncIterableIterator<R> {
     const it = lastAny?.[Symbol.asyncIterator]?.();
     if (it) {
@@ -185,6 +194,42 @@ export function compose<T = any, R = any>(
   });
   Object.defineProperty(composed, "writable", {
     get: () => first.writable
+  });
+
+  // Proxy writable-side state to `first` so properties like writableEnded and
+  // writableFinished reflect the actual head-of-chain state, not the inner
+  // Transform wrapper which is never written to directly.
+  Object.defineProperty(composed, "writableEnded", {
+    get: () => (first as any).writableEnded ?? false
+  });
+  Object.defineProperty(composed, "writableFinished", {
+    get: () => (first as any).writableFinished ?? false
+  });
+  Object.defineProperty(composed, "writableLength", {
+    get: () => (first as any).writableLength ?? 0
+  });
+  Object.defineProperty(composed, "writableHighWaterMark", {
+    get: () => (first as any).writableHighWaterMark ?? getDefaultHighWaterMark(false)
+  });
+  Object.defineProperty(composed, "writableCorked", {
+    get: () => (first as any).writableCorked ?? 0
+  });
+  Object.defineProperty(composed, "writableNeedDrain", {
+    get: () => (first as any).writableNeedDrain ?? false
+  });
+
+  // Proxy readable-side state to `last`.
+  Object.defineProperty(composed, "readableEnded", {
+    get: () => (last as any).readableEnded ?? false
+  });
+  Object.defineProperty(composed, "readableLength", {
+    get: () => (last as any).readableLength ?? 0
+  });
+  Object.defineProperty(composed, "readableHighWaterMark", {
+    get: () => (last as any).readableHighWaterMark ?? getDefaultHighWaterMark(false)
+  });
+  Object.defineProperty(composed, "readableFlowing", {
+    get: () => (last as any).readableFlowing ?? null
   });
 
   return composed;

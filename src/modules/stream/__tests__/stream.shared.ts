@@ -30,6 +30,9 @@ export interface StreamModuleImports {
   TransactionalChunkedBuilder: new (options?: any) => any;
 
   // Factory Functions
+  createReadable: <_T = Uint8Array>(options?: any) => any;
+  createWritable: <_T = Uint8Array>(options?: any) => any;
+  createPassThrough: <_T = any>(options?: any) => any;
   createTransform: <TInput = Uint8Array, TOutput = Uint8Array>(
     transformFn: (chunk: TInput, encoding?: string) => TOutput | Promise<TOutput>,
     options?: any
@@ -109,12 +112,16 @@ export function runStreamTests(imports: StreamModuleImports): void {
     Readable,
     Writable,
     Transform,
+    Duplex,
     BufferedStream,
     PullStream,
     StringChunk,
     ByteChunk,
     ChunkedBuilder,
     TransactionalChunkedBuilder,
+    createReadable: _createReadable,
+    createWritable,
+    createPassThrough,
     createTransform,
     createCollector,
     createDuplex,
@@ -222,8 +229,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       emitter.on("b", () => {});
 
       const names = emitter.eventNames();
-      expect(names).toContain("a");
-      expect(names).toContain("b");
+      expect(names).toEqual(["a", "b"]);
     });
 
     it("should return listeners array copy", () => {
@@ -232,7 +238,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       emitter.on("test", listener);
 
       const listeners = emitter.listeners("test");
-      expect(listeners).toContain(listener);
+      expect(listeners).toEqual([listener]);
     });
 
     it("should prepend listener to beginning", () => {
@@ -393,11 +399,10 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const stream = new BufferedStream();
 
       stream.write("test");
-      expect(stream.bufferedLength).toBeGreaterThan(0);
+      expect(stream.bufferedLength).toBe(4);
 
       stream.write("more");
-      const length = stream.bufferedLength;
-      expect(length).toBeGreaterThan(4);
+      expect(stream.bufferedLength).toBe(8);
     });
 
     it("should not accept writes after destroy", () => {
@@ -424,6 +429,44 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       await finishPromise;
       expect(stream.isFinished).toBe(true);
+    });
+
+    it("should not accept writes after end", () => {
+      const stream = new BufferedStream();
+      stream.on("error", () => {});
+
+      stream.write("before");
+      stream.end();
+
+      const result = stream.write("after");
+      expect(result).toBe(false);
+    });
+
+    it("should not emit finish/end twice on double end()", () => {
+      const stream = new BufferedStream();
+      let finishCount = 0;
+      let endCount = 0;
+      stream.on("finish", () => finishCount++);
+      stream.on("end", () => endCount++);
+
+      stream.end();
+      stream.end(); // second call should be no-op
+
+      expect(finishCount).toBe(1);
+      expect(endCount).toBe(1);
+    });
+
+    it("should reset state after toUint8Array()", () => {
+      const stream = new BufferedStream();
+
+      stream.write("hello");
+      const first = stream.toUint8Array();
+      expect(uint8ArrayToString(first)).toBe("hello");
+      expect(stream.bufferedLength).toBe(0);
+
+      // Second call returns empty
+      const second = stream.toUint8Array();
+      expect(second.length).toBe(0);
     });
   });
 
@@ -473,12 +516,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
     it("should track cursor position", () => {
       const builder = new ChunkedBuilder({ chunkSize: 10 });
 
-      const cursor1 = builder.cursor;
+      expect(builder.cursor).toBe(0);
       builder.push("hello");
-      const cursor2 = builder.cursor;
-
-      // Cursor should increase after push
-      expect(cursor2).toBeGreaterThan(cursor1);
+      expect(builder.cursor).toBe(1);
     });
 
     it("should convert to Uint8Array", () => {
@@ -616,6 +656,41 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(stream.isFinished).toBe(false);
       stream.end();
       expect(stream.isFinished).toBe(true);
+    });
+
+    it("should not emit events when end() called after destroy()", () => {
+      const stream = new PullStream();
+      stream.on("error", () => {});
+
+      stream.destroy();
+
+      let finishEmitted = false;
+      let endEmitted = false;
+      stream.on("finish", () => {
+        finishEmitted = true;
+      });
+      stream.on("end", () => {
+        endEmitted = true;
+      });
+
+      stream.end();
+
+      expect(finishEmitted).toBe(false);
+      expect(endEmitted).toBe(false);
+    });
+
+    it("should not emit finish/end twice on double end()", () => {
+      const stream = new PullStream();
+      let finishCount = 0;
+      let endCount = 0;
+      stream.on("finish", () => finishCount++);
+      stream.on("end", () => endCount++);
+
+      stream.end();
+      stream.end(); // second call should be no-op
+
+      expect(finishCount).toBe(1);
+      expect(endCount).toBe(1);
     });
   });
 
@@ -885,11 +960,13 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
     it("should return default high water mark for byte mode", () => {
       const hwm = getDefaultHighWaterMark(false);
-      expect(hwm).toBe(16 * 1024);
+      expect(hwm).toBe(65536);
     });
 
     it("should not throw when setting high water mark", () => {
+      const original = getDefaultHighWaterMark(true);
       expect(() => setDefaultHighWaterMark(true, 32)).not.toThrow();
+      setDefaultHighWaterMark(true, original);
     });
   });
 
@@ -947,8 +1024,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
       // Allow data to flow
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      expect(serverReceived).toContain("hello");
-      expect(clientReceived).toContain("world");
+      expect(serverReceived).toEqual(["hello"]);
+      expect(clientReceived).toEqual(["world"]);
     });
   });
 
@@ -1539,10 +1616,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
         await new Promise(resolve => setTimeout(resolve, 20));
 
-        expect(received1).toContain("from2-a");
-        expect(received1).toContain("from2-b");
-        expect(received2).toContain("from1-a");
-        expect(received2).toContain("from1-b");
+        expect(received1).toEqual(["from2-a", "from2-b"]);
+        expect(received2).toEqual(["from1-a", "from1-b"]);
       });
 
       it("should handle end signal propagation", async () => {
@@ -1608,7 +1683,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         controller.abort();
 
         const error = await errorPromise;
-        expect(error.message).toContain("Abort");
+        expect(error.message).toBe("Aborted");
         expect(isDestroyed(readable)).toBe(true);
       });
 
@@ -1823,7 +1898,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           for await (const chunk of readable) {
             results.push(chunk);
           }
-          expect(typeof results[0]).toBe("function");
+          expect(results[0]).toBe(fn);
           expect((results[0] as (x: number) => number)(5)).toBe(10);
         });
 
@@ -2002,8 +2077,32 @@ export function runStreamTests(imports: StreamModuleImports): void {
           pullStream.write(new Uint8Array([1, 2, 3, 255]));
           pullStream.end();
           const result = await pullStream.pullUntil(new Uint8Array([255]));
-          // Node.js returns Buffer, browser returns Uint8Array - both are compatible
-          expect([...result]).toEqual([1, 2, 3]);
+          expect(new Uint8Array(result)).toEqual(new Uint8Array([1, 2, 3]));
+        });
+
+        it("should reject pending pull() when destroy() is called", async () => {
+          const pullStream = new PullStream();
+          pullStream.write(new Uint8Array([1, 2]));
+
+          // Start a pull for more data than available — will block
+          const pullPromise = pullStream.pull(100);
+
+          // Destroy while pull is pending
+          pullStream.destroy();
+
+          await expect(pullPromise).rejects.toThrow("Stream destroyed");
+        });
+
+        it("should reject pending pullUntil() when destroy() is called", async () => {
+          const pullStream = new PullStream();
+          pullStream.write(new Uint8Array([1, 2, 3]));
+
+          // Pattern not in buffer — will block waiting for more data
+          const pullPromise = pullStream.pullUntil(new Uint8Array([255]));
+
+          pullStream.destroy();
+
+          await expect(pullPromise).rejects.toThrow("Stream destroyed");
         });
       });
 
@@ -2064,6 +2163,65 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           expect(builder.toString()).toBe("0123");
         });
+
+        it("should handle rollback after consolidation correctly", () => {
+          // Use a small chunkSize so that consolidation would trigger during pushes
+          const builder = new TransactionalChunkedBuilder({ chunkSize: 2 });
+
+          builder.push("a");
+          builder.push("b");
+          // With chunkSize=2, consolidation fires (no snapshot active)
+
+          builder.snapshot();
+          builder.push("c");
+          builder.push("d");
+          // Consolidation is blocked because a snapshot is active
+
+          // Rollback should restore to state before "c" and "d"
+          builder.rollback();
+
+          // The result should only contain "a" and "b"
+          expect(builder.toString()).toBe("ab");
+        });
+
+        it("should handle snapshot-push-consolidate-rollback cycle", () => {
+          const builder = new TransactionalChunkedBuilder({ chunkSize: 3 });
+
+          // Add initial data
+          builder.push("x");
+          builder.push("y");
+          builder.push("z");
+          // Consolidation happens (3 pieces -> 1 chunk, no snapshot active)
+
+          builder.snapshot();
+
+          builder.push("1");
+          builder.push("2");
+          builder.push("3");
+          // Consolidation is blocked because a snapshot is active
+
+          builder.rollback();
+          expect(builder.toString()).toBe("xyz");
+        });
+
+        it("should consolidate deferred pieces after all snapshots are committed", () => {
+          const builder = new TransactionalChunkedBuilder({ chunkSize: 2 });
+
+          builder.snapshot();
+          builder.push("a");
+          builder.push("b");
+          builder.push("c");
+          // Consolidation blocked — all 3 pieces remain in _pieces
+
+          builder.commit();
+          // After commit, next push that hits chunkSize will consolidate
+
+          builder.push("d");
+          // Now 4 pieces, chunkSize=2, consolidation fires
+
+          const result = builder.toString();
+          expect(result).toBe("abcd");
+        });
       });
 
       describe("Collector Edge Cases", () => {
@@ -2077,6 +2235,14 @@ export function runStreamTests(imports: StreamModuleImports): void {
           // Both Node.js and browser Collector have synchronous write
           const result = collector.toUint8Array();
           expect(result).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+        });
+
+        it("should throw consistent error message for non-binary data in toUint8Array", () => {
+          const collector = createCollector<string>();
+          collector.write("hello");
+          collector.end();
+
+          expect(() => collector.toUint8Array()).toThrow("non-binary data");
         });
       });
 
@@ -2139,8 +2305,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
           expect(isStream({})).toBe(false);
           expect(isStream({ pipe: "not a function" })).toBe(false);
           // These might pass or fail depending on implementation
-          expect(typeof isReadable(fakeReadable)).toBe("boolean");
-          expect(typeof isWritable(fakeWritable)).toBe("boolean");
+          expect(isReadable(fakeReadable)).toBe(false);
+          expect(isWritable(fakeWritable)).toBe(false);
         });
 
         it("should handle destroyed state correctly", () => {
@@ -2215,7 +2381,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           await finished(readable);
 
           expect(results.length).toBe(5);
-          expect(countWhilePaused).toBeLessThanOrEqual(results.length);
+          expect(countWhilePaused).toBe(0);
         });
 
         it("should handle immediate end after creation", async () => {
@@ -2227,6 +2393,97 @@ export function runStreamTests(imports: StreamModuleImports): void {
           }
 
           expect(chunks).toEqual([]);
+        });
+      });
+
+      describe("Pause/Resume Events", () => {
+        it("should emit pause event synchronously when paused", () => {
+          const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+          let pauseCount = 0;
+
+          readable.on("pause", () => pauseCount++);
+          readable.on("data", () => {});
+
+          // Now flowing — pause it
+          readable.pause();
+
+          // pause event must be synchronous — available immediately
+          expect(pauseCount).toBe(1);
+        });
+
+        it("should emit resume event asynchronously when resumed after pause", async () => {
+          const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+          let resumeCount = 0;
+
+          readable.on("resume", () => resumeCount++);
+          readable.on("data", () => {});
+
+          readable.pause();
+          readable.resume();
+
+          // resume event must be asynchronous — NOT available synchronously
+          expect(resumeCount).toBe(0);
+
+          // should fire exactly once after async flush
+          await new Promise(resolve => setTimeout(resolve, 50));
+          expect(resumeCount).toBe(1);
+        });
+
+        it("should not emit pause when already paused", () => {
+          const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+          let pauseCount = 0;
+
+          readable.on("pause", () => pauseCount++);
+          readable.on("data", () => {});
+
+          readable.pause();
+          readable.pause(); // second pause — should not emit
+
+          // synchronous check — no waiting needed
+          expect(pauseCount).toBe(1);
+        });
+      });
+
+      describe("Pipe/Unpipe Events on Writable", () => {
+        it("should emit pipe event on writable when piped to", async () => {
+          const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+          const writable = createWritable({
+            objectMode: true,
+            write(_chunk: unknown, _encoding: string, callback: (error?: Error | null) => void) {
+              callback();
+            }
+          });
+
+          let pipeSource: unknown = null;
+          writable.on("pipe", (src: unknown) => {
+            pipeSource = src;
+          });
+
+          readable.pipe(writable);
+
+          expect(pipeSource).toBe(readable);
+
+          await finished(writable);
+        });
+
+        it("should emit unpipe event on writable when unpiped", () => {
+          const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+          const writable = createWritable({
+            objectMode: true,
+            write(_chunk: unknown, _encoding: string, callback: (error?: Error | null) => void) {
+              callback();
+            }
+          });
+
+          let unpipeSource: unknown = null;
+          writable.on("unpipe", (src: unknown) => {
+            unpipeSource = src;
+          });
+
+          readable.pipe(writable);
+          readable.unpipe(writable);
+
+          expect(unpipeSource).toBe(readable);
         });
       });
 
@@ -2256,8 +2513,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           await new Promise(resolve => setTimeout(resolve, 10));
 
-          expect(results).toContain(1);
+          expect(results).toEqual([1]);
           expect(errors.length).toBe(1);
+          expect(errors[0].message).toBe("Stop at 2");
         });
 
         it("should handle error in pipeline source", async () => {
@@ -2311,31 +2569,20 @@ export function runStreamTests(imports: StreamModuleImports): void {
         it("should handle writable cork/uncork", async () => {
           const collector = createCollector<number>();
 
-          if (typeof collector.cork === "function") {
-            collector.cork();
-            collector.write(1);
-            collector.write(2);
-            collector.write(3);
+          collector.cork();
+          collector.write(1);
+          collector.write(2);
+          collector.write(3);
 
-            // Data might be buffered
-            await new Promise(resolve => setTimeout(resolve, 5));
-            const countBeforUncork = collector.chunks.length;
+          // Data might be buffered
+          await new Promise(resolve => setTimeout(resolve, 5));
 
-            collector.uncork?.();
-            await new Promise(resolve => setTimeout(resolve, 10));
-
-            // After uncork, all data should be written
-            expect(collector.chunks.length).toBeGreaterThanOrEqual(countBeforUncork);
-          } else {
-            // cork not implemented, just write normally
-            collector.write(1);
-            collector.write(2);
-            collector.write(3);
-          }
+          collector.uncork();
+          await new Promise(resolve => setTimeout(resolve, 10));
 
           collector.end();
           await finished(collector);
-          expect(collector.chunks).toContain(1);
+          expect(collector.chunks).toEqual([1, 2, 3]);
         });
       });
 
@@ -2428,8 +2675,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           await new Promise(resolve => setTimeout(resolve, 20));
 
-          expect(serverReceived).toContain("hello from client");
-          expect(clientReceived).toContain("hello from server");
+          expect(serverReceived).toEqual(["hello from client"]);
+          expect(clientReceived).toEqual(["hello from server"]);
 
           client.end();
           server.end();
@@ -2689,7 +2936,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           expect(chunks.length).toBeLessThanOrEqual(5);
         });
 
-        it("should handle already aborted signal", () => {
+        it("should handle already aborted signal", async () => {
           const controller = new AbortController();
           controller.abort();
 
@@ -2702,8 +2949,11 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           addAbortSignal(controller.signal, readable);
 
-          // Error should be emitted synchronously or very quickly
-          expect(errorEmitted || isDestroyed(readable)).toBe(true);
+          // Stream must be destroyed synchronously
+          expect(isDestroyed(readable)).toBe(true);
+          // Error emission is deferred (process.nextTick / queueMicrotask) on both platforms
+          await new Promise(resolve => setTimeout(resolve, 10));
+          expect(errorEmitted).toBe(true);
         });
       });
 
@@ -2801,10 +3051,10 @@ export function runStreamTests(imports: StreamModuleImports): void {
             errorCaught = true;
           }
 
-          // Either error is thrown or stream handles it
-          expect(chunks.length).toBeGreaterThanOrEqual(0);
-          // Error should be propagated
-          expect(errorCaught || isErrored(readable) || isDestroyed(readable)).toBe(true);
+          // First chunk (1) must be yielded before the generator error
+          expect(chunks).toEqual([1]);
+          // Error should be propagated via for-await-of
+          expect(errorCaught).toBe(true);
         });
       });
 
@@ -2813,8 +3063,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
           const originalHwm = getDefaultHighWaterMark(false);
           const originalObjectHwm = getDefaultHighWaterMark(true);
 
-          expect(typeof originalHwm).toBe("number");
-          expect(typeof originalObjectHwm).toBe("number");
+          expect(originalHwm).toBe(65536);
+          expect(originalObjectHwm).toBe(16);
 
           // Set new defaults
           const newHwm = 32768;
@@ -2822,9 +3072,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
           setDefaultHighWaterMark(false, newHwm);
           setDefaultHighWaterMark(true, newObjectHwm);
 
-          // The values should change (or at least be numbers)
-          expect(typeof getDefaultHighWaterMark(false)).toBe("number");
-          expect(typeof getDefaultHighWaterMark(true)).toBe("number");
+          expect(getDefaultHighWaterMark(false)).toBe(32768);
+          expect(getDefaultHighWaterMark(true)).toBe(32);
 
           // Restore
           setDefaultHighWaterMark(false, originalHwm);
@@ -2861,8 +3110,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           await finished(collector);
 
           expect(flushCalled).toBe(true);
-          expect(collector.chunks).toContain("data");
-          expect(collector.chunks).toContain("flushed");
+          expect(collector.chunks).toEqual(["data", "flushed"]);
         });
 
         it("should handle transform with async flush", async () => {
@@ -2892,8 +3140,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           await finished(collector);
 
-          expect(collector.chunks).toContain("data");
-          expect(collector.chunks).toContain("async-flush");
+          expect(collector.chunks).toEqual(["data", "async-flush"]);
         });
       });
 
@@ -2936,11 +3183,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
           transform.end();
 
           await finished(transform);
-          expect(results).toContain(1);
-          expect(results).toContain(2);
-          expect(results).toContain(3);
-          // Should also contain the dynamically added items
-          expect(results.length).toBeGreaterThan(3);
+          // Original items 1, 2, 3 must appear; dynamically added 101, 102, 103 must also appear
+          expect(results).toEqual(expect.arrayContaining([1, 2, 3, 101, 102, 103]));
+          expect(results.length).toBe(6);
         });
       });
 
@@ -3078,7 +3323,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           await new Promise(resolve => setTimeout(resolve, 20));
 
-          expect(errors.length).toBeGreaterThan(0);
+          expect(errors.length).toBe(1);
           expect(errors[0].message).toBe("Sync transform error");
         });
 
@@ -3308,9 +3553,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
           // Finish should come before close
           const finishIndex = events.indexOf("finish");
           const closeIndex = events.indexOf("close");
-          if (closeIndex !== -1) {
-            expect(finishIndex).toBeLessThan(closeIndex);
-          }
+          expect(finishIndex).toBeGreaterThanOrEqual(0);
+          expect(closeIndex).toBeGreaterThanOrEqual(0);
+          expect(finishIndex).toBeLessThan(closeIndex);
         });
       });
 
@@ -3349,7 +3594,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
 
       describe("Pipeline with Options", () => {
-        it("should handle pipeline with end=false", async () => {
+        it("should handle pipeline with custom Writable", async () => {
           const source = createReadableFromArray([1, 2, 3], { objectMode: true });
           const results: number[] = [];
 
@@ -3361,11 +3606,10 @@ export function runStreamTests(imports: StreamModuleImports): void {
             }
           });
 
-          // Note: end=false is handled differently across implementations
-          // Just verify the pipeline completes
           await pipeline(source, dest);
 
           expect(results).toEqual([1, 2, 3]);
+          expect(dest.writableFinished).toBe(true);
         });
       });
 
@@ -3398,6 +3642,37 @@ export function runStreamTests(imports: StreamModuleImports): void {
           await finished(collector);
 
           expect(collector.toUint8Array()).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]));
+        });
+
+        it("should default to objectMode: true when no options provided", async () => {
+          const collector = createCollector();
+
+          collector.write("string value");
+          collector.write(42);
+          collector.end();
+
+          await finished(collector);
+
+          // In objectMode, any value is accepted without encoding
+          expect(collector.chunks.length).toBe(2);
+          expect(collector.chunks[0]).toBe("string value");
+          expect(collector.chunks[1]).toBe(42);
+        });
+
+        it("should respect explicit objectMode: false", async () => {
+          const collector = createCollector<Uint8Array>({ objectMode: false });
+
+          collector.write(new Uint8Array([1, 2, 3]));
+          collector.end();
+
+          await finished(collector);
+
+          expect(collector.chunks.length).toBe(1);
+          const result = collector.toUint8Array();
+          expect(result.length).toBe(3);
+          expect(result[0]).toBe(1);
+          expect(result[1]).toBe(2);
+          expect(result[2]).toBe(3);
         });
       });
 
@@ -3434,6 +3709,999 @@ export function runStreamTests(imports: StreamModuleImports): void {
           expect(result[0]).toBe(0);
           expect(result[size - 1]).toBe((size - 1) % 256);
         });
+      });
+    });
+
+    // ========================================================================
+    // Regression Tests (Round 2 Bug Fixes)
+    // ========================================================================
+    describe("Regression Tests", () => {
+      describe("Cork/Uncork _writableLength accuracy (Bug #3)", () => {
+        it("should not double-count corked chunks in writableLength", async () => {
+          const chunks: number[] = [];
+          const writable = new Writable({
+            objectMode: true,
+            write(chunk: number, _encoding: string, callback: (error?: Error | null) => void) {
+              chunks.push(chunk);
+              callback();
+            }
+          });
+
+          writable.cork();
+          writable.write(1);
+          writable.write(2);
+          writable.write(3);
+
+          // While corked, writableLength should reflect buffered items
+          const corkedLength = writable.writableLength;
+          expect(corkedLength).toBeGreaterThan(0);
+
+          writable.uncork();
+          await new Promise(resolve => setTimeout(resolve, 10));
+
+          // After uncork, writableLength should drop (chunks are drained)
+          expect(writable.writableLength).toBeLessThanOrEqual(corkedLength);
+
+          // All chunks should have been written
+          writable.end();
+          await finished(writable);
+          expect(chunks).toEqual([1, 2, 3]);
+        });
+
+        it("should handle nested cork/uncork without length corruption", async () => {
+          const chunks: number[] = [];
+          const writable = new Writable({
+            objectMode: true,
+            write(chunk: number, _encoding: string, callback: (error?: Error | null) => void) {
+              chunks.push(chunk);
+              callback();
+            }
+          });
+
+          writable.cork();
+          writable.cork();
+          writable.write(1);
+          writable.write(2);
+
+          // Nested cork — still buffered
+          writable.uncork();
+          await new Promise(resolve => setTimeout(resolve, 5));
+
+          // Should still be corked (nested)
+          writable.write(3);
+
+          writable.uncork();
+          await new Promise(resolve => setTimeout(resolve, 10));
+
+          writable.end();
+          await finished(writable);
+          expect(chunks).toEqual([1, 2, 3]);
+        });
+      });
+
+      describe("Compose property proxies (Bug #12)", () => {
+        it("should proxy writableEnded on composed stream", async () => {
+          const t1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+          const t2 = createTransform<number, number>(n => n * 2, { objectMode: true });
+
+          const composed = compose(t1, t2);
+
+          expect(composed.writableEnded).toBe(false);
+
+          composed.write(5);
+          composed.end();
+
+          // After end(), writableEnded should become true
+          await new Promise(resolve => setTimeout(resolve, 20));
+          expect(composed.writableEnded).toBe(true);
+        });
+
+        it("should proxy readableEnded on composed stream", async () => {
+          const t1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+          const t2 = createTransform<number, number>(n => n * 2, { objectMode: true });
+
+          const composed = compose(t1, t2);
+          const collector = createCollector<number>();
+
+          composed.pipe(collector);
+          composed.write(5);
+          composed.end();
+
+          await finished(collector);
+          expect(composed.readableEnded).toBe(true);
+        });
+      });
+
+      describe("Compose flush correctness (Bug #13)", () => {
+        it("should flush all data through multi-stage compose", async () => {
+          const add1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+          const mul2 = createTransform<number, number>(n => n * 2, { objectMode: true });
+          const sub3 = createTransform<number, number>(n => n - 3, { objectMode: true });
+
+          const composed = compose(add1, mul2, sub3);
+          const collector = createCollector<number>();
+          composed.pipe(collector);
+
+          composed.write(5);
+          composed.write(10);
+          composed.write(20);
+          composed.end();
+
+          await finished(collector);
+
+          // 5: (5+1)*2-3 = 9
+          // 10: (10+1)*2-3 = 19
+          // 20: (20+1)*2-3 = 39
+          expect(collector.chunks).toEqual([9, 19, 39]);
+        });
+
+        it("should emit end after flush completes", async () => {
+          const transform = createTransform<string, string>(s => s.toUpperCase(), {
+            objectMode: true
+          });
+
+          const composed = compose(transform);
+          const results: string[] = [];
+          let endEmitted = false;
+
+          composed.on("data", (chunk: string) => results.push(chunk));
+          composed.on("end", () => {
+            endEmitted = true;
+          });
+
+          composed.write("hello");
+          composed.write("world");
+          composed.end();
+
+          await finished(composed);
+
+          expect(results).toEqual(["HELLO", "WORLD"]);
+          expect(endEmitted).toBe(true);
+        });
+      });
+    });
+  });
+
+  // ==========================================================================
+  // Core Class Construction & Properties Tests
+  // ==========================================================================
+  describe("Core Class Construction", () => {
+    describe("Readable from options", () => {
+      it("should create readable from options with read", async () => {
+        const data = [1, 2, 3];
+        let index = 0;
+
+        const readable = new Readable({
+          objectMode: true,
+          read() {
+            if (index < data.length) {
+              this.push(data[index++]);
+            } else {
+              this.push(null);
+            }
+          }
+        });
+
+        const results: number[] = [];
+        for await (const chunk of readable) {
+          results.push(chunk);
+        }
+
+        expect(results).toEqual([1, 2, 3]);
+      });
+
+      it("should support unshift", () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        readable.push(1);
+        readable.push(2);
+        readable.unshift(0);
+
+        expect(readable.read()).toBe(0);
+        expect(readable.read()).toBe(1);
+        expect(readable.read()).toBe(2);
+      });
+
+      it("should support unpipe", () => {
+        const readable = createReadableFromArray<number>([1, 2, 3], { objectMode: true });
+        const writable = createNullWritable({ objectMode: true });
+
+        readable.pipe(writable);
+        readable.unpipe(writable);
+
+        // After unpipe, readableFlowing should be null or false
+        expect(readable.readableFlowing === null || readable.readableFlowing === false).toBe(true);
+      });
+
+      it("should emit readable event", async () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        const readablePromise = new Promise<void>(resolve => {
+          readable.once("readable", resolve);
+        });
+
+        readable.push("data");
+
+        await readablePromise;
+        expect(readable.read()).toBe("data");
+      });
+    });
+
+    describe("Writable from options", () => {
+      it("should create writable from options", async () => {
+        const chunks: any[] = [];
+
+        const writable = new Writable({
+          objectMode: true,
+          write(chunk, _encoding, callback) {
+            chunks.push(chunk);
+            callback();
+          }
+        });
+
+        writable.write(1);
+        writable.write(2);
+        writable.end();
+
+        await new Promise<void>(resolve => writable.on("finish", resolve));
+        expect(chunks).toEqual([1, 2]);
+      });
+
+      it("should track writable state properties", () => {
+        const writable = createNullWritable();
+
+        expect(writable.writable).toBe(true);
+        expect(typeof writable.writableHighWaterMark).toBe("number");
+      });
+
+      it("should support cork and uncork", () => {
+        const chunks: string[] = [];
+        const writable = new Writable({
+          write(chunk, _encoding, callback) {
+            chunks.push(chunk.toString());
+            callback();
+          }
+        });
+
+        writable.cork();
+        writable.write("a");
+        writable.write("b");
+
+        // While corked, data should be buffered
+        expect(chunks).toEqual([]);
+
+        writable.uncork();
+
+        // After uncork, data should flow
+        expect(chunks).toEqual(["a", "b"]);
+      });
+    });
+
+    describe("Transform from options", () => {
+      it("should create transform from options", async () => {
+        const transform = new Transform({
+          objectMode: true,
+          transform(chunk, _encoding, callback) {
+            this.push((chunk as number) * 2);
+            callback();
+          }
+        });
+
+        const results: number[] = [];
+        transform.on("data", (n: number) => results.push(n));
+
+        transform.write(1);
+        transform.write(2);
+        transform.end();
+
+        await new Promise<void>(resolve => transform.on("finish", resolve));
+        expect(results).toEqual([2, 4]);
+      });
+    });
+
+    describe("Duplex from options", () => {
+      it("should create duplex from options", async () => {
+        const duplex = new Duplex({
+          objectMode: true,
+          read() {},
+          write(chunk: number, _encoding: string, callback: (error?: Error | null) => void) {
+            this.push(chunk * 2);
+            callback();
+          },
+          final(callback: (error?: Error | null) => void) {
+            this.push(null);
+            callback();
+          }
+        });
+
+        const results: number[] = [];
+        duplex.on("data", (n: number) => results.push(n));
+
+        duplex.write(1);
+        duplex.write(2);
+        duplex.end();
+
+        await new Promise<void>(resolve => duplex.on("finish", resolve));
+        expect(results).toEqual([2, 4]);
+      });
+    });
+
+    describe("PassThrough", () => {
+      it("should pass data through unchanged", async () => {
+        const passThrough = createPassThrough<string>({ objectMode: true });
+        const results: string[] = [];
+
+        passThrough.on("data", (chunk: string) => results.push(chunk));
+
+        passThrough.write("hello");
+        passThrough.write("world");
+        passThrough.end();
+
+        await new Promise<void>(resolve => passThrough.on("finish", resolve));
+        expect(results).toEqual(["hello", "world"]);
+      });
+    });
+
+    describe("createWritable Helper", () => {
+      it("should create writable stream with write function", async () => {
+        const chunks: number[] = [];
+        const writable = createWritable<number>({
+          objectMode: true,
+          write(chunk, _encoding, callback) {
+            chunks.push(chunk);
+            callback();
+          }
+        });
+
+        writable.write(1);
+        writable.write(2);
+        writable.end();
+
+        await new Promise<void>(resolve => writable.on("finish", resolve));
+        expect(chunks).toEqual([1, 2]);
+      });
+    });
+
+    describe("Stream Properties", () => {
+      it("readable should have correct readable properties", () => {
+        const readable = createReadableFromArray([1, 2], { objectMode: true });
+
+        expect(readable.readable).toBe(true);
+        expect(readable.readableObjectMode).toBe(true);
+        expect(typeof readable.readableHighWaterMark).toBe("number");
+      });
+
+      it("writable should have correct writable properties", () => {
+        const writable = createNullWritable();
+
+        expect(writable.writable).toBe(true);
+        expect(typeof writable.writableHighWaterMark).toBe("number");
+      });
+
+      it("transform should have both readable and writable properties", () => {
+        const transform = createTransform<number, number>(n => n * 2, { objectMode: true });
+
+        expect(transform.readable).toBe(true);
+        expect(transform.writable).toBe(true);
+      });
+    });
+  });
+
+  // ==========================================================================
+  // Async Iterator Support
+  // ==========================================================================
+  describe("Async Iterator Support", () => {
+    it("readable should support for await...of", async () => {
+      const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+      const results: number[] = [];
+
+      for await (const chunk of readable) {
+        results.push(chunk as number);
+      }
+
+      expect(results).toEqual([1, 2, 3]);
+    });
+
+    it("transform should support for await...of", async () => {
+      const transform = createTransform<number, number>(n => n * 2, { objectMode: true });
+
+      transform.write(1);
+      transform.write(2);
+      transform.end();
+
+      const results: number[] = [];
+      for await (const chunk of transform) {
+        results.push(chunk as number);
+      }
+
+      expect(results).toEqual([2, 4]);
+    });
+  });
+
+  // ==========================================================================
+  // Error Handling (with createWritable)
+  // ==========================================================================
+  describe("Error Handling", () => {
+    it("should emit error event on write failure", async () => {
+      const writable = createWritable<string>({
+        objectMode: true,
+        write(_chunk, _encoding, callback) {
+          callback(new Error("Write failed"));
+        }
+      });
+
+      const errorPromise = new Promise<Error>(resolve => {
+        writable.on("error", resolve);
+      });
+
+      writable.write("test");
+
+      const error = await errorPromise;
+      expect(error.message).toBe("Write failed");
+    });
+
+    it("should emit error event on transform failure", async () => {
+      const transform = createTransform<string, string>(
+        () => {
+          throw new Error("Transform failed");
+        },
+        { objectMode: true }
+      );
+
+      const errorPromise = new Promise<Error>(resolve => {
+        transform.on("error", resolve);
+      });
+
+      transform.write("test");
+
+      const error = await errorPromise;
+      expect(error.message).toBe("Transform failed");
+    });
+
+    it("should propagate errors through pipeline", async () => {
+      const readable = createReadableFromArray(["test"], { objectMode: true });
+      const transform = createTransform<string, string>(
+        () => {
+          throw new Error("Pipeline error");
+        },
+        { objectMode: true }
+      );
+      const collector = createCollector<string>();
+
+      await expect(pipeline(readable, transform, collector)).rejects.toThrow("Pipeline error");
+    });
+  });
+
+  // ==========================================================================
+  // Backpressure
+  // ==========================================================================
+  describe("Backpressure", () => {
+    it("should handle backpressure correctly", async () => {
+      const readable = createReadableFromArray([1, 2, 3, 4, 5], { objectMode: true });
+      const results: number[] = [];
+
+      // Slow consumer
+      const writable = createWritable<number>({
+        objectMode: true,
+        highWaterMark: 1,
+        write(chunk, _encoding, callback) {
+          results.push(chunk);
+          setTimeout(callback, 1);
+        }
+      });
+
+      await pipeline(readable, writable);
+      expect(results).toEqual([1, 2, 3, 4, 5]);
+    });
+  });
+
+  // ==========================================================================
+  // DuplexPair Write Callbacks
+  // ==========================================================================
+  describe("DuplexPair Write Callbacks", () => {
+    it("should invoke write callback", async () => {
+      const [side1, side2] = duplexPair({ objectMode: true });
+
+      const received: unknown[] = [];
+      side2.on("data", (chunk: unknown) => received.push(chunk));
+
+      let callbackInvoked = false;
+      side1.write("test", () => {
+        callbackInvoked = true;
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(callbackInvoked).toBe(true);
+      expect(received).toContain("test");
+
+      side1.end();
+      side2.end();
+    });
+
+    it("should invoke write callback with encoding argument", async () => {
+      const [side1, side2] = duplexPair({ objectMode: true });
+
+      const received: unknown[] = [];
+      side2.on("data", (chunk: unknown) => received.push(chunk));
+
+      let callbackInvoked = false;
+      side1.write("data", "utf-8", () => {
+        callbackInvoked = true;
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(callbackInvoked).toBe(true);
+      expect(received).toContain("data");
+
+      side1.end();
+      side2.end();
+    });
+
+    it("should return backpressure signal from push()", async () => {
+      // Create pair with very low highWaterMark to trigger backpressure
+      const [side1, side2] = duplexPair({ objectMode: true, highWaterMark: 1 });
+
+      // Don't consume side2 readable — buffer will fill up
+      // Write enough to exceed the highWaterMark
+      const results: boolean[] = [];
+      for (let i = 0; i < 5; i++) {
+        results.push(side1.write(i));
+      }
+
+      // At least one write should have returned false (backpressure)
+      expect(results).toContain(false);
+
+      // Now consume to clear backpressure
+      side2.resume();
+      side1.end();
+      side2.end();
+    });
+  });
+
+  // ==========================================================================
+  // Readable.from() Backpressure
+  // ==========================================================================
+  describe("Readable.from() Backpressure", () => {
+    it("should use pull-based iteration", async () => {
+      let iteratorAdvances = 0;
+
+      async function* gen() {
+        for (let i = 0; i < 5; i++) {
+          iteratorAdvances++;
+          yield i;
+        }
+      }
+
+      const readable = (Readable as any).from(gen(), { objectMode: true, highWaterMark: 1 });
+      const results: number[] = [];
+
+      for await (const chunk of readable) {
+        results.push(chunk as number);
+      }
+
+      expect(results).toEqual([0, 1, 2, 3, 4]);
+      expect(iteratorAdvances).toBe(5);
+    });
+
+    it("should stop pulling from iterator when destroyed", async () => {
+      let iteratorAdvances = 0;
+
+      async function* gen() {
+        for (let i = 0; i < 100; i++) {
+          iteratorAdvances++;
+          yield i;
+          // Slow down to ensure destroy has time to take effect
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      }
+
+      const readable = (Readable as any).from(gen(), { objectMode: true });
+
+      // Read a couple of chunks then destroy
+      const iterator = readable[Symbol.asyncIterator]();
+      await iterator.next();
+      await iterator.next();
+      readable.destroy();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Should not have iterated through all 100 items
+      expect(iteratorAdvances).toBeLessThan(100);
+    });
+
+    it("should treat string as a single chunk (not char-by-char)", async () => {
+      const readable = (Readable as any).from("hello");
+      const chunks: string[] = [];
+
+      for await (const chunk of readable) {
+        chunks.push(chunk as string);
+      }
+
+      // Node.js yields the entire string as one chunk
+      expect(chunks).toEqual(["hello"]);
+    });
+
+    it("should treat empty string as a single empty-string chunk", async () => {
+      const readable = (Readable as any).from("");
+      const chunks: string[] = [];
+
+      for await (const chunk of readable) {
+        chunks.push(chunk as string);
+      }
+
+      expect(chunks).toEqual([""]);
+    });
+  });
+
+  // ==========================================================================
+  // Transform destroy cleanup
+  // ==========================================================================
+  describe("Transform destroy cleanup", () => {
+    it("should not emit events after destroy during async transform", async () => {
+      const transform = new Transform({
+        objectMode: true,
+        async transform(
+          chunk: number,
+          _encoding: string,
+          callback: (err?: Error | null, data?: number) => void
+        ) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          callback(null, chunk * 2);
+        }
+      });
+
+      const events: string[] = [];
+      transform.on("data", () => events.push("data"));
+      transform.on("end", () => events.push("end"));
+      transform.on("error", () => events.push("error"));
+
+      transform.write(1);
+      // Destroy while transform is still processing
+      await new Promise(resolve => setTimeout(resolve, 10));
+      transform.destroy();
+
+      // Wait long enough for any leaked timer to fire
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(transform.destroyed).toBe(true);
+      // Should not have emitted end after destroy
+      expect(events).not.toContain("end");
+    });
+  });
+
+  // ==========================================================================
+  // API Consistency Tests (Phase 1 behavior fixes verification)
+  // ==========================================================================
+  describe("API Consistency", () => {
+    describe("readableLength", () => {
+      it("should return chunk count in objectMode", () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        readable.push("a");
+        readable.push("b");
+        readable.push("c");
+
+        expect(readable.readableLength).toBe(3);
+      });
+
+      it("should return byte size in binary mode", () => {
+        const readable = new Readable({ read() {} });
+
+        readable.push(new Uint8Array([1, 2, 3]));
+        readable.push(new Uint8Array([4, 5]));
+
+        expect(readable.readableLength).toBe(5);
+      });
+    });
+
+    describe("readableAborted", () => {
+      it("should be false initially", () => {
+        const readable = new Readable({ read() {} });
+        expect(readable.readableAborted).toBe(false);
+      });
+
+      it("should be true after destroy before end", async () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        readable.push("data");
+        readable.destroy();
+
+        // Wait for async destroy
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(readable.readableAborted).toBe(true);
+      });
+    });
+
+    describe("writableAborted", () => {
+      it("should be false initially", () => {
+        const writable = new Writable({
+          write(_chunk, _encoding, callback) {
+            callback();
+          }
+        });
+        expect(writable.writableAborted).toBe(false);
+      });
+
+      it("should be true after destroy before finish", async () => {
+        const writable = new Writable({
+          write(_chunk, _encoding, callback) {
+            callback();
+          }
+        });
+
+        writable.write("data");
+        writable.destroy();
+
+        // Wait for async destroy
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(writable.writableAborted).toBe(true);
+      });
+
+      it("should be false after normal end+finish", async () => {
+        const writable = new Writable({
+          write(_chunk, _encoding, callback) {
+            callback();
+          }
+        });
+
+        writable.end();
+
+        await new Promise(resolve => writable.on("finish", resolve));
+
+        expect(writable.writableAborted).toBe(false);
+        writable.destroy();
+        // Even after destroy post-finish, writableAborted should remain false
+        expect(writable.writableAborted).toBe(false);
+      });
+    });
+
+    describe("readableFlowing", () => {
+      it("should be null initially", () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        expect(readable.readableFlowing).toBeNull();
+      });
+
+      it("should be true when flowing (data listener attached)", () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        readable.on("data", () => {});
+        expect(readable.readableFlowing).toBe(true);
+      });
+
+      it("should be false after pause (not null)", () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {}
+        });
+
+        readable.on("data", () => {});
+        readable.pause();
+
+        expect(readable.readableFlowing).toBe(false);
+      });
+    });
+
+    describe("unshift after end", () => {
+      it("should allow unshift after end without throwing", async () => {
+        const readable = new Readable({
+          objectMode: true,
+          read() {
+            this.push(null);
+          }
+        });
+
+        // Consume to trigger end
+        for await (const _chunk of readable) {
+          // drain
+        }
+
+        // Both Node and browser allow unshift after end (no throw)
+        expect(() => readable.unshift("data")).not.toThrow();
+      });
+    });
+
+    describe("Duplex destroyed semantics", () => {
+      it("should be true immediately after destroy() is called", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.destroyed).toBe(false);
+        duplex.destroy();
+        expect(duplex.destroyed).toBe(true);
+      });
+
+      it("should handle multiple destroy calls without error", () => {
+        const duplex = createDuplex({ objectMode: true });
+        duplex.destroy();
+        expect(() => duplex.destroy()).not.toThrow();
+        expect(duplex.destroyed).toBe(true);
+      });
+    });
+
+    describe("Duplex delegated getters and methods", () => {
+      it("should expose readableFlowing", () => {
+        const duplex = createDuplex({
+          objectMode: true,
+          read() {
+            // no-op
+          }
+        });
+        expect(duplex.readableFlowing).toBeNull();
+        duplex.on("data", () => {});
+        expect(duplex.readableFlowing).toBe(true);
+      });
+
+      it("should expose readableAborted", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.readableAborted).toBe(false);
+      });
+
+      it("should expose readableDidRead", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.readableDidRead).toBe(false);
+      });
+
+      it("should expose readableEncoding", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.readableEncoding).toBeNull();
+      });
+
+      it("should expose errored (null when no error)", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.errored).toBeNull();
+      });
+
+      it("should expose closed", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.closed).toBe(false);
+      });
+
+      it("should expose readableBuffer", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.readableBuffer).toBeDefined();
+      });
+
+      it("should expose writableBuffer", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(duplex.writableBuffer).toBeDefined();
+      });
+
+      it("should support iterator() method", async () => {
+        const duplex = createDuplex({
+          objectMode: true,
+          read() {
+            this.push("a");
+            this.push("b");
+            this.push(null);
+          }
+        });
+
+        const iter = duplex.iterator({ destroyOnReturn: false });
+        const chunks: unknown[] = [];
+        for (let r = await iter.next(); !r.done; r = await iter.next()) {
+          chunks.push(r.value);
+        }
+        // Node may coalesce chunks; just verify all data arrives
+        expect(chunks.join("")).toBe("ab");
+      });
+    });
+
+    describe("Transform delegated methods and getters", () => {
+      it("should have cork and uncork methods", () => {
+        const t = new Transform({ objectMode: true });
+        expect(typeof t.cork).toBe("function");
+        expect(typeof t.uncork).toBe("function");
+        t.cork();
+        expect(t.writableCorked).toBe(1);
+        t.uncork();
+        expect(t.writableCorked).toBe(0);
+      });
+
+      it("should have setEncoding method", () => {
+        const t = new Transform({ objectMode: true });
+        expect(typeof t.setEncoding).toBe("function");
+        const result = t.setEncoding("utf-8");
+        // Should return this for chaining
+        expect(result).toBe(t);
+      });
+
+      it("should have setDefaultEncoding method", () => {
+        const t = new Transform({ objectMode: true });
+        expect(typeof t.setDefaultEncoding).toBe("function");
+        const result = t.setDefaultEncoding("utf-8");
+        expect(result).toBe(t);
+      });
+
+      it("should have unshift method", () => {
+        const t = new Transform({ objectMode: true });
+        expect(typeof t.unshift).toBe("function");
+      });
+
+      it("should have wrap method", () => {
+        const t = new Transform({ objectMode: true });
+        expect(typeof t.wrap).toBe("function");
+      });
+
+      it("should have iterator method", () => {
+        const t = new Transform({ objectMode: true });
+        expect(typeof t.iterator).toBe("function");
+      });
+
+      it("should expose writableCorked", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.writableCorked).toBe(0);
+      });
+
+      it("should expose writableNeedDrain", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.writableNeedDrain).toBe(false);
+      });
+
+      it("should expose writableObjectMode", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.writableObjectMode).toBe(true);
+      });
+
+      it("should expose readableAborted", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.readableAborted).toBe(false);
+      });
+
+      it("should expose readableDidRead", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.readableDidRead).toBe(false);
+      });
+
+      it("should expose readableEncoding", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.readableEncoding).toBeNull();
+      });
+
+      it("should expose errored (null when no error)", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.errored).toBeNull();
+      });
+
+      it("should expose closed", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.closed).toBe(false);
+      });
+
+      it("should expose readableBuffer", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.readableBuffer).toBeDefined();
+      });
+
+      it("should expose writableBuffer", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.writableBuffer).toBeDefined();
+      });
+
+      it("destroy should return this", () => {
+        const t = new Transform({ objectMode: true });
+        const result = t.destroy();
+        expect(result).toBe(t);
       });
     });
   });

@@ -1,0 +1,172 @@
+/**
+ * Browser Stream - PipeManager
+ *
+ * Encapsulates pipe/unpipe logic for Readable streams.
+ * Owns the destination list and the per-destination listener bookkeeping,
+ * so Readable doesn't need to know anything about piping internals.
+ */
+
+import type { WritableLike } from "@stream/types";
+import { StreamTypeError } from "@stream/errors";
+import { removeEmitterListener } from "./helpers";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+/** Minimal subset of Readable that PipeManager needs to drive. */
+export interface PipeSource {
+  on(event: string | symbol, listener: (...args: any[]) => void): any;
+  once(event: string | symbol, listener: (...args: any[]) => void): any;
+  off(event: string | symbol, listener: (...args: any[]) => void): any;
+  pause(): any;
+  resume(): any;
+}
+
+interface PipeListeners<T> {
+  data: (chunk: T) => void;
+  end: () => void;
+  error: (err: Error) => void;
+  drain?: () => void;
+  eventTarget: any;
+}
+
+// =============================================================================
+// PipeManager
+// =============================================================================
+
+export class PipeManager<T> {
+  private _destinations: WritableLike[] = [];
+  private _listeners: Map<WritableLike, PipeListeners<T>> = new Map();
+
+  constructor(private readonly _source: PipeSource) {}
+
+  /** Pipe source data to `destination`. Returns `destination` for chaining. */
+  pipe<W extends WritableLike>(destination: W): W {
+    // IMPORTANT:
+    // Do not rely on `instanceof` here.
+    // In bundled/minified builds, multiple copies of this module can exist,
+    // causing `instanceof Transform/Writable/Duplex` to fail even when the object
+    // is a valid destination.
+    const dest = destination;
+    const eventTarget: any = dest;
+
+    const hasWrite = typeof dest?.write === "function";
+    const hasEnd = typeof dest?.end === "function";
+    const hasOn = typeof eventTarget?.on === "function";
+    const hasOnce = typeof eventTarget?.once === "function";
+    const hasOff = typeof eventTarget?.off === "function";
+
+    if (!hasWrite || !hasEnd || (!hasOnce && !hasOn) || (!hasOff && !eventTarget?.removeListener)) {
+      throw new StreamTypeError("Writable", typeof dest);
+    }
+
+    this._destinations.push(dest);
+
+    // Create listeners that we can later remove
+    let drainListener: (() => void) | undefined;
+
+    const removeDrainListener = (): void => {
+      if (!drainListener) {
+        return;
+      }
+      removeEmitterListener(eventTarget, "drain", drainListener);
+      drainListener = undefined;
+    };
+
+    const dataListener = (chunk: T): void => {
+      const canWrite = dest.write(chunk);
+      if (!canWrite) {
+        this._source.pause();
+
+        if (!drainListener) {
+          drainListener = () => {
+            removeDrainListener();
+            this._source.resume();
+          };
+          eventTarget.on("drain", drainListener);
+          const entry = this._listeners.get(dest);
+          if (entry) {
+            entry.drain = drainListener;
+          }
+        }
+      }
+    };
+
+    const endListener = (): void => {
+      dest.end();
+    };
+
+    const errorListener = (err: Error): void => {
+      if (typeof dest.destroy === "function") {
+        dest.destroy(err);
+      } else {
+        eventTarget.emit?.("error", err);
+      }
+    };
+
+    this._listeners.set(dest, {
+      data: dataListener,
+      end: endListener,
+      error: errorListener,
+      eventTarget
+    });
+
+    this._source.on("data", dataListener);
+    this._source.once("end", endListener);
+    this._source.once("error", errorListener);
+
+    // Emit 'pipe' event on destination (Node.js compatibility)
+    eventTarget.emit?.("pipe", this._source);
+
+    this._source.resume();
+    return destination;
+  }
+
+  /** Unpipe from a specific destination, or all destinations if none given. */
+  unpipe(destination?: WritableLike): void {
+    if (destination) {
+      const idx = this._destinations.indexOf(destination);
+      if (idx !== -1) {
+        this._destinations.splice(idx, 1);
+        this._removeListeners(destination);
+
+        // Pause source when no destinations remain (match Node.js behavior)
+        if (this._destinations.length === 0) {
+          this._source.pause();
+        }
+      }
+    } else {
+      const hadDestinations = this._destinations.length > 0;
+      for (const target of this._destinations) {
+        this._removeListeners(target);
+      }
+      this._destinations = [];
+
+      // Only pause if we actually had destinations to remove
+      if (hadDestinations) {
+        this._source.pause();
+      }
+    }
+  }
+
+  private _removeListeners(destination: WritableLike): void {
+    const listeners = this._listeners.get(destination);
+    if (!listeners) {
+      return;
+    }
+
+    this._source.off("data", listeners.data);
+    this._source.off("end", listeners.end);
+    this._source.off("error", listeners.error);
+
+    if (listeners.drain) {
+      removeEmitterListener(listeners.eventTarget, "drain", listeners.drain);
+    }
+
+    // Emit 'unpipe' event on destination (Node.js compatibility)
+    listeners.eventTarget.emit?.("unpipe", this._source);
+
+    this._listeners.delete(destination);
+  }
+}

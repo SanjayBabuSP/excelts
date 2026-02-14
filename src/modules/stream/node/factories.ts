@@ -66,10 +66,13 @@ export function createReadableFromAsyncIterable<T>(
   iterable: AsyncIterable<T>,
   options?: ReadableStreamOptions
 ): IReadable<T> {
-  return Readable.from(iterable, {
-    highWaterMark: options?.highWaterMark,
+  const opts: Record<string, unknown> = {
     objectMode: options?.objectMode ?? true
-  });
+  };
+  if (options?.highWaterMark !== undefined) {
+    opts.highWaterMark = options.highWaterMark;
+  }
+  return Readable.from(iterable, opts);
 }
 
 /**

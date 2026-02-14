@@ -5,6 +5,7 @@
 import type { DuplexStreamOptions } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
+import { parseEndArgs } from "@stream/common/end-args";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";
@@ -25,8 +26,6 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   /** @internal - for pipe() support */
   readonly _writable: Writable<TWrite>;
   readonly allowHalfOpen: boolean;
-  readonly readableObjectMode: boolean;
-  readonly writableObjectMode: boolean;
 
   /**
    * Create a Duplex stream from various sources
@@ -177,15 +176,16 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     duplex: Duplex<R, W>
   ): { readable: ReadableStream<R>; writable: WritableStream<W> } {
     return {
-      readable: duplex._readable.webStream,
-      writable: duplex._writable.webStream
+      readable: Readable.toWeb(duplex._readable),
+      writable: Writable.toWeb(duplex._writable)
     };
   }
 
   // Track if we've already set up data forwarding
   private _dataForwardingSetup: boolean = false;
+  private _destroyed: boolean = false;
 
-  _sideForwardingCleanup: (() => void) | null = null;
+  private _sideForwardingCleanup: (() => void) | null = null;
 
   constructor(
     options?: DuplexStreamOptions & {
@@ -206,18 +206,18 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     this.allowHalfOpen = options?.allowHalfOpen ?? true;
     // Support shorthand objectMode option
     const objectMode = options?.objectMode ?? false;
-    this.readableObjectMode = options?.readableObjectMode ?? objectMode;
-    this.writableObjectMode = options?.writableObjectMode ?? objectMode;
+    const readableObjMode = options?.readableObjectMode ?? objectMode;
+    const writableObjMode = options?.writableObjectMode ?? objectMode;
 
     this._readable = new Readable<TRead>({
-      highWaterMark: options?.readableHighWaterMark,
-      objectMode: this.readableObjectMode,
+      highWaterMark: options?.readableHighWaterMark ?? options?.highWaterMark,
+      objectMode: readableObjMode,
       read: options?.read?.bind(this)
     });
 
     this._writable = new Writable<TWrite>({
-      highWaterMark: options?.writableHighWaterMark,
-      objectMode: this.writableObjectMode,
+      highWaterMark: options?.writableHighWaterMark ?? options?.highWaterMark,
+      objectMode: writableObjMode,
       write: options?.write?.bind(this),
       final: options?.final?.bind(this)
     });
@@ -258,12 +258,17 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
    * Override on() to set up data forwarding lazily
    */
   override on(event: string | symbol, listener: (...args: any[]) => void): this {
+    // Register the listener FIRST so that when _readable.on("data") triggers
+    // resume() and synchronously drains buffered data, the forwarding handler
+    // can find the listener already in place on this Duplex.
+    super.on(event, listener);
+
     // Set up data forwarding when first external data listener is added
     if (event === "data" && !this._dataForwardingSetup) {
       this._dataForwardingSetup = true;
       this._readable.on("data", chunk => this.emit("data", chunk));
     }
-    return super.on(event, listener);
+    return this;
   }
 
   /**
@@ -312,13 +317,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     encodingOrCallback?: string | (() => void),
     callback?: () => void
   ): this {
-    const chunk = typeof chunkOrCallback === "function" ? undefined : chunkOrCallback;
-    const cb: (() => void) | undefined =
-      typeof chunkOrCallback === "function"
-        ? (chunkOrCallback as () => void)
-        : typeof encodingOrCallback === "function"
-          ? (encodingOrCallback as () => void)
-          : callback;
+    const { chunk, cb } = parseEndArgs<TWrite>(chunkOrCallback, encodingOrCallback, callback);
 
     if (cb) {
       this.once("finish", cb);
@@ -408,6 +407,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
    * Destroy both sides
    */
   destroy(error?: Error): this {
+    if (this._destroyed) {
+      return this;
+    }
+    this._destroyed = true;
     if (this._sideForwardingCleanup) {
       this._sideForwardingCleanup();
       this._sideForwardingCleanup = null;
@@ -421,8 +424,16 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     return this._readable.readable;
   }
 
+  set readable(val: boolean) {
+    this._readable.readable = val;
+  }
+
   get writable(): boolean {
     return this._writable.writable;
+  }
+
+  set writable(val: boolean) {
+    this._writable.writable = val;
   }
 
   get readableEnded(): boolean {
@@ -454,7 +465,11 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   }
 
   get destroyed(): boolean {
-    return this._readable.destroyed && this._writable.destroyed;
+    return this._destroyed;
+  }
+
+  set destroyed(val: boolean) {
+    this._destroyed = val;
   }
 
   get writableCorked(): number {
@@ -463,6 +478,65 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
   get writableNeedDrain(): boolean {
     return this._writable.writableNeedDrain;
+  }
+
+  get readableObjectMode(): boolean {
+    return this._readable.readableObjectMode;
+  }
+
+  get writableObjectMode(): boolean {
+    return this._writable.writableObjectMode;
+  }
+
+  get readableFlowing(): boolean | null {
+    return this._readable.readableFlowing;
+  }
+
+  set readableFlowing(val: boolean | null) {
+    this._readable.readableFlowing = val;
+  }
+
+  get readableAborted(): boolean {
+    return this._readable.readableAborted;
+  }
+
+  get readableDidRead(): boolean {
+    return this._readable.readableDidRead;
+  }
+
+  get readableEncoding(): string | null {
+    return this._readable.readableEncoding;
+  }
+
+  get errored(): Error | null {
+    return this._readable.errored ?? this._writable.errored;
+  }
+
+  get closed(): boolean {
+    return this._readable.closed && this._writable.closed;
+  }
+
+  get readableBuffer(): TRead[] {
+    return this._readable.readableBuffer;
+  }
+
+  get writableBuffer(): TWrite[] {
+    return this._writable.writableBuffer;
+  }
+
+  /**
+   * Wrap a legacy stream
+   */
+  wrap(stream: any): this {
+    this._readable.wrap(stream);
+    return this;
+  }
+
+  /**
+   * Create an async iterator with options
+   */
+  iterator(options?: { destroyOnReturn?: boolean }): AsyncIterableIterator<TRead> {
+    return this._readable.iterator(options);
   }
 
   /**

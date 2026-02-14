@@ -4,6 +4,7 @@
 
 import type { PipelineStreamLike } from "@stream/types";
 import type { PipelineOptions, PipelineCallback, FinishedOptions } from "@stream/common/options";
+import { createFinishedAll } from "@stream/common/finished-all";
 import {
   isReadableStream,
   isTransformStream,
@@ -314,18 +315,4 @@ export function finished(
 /**
  * Wait for multiple streams to finish
  */
-export async function finishedAll(streams: ReadonlyArray<PipelineStreamLike>): Promise<void> {
-  const len = streams.length;
-  if (len === 0) {
-    return;
-  }
-  if (len === 1) {
-    await finished(streams[0]);
-    return;
-  }
-  const promises = new Array<Promise<void>>(len);
-  for (let i = 0; i < len; i++) {
-    promises[i] = finished(streams[i]);
-  }
-  await Promise.all(promises);
-}
+export const finishedAll = createFinishedAll(finished);
