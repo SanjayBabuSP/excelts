@@ -75,6 +75,38 @@ type _ClassExportNames_BrowserExtra = Assert<
   IsNever<Exclude<ClassKeys<BrowserRuntime>, ClassKeys<NodeRuntime>>>
 >;
 
+// Class external contracts must align with shared interfaces.
+type _ClassContract_Readable_Node = Assert<
+  InstanceType<NodeRuntime["Readable"]> extends IReadable<any> ? true : false
+>;
+type _ClassContract_Readable_Browser = Assert<
+  InstanceType<BrowserRuntime["Readable"]> extends IReadable<any> ? true : false
+>;
+type _ClassContract_Writable_Node = Assert<
+  InstanceType<NodeRuntime["Writable"]> extends IWritable<any> ? true : false
+>;
+type _ClassContract_Writable_Browser = Assert<
+  InstanceType<BrowserRuntime["Writable"]> extends IWritable<any> ? true : false
+>;
+type _ClassContract_Transform_Node = Assert<
+  InstanceType<NodeRuntime["Transform"]> extends ITransform<any, any> ? true : false
+>;
+type _ClassContract_Transform_Browser = Assert<
+  InstanceType<BrowserRuntime["Transform"]> extends ITransform<any, any> ? true : false
+>;
+type _ClassContract_Duplex_Node = Assert<
+  InstanceType<NodeRuntime["Duplex"]> extends IDuplex<any, any> ? true : false
+>;
+type _ClassContract_Duplex_Browser = Assert<
+  InstanceType<BrowserRuntime["Duplex"]> extends IDuplex<any, any> ? true : false
+>;
+type _ClassContract_Collector_Node = Assert<
+  InstanceType<NodeRuntime["Collector"]> extends ICollector<any> ? true : false
+>;
+type _ClassContract_Collector_Browser = Assert<
+  InstanceType<BrowserRuntime["Collector"]> extends ICollector<any> ? true : false
+>;
+
 type _NonClassExportNames_NodeExtra = Assert<
   IsNever<Exclude<keyof NodeRuntimeNonClass, keyof BrowserRuntimeNonClass>>
 >;

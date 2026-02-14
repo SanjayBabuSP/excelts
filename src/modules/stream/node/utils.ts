@@ -18,6 +18,7 @@ import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards"
 import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
+import { getTextDecoder, textDecoder } from "@utils/binary";
 
 import { Writable } from "./writable";
 import { pipeline, finished } from "./pipeline";
@@ -85,7 +86,8 @@ export async function streamToString(
   encoding?: string
 ): Promise<string> {
   const bytes = await streamToUint8Array(stream);
-  return Buffer.from(bytes).toString((encoding ?? "utf8") as BufferEncoding);
+  const decoder = encoding ? getTextDecoder(encoding) : textDecoder;
+  return decoder.decode(bytes);
 }
 
 /**
@@ -133,7 +135,10 @@ export function isReadable(obj: unknown): obj is ReadableLike {
   if (obj == null) {
     return false;
   }
-  if (obj instanceof Readable) {
+  if (obj instanceof Readable || obj instanceof Transform) {
+    return true;
+  }
+  if (obj instanceof Duplex) {
     return true;
   }
   const o = obj as Record<string, unknown>;
@@ -147,7 +152,10 @@ export function isWritable(obj: unknown): obj is WritableLike {
   if (obj == null) {
     return false;
   }
-  if (obj instanceof Writable) {
+  if (obj instanceof Writable || obj instanceof Transform) {
+    return true;
+  }
+  if (obj instanceof Duplex) {
     return true;
   }
   const o = obj as Record<string, unknown>;
@@ -159,7 +167,10 @@ export const isTransform: (obj: unknown) => obj is ITransform<any, any> =
   createIsTransform(Transform);
 
 /** Check if an object is a duplex stream */
-export const isDuplex: (obj: unknown) => obj is IDuplex<any, any> = createIsDuplex(Duplex);
+export const isDuplex: (obj: unknown) => obj is IDuplex<any, any> = createIsDuplex(
+  Duplex,
+  Transform
+);
 
 /** Check if an object is any kind of stream */
 export const isStream: (obj: unknown) => obj is ReadableLike | WritableLike = createIsStream(

@@ -9,9 +9,9 @@ import {
   Writable as NodeWritable,
   Transform,
   Duplex,
-  pipeline as nodePipeline,
   finished as nodeFinished
 } from "stream";
+import { pipeline as nodePipeline } from "stream/promises";
 import type { PipelineStreamLike } from "@stream/types";
 import { createFinishedAll } from "@stream/common/finished-all";
 import type { PipelineOptions, PipelineCallback, FinishedOptions } from "@stream/common/options";
@@ -81,26 +81,13 @@ export function pipeline(
 
   const normalizedStreams = streams.map(toNodePipelineStream);
 
-  const promise = new Promise<void>((resolve, reject) => {
-    if (streams.length < 2) {
-      reject(new Error("Pipeline requires at least 2 streams"));
-      return;
-    }
+  if (streams.length < 2) {
+    return Promise.reject(new Error("Pipeline requires at least 2 streams"));
+  }
 
-    const done = (err?: Error | null): void => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
-    };
-
-    if (options) {
-      (nodePipeline as any)(...normalizedStreams, options, done);
-    } else {
-      (nodePipeline as any)(...normalizedStreams, done);
-    }
-  });
+  const promise: Promise<void> = options
+    ? (nodePipeline as any)(...normalizedStreams, options)
+    : (nodePipeline as any)(...normalizedStreams);
 
   if (callback) {
     promise.then(() => callback!()).catch(err => callback!(err));

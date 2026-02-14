@@ -49,7 +49,7 @@ export function compose<T = any, R = any>(
   // - readable side to `last`
   // It forwards relevant events lazily to avoid per-chunk overhead when unused.
   const composed = new Transform<T, R>({
-    objectMode: (first as any)?.objectMode ?? true,
+    objectMode: (first as any)?.readableObjectMode ?? (first as any)?.writableObjectMode ?? true,
     transform: chunk => chunk
   });
 
@@ -67,14 +67,15 @@ export function compose<T = any, R = any>(
   // Forward readable-side events from `last` lazily.
   let forwardData = false;
   let forwardEnd = false;
-  let forwardReadable = false;
 
   const ensureDataForwarding = (): void => {
     if (forwardData) {
       return;
     }
     forwardData = true;
-    registry.add(last as any, "data", (chunk: R) => composed.emit("data", chunk));
+    registry.add(last as any, "data", (chunk: R) => {
+      (composed as any).push(chunk);
+    });
   };
 
   const ensureEndForwarding = (): void => {
@@ -82,15 +83,9 @@ export function compose<T = any, R = any>(
       return;
     }
     forwardEnd = true;
-    registry.once(last as any, "end", () => composed.emit("end"));
-  };
-
-  const ensureReadableForwarding = (): void => {
-    if (forwardReadable) {
-      return;
-    }
-    forwardReadable = true;
-    registry.add(last as any, "readable", () => composed.emit("readable"));
+    registry.once(last as any, "end", () => {
+      (composed as any).push(null);
+    });
   };
 
   const originalOn = composed.on.bind(composed);
@@ -99,10 +94,10 @@ export function compose<T = any, R = any>(
   (composed as any).on = (event: string | symbol, listener: (...args: any[]) => void): any => {
     if (event === "data") {
       ensureDataForwarding();
-    } else if (event === "end") {
       ensureEndForwarding();
-    } else if (event === "readable") {
-      ensureReadableForwarding();
+    } else if (event === "end") {
+      ensureDataForwarding();
+      ensureEndForwarding();
     }
     return originalOn(event, listener);
   };
@@ -110,10 +105,10 @@ export function compose<T = any, R = any>(
   (composed as any).once = (event: string | symbol, listener: (...args: any[]) => void): any => {
     if (event === "data") {
       ensureDataForwarding();
-    } else if (event === "end") {
       ensureEndForwarding();
-    } else if (event === "readable") {
-      ensureReadableForwarding();
+    } else if (event === "end") {
+      ensureDataForwarding();
+      ensureEndForwarding();
     }
     return originalOnce(event, listener);
   };
@@ -153,11 +148,29 @@ export function compose<T = any, R = any>(
   (composed as any).pipe = <W extends Writable<R> | Transform<R, any> | Duplex<any, R>>(
     destination: W
   ): W => {
-    return lastAny.pipe(destination) as W;
+    ensureDataForwarding();
+    ensureEndForwarding();
+    return Transform.prototype.pipe.call(composed, destination) as W;
   };
 
   (composed as any).read = (size?: number): R | null => {
-    return typeof lastAny.read === "function" ? (lastAny.read(size) as R | null) : null;
+    ensureDataForwarding();
+    ensureEndForwarding();
+    return Transform.prototype.read.call(composed, size) as R | null;
+  };
+
+  const originalPause = composed.pause.bind(composed);
+  const originalResume = composed.resume.bind(composed);
+
+  (composed as any).pause = (): any => {
+    lastAny.pause?.();
+    return originalPause();
+  };
+
+  (composed as any).resume = (): any => {
+    const resumed = originalResume();
+    lastAny.resume?.();
+    return resumed;
   };
 
   // Delegate cork/uncork to the head of the chain.
@@ -169,13 +182,8 @@ export function compose<T = any, R = any>(
   };
 
   (composed as any)[Symbol.asyncIterator] = async function* (): AsyncIterableIterator<R> {
-    const it = lastAny?.[Symbol.asyncIterator]?.();
-    if (it) {
-      for await (const chunk of it as AsyncIterable<R>) {
-        yield chunk;
-      }
-      return;
-    }
+    ensureDataForwarding();
+    ensureEndForwarding();
     yield* Transform.prototype[Symbol.asyncIterator].call(composed);
   };
 

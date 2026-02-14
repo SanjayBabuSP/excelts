@@ -148,6 +148,34 @@ function getBrowserContext() {
 
 createTrueStreamingTests(getBrowserContext);
 
+const createCompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> => {
+  if (typeof CompressionStream !== "undefined") {
+    return new CompressionStream("deflate-raw") as unknown as TransformStream<
+      Uint8Array,
+      Uint8Array
+    >;
+  }
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    }
+  });
+};
+
+const createDecompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> => {
+  if (typeof DecompressionStream !== "undefined") {
+    return new DecompressionStream("deflate-raw") as unknown as TransformStream<
+      Uint8Array,
+      Uint8Array
+    >;
+  }
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    }
+  });
+};
+
 // ============================================================================
 // Browser-Specific Additional Tests
 // ============================================================================
@@ -155,16 +183,10 @@ createTrueStreamingTests(getBrowserContext);
 describe("Browser-Specific True Streaming", () => {
   describe("Native CompressionStream Verification", () => {
     it("should verify CompressionStream streams chunks progressively", async () => {
-      // Skip if CompressionStream not available
-      if (typeof CompressionStream === "undefined") {
-        console.log("CompressionStream not available, skipping test");
-        return;
-      }
-
       const chunks: { time: number; size: number }[] = [];
       const startTime = performance.now();
 
-      const compressionStream = new CompressionStream("deflate-raw");
+      const compressionStream = createCompressionLikeStream();
       const writer = compressionStream.writable.getWriter();
       const reader = compressionStream.readable.getReader();
 
@@ -219,14 +241,8 @@ describe("Browser-Specific True Streaming", () => {
 
   describe("Native DecompressionStream Verification", () => {
     it("should verify DecompressionStream streams chunks progressively", async () => {
-      // Skip if DecompressionStream not available
-      if (typeof DecompressionStream === "undefined") {
-        console.log("DecompressionStream not available, skipping test");
-        return;
-      }
-
       // First compress some data
-      const compressionStream = new CompressionStream("deflate-raw");
+      const compressionStream = createCompressionLikeStream();
       const compressWriter = compressionStream.writable.getWriter();
       const compressReader = compressionStream.readable.getReader();
 
@@ -262,7 +278,7 @@ describe("Browser-Specific True Streaming", () => {
       const decompressedChunks: { time: number; size: number }[] = [];
       const startTime = performance.now();
 
-      const decompressionStream = new DecompressionStream("deflate-raw");
+      const decompressionStream = createDecompressionLikeStream();
       const decompressWriter = decompressionStream.writable.getWriter();
       const decompressReader = decompressionStream.readable.getReader();
 

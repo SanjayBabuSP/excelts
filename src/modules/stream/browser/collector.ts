@@ -5,6 +5,7 @@
 import type { WritableStreamOptions } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
 import { concatUint8Arrays, chunksToString } from "@utils/binary";
+import { toBinaryChunk } from "@stream/common/binary-chunk";
 
 import { Writable } from "./writable";
 
@@ -19,30 +20,19 @@ export class Collector<T = Uint8Array> extends Writable<T> {
   public chunks: T[] = [];
 
   constructor(options?: WritableStreamOptions) {
-    super({ ...options, objectMode: options?.objectMode ?? true });
-  }
-
-  // Override write to be synchronous - Collector doesn't need async behavior
-  // This makes behavior consistent with Node.js Collector
-  override write(chunk: T, callback?: (error?: Error | null) => void): boolean;
-  override write(chunk: T, encoding?: string, callback?: (error?: Error | null) => void): boolean;
-  override write(
-    chunk: T,
-    encodingOrCallback?: string | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    if (this.destroyed || this.writableEnded || this.writableFinished) {
-      const err = new Error("write after end");
-      this.emit("error", err);
-      return false;
-    }
-
-    const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-
-    // Synchronously push to chunks
-    this.chunks.push(chunk);
-    cb?.(null);
-    return true;
+    super({
+      ...options,
+      objectMode: options?.objectMode ?? true,
+      write(
+        this: Writable<T>,
+        chunk: T,
+        _encoding: string,
+        callback: (error?: Error | null) => void
+      ) {
+        (this as unknown as Collector<T>).chunks.push(chunk);
+        callback();
+      }
+    });
   }
 
   /**
@@ -54,16 +44,23 @@ export class Collector<T = Uint8Array> extends Writable<T> {
     if (len === 0) {
       return new Uint8Array(0);
     }
-    if (len === 1 && chunks[0] instanceof Uint8Array) {
-      return chunks[0];
+
+    const binaryChunks = new Array<Uint8Array>(len);
+    let totalLength = 0;
+    for (let i = 0; i < len; i++) {
+      const normalized = toBinaryChunk(chunks[i]);
+      if (!normalized) {
+        throw new StreamTypeError("Uint8Array", "non-binary data");
+      }
+      binaryChunks[i] = normalized;
+      totalLength += normalized.length;
     }
 
-    // If chunks are Uint8Arrays, concatenate them
-    if (chunks[0] instanceof Uint8Array) {
-      return concatUint8Arrays(chunks as Uint8Array[]);
+    if (len === 1) {
+      return binaryChunks[0]!;
     }
 
-    throw new StreamTypeError("Uint8Array", "non-binary data");
+    return concatUint8Arrays(binaryChunks, totalLength);
   }
 
   /**

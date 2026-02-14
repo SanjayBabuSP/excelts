@@ -25,7 +25,8 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   readonly _readable: Readable<TOutput>;
   /** @internal - for pipe() support */
   readonly _writable: Writable<TInput>;
-  readonly objectMode: boolean;
+  private _objectMode: boolean;
+  allowHalfOpen: boolean;
 
   private _destroyed: boolean = false;
   private _ended: boolean = false;
@@ -63,12 +64,13 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    * Push data to the readable side (Node.js compatibility).
    * Intended to be called from within transform/flush.
    */
-  push(chunk: TOutput | null): boolean {
-    return this._readable.push(chunk);
+  push(chunk: TOutput | null, encoding?: string): boolean {
+    return this._readable.push(chunk, encoding);
   }
 
   constructor(
     options?: TransformStreamOptions & {
+      allowHalfOpen?: boolean;
       transform?:
         | ((chunk: TInput) => TOutput | Promise<TOutput>)
         | ((
@@ -86,16 +88,17 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
   ) {
     super();
-    this.objectMode = options?.objectMode ?? false;
+    this._objectMode = options?.objectMode ?? false;
+    this.allowHalfOpen = options?.allowHalfOpen ?? true;
     this._transformImpl = options?.transform;
     this._flushImpl = options?.flush;
 
     this._readable = new Readable<TOutput>({
-      objectMode: this.objectMode
+      objectMode: this._objectMode
     });
 
     this._writable = new Writable<TInput>({
-      objectMode: this.objectMode,
+      objectMode: this._objectMode,
       write: (chunk, _encoding, callback) => {
         // Try synchronous transform first.  If the transform completes
         // synchronously we MUST call the callback synchronously so that
@@ -134,12 +137,22 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     const registry = createListenerRegistry();
 
-    registry.once(this._readable, "end", () => this.emit("end"));
+    registry.once(this._readable, "end", () => {
+      this.emit("end");
+      if (!this.allowHalfOpen) {
+        this._writable.end();
+      }
+    });
     registry.add(this._readable, "error", err => this._emitErrorOnce(err));
 
     registry.once(this._writable, "finish", () => this.emit("finish"));
     registry.add(this._writable, "drain", () => this.emit("drain"));
     registry.add(this._writable, "error", err => this._emitErrorOnce(err));
+    registry.once(this._writable, "close", () => {
+      if (!this.allowHalfOpen && !this._readable.destroyed) {
+        this._readable.destroy();
+      }
+    });
 
     this._sideForwardingCleanup = () => registry.cleanup();
   }
@@ -552,9 +565,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    * Pipe readable side to destination
    */
   pipe<W extends Writable<TOutput> | Transform<TOutput, any> | Duplex<any, TOutput>>(
-    destination: W
+    destination: W,
+    options?: { end?: boolean }
   ): W {
-    return this._readable.pipe(destination) as W;
+    return this._readable.pipe(destination, options) as W;
   }
 
   /**
@@ -706,7 +720,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   get readableObjectMode(): boolean {
-    return this._readable.readableObjectMode ?? this._readable.objectMode;
+    return this._readable.readableObjectMode;
   }
 
   get readableFlowing(): boolean | null {
@@ -762,8 +776,8 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   /**
    * Put a chunk back at the front of the readable buffer
    */
-  unshift(chunk: TOutput): void {
-    this._readable.unshift(chunk);
+  unshift(chunk: TOutput, encoding?: string): void {
+    this._readable.unshift(chunk, encoding);
   }
 
   /**
@@ -794,7 +808,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   get writableObjectMode(): boolean {
-    return this._writable.writableObjectMode ?? this._writable.objectMode;
+    return this._writable.writableObjectMode;
   }
 
   get readableAborted(): boolean {
@@ -830,6 +844,94 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    */
   async *[Symbol.asyncIterator](): AsyncIterableIterator<TOutput> {
     yield* this._readable[Symbol.asyncIterator]();
+  }
+
+  // =============================================================================
+  // Functional / Higher-order Methods (forwarded to readable side)
+  // =============================================================================
+
+  map<U>(
+    fn: (data: TOutput, options: { signal: AbortSignal }) => U | Promise<U>,
+    options?: { concurrency?: number; highWaterMark?: number; signal?: AbortSignal }
+  ): Readable<U> {
+    return this._readable.map(fn, options);
+  }
+
+  filter(
+    fn: (data: TOutput, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; highWaterMark?: number; signal?: AbortSignal }
+  ): Readable<TOutput> {
+    return this._readable.filter(fn, options);
+  }
+
+  async forEach(
+    fn: (data: TOutput, options: { signal: AbortSignal }) => void | Promise<void>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<undefined> {
+    return this._readable.forEach(fn, options);
+  }
+
+  async toArray(options?: { signal?: AbortSignal }): Promise<TOutput[]> {
+    return this._readable.toArray(options);
+  }
+
+  async some(
+    fn: (data: TOutput, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<boolean> {
+    return this._readable.some(fn, options);
+  }
+
+  async find(
+    fn: (data: TOutput, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<TOutput | undefined> {
+    return this._readable.find(fn, options);
+  }
+
+  async every(
+    fn: (data: TOutput, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<boolean> {
+    return this._readable.every(fn, options);
+  }
+
+  flatMap<U>(
+    fn: (
+      data: TOutput,
+      options: { signal: AbortSignal }
+    ) => Iterable<U> | AsyncIterable<U> | Readable<U> | Promise<Iterable<U> | AsyncIterable<U>>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Readable<U> {
+    return this._readable.flatMap(fn, options);
+  }
+
+  drop(limit: number, options?: { signal?: AbortSignal }): Readable<TOutput> {
+    return this._readable.drop(limit, options);
+  }
+
+  take(limit: number, options?: { signal?: AbortSignal }): Readable<TOutput> {
+    return this._readable.take(limit, options);
+  }
+
+  async reduce<U = TOutput>(
+    fn: (previous: U, data: TOutput, options: { signal: AbortSignal }) => U | Promise<U>,
+    initial?: U,
+    options?: { signal?: AbortSignal }
+  ): Promise<U> {
+    if (arguments.length >= 2) {
+      return this._readable.reduce(fn, initial, options);
+    }
+    return this._readable.reduce(fn);
+  }
+
+  compose<U>(
+    stream:
+      | import("@stream/types").WritableLike
+      | ((source: AsyncIterable<TOutput>) => AsyncIterable<U>),
+    options?: { signal?: AbortSignal }
+  ): Readable<U> {
+    return this._readable.compose(stream, options);
   }
 
   // =========================================================================

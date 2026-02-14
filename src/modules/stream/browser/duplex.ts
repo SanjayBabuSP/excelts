@@ -25,7 +25,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   readonly _readable: Readable<TRead>;
   /** @internal - for pipe() support */
   readonly _writable: Writable<TWrite>;
-  readonly allowHalfOpen: boolean;
+  allowHalfOpen: boolean;
 
   /**
    * Create a Duplex stream from various sources
@@ -274,15 +274,15 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   /**
    * Push data to readable side
    */
-  push(chunk: TRead | null): boolean {
-    return this._readable.push(chunk);
+  push(chunk: TRead | null, encoding?: string): boolean {
+    return this._readable.push(chunk, encoding);
   }
 
   /**
    * Put a chunk back at the front of the buffer (readable side)
    */
-  unshift(chunk: TRead): void {
-    this._readable.unshift(chunk);
+  unshift(chunk: TRead, encoding?: string): void {
+    this._readable.unshift(chunk, encoding);
   }
 
   /**
@@ -363,12 +363,15 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   /**
    * Pipe readable side to destination
    */
-  pipe<W extends Writable<TRead> | Transform<TRead, any>>(destination: W): W {
+  pipe<W extends Writable<TRead> | Transform<TRead, any>>(
+    destination: W,
+    options?: { end?: boolean }
+  ): W {
     if (destination instanceof Transform) {
-      this._readable.pipe(destination._writable);
+      this._readable.pipe(destination._writable, options);
       return destination;
     }
-    this._readable.pipe(destination);
+    this._readable.pipe(destination, options);
     return destination;
   }
 
@@ -544,5 +547,93 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
    */
   [Symbol.asyncIterator](): AsyncIterableIterator<TRead> {
     return this._readable[Symbol.asyncIterator]();
+  }
+
+  // =============================================================================
+  // Functional / Higher-order Methods (forwarded to readable side)
+  // =============================================================================
+
+  map<U>(
+    fn: (data: TRead, options: { signal: AbortSignal }) => U | Promise<U>,
+    options?: { concurrency?: number; highWaterMark?: number; signal?: AbortSignal }
+  ): Readable<U> {
+    return this._readable.map(fn, options);
+  }
+
+  filter(
+    fn: (data: TRead, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; highWaterMark?: number; signal?: AbortSignal }
+  ): Readable<TRead> {
+    return this._readable.filter(fn, options);
+  }
+
+  async forEach(
+    fn: (data: TRead, options: { signal: AbortSignal }) => void | Promise<void>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<undefined> {
+    return this._readable.forEach(fn, options);
+  }
+
+  async toArray(options?: { signal?: AbortSignal }): Promise<TRead[]> {
+    return this._readable.toArray(options);
+  }
+
+  async some(
+    fn: (data: TRead, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<boolean> {
+    return this._readable.some(fn, options);
+  }
+
+  async find(
+    fn: (data: TRead, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<TRead | undefined> {
+    return this._readable.find(fn, options);
+  }
+
+  async every(
+    fn: (data: TRead, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<boolean> {
+    return this._readable.every(fn, options);
+  }
+
+  flatMap<U>(
+    fn: (
+      data: TRead,
+      options: { signal: AbortSignal }
+    ) => Iterable<U> | AsyncIterable<U> | Readable<U> | Promise<Iterable<U> | AsyncIterable<U>>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Readable<U> {
+    return this._readable.flatMap(fn, options);
+  }
+
+  drop(limit: number, options?: { signal?: AbortSignal }): Readable<TRead> {
+    return this._readable.drop(limit, options);
+  }
+
+  take(limit: number, options?: { signal?: AbortSignal }): Readable<TRead> {
+    return this._readable.take(limit, options);
+  }
+
+  async reduce<U = TRead>(
+    fn: (previous: U, data: TRead, options: { signal: AbortSignal }) => U | Promise<U>,
+    initial?: U,
+    options?: { signal?: AbortSignal }
+  ): Promise<U> {
+    if (arguments.length >= 2) {
+      return this._readable.reduce(fn, initial, options);
+    }
+    return this._readable.reduce(fn);
+  }
+
+  compose<U>(
+    stream:
+      | import("@stream/types").WritableLike
+      | ((source: AsyncIterable<TRead>) => AsyncIterable<U>),
+    options?: { signal?: AbortSignal }
+  ): Readable<U> {
+    return this._readable.compose(stream, options);
   }
 }

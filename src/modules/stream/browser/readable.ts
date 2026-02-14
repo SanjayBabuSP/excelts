@@ -41,10 +41,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _pushMode: boolean = false;
   // Whether this stream was created from an external Web Stream (true) or is controllable (false)
   private _webStreamMode: boolean = false;
-  readonly objectMode: boolean;
-  readonly readableHighWaterMark: number;
-  readonly autoDestroy: boolean;
-  readonly emitClose: boolean;
+  private _objectMode: boolean;
+  private _highWaterMark: number;
+  private _autoDestroy: boolean;
+  private _emitClose: boolean;
   // User-provided read function (Node.js compatibility)
   private _read?: (size?: number) => void;
 
@@ -57,12 +57,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
   ) {
     super();
-    this.objectMode = options?.objectMode ?? false;
-    this.readableHighWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this.objectMode);
-    this._buf = new ChunkBuffer<T>(this.objectMode);
+    this._objectMode = options?.objectMode ?? false;
+    this._highWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this._objectMode);
+    this._buf = new ChunkBuffer<T>(this._objectMode);
     this._pipes = new PipeManager<T>(this);
-    this.autoDestroy = options?.autoDestroy ?? true;
-    this.emitClose = options?.emitClose ?? true;
+    this._autoDestroy = options?.autoDestroy ?? true;
+    this._emitClose = options?.emitClose ?? true;
 
     // Store user-provided read function
     if (options?.read) {
@@ -124,13 +124,19 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   /**
    * Push data to the stream (when using controllable stream)
    */
-  push(chunk: T | null): boolean {
+  push(chunk: T | null, encoding?: string): boolean {
     if (this._destroyed) {
       return false;
     }
 
     // Mark as push mode when push() is called
     this._pushMode = true;
+
+    // Handle string encoding (Node.js compatibility)
+    if (chunk !== null && typeof chunk === "string" && encoding && !this._objectMode) {
+      const encoder = new TextEncoder();
+      chunk = encoder.encode(chunk) as any;
+    }
 
     if (chunk === null) {
       // Prevent duplicate end handling
@@ -160,7 +166,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (this._read && !this._ended) {
         queueMicrotask(() => {
           if (this._flowing && !this._ended && !this._destroyed) {
-            this._read!(this.readableHighWaterMark);
+            this._read!(this._highWaterMark);
           }
         });
       }
@@ -177,11 +183,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       }
       // Return false if buffer exceeds high water mark (backpressure signal)
       // Fast path for object mode - just count items
-      if (this.objectMode) {
-        return this._buf.length < this.readableHighWaterMark;
+      if (this._objectMode) {
+        return this._buf.length < this._highWaterMark;
       }
       // For binary mode, use tracked buffer size (O(1))
-      return this._buf.byteSize < this.readableHighWaterMark;
+      return this._buf.byteSize < this._highWaterMark;
     }
   }
 
@@ -193,7 +199,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this.emit("end");
 
     // Match Node.js autoDestroy behavior: automatically destroy after end
-    if (this.autoDestroy) {
+    if (this._autoDestroy) {
       this.destroy();
     }
   }
@@ -201,28 +207,97 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   /**
    * Put a chunk back at the front of the buffer
    */
-  unshift(chunk: T): void {
+  unshift(chunk: T, encoding?: string): void {
     if (this._destroyed) {
       return;
+    }
+    // Handle string encoding (Node.js compatibility)
+    if (typeof chunk === "string" && encoding && !this._objectMode) {
+      const encoder = new TextEncoder();
+      chunk = encoder.encode(chunk) as any;
     }
     this._buf.unshift(chunk);
   }
 
   /**
-   * Read data from the stream
+   * Read data from the stream.
+   *
+   * Node.js behavior:
+   * - read() / read(undefined) — in object mode returns one object;
+   *   in binary mode returns all buffered data as one chunk
+   * - read(0) — returns null, may trigger internal _read()
+   * - read(n) — returns exactly n bytes (binary) or null if not enough;
+   *   in object mode returns one object (size ignored)
    */
-  read(_size?: number): T | null {
+  read(size?: number): T | null {
     this._didRead = true;
 
-    if (this._buf.length > 0) {
+    // size === 0: return null but may trigger internal _read
+    if (size === 0) {
+      if (this._read && !this._ended && !this._destroyed) {
+        const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
+        if (bufSize < this._highWaterMark) {
+          this._read(this._highWaterMark);
+        }
+      }
+      return null;
+    }
+
+    if (this._buf.length === 0) {
+      return null;
+    }
+
+    // Object mode: always return a single object, ignore size
+    if (this._objectMode) {
       const chunk = this._buf.shift();
-      const decoded = this._applyEncoding(chunk);
       if (this._ended && this._buf.length === 0) {
         queueMicrotask(() => this._emitEndOnce());
       }
-      return decoded;
+      return chunk;
     }
-    return null;
+
+    // Binary mode
+    let result: T;
+
+    if (size == null) {
+      // read() with no size: return ALL buffered data as one chunk
+      result = this._applyEncoding(this._buf.consumeAll());
+    } else {
+      // read(n): return exactly n bytes, or null if not enough
+      if (this._buf.byteSize < size) {
+        // Not enough data buffered
+        if (this._ended) {
+          // Stream ended — return whatever is available
+          result = this._applyEncoding(this._buf.consumeAll());
+        } else {
+          // Trigger internal read to fill buffer
+          if (this._read) {
+            this._read(size);
+          }
+          return null;
+        }
+      } else {
+        result = this._applyEncoding(this._buf.consumeBytes(size));
+      }
+    }
+
+    // Trigger _read to refill buffer if below HWM
+    if (this._read && !this._ended && !this._destroyed) {
+      const bufSize = this._buf.byteSize;
+      if (bufSize < this._highWaterMark) {
+        queueMicrotask(() => {
+          if (!this._ended && !this._destroyed) {
+            this._read!(this._highWaterMark);
+          }
+        });
+      }
+    }
+
+    if (this._ended && this._buf.length === 0) {
+      queueMicrotask(() => this._emitEndOnce());
+    }
+
+    return result;
   }
 
   /**
@@ -307,7 +382,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // This allows multiple pipe() calls to register before data flows
       queueMicrotask(() => {
         if (this._flowing && !this._ended && !this._destroyed) {
-          this._read!(this.readableHighWaterMark);
+          this._read!(this._highWaterMark);
         }
       });
     } else if (this._webStreamMode && !this._pushMode) {
@@ -346,8 +421,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   /**
    * Pipe to a writable stream, transform stream, or duplex stream
    */
-  pipe<W extends Writable<T> | Transform<T, any> | Duplex<any, T>>(destination: W): W {
-    return this._pipes.pipe(destination) as W;
+  pipe<W extends Writable<T> | Transform<T, any> | Duplex<any, T>>(
+    destination: W,
+    options?: { end?: boolean }
+  ): W {
+    return this._pipes.pipe(destination, options) as W;
   }
 
   /**
@@ -467,7 +545,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   get readableLength(): number {
-    return this.objectMode ? this._buf.length : this._buf.byteSize;
+    return this._objectMode ? this._buf.length : this._buf.byteSize;
   }
 
   /** Whether the stream has been destroyed */
@@ -529,7 +607,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /** Returns array of objects containing info about buffered data */
   get readableObjectMode(): boolean {
-    return this.objectMode;
+    return this._objectMode;
+  }
+
+  get readableHighWaterMark(): number {
+    return this._highWaterMark;
   }
 
   /**
@@ -616,11 +698,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       return;
     }
 
-    const highWaterMark = this.readableHighWaterMark;
+    const highWaterMark = this._highWaterMark;
     const lowWaterMark = Math.max(0, Math.floor(highWaterMark / 2));
 
     const chunkSizeForBackpressure = (chunk: any): number => {
-      if (this.objectMode) {
+      if (this._objectMode) {
         return 1;
       }
       if (chunk instanceof Uint8Array) {
@@ -760,6 +842,444 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         return this;
       }
     };
+  }
+
+  // =============================================================================
+  // Functional / Higher-order Methods (Node.js Readable compatibility)
+  // =============================================================================
+
+  /**
+   * Map each chunk through a function, returning a new Readable.
+   */
+  map<U>(
+    fn: (data: T, options: { signal: AbortSignal }) => U | Promise<U>,
+    options?: { concurrency?: number; highWaterMark?: number; signal?: AbortSignal }
+  ): Readable<U> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    const result = new Readable<U>({ objectMode: true });
+    const source = this;
+
+    pumpAsyncIterableToReadable(
+      result,
+      (async function* () {
+        try {
+          for await (const chunk of source) {
+            _throwIfAborted(signal);
+            const mapped = await fn(chunk, { signal: innerSignal });
+            yield mapped;
+          }
+        } finally {
+          ac.abort();
+        }
+      })()
+    );
+
+    if (signal) {
+      const onAbort = () => {
+        result.destroy(new _AbortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    return result;
+  }
+
+  /**
+   * Filter chunks by a predicate, returning a new Readable.
+   */
+  filter(
+    fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; highWaterMark?: number; signal?: AbortSignal }
+  ): Readable<T> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    const result = new Readable<T>({ objectMode: true });
+    const source = this;
+
+    pumpAsyncIterableToReadable(
+      result,
+      (async function* () {
+        try {
+          for await (const chunk of source) {
+            _throwIfAborted(signal);
+            const keep = await fn(chunk, { signal: innerSignal });
+            if (keep) {
+              yield chunk;
+            }
+          }
+        } finally {
+          ac.abort();
+        }
+      })()
+    );
+
+    if (signal) {
+      const onAbort = () => {
+        result.destroy(new _AbortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    return result;
+  }
+
+  /**
+   * Iterate all chunks. Returns a promise that resolves when the stream ends.
+   */
+  async forEach(
+    fn: (data: T, options: { signal: AbortSignal }) => void | Promise<void>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<undefined> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    try {
+      for await (const chunk of this) {
+        _throwIfAborted(signal);
+        await fn(chunk, { signal: innerSignal });
+      }
+    } finally {
+      ac.abort();
+    }
+    return undefined;
+  }
+
+  /**
+   * Collect all chunks into an array.
+   */
+  async toArray(options?: { signal?: AbortSignal }): Promise<T[]> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+
+    const result: T[] = [];
+    for await (const chunk of this) {
+      _throwIfAborted(signal);
+      result.push(chunk);
+    }
+    return result;
+  }
+
+  /**
+   * Returns true if any chunk passes the predicate. Short-circuits on first match.
+   */
+  async some(
+    fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<boolean> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    try {
+      for await (const chunk of this) {
+        _throwIfAborted(signal);
+        const result = await fn(chunk, { signal: innerSignal });
+        if (result) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      ac.abort();
+      this.destroy();
+    }
+  }
+
+  /**
+   * Find the first chunk matching the predicate. Short-circuits on match.
+   */
+  async find(
+    fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<T | undefined> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    try {
+      for await (const chunk of this) {
+        _throwIfAborted(signal);
+        const result = await fn(chunk, { signal: innerSignal });
+        if (result) {
+          return chunk;
+        }
+      }
+      return undefined;
+    } finally {
+      ac.abort();
+      this.destroy();
+    }
+  }
+
+  /**
+   * Returns true if all chunks pass the predicate. Short-circuits on first failure.
+   */
+  async every(
+    fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Promise<boolean> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    try {
+      for await (const chunk of this) {
+        _throwIfAborted(signal);
+        const result = await fn(chunk, { signal: innerSignal });
+        if (!result) {
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      ac.abort();
+      this.destroy();
+    }
+  }
+
+  /**
+   * Map each chunk to multiple outputs (flattening), returning a new Readable.
+   */
+  flatMap<U>(
+    fn: (
+      data: T,
+      options: { signal: AbortSignal }
+    ) => Iterable<U> | AsyncIterable<U> | Readable<U> | Promise<Iterable<U> | AsyncIterable<U>>,
+    options?: { concurrency?: number; signal?: AbortSignal }
+  ): Readable<U> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    const result = new Readable<U>({ objectMode: true });
+    const source = this;
+
+    pumpAsyncIterableToReadable(
+      result,
+      (async function* () {
+        try {
+          for await (const chunk of source) {
+            _throwIfAborted(signal);
+            const mapped = await fn(chunk, { signal: innerSignal });
+
+            // If it's a Readable, consume via async iterator
+            if (mapped && typeof (mapped as any)[Symbol.asyncIterator] === "function") {
+              for await (const item of mapped as AsyncIterable<U>) {
+                yield item;
+              }
+            } else if (mapped && typeof (mapped as any)[Symbol.iterator] === "function") {
+              for (const item of mapped as Iterable<U>) {
+                yield item;
+              }
+            }
+          }
+        } finally {
+          ac.abort();
+        }
+      })()
+    );
+
+    if (signal) {
+      const onAbort = () => {
+        result.destroy(new _AbortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    return result;
+  }
+
+  /**
+   * Skip the first `limit` chunks, returning a new Readable.
+   */
+  drop(limit: number, options?: { signal?: AbortSignal }): Readable<T> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    _validateNonNegativeInteger(limit, "limit");
+
+    const result = new Readable<T>({ objectMode: true });
+    const source = this;
+
+    pumpAsyncIterableToReadable(
+      result,
+      (async function* () {
+        let count = 0;
+        for await (const chunk of source) {
+          _throwIfAborted(signal);
+          if (count >= limit) {
+            yield chunk;
+          }
+          count++;
+        }
+      })()
+    );
+
+    if (signal) {
+      const onAbort = () => {
+        result.destroy(new _AbortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    return result;
+  }
+
+  /**
+   * Take only the first `limit` chunks, returning a new Readable.
+   */
+  take(limit: number, options?: { signal?: AbortSignal }): Readable<T> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    _validateNonNegativeInteger(limit, "limit");
+
+    const result = new Readable<T>({ objectMode: true });
+    const source = this;
+
+    pumpAsyncIterableToReadable(
+      result,
+      (async function* () {
+        let count = 0;
+        for await (const chunk of source) {
+          _throwIfAborted(signal);
+          if (count >= limit) {
+            break;
+          }
+          yield chunk;
+          count++;
+        }
+      })()
+    );
+
+    if (signal) {
+      const onAbort = () => {
+        result.destroy(new _AbortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    return result;
+  }
+
+  /**
+   * Reduce the stream to a single value.
+   */
+  async reduce<U = T>(
+    fn: (previous: U, data: T, options: { signal: AbortSignal }) => U | Promise<U>,
+    initial?: U,
+    options?: { signal?: AbortSignal }
+  ): Promise<U> {
+    const signal = options?.signal;
+    _validateAbortSignal(signal);
+    const ac = new AbortController();
+    const innerSignal = ac.signal;
+
+    let accumulator: U;
+    let hasInitial = arguments.length >= 2;
+    let first = true;
+
+    try {
+      for await (const chunk of this) {
+        _throwIfAborted(signal);
+        if (first && !hasInitial) {
+          accumulator = chunk as any as U;
+          first = false;
+          continue;
+        }
+        if (first) {
+          accumulator = initial!;
+          first = false;
+        }
+        accumulator = await fn(accumulator!, chunk, { signal: innerSignal });
+      }
+
+      if (first && !hasInitial) {
+        throw new TypeError("Reduce of an empty stream requires an initial value");
+      }
+      if (first) {
+        return initial!;
+      }
+      return accumulator!;
+    } finally {
+      ac.abort();
+    }
+  }
+
+  /**
+   * Compose this readable with a stream/transform, returning a new Readable.
+   * Equivalent to piping this readable through the given stream.
+   */
+  compose<U>(
+    stream: WritableLike | ((source: AsyncIterable<T>) => AsyncIterable<U>),
+    _options?: { signal?: AbortSignal }
+  ): Readable<U> {
+    // If it's an async generator function, pipe through it
+    if (typeof stream === "function") {
+      const source = this;
+      const result = new Readable<U>({ objectMode: true });
+      pumpAsyncIterableToReadable(result, stream(source) as AsyncIterable<U>);
+      return result;
+    }
+
+    // If it's a transform/duplex with pipe support, pipe this into it and
+    // return its readable side wrapped as a Readable.
+    const target = stream as any;
+    this.pipe(target);
+    // If the target has a _readable (Transform/Duplex), return it.
+    // Otherwise, if target is a Readable itself, return it.
+    if (target._readable) {
+      return target._readable as Readable<U>;
+    }
+    return target as Readable<U>;
+  }
+}
+
+// =============================================================================
+// Internal helpers – Functional method utilities
+// =============================================================================
+
+class _AbortError extends Error {
+  override name = "AbortError";
+  code = "ABORT_ERR";
+  constructor() {
+    super("The operation was aborted");
+  }
+}
+
+function _validateAbortSignal(signal: AbortSignal | undefined): void {
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    throw new TypeError("options.signal must be an AbortSignal");
+  }
+}
+
+function _throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new _AbortError();
+  }
+}
+
+function _validateNonNegativeInteger(value: number, name: string): void {
+  if (
+    typeof value !== "number" ||
+    Number.isNaN(value) ||
+    value < 0 ||
+    Math.floor(value) !== value
+  ) {
+    throw new RangeError(
+      `The value of "${name}" must be a non-negative integer. Received ${value}`
+    );
   }
 }
 

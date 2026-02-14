@@ -11,7 +11,6 @@ import type { IDuplex, ITransform, ReadableLike, WritableLike } from "@stream/ty
 // Types
 // =============================================================================
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Constructor = abstract new (...args: any[]) => any;
 
 // =============================================================================

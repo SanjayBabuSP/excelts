@@ -7,6 +7,7 @@
 import { StreamTypeError } from "@stream/errors";
 import type { WritableStreamOptions, ICollector } from "@stream/types";
 import { chunksToString } from "@utils/binary";
+import { toBinaryChunk } from "@stream/common/binary-chunk";
 
 import { Writable } from "./writable";
 
@@ -40,36 +41,30 @@ export class Collector<T = Uint8Array> extends Writable {
     if (len === 0) {
       return new Uint8Array(0);
     }
+
+    const binaryChunks = new Array<Uint8Array>(len);
+    let totalLength = 0;
+    for (let i = 0; i < len; i++) {
+      const normalized = toBinaryChunk(chunks[i]);
+      if (!normalized) {
+        throw new StreamTypeError("Uint8Array", "non-binary data");
+      }
+      binaryChunks[i] = normalized;
+      totalLength += normalized.length;
+    }
+
     if (len === 1) {
-      const first = chunks[0];
-      if (first instanceof Uint8Array) {
-        return first;
-      }
-      if (Buffer.isBuffer(first)) {
-        return new Uint8Array(first.buffer, first.byteOffset, first.byteLength);
-      }
+      return binaryChunks[0];
     }
 
-    // Fast path: check first chunk type once
-    const first = chunks[0];
-    if (first instanceof Uint8Array || Buffer.isBuffer(first)) {
-      // Calculate total length with simple loop (faster than reduce)
-      let totalLength = 0;
-      for (let i = 0; i < len; i++) {
-        totalLength += (chunks[i] as Uint8Array).length;
-      }
-
-      const result = new Uint8Array(totalLength);
-      let offset = 0;
-      for (let i = 0; i < len; i++) {
-        const arr = chunks[i] as Uint8Array;
-        result.set(arr, offset);
-        offset += arr.length;
-      }
-      return result;
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (let i = 0; i < len; i++) {
+      const arr = binaryChunks[i]!;
+      result.set(arr, offset);
+      offset += arr.length;
     }
-
-    throw new StreamTypeError("Uint8Array", "non-binary data");
+    return result;
   }
 
   /**

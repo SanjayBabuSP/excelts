@@ -5,6 +5,7 @@
 import type { PipelineStreamLike } from "@stream/types";
 import type { PipelineOptions, PipelineCallback, FinishedOptions } from "@stream/common/options";
 import { createFinishedAll } from "@stream/common/finished-all";
+import { createAbortError } from "@stream/errors";
 import {
   isReadableStream,
   isTransformStream,
@@ -138,10 +139,10 @@ export function pipeline(
     // Handle abort signal
     if (options.signal) {
       if (options.signal.aborted) {
-        cleanupWithSignal(new Error("Pipeline aborted"));
+        cleanupWithSignal(createAbortError((options.signal as any).reason));
         return;
       }
-      onAbort = () => cleanupWithSignal(new Error("Pipeline aborted"));
+      onAbort = () => cleanupWithSignal(createAbortError((options.signal as any).reason));
       options.signal.addEventListener("abort", onAbort);
     }
 
@@ -196,7 +197,7 @@ export function pipeline(
 
   // If callback provided, use it
   if (callback) {
-    promise.then(() => callback!(null)).catch(err => callback!(err));
+    promise.then(() => callback!()).catch(err => callback!(err));
   }
 
   return promise;
@@ -270,43 +271,81 @@ export function finished(
     // Handle abort signal
     if (options.signal) {
       if (options.signal.aborted) {
-        done(new Error("Aborted"));
+        done(createAbortError((options.signal as any).reason));
         return;
       }
-      onAbort = () => done(new Error("Aborted"));
+      onAbort = () => done(createAbortError((options.signal as any).reason));
       options.signal.addEventListener("abort", onAbort);
     }
 
-    const checkReadable = options.readable !== false;
-    const checkWritable = options.writable !== false;
+    const supportsReadable =
+      "readableEnded" in (normalizedStream as any) ||
+      "readable" in (normalizedStream as any) ||
+      typeof (normalizedStream as any).read === "function";
+    const supportsWritable =
+      "writableFinished" in (normalizedStream as any) ||
+      "writable" in (normalizedStream as any) ||
+      typeof (normalizedStream as any).write === "function";
+
+    const checkReadable = options.readable !== false && supportsReadable;
+    const checkWritable = options.writable !== false && supportsWritable;
+
+    let readableDone = !checkReadable || !!(normalizedStream as any).readableEnded;
+    let writableDone = !checkWritable || !!(normalizedStream as any).writableFinished;
+
+    const maybeDone = (): void => {
+      if (readableDone && writableDone) {
+        done();
+      }
+    };
 
     // Already finished?
-    if (checkReadable && normalizedStream.readableEnded) {
-      done();
-      return;
-    }
-
-    if (checkWritable && normalizedStream.writableFinished) {
+    if (readableDone && writableDone) {
       done();
       return;
     }
 
     // Listen for events
-    if (checkWritable) {
-      registry.once(normalizedStream, "finish", () => done());
+    if (checkWritable && !writableDone) {
+      registry.once(normalizedStream, "finish", () => {
+        writableDone = true;
+        maybeDone();
+      });
     }
 
-    if (checkReadable) {
-      registry.once(normalizedStream, "end", () => done());
+    if (checkReadable && !readableDone) {
+      registry.once(normalizedStream, "end", () => {
+        readableDone = true;
+        maybeDone();
+      });
     }
 
     registry.once(normalizedStream, "error", (err: Error) => done(err));
-    registry.once(normalizedStream, "close", () => done());
+    registry.once(normalizedStream, "close", () => {
+      const closedReadableDone = readableDone || !!(normalizedStream as any).readableEnded;
+      const closedWritableDone = writableDone || !!(normalizedStream as any).writableFinished;
+
+      if (closedReadableDone && closedWritableDone) {
+        readableDone = closedReadableDone;
+        writableDone = closedWritableDone;
+        maybeDone();
+        return;
+      }
+
+      if (options.error === false) {
+        done();
+        return;
+      }
+
+      const err = new Error("Premature close") as Error & { code?: string };
+      err.code = "ERR_STREAM_PREMATURE_CLOSE";
+      done(err);
+    });
   });
 
   // If callback provided, use it
   if (cb) {
-    promise.then(() => cb!(null)).catch(err => cb!(err));
+    promise.then(() => cb!()).catch(err => cb!(err));
   }
 
   return promise;

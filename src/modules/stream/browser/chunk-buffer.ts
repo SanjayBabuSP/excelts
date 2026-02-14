@@ -134,4 +134,100 @@ export class ChunkBuffer<T> {
     this._front.length = 0;
     this._byteSize = 0;
   }
+
+  // ---------------------------------------------------------------------------
+  // Byte-level operations (binary mode)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Consume exactly `size` bytes from the buffer, splitting chunks as needed.
+   * Returns a single Uint8Array of exactly `size` bytes.
+   * Caller must ensure `byteSize >= size` before calling.
+   * Only valid in binary (non-object) mode.
+   */
+  consumeBytes(size: number): T {
+    if (size === 0) {
+      return new Uint8Array(0) as T;
+    }
+
+    // Fast path: if the front chunk is exactly the right size
+    const first = this.peek();
+    if (first instanceof Uint8Array && first.byteLength === size) {
+      return this.shift();
+    }
+
+    // Fast path: if the front chunk is bigger than needed, slice it
+    if (first instanceof Uint8Array && first.byteLength > size) {
+      this._shiftFrontChunk(); // remove the full chunk from queue
+      const result = first.subarray(0, size);
+      const remainder = first.subarray(size);
+      // Put remainder back at front
+      this.unshift(remainder as T);
+      // Adjust byteSize: shift removed full chunk, unshift added remainder.
+      // We need to additionally correct because we removed a big chunk but only consumed `size`.
+      // shift() already subtracted the full chunk size, unshift() added remainder size back.
+      // Net effect: byteSize reduced by `size`. Correct!
+      return result as T;
+    }
+
+    // General case: concatenate across multiple chunks
+    const result = new Uint8Array(size);
+    let offset = 0;
+    while (offset < size) {
+      const chunk = this.shift();
+      if (chunk instanceof Uint8Array) {
+        const needed = size - offset;
+        if (chunk.byteLength <= needed) {
+          result.set(chunk, offset);
+          offset += chunk.byteLength;
+        } else {
+          // Chunk is bigger than remaining need — take what we need, put rest back
+          result.set(chunk.subarray(0, needed), offset);
+          this.unshift(chunk.subarray(needed) as T);
+          offset += needed;
+        }
+      }
+    }
+    return result as T;
+  }
+
+  /**
+   * Consume all buffered data and return as a single concatenated Uint8Array.
+   * Only valid in binary (non-object) mode.
+   */
+  consumeAll(): T {
+    if (this.length === 0) {
+      return new Uint8Array(0) as T;
+    }
+
+    // Fast path: single chunk
+    if (this.length === 1) {
+      return this.shift();
+    }
+
+    const totalSize = this._byteSize;
+    const result = new Uint8Array(totalSize);
+    let offset = 0;
+    while (this.length > 0) {
+      const chunk = this.shift();
+      if (chunk instanceof Uint8Array) {
+        result.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    }
+    return result as T;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Remove and return the front chunk WITHOUT updating byteSize.
+   * Used by consumeBytes when we need to split a chunk.
+   * Actually, we just use shift() which handles byteSize — see consumeBytes.
+   */
+  private _shiftFrontChunk(): T {
+    return this.shift();
+  }
 }

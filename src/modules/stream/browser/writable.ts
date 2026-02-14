@@ -72,17 +72,17 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   ) => void;
   // User-provided final function (Node.js compatibility)
   private _finalFunc?: (callback: (error?: Error | null) => void) => void;
-  readonly objectMode: boolean;
-  readonly writableHighWaterMark: number;
-  readonly autoDestroy: boolean;
-  readonly emitClose: boolean;
+  private _objectMode: boolean;
+  private _highWaterMark: number;
+  private _autoDestroy: boolean;
+  private _emitClose: boolean;
 
   constructor(options?: WritableOptions<T>) {
     super();
-    this.objectMode = options?.objectMode ?? false;
-    this.writableHighWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this.objectMode);
-    this.autoDestroy = options?.autoDestroy ?? true;
-    this.emitClose = options?.emitClose ?? true;
+    this._objectMode = options?.objectMode ?? false;
+    this._highWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this._objectMode);
+    this._autoDestroy = options?.autoDestroy ?? true;
+    this._emitClose = options?.emitClose ?? true;
     this._defaultEncoding = options?.defaultEncoding ?? "utf8";
 
     // Store user-provided write function
@@ -120,7 +120,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           close: async () => {
             this._finished = true;
             this.emit("finish");
-            if (this.emitClose) {
+            if (this._emitClose) {
               this.emit("close");
             }
           },
@@ -195,7 +195,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       this._corkedChunks.push({ chunk, callback: cb });
       const chunkSize = this._getChunkSize(chunk);
       this._writableLength += chunkSize;
-      return this._writableLength < this.writableHighWaterMark;
+      return this._writableLength < this._highWaterMark;
     }
 
     const ok = this._doWrite(chunk, cb);
@@ -227,7 +227,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         .write(chunk)
         .then(() => {
           this._writableLength -= chunkSize;
-          if (this._needDrain && this._writableLength < this.writableHighWaterMark) {
+          if (this._needDrain && this._writableLength < this._highWaterMark) {
             this._needDrain = false;
             this.emit("drain");
           }
@@ -244,7 +244,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
 
     // Return false if we've exceeded high water mark (for backpressure)
-    return this._writableLength < this.writableHighWaterMark;
+    return this._writableLength < this._highWaterMark;
   }
 
   /**
@@ -274,7 +274,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         }
 
         this._writableLength -= chunkSize;
-        if (this._needDrain && this._writableLength < this.writableHighWaterMark) {
+        if (this._needDrain && this._writableLength < this._highWaterMark) {
           this._needDrain = false;
           this.emit("drain");
         }
@@ -338,7 +338,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         queueMicrotask(() => {
           this.emit("finish");
           this._closed = true;
-          if (this.emitClose) {
+          if (this._emitClose) {
             this.emit("close");
           }
           cb?.();
@@ -349,7 +349,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       queueMicrotask(() => {
         this.emit("finish");
         this._closed = true;
-        if (this.emitClose) {
+        if (this._emitClose) {
           this.emit("close");
         }
         cb?.();
@@ -358,7 +358,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   }
 
   private _getChunkSize(chunk: T): number {
-    if (this.objectMode) {
+    if (this._objectMode) {
       return 1;
     }
     if (chunk instanceof Uint8Array) {
@@ -428,7 +428,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         if (!this._ownsStream) {
           this._finished = true;
           this.emit("finish");
-          if (this.emitClose) {
+          if (this._emitClose) {
             this.emit("close");
           }
         }
@@ -569,7 +569,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
   /** Whether the stream needs drain (writableLength exceeds high water mark) */
   get writableNeedDrain(): boolean {
-    return this._writableLength >= this.writableHighWaterMark;
+    return this._writableLength >= this._highWaterMark;
   }
 
   /** How many times cork() has been called without uncork() */
@@ -584,7 +584,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
   /** Whether the stream is in object mode */
   get writableObjectMode(): boolean {
-    return this.objectMode;
+    return this._objectMode;
+  }
+
+  get writableHighWaterMark(): number {
+    return this._highWaterMark;
   }
 
   /**

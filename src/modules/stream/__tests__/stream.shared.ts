@@ -16,7 +16,7 @@ import { describe, it, expect } from "vitest";
 export interface StreamModuleImports {
   // Core Classes
   EventEmitter: new () => any;
-  Readable: new (options?: any) => any;
+  Readable: { new (options?: any): any; from: (...args: any[]) => any };
   Writable: new (options?: any) => any;
   Transform: new (options?: any) => any;
   Duplex: new (options?: any) => any;
@@ -1081,6 +1081,174 @@ export function runStreamTests(imports: StreamModuleImports): void {
       await copyStream(readable, collector);
       expect(collector.chunks).toEqual([1, 2]);
     });
+
+    it("pipeline callback should not pass null on success", async () => {
+      const readable = createReadableFromArray(["ok"], { objectMode: true });
+      const collector = createCollector<string>();
+
+      await new Promise<void>((resolve, reject) => {
+        pipeline(readable, collector, (err?: Error | null) => {
+          try {
+            expect(err).toBeUndefined();
+            resolve();
+          } catch (assertionError) {
+            reject(assertionError);
+          }
+        });
+      });
+
+      expect(collector.chunks).toEqual(["ok"]);
+    });
+
+    it("finished callback should not pass null on success", async () => {
+      const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+      readable.resume();
+
+      await new Promise<void>((resolve, reject) => {
+        finished(readable, (err?: Error | null) => {
+          try {
+            expect(err).toBeUndefined();
+            resolve();
+          } catch (assertionError) {
+            reject(assertionError);
+          }
+        });
+      });
+    });
+
+    it("finished should wait for both sides on duplex streams by default", async () => {
+      const duplex = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_chunk: unknown, _encoding: string, callback: (error?: Error | null) => void) {
+          callback();
+        },
+        final(this: any, callback: (error?: Error | null) => void) {
+          setTimeout(() => {
+            this.push("done");
+            this.push(null);
+            callback();
+          }, 20);
+        }
+      });
+
+      duplex.resume();
+      duplex.write("in");
+      duplex.end();
+
+      await finished(duplex);
+
+      expect(duplex.writableFinished).toBe(true);
+      expect(duplex.readableEnded).toBe(true);
+    });
+
+    it("pipeline should reject with AbortError when signal is already aborted", async () => {
+      const controller = new AbortController();
+      controller.abort(new Error("stop"));
+
+      const readable = createReadableFromArray(["x"], { objectMode: true });
+      const collector = createCollector<string>();
+
+      await expect(
+        pipeline(readable, collector, {
+          signal: controller.signal
+        })
+      ).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    it("finished should reject with AbortError when signal is already aborted", async () => {
+      const controller = new AbortController();
+      controller.abort(new Error("stop"));
+
+      const readable = createReadableFromArray([1], { objectMode: true });
+
+      await expect(
+        finished(readable, {
+          signal: controller.signal
+        })
+      ).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    it("pipeline should respect end:false and keep destination writable", async () => {
+      const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+      const chunks: number[] = [];
+      let finishedCount = 0;
+
+      const writable = createWritable<number>({
+        objectMode: true,
+        write(chunk, _encoding, callback) {
+          chunks.push(chunk);
+          callback();
+        }
+      });
+
+      writable.on("finish", () => {
+        finishedCount++;
+      });
+
+      await pipeline(readable, writable, { end: false });
+
+      expect(chunks).toEqual([1, 2, 3]);
+      expect(writable.writableEnded).toBe(false);
+      expect(finishedCount).toBe(0);
+
+      writable.end();
+      await finished(writable);
+      expect(finishedCount).toBe(1);
+    });
+
+    it("finished should reject on premature close", async () => {
+      const writable = createWritable<number>({
+        objectMode: true,
+        write(_chunk, _encoding, callback) {
+          setTimeout(callback, 10);
+        }
+      });
+
+      writable.write(1);
+      const done = finished(writable);
+      writable.destroy();
+
+      await expect(done).rejects.toMatchObject({ code: "ERR_STREAM_PREMATURE_CLOSE" });
+    });
+
+    it("pipeline should reject with AbortError when aborted mid-flight", async () => {
+      const controller = new AbortController();
+      const seen: number[] = [];
+
+      const readable = createReadableFromAsyncIterable(
+        (async function* () {
+          for (let i = 0; i < 100; i++) {
+            await new Promise(resolve => setTimeout(resolve, 1));
+            yield i;
+          }
+        })(),
+        { objectMode: true }
+      );
+
+      const writable = createWritable<number>({
+        objectMode: true,
+        highWaterMark: 1,
+        write(chunk, _encoding, callback) {
+          seen.push(chunk);
+          if (seen.length === 1) {
+            controller.abort(new Error("stop-mid-flight"));
+          }
+          setTimeout(callback, 1);
+        }
+      });
+
+      readable.on("error", () => {});
+      writable.on("error", () => {});
+
+      await expect(
+        pipeline(readable, writable, {
+          signal: controller.signal
+        })
+      ).rejects.toMatchObject({ name: "AbortError" });
+
+      expect(seen).toEqual([0]);
+    });
   });
 
   // ==========================================================================
@@ -1141,6 +1309,36 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const transform = createTransform<string, string>(s => s, { objectMode: true });
       const result = compose(transform);
       expect(result).toBe(transform);
+    });
+
+    it("should respect pause/resume when consuming composed data", async () => {
+      const t1 = createTransform<number, number>(n => n, { objectMode: true });
+      const t2 = createTransform<number, number>(n => n, { objectMode: true });
+
+      const composed = compose(t1, t2);
+      const received: number[] = [];
+      let pausedSnapshot: number[] = [];
+
+      composed.on("data", (chunk: number) => {
+        received.push(chunk);
+        if (chunk === 1) {
+          composed.pause();
+          setTimeout(() => {
+            pausedSnapshot = [...received];
+            composed.resume();
+          }, 10);
+        }
+      });
+
+      composed.write(1);
+      composed.write(2);
+      composed.write(3);
+      composed.end();
+
+      await finished(composed);
+
+      expect(pausedSnapshot).toEqual([1]);
+      expect(received).toEqual([1, 2, 3]);
     });
   });
 
@@ -1329,7 +1527,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           results.push(chunk);
         }
 
-        // undefined may be filtered out, but 0, '', false should be preserved
+        // 0, '', and false must be preserved even when undefined is skipped
         expect(results).toContain(0);
         expect(results).toContain("");
         expect(results).toContain(false);
@@ -2237,6 +2435,18 @@ export function runStreamTests(imports: StreamModuleImports): void {
           expect(result).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
         });
 
+        it("should handle ArrayBuffer and ArrayBufferView chunks", () => {
+          const collector = createCollector<unknown>();
+
+          collector.write(new Uint8Array([1, 2]));
+          collector.write(new Uint8Array([3, 4]).buffer);
+          collector.write(new DataView(new Uint8Array([5, 6]).buffer));
+          collector.end();
+
+          const result = collector.toUint8Array();
+          expect(result).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]));
+        });
+
         it("should throw consistent error message for non-binary data in toUint8Array", () => {
           const collector = createCollector<string>();
           collector.write("hello");
@@ -2304,7 +2514,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           expect(isStream(undefined)).toBe(false);
           expect(isStream({})).toBe(false);
           expect(isStream({ pipe: "not a function" })).toBe(false);
-          // These might pass or fail depending on implementation
+          // Similar-looking plain objects are not treated as streams
           expect(isReadable(fakeReadable)).toBe(false);
           expect(isWritable(fakeWritable)).toBe(false);
         });
@@ -2546,7 +2756,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
           states.push(readable.readable);
 
-          // First state should be true, last might be false after consumption
+          // Initial readable state should be true
           expect(states[0]).toBe(true);
         });
 
@@ -2574,7 +2784,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           collector.write(2);
           collector.write(3);
 
-          // Data might be buffered
+          // Data can be buffered before uncork
           await new Promise(resolve => setTimeout(resolve, 5));
 
           collector.uncork();
@@ -2604,7 +2814,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         });
 
         it("should handle binary data at exact buffer boundaries", async () => {
-          // Create data that might hit buffer boundaries (16KB, 64KB)
+          // Create data near common buffer boundaries (16KB, 64KB)
           const size = 16 * 1024; // 16KB
           const data = new Uint8Array(size);
           data.fill(42);
@@ -2655,6 +2865,26 @@ export function runStreamTests(imports: StreamModuleImports): void {
           const readable = createReadableFromArray([stringToUint8Array(bomStr)]);
           const result = await streamToString(readable);
           expect(result).toBe(bomStr);
+        });
+
+        it("should support utf16le/ucs2 alias decoding consistently", async () => {
+          const utf16leBytes = new Uint8Array([0x41, 0x00, 0xa9, 0x03]); // "AΩ"
+
+          const fromUtf16le = await streamToString(
+            createReadableFromArray([utf16leBytes]),
+            "utf16le"
+          );
+          const fromUcs2 = await streamToString(createReadableFromArray([utf16leBytes]), "ucs2");
+
+          expect(fromUtf16le).toBe("AΩ");
+          expect(fromUcs2).toBe("AΩ");
+        });
+
+        it("should reject unsupported text encodings consistently", async () => {
+          const readable = createReadableFromArray([stringToUint8Array("abc")]);
+          await expect(streamToString(readable, "base64")).rejects.toSatisfy(
+            (err: unknown) => err instanceof TypeError || err instanceof RangeError
+          );
         });
       });
 
@@ -2820,7 +3050,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           ]);
         });
 
-        it("should handle pipeline with transform returning undefined (skip)", async () => {
+        it("should skip undefined outputs from transform", async () => {
           const source = createReadableFromArray([1, 2, 3, 4, 5], { objectMode: true });
           const transform = createTransform<number, number | undefined>(
             n => (n % 2 === 0 ? n : undefined), // Filter out odd numbers
@@ -2829,9 +3059,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           const collector = createCollector<number | undefined>();
 
           await pipeline(source, transform, collector);
-          // undefined values might be skipped or included depending on implementation
-          const nonUndefined = collector.chunks.filter(x => x !== undefined);
-          expect(nonUndefined).toEqual([2, 4]);
+          expect(collector.chunks).toEqual([2, 4]);
         });
       });
 
@@ -3192,7 +3420,19 @@ export function runStreamTests(imports: StreamModuleImports): void {
       describe("Destroy and Cleanup", () => {
         it("should not emit data after destroy", async () => {
           const results: number[] = [];
-          const readable = createReadableFromArray([1, 2, 3, 4, 5], { objectMode: true });
+          let index = 0;
+          const readable = new Readable({
+            objectMode: true,
+            read() {
+              if (index >= 5) {
+                this.push(null);
+                return;
+              }
+              setTimeout(() => {
+                this.push(++index);
+              }, 1);
+            }
+          });
 
           readable.on("data", (n: number) => {
             results.push(n);
@@ -3204,8 +3444,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           // Wait a bit for any pending events
           await new Promise(resolve => setTimeout(resolve, 50));
 
-          // Should have stopped at or near 2
-          expect(results.length).toBeLessThanOrEqual(3);
+          expect(results).toEqual([1, 2]);
         });
 
         it("should handle destroy with error", async () => {
@@ -3642,6 +3881,19 @@ export function runStreamTests(imports: StreamModuleImports): void {
           await finished(collector);
 
           expect(collector.toUint8Array()).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]));
+        });
+
+        it("should handle toUint8Array on mixed binary-view collector", async () => {
+          const collector = createCollector<unknown>({ objectMode: true });
+
+          collector.write(new Uint8Array([10]));
+          collector.write(new Uint8Array([11, 12]).buffer);
+          collector.write(new DataView(new Uint8Array([13]).buffer));
+          collector.end();
+
+          await finished(collector);
+
+          expect(collector.toUint8Array()).toEqual(new Uint8Array([10, 11, 12, 13]));
         });
 
         it("should default to objectMode: true when no options provided", async () => {
@@ -4199,6 +4451,71 @@ export function runStreamTests(imports: StreamModuleImports): void {
       await pipeline(readable, writable);
       expect(results).toEqual([1, 2, 3, 4, 5]);
     });
+
+    it("compose should preserve order under slow downstream pressure", async () => {
+      const addOne = createTransform<number, number>(n => n + 1, { objectMode: true });
+      const multiply = createTransform<number, number>(n => n * 2, { objectMode: true });
+      const composed = compose(addOne, multiply);
+
+      const input = Array.from({ length: 200 }, (_, i) => i);
+      const expected = input.map(n => (n + 1) * 2);
+      const output: number[] = [];
+
+      const slowWritable = createWritable<number>({
+        objectMode: true,
+        highWaterMark: 1,
+        write(chunk, _encoding, callback) {
+          output.push(chunk);
+          setTimeout(callback, 1);
+        }
+      });
+
+      const source = createReadableFromArray(input, { objectMode: true });
+      await pipeline(source, composed, slowWritable);
+
+      expect(output).toEqual(expected);
+    });
+
+    it("compose chain should reject with AbortError and keep prefix ordering", async () => {
+      const controller = new AbortController();
+
+      const stage1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+      const stage2 = createTransform<number, number>(n => n * 3, { objectMode: true });
+      const stage3 = createTransform<number, number>(n => n - 2, { objectMode: true });
+      const composed = compose(stage1, stage2, stage3);
+
+      const input = Array.from({ length: 120 }, (_, i) => i);
+      const output: number[] = [];
+
+      const writable = createWritable<number>({
+        objectMode: true,
+        highWaterMark: 1,
+        write(chunk, _encoding, callback) {
+          output.push(chunk);
+          if (output.length === 5) {
+            controller.abort(new Error("abort-compose"));
+          }
+          setTimeout(callback, 1);
+        }
+      });
+
+      stage1.on("error", () => {});
+      stage2.on("error", () => {});
+      stage3.on("error", () => {});
+      composed.on("error", () => {});
+      writable.on("error", () => {});
+
+      await expect(
+        pipeline(createReadableFromArray(input, { objectMode: true }), composed, writable, {
+          signal: controller.signal
+        })
+      ).rejects.toMatchObject({ name: "AbortError" });
+
+      const expectedPrefix = input.map(n => (n + 1) * 3 - 2).slice(0, output.length);
+      expect(output).toEqual(expectedPrefix);
+      expect(output.length).toBeGreaterThanOrEqual(5);
+      expect(output.length).toBeLessThan(input.length);
+    });
   });
 
   // ==========================================================================
@@ -4518,7 +4835,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           // drain
         }
 
-        // Both Node and browser allow unshift after end (no throw)
+        // unshift after end should not throw
         expect(() => readable.unshift("data")).not.toThrow();
       });
     });
@@ -4602,7 +4919,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         for (let r = await iter.next(); !r.done; r = await iter.next()) {
           chunks.push(r.value);
         }
-        // Node may coalesce chunks; just verify all data arrives
+        // Verify all data arrives regardless of chunk boundaries
         expect(chunks.join("")).toBe("ab");
       });
     });
@@ -4703,6 +5020,970 @@ export function runStreamTests(imports: StreamModuleImports): void {
         const result = t.destroy();
         expect(result).toBe(t);
       });
+    });
+  });
+
+  // ===========================================================================
+  // Fix 2: pipe() with options { end: false }
+  // ===========================================================================
+
+  describe("pipe options { end: false }", () => {
+    it("Readable.pipe with end: false should not end destination", async () => {
+      const source = Readable.from([1, 2, 3], { objectMode: true });
+      const chunks: any[] = [];
+      let finished = false;
+
+      const dest = new Writable({
+        objectMode: true,
+        write(chunk: any, _enc: string, cb: () => void) {
+          chunks.push(chunk);
+          cb();
+        },
+        final(cb: () => void) {
+          finished = true;
+          cb();
+        }
+      });
+
+      source.pipe(dest, { end: false });
+
+      await new Promise<void>(resolve => {
+        source.on("end", () => {
+          // Give a tick for any end propagation
+          setTimeout(() => resolve(), 50);
+        });
+      });
+
+      expect(chunks).toEqual([1, 2, 3]);
+      expect(finished).toBe(false);
+      // Clean up
+      dest.end();
+    });
+
+    it("Readable.pipe without options should end destination", async () => {
+      const source = Readable.from([1, 2, 3], { objectMode: true });
+      const chunks: any[] = [];
+
+      const dest = new Writable({
+        objectMode: true,
+        write(chunk: any, _enc: string, cb: () => void) {
+          chunks.push(chunk);
+          cb();
+        }
+      });
+
+      source.pipe(dest);
+
+      await new Promise<void>(resolve => {
+        dest.on("finish", () => resolve());
+      });
+
+      expect(chunks).toEqual([1, 2, 3]);
+    });
+  });
+
+  // ===========================================================================
+  // Fix 3 & 4: push/unshift with encoding parameter
+  // ===========================================================================
+
+  describe("push and unshift with encoding", () => {
+    it("push with encoding should convert string to bytes in binary mode", async () => {
+      const r = new Readable();
+      r.push("hello", "utf8");
+      r.push(null);
+
+      const chunks: any[] = [];
+      for await (const chunk of r) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.length).toBe(1);
+      // Should be Uint8Array in binary mode
+      expect(chunks[0] instanceof Uint8Array).toBe(true);
+      // Compare contents
+      const expected = new TextEncoder().encode("hello");
+      expect(Array.from(chunks[0] as Uint8Array)).toEqual(Array.from(expected));
+    });
+
+    it("push without encoding should accept Uint8Array directly", async () => {
+      const r = new Readable();
+      const data = new Uint8Array([1, 2, 3]);
+      r.push(data);
+      r.push(null);
+
+      const chunks: any[] = [];
+      for await (const chunk of r) {
+        chunks.push(chunk);
+      }
+      expect(chunks.length).toBe(1);
+      expect(Array.from(chunks[0] as Uint8Array)).toEqual([1, 2, 3]);
+    });
+
+    it("push with encoding in object mode should pass string as-is", async () => {
+      const r = new Readable({ objectMode: true });
+      r.push("hello", "utf8");
+      r.push(null);
+
+      const chunks: any[] = [];
+      for await (const chunk of r) {
+        chunks.push(chunk);
+      }
+      expect(chunks).toEqual(["hello"]);
+    });
+  });
+
+  // ===========================================================================
+  // Fix 5: read(size) precise byte reading
+  // ===========================================================================
+
+  describe("read(size) precise reading", () => {
+    it("read(0) should return null", () => {
+      const r = new Readable({ objectMode: true, read() {} });
+      r.push("a");
+      const result = r.read(0);
+      expect(result).toBeNull();
+    });
+
+    it("read() in object mode should return one object at a time", () => {
+      const r = new Readable({ objectMode: true, read() {} });
+      r.push("a");
+      r.push("b");
+      r.push("c");
+
+      expect(r.read()).toBe("a");
+      expect(r.read()).toBe("b");
+      expect(r.read()).toBe("c");
+      expect(r.read()).toBeNull();
+    });
+
+    it("read() without size in binary mode should return all buffered data", () => {
+      const r = new Readable({ read() {} });
+      r.push(new Uint8Array([1, 2]));
+      r.push(new Uint8Array([3, 4]));
+
+      const result = r.read() as Uint8Array;
+      expect(result).not.toBeNull();
+      expect(Array.from(result)).toEqual([1, 2, 3, 4]);
+    });
+
+    it("read(n) should return exactly n bytes", () => {
+      const r = new Readable({ read() {} });
+      r.push(new Uint8Array([1, 2, 3, 4, 5]));
+
+      const result = r.read(3) as Uint8Array;
+      expect(result).not.toBeNull();
+      expect(Array.from(result)).toEqual([1, 2, 3]);
+
+      const rest = r.read(2) as Uint8Array;
+      expect(rest).not.toBeNull();
+      expect(Array.from(rest)).toEqual([4, 5]);
+    });
+
+    it("read(n) should return null when insufficient data", () => {
+      const r = new Readable({ read() {} });
+      r.push(new Uint8Array([1, 2]));
+
+      const result = r.read(5);
+      expect(result).toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // Fix 6: Functional / Higher-order Methods on Readable
+  // ===========================================================================
+
+  describe("Readable functional methods", () => {
+    describe("map", () => {
+      it("should map each chunk", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const mapped = r.map((x: number) => x * 2);
+        const result: any[] = [];
+        for await (const chunk of mapped) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([2, 4, 6]);
+      });
+
+      it("should support async map functions", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const mapped = r.map(async (x: number) => {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          return x * 10;
+        });
+        const result: any[] = [];
+        for await (const chunk of mapped) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([10, 20, 30]);
+      });
+
+      it("should return a Readable", () => {
+        const r = Readable.from([1], { objectMode: true });
+        const mapped = r.map((x: number) => x);
+        expect(mapped).toBeInstanceOf(Readable);
+      });
+    });
+
+    describe("filter", () => {
+      it("should filter chunks by predicate", async () => {
+        const r = Readable.from([1, 2, 3, 4, 5], { objectMode: true });
+        const filtered = r.filter((x: number) => x % 2 === 0);
+        const result: any[] = [];
+        for await (const chunk of filtered) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([2, 4]);
+      });
+
+      it("should support async predicates", async () => {
+        const r = Readable.from([1, 2, 3, 4], { objectMode: true });
+        const filtered = r.filter(async (x: number) => x > 2);
+        const result: any[] = [];
+        for await (const chunk of filtered) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([3, 4]);
+      });
+
+      it("should return a Readable", () => {
+        const r = Readable.from([1], { objectMode: true });
+        const filtered = r.filter(() => true);
+        expect(filtered).toBeInstanceOf(Readable);
+      });
+    });
+
+    describe("forEach", () => {
+      it("should iterate all chunks", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const items: any[] = [];
+        const result = await r.forEach((x: number) => {
+          items.push(x);
+        });
+        expect(items).toEqual([1, 2, 3]);
+        expect(result).toBeUndefined();
+      });
+
+      it("should support async callbacks", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const items: any[] = [];
+        await r.forEach(async (x: number) => {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          items.push(x);
+        });
+        expect(items).toEqual([1, 2, 3]);
+      });
+    });
+
+    describe("toArray", () => {
+      it("should collect all chunks into an array", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.toArray();
+        expect(result).toEqual([1, 2, 3]);
+      });
+
+      it("should return empty array for empty stream", async () => {
+        const r = Readable.from([], { objectMode: true });
+        const result = await r.toArray();
+        expect(result).toEqual([]);
+      });
+    });
+
+    describe("some", () => {
+      it("should return true if any chunk matches", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.some((x: number) => x === 2);
+        expect(result).toBe(true);
+      });
+
+      it("should return false if no chunk matches", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.some((x: number) => x === 5);
+        expect(result).toBe(false);
+      });
+
+      it("should return false for empty stream", async () => {
+        const r = Readable.from([], { objectMode: true });
+        const result = await r.some(() => true);
+        expect(result).toBe(false);
+      });
+    });
+
+    describe("find", () => {
+      it("should find the first matching chunk", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.find((x: number) => x === 2);
+        expect(result).toBe(2);
+      });
+
+      it("should return undefined if no match", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.find((x: number) => x === 5);
+        expect(result).toBeUndefined();
+      });
+    });
+
+    describe("every", () => {
+      it("should return true if all chunks match", async () => {
+        const r = Readable.from([2, 4, 6], { objectMode: true });
+        const result = await r.every((x: number) => x % 2 === 0);
+        expect(result).toBe(true);
+      });
+
+      it("should return false if any chunk fails", async () => {
+        const r = Readable.from([2, 3, 6], { objectMode: true });
+        const result = await r.every((x: number) => x % 2 === 0);
+        expect(result).toBe(false);
+      });
+
+      it("should return true for empty stream (vacuous truth)", async () => {
+        const r = Readable.from([], { objectMode: true });
+        const result = await r.every(() => false);
+        expect(result).toBe(true);
+      });
+    });
+
+    describe("flatMap", () => {
+      it("should flatten arrays", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const flat = r.flatMap((x: number) => [x, x * 10]);
+        const result: any[] = [];
+        for await (const chunk of flat) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([1, 10, 2, 20, 3, 30]);
+      });
+
+      it("should flatten async iterables", async () => {
+        const r = Readable.from([1, 2], { objectMode: true });
+        const flat = r.flatMap(async function* (x: number) {
+          yield x;
+          yield x * 10;
+        });
+        const result: any[] = [];
+        for await (const chunk of flat) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([1, 10, 2, 20]);
+      });
+
+      it("should return a Readable", () => {
+        const r = Readable.from([1], { objectMode: true });
+        const flat = r.flatMap((x: number) => [x]);
+        expect(flat).toBeInstanceOf(Readable);
+      });
+    });
+
+    describe("drop", () => {
+      it("should skip first N chunks", async () => {
+        const r = Readable.from([1, 2, 3, 4, 5], { objectMode: true });
+        const dropped = r.drop(2);
+        const result: any[] = [];
+        for await (const chunk of dropped) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([3, 4, 5]);
+      });
+
+      it("drop(0) should pass everything through", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const dropped = r.drop(0);
+        const result: any[] = [];
+        for await (const chunk of dropped) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([1, 2, 3]);
+      });
+
+      it("drop more than available should return empty", async () => {
+        const r = Readable.from([1, 2], { objectMode: true });
+        const dropped = r.drop(10);
+        const result: any[] = [];
+        for await (const chunk of dropped) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([]);
+      });
+
+      it("should return a Readable", () => {
+        const r = Readable.from([1], { objectMode: true });
+        const dropped = r.drop(0);
+        expect(dropped).toBeInstanceOf(Readable);
+      });
+    });
+
+    describe("take", () => {
+      it("should take only first N chunks", async () => {
+        const r = Readable.from([1, 2, 3, 4, 5], { objectMode: true });
+        const taken = r.take(3);
+        const result: any[] = [];
+        for await (const chunk of taken) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([1, 2, 3]);
+      });
+
+      it("take(0) should return empty", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const taken = r.take(0);
+        const result: any[] = [];
+        for await (const chunk of taken) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([]);
+      });
+
+      it("take more than available should return all", async () => {
+        const r = Readable.from([1, 2], { objectMode: true });
+        const taken = r.take(10);
+        const result: any[] = [];
+        for await (const chunk of taken) {
+          result.push(chunk);
+        }
+        expect(result).toEqual([1, 2]);
+      });
+
+      it("should return a Readable", () => {
+        const r = Readable.from([1], { objectMode: true });
+        const taken = r.take(1);
+        expect(taken).toBeInstanceOf(Readable);
+      });
+    });
+
+    describe("reduce", () => {
+      it("should reduce with initial value", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.reduce((acc: number, x: number) => acc + x, 0);
+        expect(result).toBe(6);
+      });
+
+      it("should reduce without initial value (uses first chunk)", async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const result = await r.reduce((acc: number, x: number) => acc + x);
+        expect(result).toBe(6);
+      });
+
+      it("should throw on empty stream without initial value", async () => {
+        const r = Readable.from([], { objectMode: true });
+        await expect(r.reduce((acc: any, x: any) => acc + x)).rejects.toThrow(TypeError);
+      });
+
+      it("should return initial value for empty stream with initial", async () => {
+        const r = Readable.from([], { objectMode: true });
+        const result = await r.reduce((_acc: number, x: number) => x, 42);
+        expect(result).toBe(42);
+      });
+    });
+
+    describe("chaining", () => {
+      it("should chain filter -> map -> toArray", async () => {
+        const r = Readable.from([1, 2, 3, 4, 5, 6], { objectMode: true });
+        const result = await r
+          .filter((x: number) => x % 2 === 0)
+          .map((x: number) => x * 3)
+          .toArray();
+        expect(result).toEqual([6, 12, 18]);
+      });
+
+      it("should chain filter -> map -> take -> toArray", async () => {
+        const r = Readable.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], { objectMode: true });
+        const result = await r
+          .filter((x: number) => x % 2 === 0)
+          .map((x: number) => x * 3)
+          .take(3)
+          .toArray();
+        expect(result).toEqual([6, 12, 18]);
+      });
+
+      it("should chain drop -> take -> reduce", async () => {
+        const r = Readable.from([1, 2, 3, 4, 5], { objectMode: true });
+        const result = await r
+          .drop(1)
+          .take(3)
+          .reduce((acc: number, x: number) => acc + x, 0);
+        expect(result).toBe(9); // 2 + 3 + 4
+      });
+    });
+  });
+
+  // ===========================================================================
+  // Functional methods on Duplex
+  // ===========================================================================
+
+  describe("Duplex functional methods", () => {
+    it("should support map", async () => {
+      const d = new Duplex({ objectMode: true, read() {} });
+      d.push(1);
+      d.push(2);
+      d.push(3);
+      d.push(null);
+
+      const mapped = d.map((x: number) => x * 2);
+      const result = await mapped.toArray();
+      expect(result).toEqual([2, 4, 6]);
+    });
+
+    it("should support filter", async () => {
+      const d = new Duplex({ objectMode: true, read() {} });
+      d.push(1);
+      d.push(2);
+      d.push(3);
+      d.push(4);
+      d.push(null);
+
+      const filtered = d.filter((x: number) => x % 2 === 0);
+      const result = await filtered.toArray();
+      expect(result).toEqual([2, 4]);
+    });
+
+    it("should support toArray", async () => {
+      const d = new Duplex({ objectMode: true, read() {} });
+      d.push("a");
+      d.push("b");
+      d.push(null);
+
+      const result = await d.toArray();
+      expect(result).toEqual(["a", "b"]);
+    });
+
+    it("should support reduce", async () => {
+      const d = new Duplex({ objectMode: true, read() {} });
+      d.push(1);
+      d.push(2);
+      d.push(3);
+      d.push(null);
+
+      const result = await d.reduce((acc: number, x: number) => acc + x, 0);
+      expect(result).toBe(6);
+    });
+  });
+
+  // ===========================================================================
+  // Functional methods on Transform
+  // ===========================================================================
+
+  describe("Transform functional methods", () => {
+    it("should support map on output", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
+          cb(null, chunk * 2);
+        }
+      });
+
+      t.write(1);
+      t.write(2);
+      t.write(3);
+      t.end();
+
+      const mapped = t.map((x: number) => x + 1);
+      const result = await mapped.toArray();
+      expect(result).toEqual([3, 5, 7]);
+    });
+
+    it("should support filter on output", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
+          cb(null, chunk);
+        }
+      });
+
+      t.write(1);
+      t.write(2);
+      t.write(3);
+      t.write(4);
+      t.end();
+
+      const filtered = t.filter((x: number) => x % 2 === 0);
+      const result = await filtered.toArray();
+      expect(result).toEqual([2, 4]);
+    });
+
+    it("should support toArray on output", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _enc: string, cb: (err: null, data: any) => void) {
+          cb(null, chunk);
+        }
+      });
+
+      t.write("x");
+      t.write("y");
+      t.end();
+
+      const result = await t.toArray();
+      expect(result).toEqual(["x", "y"]);
+    });
+
+    it("should support reduce on output", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
+          cb(null, chunk);
+        }
+      });
+
+      t.write(10);
+      t.write(20);
+      t.write(30);
+      t.end();
+
+      const result = await t.reduce((acc: number, x: number) => acc + x, 0);
+      expect(result).toBe(60);
+    });
+  });
+
+  // ===========================================================================
+  // compose on Readable
+  // ===========================================================================
+
+  describe("Readable.compose", () => {
+    it("should compose with a transform stream", async () => {
+      const r = Readable.from([1, 2, 3], { objectMode: true });
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
+          cb(null, chunk * 2);
+        }
+      });
+
+      const composed = r.compose(t);
+      const result: any[] = [];
+      for await (const chunk of composed) {
+        result.push(chunk);
+      }
+      expect(result).toEqual([2, 4, 6]);
+    });
+
+    it("should compose with an async generator function", async () => {
+      const r = Readable.from([1, 2, 3], { objectMode: true });
+
+      const composed = r.compose(async function* (source: AsyncIterable<number>) {
+        for await (const chunk of source) {
+          yield chunk * 3;
+        }
+      });
+
+      const result: any[] = [];
+      for await (const chunk of composed) {
+        result.push(chunk);
+      }
+      expect(result).toEqual([3, 6, 9]);
+    });
+  });
+
+  // ===========================================================================
+  // API Surface: internal properties must NOT be publicly exposed
+  // ===========================================================================
+
+  describe("API surface: internal properties are not public", () => {
+    describe("objectMode is not a public property", () => {
+      it("Readable should not expose objectMode as own property", () => {
+        const r = new Readable({ objectMode: true, read() {} });
+        expect(r.hasOwnProperty("objectMode")).toBe(false);
+        expect((r as any).objectMode).toBeUndefined();
+      });
+
+      it("Writable should not expose objectMode as own property", () => {
+        const w = new Writable({
+          objectMode: true,
+          write(_c: any, _e: string, cb: () => void) {
+            cb();
+          }
+        });
+        expect(w.hasOwnProperty("objectMode")).toBe(false);
+        expect((w as any).objectMode).toBeUndefined();
+      });
+
+      it("Transform should not expose objectMode as own property", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.hasOwnProperty("objectMode")).toBe(false);
+        expect((t as any).objectMode).toBeUndefined();
+      });
+
+      it("objectMode should still be accessible via readableObjectMode / writableObjectMode", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.readableObjectMode).toBe(true);
+        expect(t.writableObjectMode).toBe(true);
+
+        const r = new Readable({ objectMode: true, read() {} });
+        expect(r.readableObjectMode).toBe(true);
+
+        const w = new Writable({
+          objectMode: true,
+          write(_c: any, _e: string, cb: () => void) {
+            cb();
+          }
+        });
+        expect(w.writableObjectMode).toBe(true);
+      });
+    });
+
+    describe("autoDestroy is not a public property", () => {
+      it("Readable should not expose autoDestroy as own property", () => {
+        const r = new Readable({ read() {} });
+        expect(r.hasOwnProperty("autoDestroy")).toBe(false);
+        expect((r as any).autoDestroy).toBeUndefined();
+      });
+
+      it("Writable should not expose autoDestroy as own property", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: () => void) {
+            cb();
+          }
+        });
+        expect(w.hasOwnProperty("autoDestroy")).toBe(false);
+        expect((w as any).autoDestroy).toBeUndefined();
+      });
+    });
+
+    describe("emitClose is not a public property", () => {
+      it("Readable should not expose emitClose as own property", () => {
+        const r = new Readable({ read() {} });
+        expect(r.hasOwnProperty("emitClose")).toBe(false);
+        expect((r as any).emitClose).toBeUndefined();
+      });
+
+      it("Writable should not expose emitClose as own property", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: () => void) {
+            cb();
+          }
+        });
+        expect(w.hasOwnProperty("emitClose")).toBe(false);
+        expect((w as any).emitClose).toBeUndefined();
+      });
+    });
+  });
+
+  // ===========================================================================
+  // API Surface: highWaterMark properties are prototype getters, not own props
+  // ===========================================================================
+
+  describe("API surface: highWaterMark as prototype getters", () => {
+    it("readableHighWaterMark should not be an own property on Readable instances", () => {
+      const r = new Readable({ read() {} });
+      expect(r.hasOwnProperty("readableHighWaterMark")).toBe(false);
+      // But the value should be accessible via prototype getter
+      expect(typeof r.readableHighWaterMark).toBe("number");
+      expect(r.readableHighWaterMark).toBeGreaterThan(0);
+    });
+
+    it("writableHighWaterMark should not be an own property on Writable instances", () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(w.hasOwnProperty("writableHighWaterMark")).toBe(false);
+      // But the value should be accessible via prototype getter
+      expect(typeof w.writableHighWaterMark).toBe("number");
+      expect(w.writableHighWaterMark).toBeGreaterThan(0);
+    });
+
+    it("readableHighWaterMark on Duplex should not be an own property", () => {
+      const d = createDuplex({ objectMode: true });
+      expect(d.hasOwnProperty("readableHighWaterMark")).toBe(false);
+      expect(typeof d.readableHighWaterMark).toBe("number");
+    });
+
+    it("writableHighWaterMark on Duplex should not be an own property", () => {
+      const d = createDuplex({ objectMode: true });
+      expect(d.hasOwnProperty("writableHighWaterMark")).toBe(false);
+      expect(typeof d.writableHighWaterMark).toBe("number");
+    });
+
+    it("readableHighWaterMark should respect custom value", () => {
+      const r = new Readable({ highWaterMark: 999, read() {} });
+      expect(r.readableHighWaterMark).toBe(999);
+      expect(r.hasOwnProperty("readableHighWaterMark")).toBe(false);
+    });
+
+    it("writableHighWaterMark should respect custom value", () => {
+      const w = new Writable({
+        highWaterMark: 999,
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(w.writableHighWaterMark).toBe(999);
+      expect(w.hasOwnProperty("writableHighWaterMark")).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // API Surface: allowHalfOpen on Duplex / Transform / PassThrough
+  // ===========================================================================
+
+  describe("API surface: allowHalfOpen", () => {
+    describe("allowHalfOpen existence and defaults", () => {
+      it("Duplex should have allowHalfOpen as own property, default true", () => {
+        const d = createDuplex({ objectMode: true });
+        expect(d.hasOwnProperty("allowHalfOpen")).toBe(true);
+        expect(d.allowHalfOpen).toBe(true);
+      });
+
+      it("Transform should have allowHalfOpen as own property, default true", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.hasOwnProperty("allowHalfOpen")).toBe(true);
+        expect(t.allowHalfOpen).toBe(true);
+      });
+
+      it("PassThrough should have allowHalfOpen as own property, default true", () => {
+        const p = createPassThrough({ objectMode: true });
+        expect(p.hasOwnProperty("allowHalfOpen")).toBe(true);
+        expect(p.allowHalfOpen).toBe(true);
+      });
+
+      it("allowHalfOpen should be settable to false via constructor", () => {
+        const d = createDuplex({ objectMode: true, allowHalfOpen: false });
+        expect(d.allowHalfOpen).toBe(false);
+
+        const t = new Transform({ objectMode: true, allowHalfOpen: false });
+        expect(t.allowHalfOpen).toBe(false);
+      });
+    });
+
+    describe("allowHalfOpen is writable at runtime", () => {
+      it("Duplex allowHalfOpen can be changed at runtime", () => {
+        const d = createDuplex({ objectMode: true });
+        expect(d.allowHalfOpen).toBe(true);
+        d.allowHalfOpen = false;
+        expect(d.allowHalfOpen).toBe(false);
+        d.allowHalfOpen = true;
+        expect(d.allowHalfOpen).toBe(true);
+      });
+
+      it("Transform allowHalfOpen can be changed at runtime", () => {
+        const t = new Transform({ objectMode: true });
+        expect(t.allowHalfOpen).toBe(true);
+        t.allowHalfOpen = false;
+        expect(t.allowHalfOpen).toBe(false);
+      });
+
+      it("PassThrough allowHalfOpen can be changed at runtime", () => {
+        const p = createPassThrough({ objectMode: true });
+        expect(p.allowHalfOpen).toBe(true);
+        p.allowHalfOpen = false;
+        expect(p.allowHalfOpen).toBe(false);
+      });
+    });
+
+    describe("allowHalfOpen: false behavior", () => {
+      it("Duplex with allowHalfOpen: false should end writable side when readable ends", async () => {
+        const d = createDuplex({
+          objectMode: true,
+          allowHalfOpen: false,
+          read() {
+            this.push("data");
+            this.push(null);
+          },
+          write(_chunk: any, _enc: string, cb: () => void) {
+            cb();
+          }
+        });
+
+        const writableFinished = new Promise<void>(resolve => {
+          d.on("finish", resolve);
+        });
+
+        // Start reading to trigger readable end
+        d.resume();
+
+        // Writable side should also finish
+        await writableFinished;
+        expect(d.writableFinished).toBe(true);
+      });
+
+      it("Duplex with allowHalfOpen: true should NOT end writable side when readable ends", async () => {
+        const d = createDuplex({
+          objectMode: true,
+          allowHalfOpen: true,
+          read() {
+            this.push("data");
+            this.push(null);
+          },
+          write(_chunk: any, _enc: string, cb: () => void) {
+            cb();
+          }
+        });
+
+        let writableFinished = false;
+        d.on("finish", () => {
+          writableFinished = true;
+        });
+
+        // Start reading to trigger readable end
+        d.resume();
+
+        await new Promise<void>(resolve => {
+          d.on("end", () => {
+            // Give extra time to see if finish fires
+            setTimeout(resolve, 50);
+          });
+        });
+
+        // Writable side should NOT have finished
+        expect(writableFinished).toBe(false);
+        // Clean up
+        d.end();
+      });
+
+      it("Transform with allowHalfOpen: false should end writable when readable ends", async () => {
+        const t = new Transform({
+          objectMode: true,
+          allowHalfOpen: false,
+          transform(chunk: any, _enc: string, cb: (err: null, data: any) => void) {
+            cb(null, chunk);
+          }
+        });
+
+        const writableFinished = new Promise<void>(resolve => {
+          t.on("finish", resolve);
+        });
+
+        // Write some data and end the readable side
+        t.write("hello");
+        t.resume();
+        t.push(null); // End readable side directly
+
+        await writableFinished;
+        expect(t.writableFinished).toBe(true);
+      });
+    });
+  });
+
+  // ===========================================================================
+  // API Surface: writableAborted NOT on Duplex / Transform
+  // ===========================================================================
+
+  describe("API surface: writableAborted not on Duplex/Transform", () => {
+    it("Writable should have writableAborted", () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect("writableAborted" in w).toBe(true);
+      expect(w.writableAborted).toBe(false);
+    });
+
+    it("Duplex should NOT have writableAborted", () => {
+      const d = createDuplex({ objectMode: true });
+      expect("writableAborted" in d).toBe(false);
+      expect((d as any).writableAborted).toBeUndefined();
+    });
+
+    it("Transform should NOT have writableAborted", () => {
+      const t = new Transform({ objectMode: true });
+      expect("writableAborted" in t).toBe(false);
+      expect((t as any).writableAborted).toBeUndefined();
+    });
+
+    it("PassThrough should NOT have writableAborted", () => {
+      const p = createPassThrough({ objectMode: true });
+      expect("writableAborted" in p).toBe(false);
+      expect((p as any).writableAborted).toBeUndefined();
     });
   });
 }

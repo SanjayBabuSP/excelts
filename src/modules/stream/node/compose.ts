@@ -26,11 +26,8 @@ export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any,
     });
   }
 
-  const isNativeTransform = (stream: ITransform<any, any>): stream is Transform =>
-    stream instanceof Transform;
-
-  if (len === 1 && isNativeTransform(transforms[0]!)) {
-    return transforms[0];
+  if (len === 1) {
+    return transforms[0] as any as Transform;
   }
 
   // Chain all transforms together once.

@@ -25,7 +25,7 @@ export interface PipeSource {
 
 interface PipeListeners<T> {
   data: (chunk: T) => void;
-  end: () => void;
+  end?: () => void;
   error: (err: Error) => void;
   drain?: () => void;
   eventTarget: any;
@@ -42,7 +42,7 @@ export class PipeManager<T> {
   constructor(private readonly _source: PipeSource) {}
 
   /** Pipe source data to `destination`. Returns `destination` for chaining. */
-  pipe<W extends WritableLike>(destination: W): W {
+  pipe<W extends WritableLike>(destination: W, options?: { end?: boolean }): W {
     // IMPORTANT:
     // Do not rely on `instanceof` here.
     // In bundled/minified builds, multiple copies of this module can exist,
@@ -93,9 +93,13 @@ export class PipeManager<T> {
       }
     };
 
-    const endListener = (): void => {
-      dest.end();
-    };
+    const endEnabled = options?.end !== false;
+
+    const endListener = endEnabled
+      ? (): void => {
+          dest.end();
+        }
+      : undefined;
 
     const errorListener = (err: Error): void => {
       if (typeof dest.destroy === "function") {
@@ -113,7 +117,9 @@ export class PipeManager<T> {
     });
 
     this._source.on("data", dataListener);
-    this._source.once("end", endListener);
+    if (endListener) {
+      this._source.once("end", endListener);
+    }
     this._source.once("error", errorListener);
 
     // Emit 'pipe' event on destination (Node.js compatibility)
@@ -157,7 +163,9 @@ export class PipeManager<T> {
     }
 
     this._source.off("data", listeners.data);
-    this._source.off("end", listeners.end);
+    if (listeners.end) {
+      this._source.off("end", listeners.end);
+    }
     this._source.off("error", listeners.error);
 
     if (listeners.drain) {

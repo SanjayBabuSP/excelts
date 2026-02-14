@@ -23,16 +23,33 @@ export const textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 // Cache non-default decoders by encoding to avoid repeated allocations.
 const _decoderCache = new Map<string, TextDecoder>();
 
+function normalizeEncodingLabel(encoding?: string): string {
+  const normalized = (encoding ?? "utf-8").trim().toLowerCase();
+  if (normalized === "" || normalized === "utf8" || normalized === "utf-8") {
+    return "utf-8";
+  }
+  if (normalized === "utf16le" || normalized === "utf-16le") {
+    return "utf-16le";
+  }
+  if (normalized === "ucs2" || normalized === "ucs-2") {
+    return "utf-16le";
+  }
+  if (normalized === "binary") {
+    return "latin1";
+  }
+  return normalized;
+}
+
 /**
  * Get a cached TextDecoder instance.
  *
  * Note: For the default UTF-8 path we reuse the module-level `textDecoder`.
  */
 export function getTextDecoder(encoding?: string): TextDecoder {
-  if (!encoding || encoding === "utf-8" || encoding === "utf8") {
+  const key = normalizeEncodingLabel(encoding);
+  if (key === "utf-8") {
     return textDecoder;
   }
-  const key = encoding;
   let decoder = _decoderCache.get(key);
   if (!decoder) {
     decoder = new TextDecoder(key);

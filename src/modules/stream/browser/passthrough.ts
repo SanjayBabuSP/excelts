@@ -14,7 +14,7 @@ import { Transform } from "./transform";
  * A passthrough stream that passes data through unchanged
  */
 export class PassThrough<T = Uint8Array> extends Transform<T, T> {
-  constructor(options?: TransformStreamOptions) {
+  constructor(options?: TransformStreamOptions & { allowHalfOpen?: boolean }) {
     super({
       ...options,
       transform: chunk => chunk
