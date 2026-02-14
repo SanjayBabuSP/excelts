@@ -7,6 +7,7 @@
 
 export interface ParsedEndArgs<T> {
   chunk: T | undefined;
+  encoding: string | undefined;
   cb: (() => void) | undefined;
 }
 
@@ -24,11 +25,12 @@ export function parseEndArgs<T>(
   callback?: () => void
 ): ParsedEndArgs<T> {
   const chunk = typeof chunkOrCallback === "function" ? undefined : chunkOrCallback;
+  const encoding = typeof encodingOrCallback === "string" ? encodingOrCallback : undefined;
   const cb: (() => void) | undefined =
     typeof chunkOrCallback === "function"
       ? (chunkOrCallback as () => void)
       : typeof encodingOrCallback === "function"
         ? (encodingOrCallback as () => void)
         : callback;
-  return { chunk, cb };
+  return { chunk, encoding, cb };
 }

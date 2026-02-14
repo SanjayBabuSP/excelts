@@ -19,6 +19,14 @@ export { Duplex } from "@stream/browser/duplex";
 export { PassThrough } from "@stream/browser/passthrough";
 export { Collector } from "@stream/browser/collector";
 
+// Late-binding injection: break circular Readable ↔ Duplex and Transform ↔ Duplex
+import { Duplex } from "@stream/browser/duplex";
+import { _injectDuplexFrom as _injectReadableDuplexFrom } from "@stream/browser/readable";
+import { _injectDuplexFrom as _injectTransformDuplexFrom } from "@stream/browser/transform";
+
+_injectReadableDuplexFrom(source => Duplex.from(source));
+_injectTransformDuplexFrom(source => Duplex.from(source));
+
 // Factory functions + re-exported helpers
 export {
   PullStream,

@@ -10,6 +10,7 @@ import { promisify } from "util";
 import * as nodeZlib from "zlib";
 
 import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
+import { uint8ArrayToNodeBufferView } from "@utils/binary";
 
 // Re-export shared types and utilities
 export {
@@ -51,7 +52,7 @@ export function hasWorkerSupport(): boolean {
 
 /** Convert Uint8Array to Node.js Buffer (zero-copy view) */
 export function uint8ArrayToBuffer(data: Uint8Array): Buffer {
-  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return uint8ArrayToNodeBufferView(data) as Buffer;
 }
 
 /** Convert Node.js Buffer to Uint8Array (zero-copy view) */
@@ -91,19 +92,22 @@ export async function compress(
   options: CompressOptions = {}
 ): Promise<Uint8Array> {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  const thresholdBytes = resolveCompressThresholdBytes(options);
 
   // Level 0 means no compression
   if (level === 0) {
     return data;
   }
 
+  const thresholdBytes = resolveCompressThresholdBytes(options);
+  const input = uint8ArrayToBuffer(data);
+  const zlibOptions = { level };
+
   // Small-input fast path: avoid threadpool overhead.
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(nodeZlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
+    return bufferToUint8Array(nodeZlib.deflateRawSync(input, zlibOptions));
   }
 
-  return bufferToUint8Array(await deflateRawAsync(uint8ArrayToBuffer(data), { level }));
+  return bufferToUint8Array(await deflateRawAsync(input, zlibOptions));
 }
 
 /**
@@ -120,7 +124,9 @@ export function compressSync(data: Uint8Array, options: CompressOptions = {}): U
     return data;
   }
 
-  return bufferToUint8Array(nodeZlib.deflateRawSync(uint8ArrayToBuffer(data), { level }));
+  const input = uint8ArrayToBuffer(data);
+  const zlibOptions = { level };
+  return bufferToUint8Array(nodeZlib.deflateRawSync(input, zlibOptions));
 }
 
 /**
@@ -134,13 +140,14 @@ export async function decompress(
   options: CompressOptions = {}
 ): Promise<Uint8Array> {
   const thresholdBytes = resolveCompressThresholdBytes(options);
+  const input = uint8ArrayToBuffer(data);
 
   // Small-input fast path: avoid threadpool overhead.
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(nodeZlib.inflateRawSync(uint8ArrayToBuffer(data)));
+    return bufferToUint8Array(nodeZlib.inflateRawSync(input));
   }
 
-  return bufferToUint8Array(await inflateRawAsync(uint8ArrayToBuffer(data)));
+  return bufferToUint8Array(await inflateRawAsync(input));
 }
 
 /**
@@ -150,7 +157,8 @@ export async function decompress(
  * @returns Decompressed data
  */
 export function decompressSync(data: Uint8Array): Uint8Array {
-  return bufferToUint8Array(nodeZlib.inflateRawSync(uint8ArrayToBuffer(data)));
+  const input = uint8ArrayToBuffer(data);
+  return bufferToUint8Array(nodeZlib.inflateRawSync(input));
 }
 
 // =============================================================================
@@ -170,13 +178,15 @@ const gunzipAsync = promisify(nodeZlib.gunzip) as (input: nodeZlib.InputType) =>
 export async function gzip(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
   const thresholdBytes = resolveCompressThresholdBytes(options);
+  const input = uint8ArrayToBuffer(data);
+  const zlibOptions = { level };
 
   // Small-input fast path
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(nodeZlib.gzipSync(uint8ArrayToBuffer(data), { level }));
+    return bufferToUint8Array(nodeZlib.gzipSync(input, zlibOptions));
   }
 
-  return bufferToUint8Array(await gzipAsync(uint8ArrayToBuffer(data), { level }));
+  return bufferToUint8Array(await gzipAsync(input, zlibOptions));
 }
 
 /**
@@ -184,13 +194,14 @@ export async function gzip(data: Uint8Array, options: CompressOptions = {}): Pro
  */
 export async function gunzip(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
   const thresholdBytes = resolveCompressThresholdBytes(options);
+  const input = uint8ArrayToBuffer(data);
 
   // Small-input fast path
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(nodeZlib.gunzipSync(uint8ArrayToBuffer(data)));
+    return bufferToUint8Array(nodeZlib.gunzipSync(input));
   }
 
-  return bufferToUint8Array(await gunzipAsync(uint8ArrayToBuffer(data)));
+  return bufferToUint8Array(await gunzipAsync(input));
 }
 
 /**
@@ -198,14 +209,17 @@ export async function gunzip(data: Uint8Array, options: CompressOptions = {}): P
  */
 export function gzipSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  return bufferToUint8Array(nodeZlib.gzipSync(uint8ArrayToBuffer(data), { level }));
+  const input = uint8ArrayToBuffer(data);
+  const zlibOptions = { level };
+  return bufferToUint8Array(nodeZlib.gzipSync(input, zlibOptions));
 }
 
 /**
  * Decompress gzip data (sync)
  */
 export function gunzipSync(data: Uint8Array): Uint8Array {
-  return bufferToUint8Array(nodeZlib.gunzipSync(uint8ArrayToBuffer(data)));
+  const input = uint8ArrayToBuffer(data);
+  return bufferToUint8Array(nodeZlib.gunzipSync(input));
 }
 
 // =============================================================================
@@ -228,13 +242,15 @@ const unzlibAsync = promisify(nodeZlib.inflate) as (input: nodeZlib.InputType) =
 export async function zlib(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
   const thresholdBytes = resolveCompressThresholdBytes(options);
+  const input = uint8ArrayToBuffer(data);
+  const zlibOptions = { level };
 
   // Small-input fast path
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(nodeZlib.deflateSync(uint8ArrayToBuffer(data), { level }));
+    return bufferToUint8Array(nodeZlib.deflateSync(input, zlibOptions));
   }
 
-  return bufferToUint8Array(await zlibAsync(uint8ArrayToBuffer(data), { level }));
+  return bufferToUint8Array(await zlibAsync(input, zlibOptions));
 }
 
 /**
@@ -242,13 +258,14 @@ export async function zlib(data: Uint8Array, options: CompressOptions = {}): Pro
  */
 export async function unzlib(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
   const thresholdBytes = resolveCompressThresholdBytes(options);
+  const input = uint8ArrayToBuffer(data);
 
   // Small-input fast path
   if (data.byteLength <= thresholdBytes) {
-    return bufferToUint8Array(nodeZlib.inflateSync(uint8ArrayToBuffer(data)));
+    return bufferToUint8Array(nodeZlib.inflateSync(input));
   }
 
-  return bufferToUint8Array(await unzlibAsync(uint8ArrayToBuffer(data)));
+  return bufferToUint8Array(await unzlibAsync(input));
 }
 
 /**
@@ -256,14 +273,17 @@ export async function unzlib(data: Uint8Array, options: CompressOptions = {}): P
  */
 export function zlibSync(data: Uint8Array, options: CompressOptions = {}): Uint8Array {
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  return bufferToUint8Array(nodeZlib.deflateSync(uint8ArrayToBuffer(data), { level }));
+  const input = uint8ArrayToBuffer(data);
+  const zlibOptions = { level };
+  return bufferToUint8Array(nodeZlib.deflateSync(input, zlibOptions));
 }
 
 /**
  * Decompress Zlib data (sync)
  */
 export function unzlibSync(data: Uint8Array): Uint8Array {
-  return bufferToUint8Array(nodeZlib.inflateSync(uint8ArrayToBuffer(data)));
+  const input = uint8ArrayToBuffer(data);
+  return bufferToUint8Array(nodeZlib.inflateSync(input));
 }
 
 // =============================================================================

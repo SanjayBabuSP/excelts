@@ -3,12 +3,44 @@ import { EMPTY_UINT8ARRAY, indexOfUint8ArrayPattern } from "@archive/shared/byte
 export class ByteQueue {
   // Store data as immutable chunks to avoid copying on append.
   private _chunks: Uint8Array[] = [];
+  private _chunkHead = 0;
   private _headOffset = 0;
   private _length = 0;
 
   // Lazily materialized contiguous view (used only by callers that require a single buffer).
   private _cachedView: Uint8Array | null = null;
   private _cachedLength = 0;
+
+  private _activeChunkCount(): number {
+    return this._chunks.length - this._chunkHead;
+  }
+
+  private _headChunk(): Uint8Array {
+    return this._chunks[this._chunkHead]!;
+  }
+
+  private _compactConsumedChunks(): void {
+    if (this._chunkHead === 0) {
+      return;
+    }
+
+    if (this._chunkHead >= this._chunks.length) {
+      this._chunks = [];
+      this._chunkHead = 0;
+      return;
+    }
+
+    if (this._chunkHead > 32 && this._chunkHead * 2 >= this._chunks.length) {
+      this._chunks = this._chunks.slice(this._chunkHead);
+      this._chunkHead = 0;
+    }
+  }
+
+  private _dropHeadChunk(): void {
+    this._chunkHead++;
+    this._headOffset = 0;
+    this._compactConsumedChunks();
+  }
 
   constructor(initial?: Uint8Array) {
     if (initial && initial.length > 0) {
@@ -30,8 +62,8 @@ export class ByteQueue {
     }
 
     // Fast path: single chunk.
-    if (this._chunks.length === 1) {
-      const c = this._chunks[0];
+    if (this._activeChunkCount() === 1) {
+      const c = this._headChunk();
       return c.subarray(this._headOffset, this._headOffset + this._length);
     }
 
@@ -41,9 +73,9 @@ export class ByteQueue {
 
     const out = new Uint8Array(this._length);
     let offset = 0;
-    for (let i = 0; i < this._chunks.length; i++) {
+    for (let i = this._chunkHead; i < this._chunks.length; i++) {
       const c = this._chunks[i];
-      const start = i === 0 ? this._headOffset : 0;
+      const start = i === this._chunkHead ? this._headOffset : 0;
       const end = i === this._chunks.length - 1 ? start + (this._length - offset) : c.length;
       out.set(c.subarray(start, end), offset);
       offset += end - start;
@@ -62,6 +94,7 @@ export class ByteQueue {
     this._cachedLength = 0;
 
     this._chunks = [];
+    this._chunkHead = 0;
     this._headOffset = 0;
     this._length = 0;
 
@@ -73,6 +106,7 @@ export class ByteQueue {
     const copy = new Uint8Array(data.length);
     copy.set(data);
     this._chunks = [copy];
+    this._chunkHead = 0;
     this._headOffset = 0;
     this._length = copy.length;
   }
@@ -100,8 +134,8 @@ export class ByteQueue {
     this._cachedView = null;
     this._cachedLength = 0;
 
-    if (this._chunks.length === 1) {
-      const c = this._chunks[0];
+    if (this._activeChunkCount() === 1) {
+      const c = this._headChunk();
       const start = this._headOffset;
       const end = start + length;
       const out = c.subarray(start, end);
@@ -111,10 +145,10 @@ export class ByteQueue {
 
       if (this._length === 0) {
         this._chunks = [];
+        this._chunkHead = 0;
         this._headOffset = 0;
       } else if (this._headOffset >= c.length) {
-        this._chunks.shift();
-        this._headOffset = 0;
+        this._dropHeadChunk();
       }
 
       return out;
@@ -126,7 +160,7 @@ export class ByteQueue {
     let remaining = length;
 
     while (remaining > 0) {
-      const c = this._chunks[0];
+      const c = this._headChunk();
       const start = this._headOffset;
       const available = c.length - start;
       const toCopy = Math.min(available, remaining);
@@ -138,13 +172,13 @@ export class ByteQueue {
       this._length -= toCopy;
 
       if (this._headOffset >= c.length) {
-        this._chunks.shift();
-        this._headOffset = 0;
+        this._dropHeadChunk();
       }
     }
 
     if (this._length === 0) {
       this._chunks = [];
+      this._chunkHead = 0;
       this._headOffset = 0;
     }
 
@@ -165,8 +199,8 @@ export class ByteQueue {
     }
 
     // Fast path: single chunk.
-    if (this._chunks.length === 1) {
-      const c = this._chunks[0]!;
+    if (this._activeChunkCount() === 1) {
+      const c = this._headChunk();
       const start = this._headOffset;
       return [c.subarray(start, start + length)];
     }
@@ -174,9 +208,9 @@ export class ByteQueue {
     const parts: Uint8Array[] = [];
     let remaining = length;
 
-    for (let i = 0; i < this._chunks.length && remaining > 0; i++) {
+    for (let i = this._chunkHead; i < this._chunks.length && remaining > 0; i++) {
       const c = this._chunks[i]!;
-      const start = i === 0 ? this._headOffset : 0;
+      const start = i === this._chunkHead ? this._headOffset : 0;
       const avail = c.length - start;
       if (avail <= 0) {
         continue;
@@ -196,6 +230,7 @@ export class ByteQueue {
     }
     if (length >= this._length) {
       this._chunks = [];
+      this._chunkHead = 0;
       this._headOffset = 0;
       this._length = 0;
 
@@ -209,7 +244,7 @@ export class ByteQueue {
 
     let remaining = length;
     while (remaining > 0) {
-      const c = this._chunks[0];
+      const c = this._headChunk();
       const start = this._headOffset;
       const available = c.length - start;
       const toDrop = Math.min(available, remaining);
@@ -218,13 +253,13 @@ export class ByteQueue {
       remaining -= toDrop;
 
       if (this._headOffset >= c.length) {
-        this._chunks.shift();
-        this._headOffset = 0;
+        this._dropHeadChunk();
       }
     }
 
     if (this._length === 0) {
       this._chunks = [];
+      this._chunkHead = 0;
       this._headOffset = 0;
     }
   }
@@ -254,8 +289,8 @@ export class ByteQueue {
     }
 
     // Fast path: single chunk.
-    if (this._chunks.length === 1) {
-      const c = this._chunks[0];
+    if (this._activeChunkCount() === 1) {
+      const c = this._headChunk();
       const base = this._headOffset;
       const view = c.subarray(base, base + len);
       // Delegate to native indexOf checks for 1..4 bytes.
@@ -278,6 +313,7 @@ export class ByteQueue {
     const b3 = patLen >= 4 ? pattern[3] : 0;
 
     const chunks = this._chunks;
+    const chunkHead = this._chunkHead;
 
     const peekByteAcrossChunks = (chunkIndex: number, absoluteIndex: number): number | null => {
       let ci = chunkIndex;
@@ -294,9 +330,9 @@ export class ByteQueue {
     };
 
     let globalBase = 0;
-    for (let ci = 0; ci < chunks.length; ci++) {
+    for (let ci = chunkHead; ci < chunks.length; ci++) {
       const c = chunks[ci]!;
-      const chunkOffset = ci === 0 ? this._headOffset : 0;
+      const chunkOffset = ci === chunkHead ? this._headOffset : 0;
       const chunkLen = c.length - chunkOffset;
       if (chunkLen <= 0) {
         continue;
@@ -396,9 +432,9 @@ export class ByteQueue {
     // Try to read contiguously from a single chunk to avoid 4x chunk-walk.
     const chunks = this._chunks;
     let remaining = off;
-    for (let i = 0; i < chunks.length; i++) {
+    for (let i = this._chunkHead; i < chunks.length; i++) {
       const c = chunks[i]!;
-      const start = i === 0 ? this._headOffset : 0;
+      const start = i === this._chunkHead ? this._headOffset : 0;
       const avail = c.length - start;
       if (remaining < avail) {
         const idx = start + remaining;
@@ -455,9 +491,9 @@ export class ByteQueue {
     }
 
     let remaining = off;
-    for (let i = 0; i < this._chunks.length; i++) {
+    for (let i = this._chunkHead; i < this._chunks.length; i++) {
       const c = this._chunks[i];
-      const start = i === 0 ? this._headOffset : 0;
+      const start = i === this._chunkHead ? this._headOffset : 0;
       const avail = c.length - start;
       if (remaining < avail) {
         return c[start + remaining] | 0;

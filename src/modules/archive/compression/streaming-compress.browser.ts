@@ -41,6 +41,7 @@ import {
   type StreamCallback,
   type StreamCompressOptions
 } from "@archive/compression/streaming-compress.base";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 export { hasWorkerSupport };
 
@@ -91,20 +92,25 @@ class AsyncStreamCodec extends EventEmitter {
     this._backend = backend;
   }
 
-  private get backend(): AsyncCodecBackend {
-    if (!this._backend) {
-      throw new Error("Backend not initialized");
-    }
-    return this._backend;
-  }
-
   write(chunk: Uint8Array, callback?: StreamCallback): boolean {
     if (this.ended) {
       handleError(this, new Error(WRITE_AFTER_END_ERROR), callback);
       return false;
     }
 
-    const promise = this.writeChain.then(() => this.backend.write(chunk));
+    if (chunk.byteLength === 0) {
+      if (callback) {
+        queueMicrotask(callback);
+      }
+      return true;
+    }
+
+    const backend = this._backend;
+    if (!backend) {
+      throw new Error("Backend not initialized");
+    }
+
+    const promise = this.writeChain.then(() => backend.write(chunk));
     this.writeChain = promise;
 
     promise
@@ -129,8 +135,13 @@ class AsyncStreamCodec extends EventEmitter {
     }
     this.ended = true;
 
+    const backend = this._backend;
+    if (!backend) {
+      throw new Error("Backend not initialized");
+    }
+
     void this.writeChain
-      .then(() => this.backend.close())
+      .then(() => backend.close())
       .then(() => callback?.())
       .catch(err => handleError(this, err, callback));
   }
@@ -162,30 +173,9 @@ function createNativeWebStreamCodec(
   const reader = stream.readable.getReader();
 
   const codec = new AsyncStreamCodec();
-  codec.setBackend({
-    write: chunk => writer.write(chunk),
-    close: async () => {
-      await writer.close();
-      // Drain remaining data
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (value) {
-          codec.emit("data", value);
-        }
-      }
-      codec.emit("end");
-    },
-    abort: err => {
-      reader.cancel(err).catch(() => {});
-      writer.abort(err).catch(() => {});
-    }
-  });
+  let readLoopError: Error | null = null;
 
-  // Start async read loop
-  void (async () => {
+  const readLoop = (async (): Promise<void> => {
     try {
       while (true) {
         const { value, done } = await reader.read();
@@ -196,10 +186,28 @@ function createNativeWebStreamCodec(
           codec.emit("data", value);
         }
       }
+      codec.emit("end");
     } catch (err) {
-      codec.emit("error", toError(err));
+      const error = toError(err);
+      readLoopError = error;
+      codec.emit("error", error);
     }
   })();
+
+  codec.setBackend({
+    write: chunk => writer.write(chunk),
+    close: async () => {
+      await writer.close();
+      await readLoop;
+      if (readLoopError) {
+        throw readLoopError;
+      }
+    },
+    abort: err => {
+      reader.cancel(err).catch(() => {});
+      writer.abort(err).catch(() => {});
+    }
+  });
 
   return codec;
 }
@@ -271,9 +279,16 @@ class BufferedCodec extends EventEmitter {
       return false;
     }
 
+    if (chunk.byteLength === 0) {
+      if (callback) {
+        queueMicrotask(callback);
+      }
+      return true;
+    }
+
     this.chunks.push(chunk);
     if (callback) {
-      queueMicrotask(() => callback());
+      queueMicrotask(callback);
     }
     return true;
   }
@@ -285,7 +300,13 @@ class BufferedCodec extends EventEmitter {
     }
     this.ended = true;
 
-    const data = this.chunks.length === 1 ? this.chunks[0] : concatUint8Arrays(this.chunks);
+    const chunkCount = this.chunks.length;
+    const data =
+      chunkCount === 0
+        ? EMPTY_UINT8ARRAY
+        : chunkCount === 1
+          ? this.chunks[0]
+          : concatUint8Arrays(this.chunks);
     this.chunks.length = 0;
 
     try {
@@ -389,7 +410,7 @@ function createWrappedStream(
   if (config.hasNative()) {
     return createNativeWebStreamCodec(config.format, isCompress);
   }
-  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
+  const level = isCompress ? (options.level ?? DEFAULT_COMPRESS_LEVEL) : DEFAULT_COMPRESS_LEVEL;
   return new BufferedCodec(
     isCompress ? data => config.compressFallback(data, level) : config.decompressFallback
   );

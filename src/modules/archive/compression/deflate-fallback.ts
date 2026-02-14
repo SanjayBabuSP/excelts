@@ -53,6 +53,41 @@ const DISTANCE_EXTRA = [
   0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
 ];
 
+// Distance code table from RFC 1951.
+// Each entry: [maxDistance, code, extraBits]
+const DIST_TABLE: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0],
+  [2, 1, 0],
+  [3, 2, 0],
+  [4, 3, 0],
+  [6, 4, 1],
+  [8, 5, 1],
+  [12, 6, 2],
+  [16, 7, 2],
+  [24, 8, 3],
+  [32, 9, 3],
+  [48, 10, 4],
+  [64, 11, 4],
+  [96, 12, 5],
+  [128, 13, 5],
+  [192, 14, 6],
+  [256, 15, 6],
+  [384, 16, 7],
+  [512, 17, 7],
+  [768, 18, 8],
+  [1024, 19, 8],
+  [1536, 20, 9],
+  [2048, 21, 9],
+  [3072, 22, 10],
+  [4096, 23, 10],
+  [6144, 24, 11],
+  [8192, 25, 11],
+  [12288, 26, 12],
+  [16384, 27, 12],
+  [24576, 28, 13],
+  [32768, 29, 13]
+];
+
 // Code length order for dynamic Huffman tables
 const CODE_LENGTH_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
 
@@ -581,47 +616,13 @@ function writeLengthCode(output: BitWriter, length: number): void {
  * Write a distance code
  */
 function writeDistanceCode(output: BitWriter, distance: number): void {
-  // Distance code table from RFC 1951
-  // Each entry: [maxDistance, code, extraBits]
-  const DIST_TABLE: Array<[number, number, number]> = [
-    [1, 0, 0],
-    [2, 1, 0],
-    [3, 2, 0],
-    [4, 3, 0],
-    [6, 4, 1],
-    [8, 5, 1],
-    [12, 6, 2],
-    [16, 7, 2],
-    [24, 8, 3],
-    [32, 9, 3],
-    [48, 10, 4],
-    [64, 11, 4],
-    [96, 12, 5],
-    [128, 13, 5],
-    [192, 14, 6],
-    [256, 15, 6],
-    [384, 16, 7],
-    [512, 17, 7],
-    [768, 18, 8],
-    [1024, 19, 8],
-    [1536, 20, 9],
-    [2048, 21, 9],
-    [3072, 22, 10],
-    [4096, 23, 10],
-    [6144, 24, 11],
-    [8192, 25, 11],
-    [12288, 26, 12],
-    [16384, 27, 12],
-    [24576, 28, 13],
-    [32768, 29, 13]
-  ];
-
   // Find the appropriate distance code
   let code = 0;
   let extraBits = 0;
   let baseDistance = 1;
 
-  for (const [maxDist, c, extra] of DIST_TABLE) {
+  for (let i = 0; i < DIST_TABLE.length; i++) {
+    const [maxDist, c, extra] = DIST_TABLE[i]!;
     if (distance <= maxDist) {
       code = c;
       extraBits = extra;

@@ -2,7 +2,7 @@
  * Browser Stream - Transform
  */
 
-import type { TransformStreamOptions } from "@stream/types";
+import type { DuplexStreamOptions } from "@stream/types";
 import { StreamStateError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
 import { parseEndArgs } from "@stream/common/end-args";
@@ -21,10 +21,10 @@ import type { Duplex } from "./duplex";
  * A wrapper around Web TransformStream that provides Node.js-like API
  */
 export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventEmitter {
-  /** @internal - for pipe() support */
-  readonly _readable: Readable<TOutput>;
-  /** @internal - for pipe() support */
-  readonly _writable: Writable<TInput>;
+  /** @internal */
+  private readonly _readable: Readable<TOutput>;
+  /** @internal */
+  private readonly _writable: Writable<TInput>;
   private _objectMode: boolean;
   allowHalfOpen: boolean;
 
@@ -32,12 +32,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   private _ended: boolean = false;
   private _errored: boolean = false;
   private _dataForwardingSetup: boolean = false;
+  private _emitClose: boolean;
 
   private _endGeneration: number = 0;
 
   private _webStream: TransformStream<TInput, TOutput> | null = null;
 
   private _sideForwardingCleanup: (() => void) | null = null;
+  // User-provided construct function (Node.js compatibility)
+  private _constructFunc?: (callback: (error?: Error | null) => void) => void;
+  private _constructed: boolean = true;
 
   /** Cached result of _hasSubclassTransform (called per-chunk, so worth caching) */
   private _isSubclassTransform: boolean | undefined;
@@ -69,8 +73,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   constructor(
-    options?: TransformStreamOptions & {
-      allowHalfOpen?: boolean;
+    options?: DuplexStreamOptions & {
+      emitClose?: boolean;
+      autoDestroy?: boolean;
       transform?:
         | ((chunk: TInput) => TOutput | Promise<TOutput>)
         | ((
@@ -85,51 +90,117 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
             this: Transform<TInput, TOutput>,
             callback: (error?: Error | null, data?: TOutput) => void
           ) => void);
+      write?: (
+        this: Transform<TInput, TOutput>,
+        chunk: TInput,
+        encoding: string,
+        callback: (error?: Error | null) => void
+      ) => void;
+      writev?: (
+        this: Transform<TInput, TOutput>,
+        chunks: Array<{ chunk: TInput; encoding: string }>,
+        callback: (error?: Error | null) => void
+      ) => void;
+      final?: (this: Transform<TInput, TOutput>, callback: (error?: Error | null) => void) => void;
+      destroy?: (
+        this: Transform<TInput, TOutput>,
+        error: Error | null,
+        callback: (error?: Error | null) => void
+      ) => void;
+      construct?: (
+        this: Transform<TInput, TOutput>,
+        callback: (error?: Error | null) => void
+      ) => void;
     }
   ) {
     super();
-    this._objectMode = options?.objectMode ?? false;
+
+    // ObjectMode: per-side overrides general (matching Node)
+    const objectMode = options?.objectMode ?? false;
+    const readableObjMode = options?.readableObjectMode ?? objectMode;
+    const writableObjMode = options?.writableObjectMode ?? objectMode;
+    this._objectMode = objectMode;
     this.allowHalfOpen = options?.allowHalfOpen ?? true;
+    this._emitClose = options?.emitClose ?? true;
     this._transformImpl = options?.transform;
     this._flushImpl = options?.flush;
 
+    // HWM: if highWaterMark is explicitly provided it overrides per-side (matching Node)
+    const hasGeneralHwm =
+      options != null && Object.prototype.hasOwnProperty.call(options, "highWaterMark");
+    const readableHwm = hasGeneralHwm ? options!.highWaterMark : options?.readableHighWaterMark;
+    const writableHwm = hasGeneralHwm ? options!.highWaterMark : options?.writableHighWaterMark;
+
+    // Store user-provided destroy function
+    if (options?.destroy) {
+      this._destroy = options.destroy.bind(this);
+    }
+
+    // Store user-provided construct function
+    if (options?.construct) {
+      this._constructFunc = options.construct.bind(this);
+    }
+
     this._readable = new Readable<TOutput>({
-      objectMode: this._objectMode
+      highWaterMark: readableHwm,
+      objectMode: readableObjMode,
+      // Suppress child-level close/error — Transform itself is the authority
+      emitClose: false,
+      autoDestroy: false
     });
 
-    this._writable = new Writable<TInput>({
-      objectMode: this._objectMode,
-      write: (chunk, _encoding, callback) => {
-        // Try synchronous transform first.  If the transform completes
-        // synchronously we MUST call the callback synchronously so that
-        // the Writable write-queue drains in the same microtask, preventing
-        // _scheduleEnd from racing ahead of dynamically-added writes.
-        const maybePromise = this._runTransformSync(chunk);
-        if (maybePromise === undefined) {
-          // Completed synchronously
-          callback(null);
-        } else {
-          // Async – wait for the promise
-          maybePromise.then(
-            () => callback(null),
-            err => callback(err)
-          );
+    // Determine write/final handlers.
+    // If a `write` option is provided, it replaces the transform-based write (matching Node).
+    const writeHandler = options?.write
+      ? (chunk: TInput, encoding: string, callback: (error?: Error | null) => void) => {
+          options.write!.call(this, chunk, encoding, callback);
         }
-      },
-      final: callback => {
-        this._runFlush()
-          .then(() => {
-            this._readable.push(null);
+      : (chunk: TInput, _encoding: string, callback: (error?: Error | null) => void) => {
+          // Try synchronous transform first.  If the transform completes
+          // synchronously we MUST call the callback synchronously so that
+          // the Writable write-queue drains in the same microtask, preventing
+          // _scheduleEnd from racing ahead of dynamically-added writes.
+          const maybePromise = this._runTransformSync(chunk);
+          if (maybePromise === undefined) {
+            // Completed synchronously
             callback(null);
-          })
-          .catch(err => callback(err));
-      }
+          } else {
+            // Async – wait for the promise
+            maybePromise.then(
+              () => callback(null),
+              err => callback(err)
+            );
+          }
+        };
+
+    const finalHandler = options?.final
+      ? (callback: (error?: Error | null) => void) => {
+          options.final!.call(this, callback);
+        }
+      : (callback: (error?: Error | null) => void) => {
+          this._runFlush()
+            .then(() => {
+              this._readable.push(null);
+              callback(null);
+            })
+            .catch(err => callback(err));
+        };
+
+    this._writable = new Writable<TInput>({
+      highWaterMark: writableHwm,
+      objectMode: writableObjMode,
+      // Suppress child-level close/error — Transform itself is the authority
+      emitClose: false,
+      autoDestroy: false,
+      write: writeHandler,
+      writev: options?.writev?.bind(this),
+      final: finalHandler
     });
 
     this._setupSideForwarding();
   }
 
-  _setupSideForwarding(): void {
+  private _setupSideForwarding(): void {
     if (this._sideForwardingCleanup) {
       this._sideForwardingCleanup();
       this._sideForwardingCleanup = null;
@@ -144,6 +215,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       }
     });
     registry.add(this._readable, "error", err => this._emitErrorOnce(err));
+    registry.add(this._readable, "readable", () => this.emit("readable"));
 
     registry.once(this._writable, "finish", () => this.emit("finish"));
     registry.add(this._writable, "drain", () => this.emit("drain"));
@@ -193,7 +265,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       this._destroyed = true;
       this._readable.destroy(error);
       this._writable.destroy(error);
-      queueMicrotask(() => this.emit("close"));
+      if (this._emitClose) {
+        queueMicrotask(() => this.emit("close"));
+      }
     }
   }
 
@@ -512,6 +586,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
+    const encoding = typeof encodingOrCallback === "string" ? encodingOrCallback : undefined;
     const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
 
     // If end() has been requested, keep the close deferred as long as writes continue.
@@ -519,7 +594,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       this._scheduleEnd();
     }
 
-    return this._writable.write(chunk, cb);
+    return encoding !== undefined
+      ? this._writable.write(chunk, encoding, cb)
+      : this._writable.write(chunk, cb);
   }
 
   /**
@@ -540,14 +617,22 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
     this._ended = true;
 
-    const { chunk, cb } = parseEndArgs<TInput>(chunkOrCallback, encodingOrCallback, callback);
+    const { chunk, encoding, cb } = parseEndArgs<TInput>(
+      chunkOrCallback,
+      encodingOrCallback,
+      callback
+    );
 
     if (cb) {
       this.once("finish", cb);
     }
 
     if (chunk !== undefined) {
-      this._writable.write(chunk);
+      if (encoding !== undefined) {
+        this._writable.write(chunk, encoding);
+      } else {
+        this._writable.write(chunk);
+      }
     }
 
     this._scheduleEnd();
@@ -619,10 +704,67 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       this._sideForwardingCleanup = null;
     }
 
-    this._readable.destroy(error);
-    this._writable.destroy(error);
-    queueMicrotask(() => this.emit("close"));
+    const afterDestroy = (finalError?: Error | null): void => {
+      const err = finalError ?? error;
+      this._readable.destroy();
+      this._writable.destroy();
+      if (this._emitClose) {
+        queueMicrotask(() => {
+          if (err) {
+            this.emit("error", err);
+          }
+          this.emit("close");
+        });
+      }
+    };
+
+    if (this._hasDestroyHook()) {
+      this._destroy(error ?? null, afterDestroy);
+    } else {
+      afterDestroy(error);
+    }
     return this;
+  }
+
+  /**
+   * Override in subclass to customise destroy behaviour.
+   * Call `callback(err)` when cleanup is complete.
+   */
+  _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    callback(error);
+  }
+
+  /** Check if _destroy has been overridden by a subclass or constructor option. */
+  private _hasDestroyHook(): boolean {
+    return (
+      Object.prototype.hasOwnProperty.call(this, "_destroy") ||
+      Object.getPrototypeOf(this)._destroy !== Transform.prototype._destroy
+    );
+  }
+
+  /**
+   * Async dispose support (using await).
+   * Destroys the stream and resolves after the 'close' event.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    const selfInitiated = !this._destroyed;
+    if (selfInitiated) {
+      this.destroy();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const settle = (): void => {
+        if (selfInitiated || this.writableFinished) {
+          resolve();
+        } else {
+          reject(new Error("Premature close"));
+        }
+      };
+      if (this.closed) {
+        settle();
+      } else {
+        this.once("close", settle);
+      }
+    });
   }
 
   /**
@@ -724,11 +866,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   get readableFlowing(): boolean | null {
-    return this._readable.readableFlowing;
+    return (this as any)._readable.readableFlowing;
   }
 
-  set readableFlowing(val: boolean | null) {
-    this._readable.readableFlowing = val;
+  set readableFlowing(value: boolean | null) {
+    (this as any)._readable.readableFlowing = value;
   }
 
   get destroyed(): boolean {
@@ -939,11 +1081,30 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   // =========================================================================
 
   /**
+   * Create a Transform from various sources (delegates to Duplex.from).
+   * Matches Node.js where Transform inherits static from() from Duplex.
+   */
+  static from<TIn = Uint8Array, TOut = Uint8Array>(
+    source:
+      | AsyncIterable<TIn>
+      | Iterable<TIn>
+      | {
+          readable?: Readable<TIn>;
+          writable?: Writable<TOut>;
+        }
+  ): import("./duplex").Duplex<TIn, TOut> {
+    if (!_DuplexFromFactory) {
+      throw new Error("Transform.from() requires Duplex injection. Import from @stream.");
+    }
+    return _DuplexFromFactory(source);
+  }
+
+  /**
    * Convert a Web TransformStream to Node.js Transform
    */
   static fromWeb<TIn = Uint8Array, TOut = Uint8Array>(
     webStream: TransformStream<TIn, TOut>,
-    options?: TransformStreamOptions
+    options?: DuplexStreamOptions
   ): Transform<TIn, TOut> {
     const transform = new Transform<TIn, TOut>(options);
     transform._webStream = webStream;
@@ -1000,4 +1161,15 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     // Default: no-op
     callback();
   }
+}
+
+// =============================================================================
+// Late-binding injection for Duplex (avoids circular import)
+// =============================================================================
+
+let _DuplexFromFactory: ((source: any) => any) | null = null;
+
+/** @internal — called from index.browser.ts to break circular dependency */
+export function _injectDuplexFrom(factory: (source: any) => any): void {
+  _DuplexFromFactory = factory;
 }

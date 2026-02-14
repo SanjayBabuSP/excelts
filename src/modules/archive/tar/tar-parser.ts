@@ -9,6 +9,7 @@ import { TAR_BLOCK_SIZE, TAR_TYPE } from "./tar-constants";
 import type { TarEntryInfo } from "./tar-entry-info";
 import { decodeHeader, isZeroBlock, calculatePadding } from "./tar-header";
 import { textDecoder } from "@utils/binary";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 // Helper to strip trailing null characters without using control char regex
 const NULL_CHAR = String.fromCharCode(0);
@@ -193,6 +194,7 @@ export async function* parseTarStream(
 
   // Buffer for accumulating data
   const buffer: Uint8Array[] = [];
+  let bufferHead = 0;
   let bufferSize = 0;
   let bufferOffset = 0;
 
@@ -225,27 +227,59 @@ export async function* parseTarStream(
     return true;
   }
 
+  function consumeCurrentChunk(chunkLength: number): void {
+    if (bufferOffset >= chunkLength) {
+      bufferHead += 1;
+      bufferSize -= chunkLength;
+      bufferOffset = 0;
+      if (bufferHead > 32 && bufferHead * 2 >= buffer.length) {
+        buffer.splice(0, bufferHead);
+        bufferHead = 0;
+      }
+    }
+  }
+
   function readBytes(count: number): Uint8Array {
+    if (count === 0) {
+      return EMPTY_UINT8ARRAY;
+    }
+
+    const first = buffer[bufferHead]!;
+    const firstAvailable = first.length - bufferOffset;
+    if (firstAvailable >= count) {
+      const out = first.subarray(bufferOffset, bufferOffset + count);
+      bufferOffset += count;
+      consumeCurrentChunk(first.length);
+      return out;
+    }
+
     const result = new Uint8Array(count);
     let written = 0;
 
     while (written < count) {
-      const chunk = buffer[0];
+      const chunk = buffer[bufferHead]!;
       const available = chunk.length - bufferOffset;
       const toRead = Math.min(available, count - written);
 
       result.set(chunk.subarray(bufferOffset, bufferOffset + toRead), written);
       written += toRead;
       bufferOffset += toRead;
-
-      if (bufferOffset >= chunk.length) {
-        buffer.shift();
-        bufferSize -= chunk.length;
-        bufferOffset = 0;
-      }
+      consumeCurrentChunk(chunk.length);
     }
 
     return result;
+  }
+
+  function skipBytes(count: number): void {
+    let remaining = count;
+    while (remaining > 0) {
+      const chunk = buffer[bufferHead]!;
+      const available = chunk.length - bufferOffset;
+      const toSkip = Math.min(available, remaining);
+      remaining -= toSkip;
+      bufferOffset += toSkip;
+      consumeCurrentChunk(chunk.length);
+    }
   }
 
   // Main parsing loop
@@ -278,7 +312,7 @@ export async function* parseTarStream(
       }
       const nameData = readBytes(dataSize);
       if (padding > 0) {
-        readBytes(padding);
+        skipBytes(padding);
       }
       pendingLongName = stripTrailingNulls(textDecoder.decode(nameData));
       continue;
@@ -290,7 +324,7 @@ export async function* parseTarStream(
       }
       const linkData = readBytes(dataSize);
       if (padding > 0) {
-        readBytes(padding);
+        skipBytes(padding);
       }
       pendingLongLink = stripTrailingNulls(textDecoder.decode(linkData));
       continue;
@@ -302,7 +336,7 @@ export async function* parseTarStream(
       }
       const paxData = textDecoder.decode(readBytes(dataSize));
       if (padding > 0) {
-        readBytes(padding);
+        skipBytes(padding);
       }
       pendingPax = parsePaxHeader(paxData);
       if (info.type === TAR_TYPE.PAX_GLOBAL) {
@@ -337,7 +371,7 @@ export async function* parseTarStream(
 
     const entryData = readBytes(dataSize);
     if (padding > 0) {
-      readBytes(padding);
+      skipBytes(padding);
     }
 
     yield {

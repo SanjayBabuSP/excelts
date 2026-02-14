@@ -44,6 +44,7 @@ import { collectUint8ArrayStream, toAsyncIterable } from "@archive/io/archive-so
 import { pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
 import { joinZipPath, normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import { ZipEditView } from "@archive/zip/zip-edit-view";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import type { ZipStringEncoding } from "@archive/shared/text";
 import { createReadStream, createWriteStream } from "node:fs";
 
@@ -260,7 +261,7 @@ function buildDirectoryEntry(
 ): ZipEntry {
   return {
     name: zipPath + "/",
-    data: new Uint8Array(0),
+    data: EMPTY_UINT8ARRAY,
     level: 0,
     modTime: fsEntry.mtime,
     atime: fsEntry.atime,
@@ -1115,6 +1116,17 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     (this as any)._tarReader = reader;
   }
 
+  /** Find pending ZIP entry index by normalized path, or -1 if missing. */
+  private _findZipPendingIndex(zipPath: string): number {
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      const pending = this._zip_pending[i]!;
+      if ("zipPath" in pending && pending.zipPath === zipPath) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
   /**
    * Initialize a ZIP archive from existing ZIP data.
    */
@@ -1489,9 +1501,13 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     }
     // Check pending entries
     const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._zip_options));
-    return this._zip_pending.some(
-      e => "zipPath" in e && e.zipPath === normalizedPath
-    ) as F extends "zip" ? boolean : never;
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      const pending = this._zip_pending[i]!;
+      if ("zipPath" in pending && pending.zipPath === normalizedPath) {
+        return true as F extends "zip" ? boolean : never;
+      }
+    }
+    return false as F extends "zip" ? boolean : never;
   }
 
   /**
@@ -1507,7 +1523,14 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
 
     // Check if entry exists in pending entries
     const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._zip_options));
-    const index = this._zip_pending.findIndex(e => "zipPath" in e && e.zipPath === normalizedPath);
+    let index = -1;
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      const pending = this._zip_pending[i]!;
+      if ("zipPath" in pending && pending.zipPath === normalizedPath) {
+        index = i;
+        break;
+      }
+    }
 
     if (index >= 0) {
       this._zip_pending.splice(index, 1);
@@ -1538,7 +1561,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
 
     // Check if entry exists in pending entries
     const normalizedPath = normalizeZipPath(entryPath, resolveZipPathOptions(this._zip_options));
-    const index = this._zip_pending.findIndex(e => "zipPath" in e && e.zipPath === normalizedPath);
+    const index = this._findZipPendingIndex(normalizedPath);
 
     if (index >= 0) {
       // Replace existing pending entry
@@ -1581,13 +1604,11 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       return this.has(oldPath) as F extends "zip" ? boolean : never;
     }
 
-    const index = this._zip_pending.findIndex(e => "zipPath" in e && e.zipPath === normalizedFrom);
+    const index = this._findZipPendingIndex(normalizedFrom);
 
     if (index >= 0) {
       // Remove any existing entry with target name
-      const toIndex = this._zip_pending.findIndex(
-        e => "zipPath" in e && e.zipPath === normalizedTo
-      );
+      const toIndex = this._findZipPendingIndex(normalizedTo);
       if (toIndex >= 0 && toIndex !== index) {
         this._zip_pending.splice(toIndex, 1);
       }
@@ -1827,7 +1848,12 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         throw new Error("Cannot read entries: archive not loaded. Use fromFile() or fromBuffer().");
       }
 
-      return this._zip_parser!.getEntries().map(mapZipEntryToInfo);
+      const zipEntries = this._zip_parser!.getEntries();
+      const entries = new Array<ArchiveEntryInfo>(zipEntries.length);
+      for (let i = 0; i < zipEntries.length; i++) {
+        entries[i] = mapZipEntryToInfo(zipEntries[i]!);
+      }
+      return entries;
     } else {
       if (!this._tarReader) {
         throw new Error("Cannot read entries: archive is in write mode");
@@ -1861,7 +1887,12 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       if (!this._zipParser) {
         throw new Error("Cannot read entries: archive not loaded.");
       }
-      return this._zip_parser!.getEntries().map(mapZipEntryToInfo);
+      const zipEntries = this._zip_parser!.getEntries();
+      const entries = new Array<ArchiveEntryInfo>(zipEntries.length);
+      for (let i = 0; i < zipEntries.length; i++) {
+        entries[i] = mapZipEntryToInfo(zipEntries[i]!);
+      }
+      return entries;
     } else {
       throwTarSyncNotSupported("getEntriesSync");
     }
@@ -1871,7 +1902,16 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
    * Get entry names (file paths).
    */
   getEntryNames(): string[] {
-    return this.getEntriesSync().map(e => e.path);
+    if (this._format === "zip" && this._zip_parser) {
+      return this._zip_parser.listFiles();
+    }
+
+    const entries = this.getEntriesSync();
+    const names = new Array<string>(entries.length);
+    for (let i = 0; i < entries.length; i++) {
+      names[i] = entries[i]!.path;
+    }
+    return names;
   }
 
   /**
@@ -1879,8 +1919,16 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
    */
   getEntry(entryPath: string): ZipEntryInfo | null {
     assertZipFormat(this._format, "getEntry()");
-    const entries = this.getEntriesSync() as ZipEntryInfo[];
-    return entries.find(e => e.path === entryPath) ?? null;
+    if (!this._zip_parser) {
+      throw new Error("Cannot read entries: archive not loaded.");
+    }
+
+    const entry = this._zip_parser.getEntry(entryPath);
+    if (!entry) {
+      return null;
+    }
+
+    return mapZipEntryToInfo(entry);
   }
 
   /**
@@ -2212,8 +2260,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     }
 
     // Process pending entries using shared logic
-    for (const pending of this._zip_pending) {
-      await processZipPendingEntry(pending, ctx, fsOps);
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      await processZipPendingEntry(this._zip_pending[i]!, ctx, fsOps);
     }
 
     checkAbort();
@@ -2243,7 +2291,13 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     }
 
     // Check for stream entries which can't be processed synchronously
-    const hasStreamEntry = this._zip_pending.some(e => e.type === "stream");
+    let hasStreamEntry = false;
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      if (this._zip_pending[i]!.type === "stream") {
+        hasStreamEntry = true;
+        break;
+      }
+    }
     if (hasStreamEntry) {
       throw new Error("Stream entries cannot be processed synchronously. Use toBuffer() instead.");
     }
@@ -2293,7 +2347,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     // Process pending entries using shared logic
     // Note: We use a sync wrapper since processZipPendingEntry is async but
     // the sync fsOps make it effectively synchronous (for await works with sync iterables)
-    for (const pending of this._zip_pending) {
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      const pending = this._zip_pending[i]!;
       // Inline sync processing to avoid async/await overhead
       this._processZipPendingEntrySync(pending, ctx, fsOps);
     }
@@ -2446,6 +2501,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       throw new Error("Cannot extract: archive not loaded. Use fromFile() or fromBuffer().");
     }
 
+    const parser = this._zip_parser!;
+
     const {
       overwrite = "error",
       filter,
@@ -2459,10 +2516,12 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     } = options;
 
     const resolvedTarget = path.resolve(targetDir);
-    const entries = this._zip_parser!.getEntries();
+    const entries = parser.getEntries();
     const totalEntries = entries.length;
     let extractedEntries = 0;
     let bytesWritten = 0;
+    const effectivePassword = password ?? this._zip_password;
+    const textDecoder = new TextDecoder();
 
     // Deferred symlinks - process after all files/dirs to ensure targets exist
     const deferredSymlinks: Array<{
@@ -2471,7 +2530,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       linkTarget: string;
     }> = [];
 
-    for (const entry of entries) {
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
       // Check abort signal
       if (signal?.aborted) {
         throw new Error("Extraction aborted");
@@ -2516,12 +2576,12 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         }
 
         // Extract symlink target (content of the entry is the link target path)
-        const data = await this._zip_parser!.extract(entry.path, password ?? this._zip_password);
+        const data = await parser.extract(entry.path, effectivePassword);
         if (!data) {
           continue;
         }
 
-        const linkTarget = new TextDecoder().decode(data);
+        const linkTarget = textDecoder.decode(data);
 
         // Validate symlink target doesn't escape the extraction directory
         const resolvedLinkTarget = path.resolve(path.dirname(targetPath), linkTarget);
@@ -2572,7 +2632,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         }
 
         // Extract file content
-        const data = await this._zip_parser!.extract(entry.path, password ?? this._zip_password);
+        const data = await parser.extract(entry.path, effectivePassword);
         if (data) {
           let writeSuccess = false;
           try {
@@ -2626,7 +2686,9 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     }
 
     // Process deferred symlinks
-    for (const { entry, targetPath, linkTarget } of deferredSymlinks) {
+    for (let i = 0; i < deferredSymlinks.length; i++) {
+      const deferred = deferredSymlinks[i]!;
+      const { entry, targetPath, linkTarget } = deferred;
       if (signal?.aborted) {
         throw new Error("Extraction aborted");
       }
@@ -2687,6 +2749,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       throw new Error("Cannot extract: archive not loaded.");
     }
 
+    const parser = this._zip_parser!;
+
     const {
       overwrite = "error",
       filter,
@@ -2700,10 +2764,12 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     } = options;
 
     const resolvedTarget = path.resolve(targetDir);
-    const entries = this._zip_parser!.getEntries();
+    const entries = parser.getEntries();
     const totalEntries = entries.length;
     let extractedEntries = 0;
     let bytesWritten = 0;
+    const effectivePassword = password ?? this._zip_password;
+    const textDecoder = new TextDecoder();
 
     // Deferred symlinks - process after all files/dirs to ensure targets exist
     const deferredSymlinks: Array<{
@@ -2712,7 +2778,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       linkTarget: string;
     }> = [];
 
-    for (const entry of entries) {
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
       // Check abort signal
       if (signal?.aborted) {
         throw new Error("Extraction aborted");
@@ -2756,12 +2823,12 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         }
 
         // Extract symlink target
-        const data = this._zip_parser!.extractSync(entry.path, password ?? this._zip_password);
+        const data = parser.extractSync(entry.path, effectivePassword);
         if (!data) {
           continue;
         }
 
-        const linkTarget = new TextDecoder().decode(data);
+        const linkTarget = textDecoder.decode(data);
 
         // Validate symlink target doesn't escape the extraction directory
         const resolvedLinkTarget = path.resolve(path.dirname(targetPath), linkTarget);
@@ -2808,7 +2875,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
           continue;
         }
 
-        const data = this._zip_parser!.extractSync(entry.path, password ?? this._zip_password);
+        const data = parser.extractSync(entry.path, effectivePassword);
         if (data) {
           let writeSuccess = false;
           try {
@@ -2859,7 +2926,9 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     }
 
     // Process deferred symlinks
-    for (const { entry, targetPath, linkTarget } of deferredSymlinks) {
+    for (let i = 0; i < deferredSymlinks.length; i++) {
+      const deferred = deferredSymlinks[i]!;
+      const { entry, targetPath, linkTarget } = deferred;
       if (signal?.aborted) {
         throw new Error("Extraction aborted");
       }
@@ -2922,8 +2991,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     const opts = this._tar_options;
 
     // Process all pending entries
-    for (const entry of pending) {
-      await this._processTarEntry(archive, entry);
+    for (let i = 0; i < pending.length; i++) {
+      await this._processTarEntry(archive, pending[i]!);
     }
 
     // Build and optionally compress
@@ -2942,8 +3011,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     const opts = this._tar_options;
 
     // Process all pending entries (sync)
-    for (const entry of pending) {
-      this._processTarEntrySync(archive, entry);
+    for (let i = 0; i < pending.length; i++) {
+      this._processTarEntrySync(archive, pending[i]!);
     }
 
     // Build and optionally compress
@@ -3211,7 +3280,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     // We'll add them as buffer entries
 
     // Process pending entries and add them to ZipArchive with streaming sources
-    for (const pending of this._zip_pending) {
+    for (let i = 0; i < this._zip_pending.length; i++) {
+      const pending = this._zip_pending[i]!;
       switch (pending.type) {
         case "file": {
           // Use createReadStream for true streaming input
@@ -3333,7 +3403,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
     });
 
     // Process pending entries and add them to TarArchive with streaming sources
-    for (const pending of this._tar_pending) {
+    for (let i = 0; i < this._tar_pending.length; i++) {
+      const pending = this._tar_pending[i]!;
       switch (pending.type) {
         case "file": {
           // Use createReadStream for true streaming input
@@ -3427,6 +3498,21 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       gzippedIterable = (async function* () {
         const gzipStream = createGzipStream({ level: gzLevel });
         const chunks: Uint8Array[] = [];
+        let chunkHead = 0;
+
+        const clearConsumedChunks = (): void => {
+          if (chunkHead > 0) {
+            chunks.length = 0;
+            chunkHead = 0;
+          }
+        };
+
+        function* drainChunks(): Iterable<Uint8Array> {
+          while (chunkHead < chunks.length) {
+            yield chunks[chunkHead++]!;
+          }
+          clearConsumedChunks();
+        }
 
         // Collect gzip output
         gzipStream.on("data", (chunk: Uint8Array) => {
@@ -3437,8 +3523,8 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         for await (const tarChunk of tarIterable) {
           gzipStream.write(tarChunk);
           // Yield any available gzip output
-          while (chunks.length > 0) {
-            yield chunks.shift()!;
+          for (const chunk of drainChunks()) {
+            yield chunk;
           }
         }
 
@@ -3449,7 +3535,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         });
 
         // Yield remaining chunks
-        for (const chunk of chunks) {
+        for (const chunk of drainChunks()) {
           yield chunk;
         }
       })();

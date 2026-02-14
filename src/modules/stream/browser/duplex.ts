@@ -21,10 +21,10 @@ import { Transform } from "./transform";
  * A duplex stream that combines readable and writable
  */
 export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitter {
-  /** @internal - for pipe() support */
-  readonly _readable: Readable<TRead>;
-  /** @internal - for pipe() support */
-  readonly _writable: Writable<TWrite>;
+  /** @internal */
+  private readonly _readable: Readable<TRead>;
+  /** @internal */
+  private readonly _writable: Writable<TWrite>;
   allowHalfOpen: boolean;
 
   /**
@@ -184,13 +184,21 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   // Track if we've already set up data forwarding
   private _dataForwardingSetup: boolean = false;
   private _destroyed: boolean = false;
+  private _emitClose: boolean;
+  private _errored: Error | null = null;
+  private _closed: boolean = false;
 
   private _sideForwardingCleanup: (() => void) | null = null;
+  // User-provided construct function (Node.js compatibility)
+  private _constructFunc?: (callback: (error?: Error | null) => void) => void;
+  private _constructed: boolean = true;
 
   constructor(
     options?: DuplexStreamOptions & {
       allowHalfOpen?: boolean;
       objectMode?: boolean;
+      emitClose?: boolean;
+      autoDestroy?: boolean;
       read?: (this: Duplex<TRead, TWrite>, size?: number) => void;
       write?: (
         this: Duplex<TRead, TWrite>,
@@ -198,34 +206,69 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
         encoding: string,
         callback: (error?: Error | null) => void
       ) => void;
+      writev?: (
+        this: Duplex<TRead, TWrite>,
+        chunks: Array<{ chunk: TWrite; encoding: string }>,
+        callback: (error?: Error | null) => void
+      ) => void;
       final?: (this: Duplex<TRead, TWrite>, callback: (error?: Error | null) => void) => void;
+      destroy?: (
+        this: Duplex<TRead, TWrite>,
+        error: Error | null,
+        callback: (error?: Error | null) => void
+      ) => void;
+      construct?: (this: Duplex<TRead, TWrite>, callback: (error?: Error | null) => void) => void;
     }
   ) {
     super();
 
     this.allowHalfOpen = options?.allowHalfOpen ?? true;
+    this._emitClose = options?.emitClose ?? true;
     // Support shorthand objectMode option
     const objectMode = options?.objectMode ?? false;
     const readableObjMode = options?.readableObjectMode ?? objectMode;
     const writableObjMode = options?.writableObjectMode ?? objectMode;
 
+    // HWM: if highWaterMark is explicitly provided it overrides per-side (matching Node)
+    const hasGeneralHwm =
+      options != null && Object.prototype.hasOwnProperty.call(options, "highWaterMark");
+    const readableHwm = hasGeneralHwm ? options!.highWaterMark : options?.readableHighWaterMark;
+    const writableHwm = hasGeneralHwm ? options!.highWaterMark : options?.writableHighWaterMark;
+
     this._readable = new Readable<TRead>({
-      highWaterMark: options?.readableHighWaterMark ?? options?.highWaterMark,
+      highWaterMark: readableHwm,
       objectMode: readableObjMode,
-      read: options?.read?.bind(this)
+      read: options?.read?.bind(this),
+      // Suppress child-level close/error — Duplex itself is the authority
+      emitClose: false,
+      autoDestroy: false
     });
 
     this._writable = new Writable<TWrite>({
-      highWaterMark: options?.writableHighWaterMark ?? options?.highWaterMark,
+      highWaterMark: writableHwm,
       objectMode: writableObjMode,
       write: options?.write?.bind(this),
-      final: options?.final?.bind(this)
+      writev: options?.writev?.bind(this),
+      final: options?.final?.bind(this),
+      // Suppress child-level close/error — Duplex itself is the authority
+      emitClose: false,
+      autoDestroy: false
     });
+
+    // Store user-provided destroy function
+    if (options?.destroy) {
+      this._destroy = options.destroy.bind(this);
+    }
+
+    // Store user-provided construct function
+    if (options?.construct) {
+      this._constructFunc = options.construct.bind(this);
+    }
 
     this._setupSideForwarding();
   }
 
-  _setupSideForwarding(): void {
+  private _setupSideForwarding(): void {
     if (this._sideForwardingCleanup) {
       this._sideForwardingCleanup();
       this._sideForwardingCleanup = null;
@@ -241,6 +284,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       }
     });
     registry.add(this._readable, "error", err => this.emit("error", err));
+    registry.add(this._readable, "readable", () => this.emit("readable"));
 
     registry.add(this._writable, "error", err => this.emit("error", err));
     registry.once(this._writable, "finish", () => this.emit("finish"));
@@ -302,8 +346,11 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
+    const encoding = typeof encodingOrCallback === "string" ? encodingOrCallback : undefined;
     const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-    return this._writable.write(chunk, cb);
+    return encoding !== undefined
+      ? this._writable.write(chunk, encoding, cb)
+      : this._writable.write(chunk, cb);
   }
 
   /**
@@ -317,14 +364,22 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     encodingOrCallback?: string | (() => void),
     callback?: () => void
   ): this {
-    const { chunk, cb } = parseEndArgs<TWrite>(chunkOrCallback, encodingOrCallback, callback);
+    const { chunk, encoding, cb } = parseEndArgs<TWrite>(
+      chunkOrCallback,
+      encodingOrCallback,
+      callback
+    );
 
     if (cb) {
       this.once("finish", cb);
     }
 
     if (chunk !== undefined) {
-      this._writable.write(chunk);
+      if (encoding !== undefined) {
+        this._writable.write(chunk, encoding);
+      } else {
+        this._writable.write(chunk);
+      }
     }
     this._writable.end();
     return this;
@@ -368,7 +423,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     options?: { end?: boolean }
   ): W {
     if (destination instanceof Transform) {
-      this._readable.pipe(destination._writable, options);
+      this._readable.pipe((destination as any)._writable, options);
       return destination;
     }
     this._readable.pipe(destination, options);
@@ -418,9 +473,74 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       this._sideForwardingCleanup();
       this._sideForwardingCleanup = null;
     }
-    this._readable.destroy(error);
-    this._writable.destroy(error);
+
+    const afterDestroy = (finalError?: Error | null): void => {
+      const err = finalError ?? error;
+      if (err) {
+        this._errored = err;
+      }
+      this._closed = true;
+      // Destroy internal streams without their own error/close emission — the
+      // Duplex itself is the authority for those events.
+      this._readable.destroy();
+      this._writable.destroy();
+      queueMicrotask(() => {
+        if (err) {
+          this.emit("error", err);
+        }
+        if (this._emitClose) {
+          this.emit("close");
+        }
+      });
+    };
+
+    if (this._hasDestroyHook()) {
+      this._destroy(error ?? null, afterDestroy);
+    } else {
+      afterDestroy(error);
+    }
     return this;
+  }
+
+  /**
+   * Override in subclass to customise destroy behaviour.
+   * Call `callback(err)` when cleanup is complete.
+   */
+  _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    callback(error);
+  }
+
+  /** Check if _destroy has been overridden by a subclass or constructor option. */
+  private _hasDestroyHook(): boolean {
+    return (
+      Object.prototype.hasOwnProperty.call(this, "_destroy") ||
+      Object.getPrototypeOf(this)._destroy !== Duplex.prototype._destroy
+    );
+  }
+
+  /**
+   * Async dispose support (using await).
+   * Destroys the stream and resolves after the 'close' event.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    const selfInitiated = !this._destroyed;
+    if (selfInitiated) {
+      this.destroy();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const settle = (): void => {
+        if (selfInitiated || this.writableFinished) {
+          resolve();
+        } else {
+          reject(new Error("Premature close"));
+        }
+      };
+      if (this._closed) {
+        settle();
+      } else {
+        this.once("close", settle);
+      }
+    });
   }
 
   get readable(): boolean {
@@ -495,8 +615,8 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     return this._readable.readableFlowing;
   }
 
-  set readableFlowing(val: boolean | null) {
-    this._readable.readableFlowing = val;
+  set readableFlowing(value: boolean | null) {
+    this._readable.readableFlowing = value;
   }
 
   get readableAborted(): boolean {
@@ -512,11 +632,11 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   }
 
   get errored(): Error | null {
-    return this._readable.errored ?? this._writable.errored;
+    return this._errored ?? this._readable.errored ?? this._writable.errored;
   }
 
   get closed(): boolean {
-    return this._readable.closed && this._writable.closed;
+    return this._closed;
   }
 
   get readableBuffer(): TRead[] {

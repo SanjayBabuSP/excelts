@@ -40,7 +40,8 @@ import { ByteQueue } from "@archive/shared/byte-queue";
 import { encodeZipString, type ZipStringEncoding } from "@archive/shared/text";
 import { buildZipDeflateFileOptions } from "@archive/zip/zip-entry-options";
 import {
-  buildCentralDirectoryAndEocd,
+  measureCentralDirectoryAndEocd,
+  writeCentralDirectoryAndEocdInto,
   type ZipCentralDirectoryEntryInput
 } from "@archive/zip/writer-core";
 import { buildZipEntryMetadata } from "@archive/zip/zip-entry-metadata";
@@ -537,18 +538,22 @@ export class ZipArchive {
       throw new Error("ZIP64 required for central directory offset");
     }
 
-    const cdResult = buildCentralDirectoryAndEocd(cdEntries, {
-      zipComment: encodeZipString(this._options.comment, this._options.encoding),
+    const zipComment = encodeZipString(this._options.comment, this._options.encoding);
+    const cdSizing = measureCentralDirectoryAndEocd(cdEntries, {
+      zipComment,
       zip64Mode: this._options.zip64,
       centralDirOffset
     });
 
-    for (const h of cdResult.centralDirectoryHeaders) {
-      out.append(h);
-    }
-    for (const t of cdResult.trailerRecords) {
-      out.append(t);
-    }
+    const cdChunk = new Uint8Array(cdSizing.totalSize);
+    writeCentralDirectoryAndEocdInto(cdEntries, {
+      zipComment,
+      zip64Mode: this._options.zip64,
+      centralDirOffset,
+      out: cdChunk,
+      offset: 0
+    });
+    out.append(cdChunk);
 
     return out.read(out.length);
   }
@@ -565,6 +570,7 @@ export class ZipArchive {
     }
 
     const allSourcesInMemory = this._entries.every(e => isInMemoryArchiveSource(e.source));
+
     const hasBlobSource =
       typeof Blob !== "undefined" && this._entries.some(e => e.source instanceof Blob);
 
@@ -589,26 +595,26 @@ export class ZipArchive {
       // Prefer the sync builder when possible (Node.js hot path): it avoids
       // async/Promise overhead and uses zlib sync fast paths.
       if (!hasBlobSource) {
-        const entries = this._entries.map(e => ({
-          name: e.name,
-          data: toUint8ArraySync(e.source as any),
-          level: e.options?.level,
-          modTime: e.options?.modTime,
-          comment: e.options?.comment,
-          encoding: e.options?.encoding ?? this._options.encoding
+        const entries = this._entries.map(entry => ({
+          name: entry.name,
+          data: toUint8ArraySync(entry.source as any),
+          level: entry.options?.level,
+          modTime: entry.options?.modTime,
+          comment: entry.options?.comment,
+          encoding: entry.options?.encoding ?? this._options.encoding
         }));
 
         return createZipSync(entries, this._getCreateZipOptions());
       }
 
       const entries = await Promise.all(
-        this._entries.map(async e => ({
-          name: e.name,
-          data: await toUint8Array(e.source as any),
-          level: e.options?.level,
-          modTime: e.options?.modTime,
-          comment: e.options?.comment,
-          encoding: e.options?.encoding ?? this._options.encoding
+        this._entries.map(async entry => ({
+          name: entry.name,
+          data: await toUint8Array(entry.source as any),
+          level: entry.options?.level,
+          modTime: entry.options?.modTime,
+          comment: entry.options?.comment,
+          encoding: entry.options?.encoding ?? this._options.encoding
         }))
       );
 
@@ -621,20 +627,20 @@ export class ZipArchive {
   bytesSync(): Uint8Array {
     this._sealed = true;
 
-    const entries = this._entries.map(e => {
+    const entries = this._entries.map(entry => {
       if (
-        !(e.source instanceof Uint8Array) &&
-        !(e.source instanceof ArrayBuffer) &&
-        typeof e.source !== "string"
+        !(entry.source instanceof Uint8Array) &&
+        !(entry.source instanceof ArrayBuffer) &&
+        typeof entry.source !== "string"
       ) {
         throw new Error("bytesSync() only supports Uint8Array/ArrayBuffer/string sources");
       }
       return {
-        name: e.name,
-        data: toUint8ArraySync(e.source as any),
-        modTime: e.options?.modTime,
-        comment: e.options?.comment,
-        encoding: e.options?.encoding ?? this._options.encoding
+        name: entry.name,
+        data: toUint8ArraySync(entry.source as any),
+        modTime: entry.options?.modTime,
+        comment: entry.options?.comment,
+        encoding: entry.options?.encoding ?? this._options.encoding
       };
     });
 

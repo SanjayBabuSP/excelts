@@ -8,6 +8,7 @@ import {
   type Readable
 } from "@stream";
 import { ByteQueue } from "@archive/shared/byte-queue";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import { textEncoder as utf8Encoder } from "@utils/binary";
 import { decodeZipPath, resolveZipStringCodec } from "@archive/shared/text";
 import { PatternScanner } from "@archive/unzip/pattern-scanner";
@@ -98,6 +99,8 @@ export class PullStream extends Duplex {
   finished: boolean;
   match?: number;
   __emittedError?: Error;
+  private _pendingChunkResolve?: () => void;
+  private _pendingChunkPromise?: Promise<void>;
 
   constructor(opts: ParseOptions = {}) {
     super({ decodeStrings: false, objectMode: true });
@@ -112,8 +115,44 @@ export class PullStream extends Duplex {
 
     this.on("finish", () => {
       this.finished = true;
+      this._notifyPendingChunkWaiter();
       this.emit("chunk", false);
     });
+  }
+
+  private _notifyPendingChunkWaiter(): void {
+    if (!this._pendingChunkResolve) {
+      return;
+    }
+    const resolve = this._pendingChunkResolve;
+    this._pendingChunkResolve = undefined;
+    this._pendingChunkPromise = undefined;
+    resolve();
+  }
+
+  private _waitForChunkSignal(): Promise<void> {
+    if (this._pendingChunkPromise) {
+      return this._pendingChunkPromise;
+    }
+    this._pendingChunkPromise = new Promise<void>(resolve => {
+      this._pendingChunkResolve = resolve;
+    });
+    return this._pendingChunkPromise;
+  }
+
+  private async _pullFixedLength(length: number): Promise<Uint8Array> {
+    const queue = this._queue;
+
+    while (queue.length < length) {
+      if (this.finished) {
+        throw new Error("FILE_ENDED");
+      }
+      await this._waitForChunkSignal();
+    }
+
+    const out = queue.read(length);
+    this._maybeReleaseWriteCallback();
+    return out;
   }
 
   _write(chunk: Uint8Array | string, _encoding: string, callback: () => void): void {
@@ -127,6 +166,7 @@ export class PullStream extends Duplex {
     } else {
       callback();
     }
+    this._notifyPendingChunkWaiter();
     this.emit("chunk");
   }
 
@@ -161,6 +201,11 @@ export class PullStream extends Duplex {
 
     const cb = (): void => {
       this._maybeReleaseWriteCallback();
+    };
+
+    const onDrain = (): void => {
+      waitingDrain = false;
+      pull();
     };
 
     const pull = (): void => {
@@ -229,10 +274,7 @@ export class PullStream extends Duplex {
 
         if (!ok) {
           waitingDrain = true;
-          p.once("drain", () => {
-            waitingDrain = false;
-            pull();
-          });
+          p.once("drain", onDrain);
           return;
         }
 
@@ -265,31 +307,25 @@ export class PullStream extends Duplex {
 
   pull(eof: number | Uint8Array, includeEof?: boolean): Promise<Uint8Array> {
     if (eof === 0) {
-      return Promise.resolve(new Uint8Array(0));
+      return Promise.resolve(EMPTY_UINT8ARRAY);
     }
 
-    // If we already have the required data in buffer
-    // we can resolve the request immediately
-    if (typeof eof === "number" && this._queue.length >= eof) {
-      const data = this._queue.read(eof);
-
-      // Allow the upstream writer to continue once the consumer makes progress.
-      // Waiting for a full drain can deadlock when the producer must call `end()`
-      // but is blocked behind a deferred write callback.
-      this._maybeReleaseWriteCallback();
-      return Promise.resolve(data);
+    if (typeof eof === "number") {
+      return this._pullFixedLength(eof);
     }
+
+    const queue = this._queue;
 
     // Otherwise we wait for more data and fulfill directly from the internal queue.
     // This avoids constructing intermediate streams for small pulls (hot path).
-    const chunks: Uint8Array[] = [];
+    let firstChunk: Uint8Array | null = null;
+    let chunks: Uint8Array[] | null = null;
     let pullStreamRejectHandler: (e: Error) => void;
 
     // Pattern scanning state (only used when eof is a pattern)
-    const eofIsNumber = typeof eof === "number";
-    const pattern = eofIsNumber ? undefined : (eof as Uint8Array);
-    const patternLen = pattern ? pattern.length : 0;
-    const scanner = eofIsNumber ? undefined : new PatternScanner(pattern!);
+    const pattern = eof as Uint8Array;
+    const patternLen = pattern.length;
+    const scanner = new PatternScanner(pattern);
 
     return new Promise<Uint8Array>((resolve, reject) => {
       let settled = false;
@@ -313,11 +349,33 @@ export class PullStream extends Duplex {
       const finalize = (): void => {
         cleanup();
         settled = true;
-        if (chunks.length === 0) {
-          resolve(new Uint8Array(0));
+        if (!firstChunk) {
+          resolve(EMPTY_UINT8ARRAY);
           return;
         }
-        resolve(chunks.length === 1 ? chunks[0] : concatUint8Arrays(chunks));
+        if (!chunks) {
+          resolve(firstChunk);
+          return;
+        }
+        resolve(concatUint8Arrays(chunks));
+      };
+
+      const appendChunk = (chunk: Uint8Array): void => {
+        if (chunk.length === 0) {
+          return;
+        }
+
+        if (!firstChunk) {
+          firstChunk = chunk;
+          return;
+        }
+
+        if (!chunks) {
+          chunks = [firstChunk, chunk];
+          return;
+        }
+
+        chunks.push(chunk);
       };
 
       const onFinish = (): void => {
@@ -335,44 +393,20 @@ export class PullStream extends Duplex {
       };
 
       const onChunk = (): void => {
-        if (typeof eof === "number") {
-          const available = this._queue.length;
-          if (available <= 0) {
-            return;
-          }
-          const toRead = Math.min(eof, available);
-          if (toRead > 0) {
-            chunks.push(this._queue.read(toRead));
-            eof -= toRead;
-          }
-
-          // Allow upstream to continue as soon as we consume bytes.
-          // This avoids deadlocks when the last upstream chunk is waiting on its
-          // callback and the parser needs an EOF signal after draining buffered data.
-          this._maybeReleaseWriteCallback();
-
-          if (eof === 0) {
-            finalize();
-          }
-
-          return;
-        }
-
-        // eof is a pattern
-        while (this._queue.length > 0) {
-          const bufLen = this._queue.length;
-          const match = scanner!.find(this._queue);
+        while (queue.length > 0) {
+          const bufLen = queue.length;
+          const match = scanner.find(queue);
           if (match !== -1) {
             // store signature match byte offset to allow us to reference
             // this for zip64 offset
             this.match = match;
             const toRead = includeEof ? match + patternLen : match;
             if (toRead > 0) {
-              chunks.push(this._queue.read(toRead));
-              scanner!.onConsume(toRead);
+              appendChunk(queue.read(toRead));
+              scanner.onConsume(toRead);
             }
 
-            if (this._queue.length === 0 || (patternLen && this._queue.length <= patternLen)) {
+            if (queue.length === 0 || (patternLen && queue.length <= patternLen)) {
               this._maybeReleaseWriteCallback();
             }
             finalize();
@@ -380,7 +414,7 @@ export class PullStream extends Duplex {
           }
 
           // No match yet. Avoid rescanning bytes that can't start a match.
-          scanner!.onNoMatch(bufLen);
+          scanner.onNoMatch(bufLen);
 
           const safeLen = bufLen - patternLen;
           if (safeLen <= 0) {
@@ -389,10 +423,10 @@ export class PullStream extends Duplex {
             return;
           }
 
-          chunks.push(this._queue.read(safeLen));
-          scanner!.onConsume(safeLen);
+          appendChunk(queue.read(safeLen));
+          scanner.onConsume(safeLen);
 
-          if (this._queue.length === 0 || (patternLen && this._queue.length <= patternLen)) {
+          if (queue.length === 0 || (patternLen && queue.length <= patternLen)) {
             this._maybeReleaseWriteCallback();
             return;
           }
@@ -486,6 +520,11 @@ export function streamUntilValidatedDataDescriptor(
     }
   };
 
+  const onDrain = (): void => {
+    waitingDrain = false;
+    pull();
+  };
+
   const pull = (): void => {
     if (done) {
       return;
@@ -531,10 +570,7 @@ export function streamUntilValidatedDataDescriptor(
                   written += part.length;
                   if (!ok) {
                     waitingDrain = true;
-                    output.once("drain", () => {
-                      waitingDrain = false;
-                      pull();
-                    });
+                    output.once("drain", onDrain);
                     break;
                   }
                 }
@@ -555,10 +591,7 @@ export function streamUntilValidatedDataDescriptor(
 
                 if (!ok) {
                   waitingDrain = true;
-                  output.once("drain", () => {
-                    waitingDrain = false;
-                    pull();
-                  });
+                  output.once("drain", onDrain);
                   return;
                 }
               }
@@ -595,10 +628,7 @@ export function streamUntilValidatedDataDescriptor(
             written += part.length;
             if (!ok) {
               waitingDrain = true;
-              output.once("drain", () => {
-                waitingDrain = false;
-                pull();
-              });
+              output.once("drain", onDrain);
               break;
             }
           }
@@ -628,10 +658,7 @@ export function streamUntilValidatedDataDescriptor(
 
         if (!ok) {
           waitingDrain = true;
-          output.once("drain", () => {
-            waitingDrain = false;
-            pull();
-          });
+          output.once("drain", onDrain);
         }
 
         return;
@@ -738,41 +765,50 @@ async function pumpKnownCompressedSizeToEntry(
   entry.once("error", onError);
 
   let skipping = false;
+  const anyInflater = inflater as any;
+  let waitResolve: (() => void) | null = null;
+
+  const cleanupWaitListeners = (): void => {
+    try {
+      anyInflater?.removeListener?.("drain", onDrain);
+    } catch {
+      // ignore
+    }
+    try {
+      entry.removeListener("__autodrain", onAutodrain);
+    } catch {
+      // ignore
+    }
+    try {
+      entry.removeListener("close", onClose);
+    } catch {
+      // ignore
+    }
+  };
+
+  const resolveWait = (): void => {
+    const resolve = waitResolve;
+    if (!resolve) {
+      return;
+    }
+    waitResolve = null;
+    cleanupWaitListeners();
+    resolve();
+  };
+
+  const onDrain = (): void => {
+    resolveWait();
+  };
+  const onAutodrain = (): void => {
+    resolveWait();
+  };
+  const onClose = (): void => {
+    resolveWait();
+  };
 
   const waitForDrainOrSkipSignal = async (): Promise<void> => {
     await new Promise<void>(resolve => {
-      const anyInflater = inflater as any;
-
-      const cleanup = () => {
-        try {
-          anyInflater?.removeListener?.("drain", onDrain);
-        } catch {
-          // ignore
-        }
-        try {
-          entry.removeListener("__autodrain", onAutodrain);
-        } catch {
-          // ignore
-        }
-        try {
-          entry.removeListener("close", onClose);
-        } catch {
-          // ignore
-        }
-      };
-
-      const onDrain = () => {
-        cleanup();
-        resolve();
-      };
-      const onAutodrain = () => {
-        cleanup();
-        resolve();
-      };
-      const onClose = () => {
-        cleanup();
-        resolve();
-      };
+      waitResolve = resolve;
 
       if (typeof anyInflater?.once === "function") {
         anyInflater.once("drain", onDrain);

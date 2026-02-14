@@ -48,6 +48,21 @@ export class TarGzArchive extends TarArchive {
   override async *stream(): AsyncIterable<Uint8Array> {
     const gzipStream = createGzipStream({ level: this._gzLevel });
     const chunks: Uint8Array[] = [];
+    let chunkHead = 0;
+
+    function clearConsumedChunks(): void {
+      if (chunkHead > 0) {
+        chunks.length = 0;
+        chunkHead = 0;
+      }
+    }
+
+    function* drainChunks(): Iterable<Uint8Array> {
+      while (chunkHead < chunks.length) {
+        yield chunks[chunkHead++]!;
+      }
+      clearConsumedChunks();
+    }
 
     // Collect gzip output
     gzipStream.on("data", (chunk: Uint8Array) => {
@@ -58,8 +73,8 @@ export class TarGzArchive extends TarArchive {
     for await (const tarChunk of super.stream()) {
       gzipStream.write(tarChunk);
       // Yield any available gzip output
-      while (chunks.length > 0) {
-        yield chunks.shift()!;
+      for (const chunk of drainChunks()) {
+        yield chunk;
       }
     }
 
@@ -70,7 +85,7 @@ export class TarGzArchive extends TarArchive {
     });
 
     // Yield remaining chunks
-    for (const chunk of chunks) {
+    for (const chunk of drainChunks()) {
       yield chunk;
     }
   }

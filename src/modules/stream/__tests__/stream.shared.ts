@@ -20,6 +20,7 @@ export interface StreamModuleImports {
   Writable: new (options?: any) => any;
   Transform: new (options?: any) => any;
   Duplex: new (options?: any) => any;
+  PassThrough: new (options?: any) => any;
 
   // Specialized Streams
   BufferedStream: new (options?: any) => any;
@@ -113,6 +114,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
     Writable,
     Transform,
     Duplex,
+    PassThrough,
     BufferedStream,
     PullStream,
     StringChunk,
@@ -1009,6 +1011,69 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(results).toEqual([2, 4]);
     });
 
+    it("should ignore readable/writable shortcut options in createDuplex (Node parity)", async () => {
+      const chunks: number[] = [];
+      const duplex = createDuplex({
+        readableObjectMode: true,
+        writableObjectMode: true,
+        readable: {
+          pipe() {
+            throw new Error("createDuplex should not auto-bridge readable");
+          }
+        },
+        writable: {
+          write() {
+            throw new Error("createDuplex should not auto-bridge writable");
+          },
+          end() {
+            throw new Error("createDuplex should not auto-bridge writable end");
+          }
+        },
+        read() {},
+        write(
+          this: any,
+          chunk: number,
+          _encoding: string,
+          callback: (error?: Error | null) => void
+        ) {
+          chunks.push(chunk);
+          this.push(chunk * 3);
+          callback();
+        },
+        final(this: any, callback: (error?: Error | null) => void) {
+          this.push(null);
+          callback();
+        }
+      } as any);
+
+      duplex.write(2);
+      duplex.end();
+
+      const results: number[] = [];
+      for await (const chunk of duplex) {
+        results.push(chunk as number);
+      }
+
+      expect(chunks).toEqual([2]);
+      expect(results).toEqual([6]);
+    });
+
+    it("should apply objectMode/highWaterMark defaults to both duplex sides", () => {
+      const duplex = createDuplex({
+        objectMode: true,
+        highWaterMark: 7,
+        read() {},
+        write(_chunk, _encoding, callback) {
+          callback();
+        }
+      });
+
+      expect(duplex.readableObjectMode).toBe(true);
+      expect(duplex.writableObjectMode).toBe(true);
+      expect(duplex.readableHighWaterMark).toBe(7);
+      expect(duplex.writableHighWaterMark).toBe(7);
+    });
+
     it("should create a pair of connected duplex streams", async () => {
       const [client, server] = duplexPair({ objectMode: true });
 
@@ -1057,6 +1122,12 @@ export function runStreamTests(imports: StreamModuleImports): void {
         stringToUint8Array("World")
       ]);
       const result = await streamToString(readable);
+      expect(result).toBe("Hello World");
+    });
+
+    it("should collect stream into string when chunks are strings", async () => {
+      const readable = createReadableFromArray(["Hello ", "World"], { objectMode: true });
+      const result = await streamToString(readable as any);
       expect(result).toBe("Hello World");
     });
 
@@ -2865,6 +2936,17 @@ export function runStreamTests(imports: StreamModuleImports): void {
           const readable = createReadableFromArray([stringToUint8Array(bomStr)]);
           const result = await streamToString(readable);
           expect(result).toBe(bomStr);
+        });
+
+        it("should decode split multibyte UTF-8 across chunk boundaries", async () => {
+          const bytes = stringToUint8Array("A😀B");
+          const readable = createReadableFromArray([
+            bytes.subarray(0, 2),
+            bytes.subarray(2, 4),
+            bytes.subarray(4)
+          ]);
+          const result = await streamToString(readable);
+          expect(result).toBe("A😀B");
         });
 
         it("should support utf16le/ucs2 alias decoding consistently", async () => {
@@ -5957,6 +6039,291 @@ export function runStreamTests(imports: StreamModuleImports): void {
   // API Surface: writableAborted NOT on Duplex / Transform
   // ===========================================================================
 
+  // ===========================================================================
+  // Phase 4: Tests for Fixes #1–#10 (stream API alignment)
+  // ===========================================================================
+
+  describe("Fix #1: Transform.from() and PassThrough.from()", () => {
+    it("Transform.from() should create a Transform from an iterable", async () => {
+      const t = (Transform as any).from([10, 20, 30]);
+      const result: any[] = [];
+      for await (const chunk of t) {
+        result.push(chunk);
+      }
+      expect(result).toEqual([10, 20, 30]);
+    });
+
+    it("PassThrough.from() should create a PassThrough from an iterable", async () => {
+      const p = (PassThrough as any).from(["a", "b", "c"]);
+      const result: any[] = [];
+      for await (const chunk of p) {
+        result.push(chunk);
+      }
+      expect(result).toEqual(["a", "b", "c"]);
+    });
+
+    it("Transform.from() should work with async iterables", async () => {
+      async function* gen() {
+        yield 1;
+        yield 2;
+      }
+      const t = (Transform as any).from(gen());
+      const result: any[] = [];
+      for await (const chunk of t) {
+        result.push(chunk);
+      }
+      expect(result).toEqual([1, 2]);
+    });
+  });
+
+  describe("Fix #2: compose() returns Duplex-like stream", () => {
+    it("Readable.compose() result should have write method (Duplex-like)", async () => {
+      const r = Readable.from([1, 2, 3], { objectMode: true });
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
+          cb(null, chunk * 2);
+        }
+      });
+      const composed = r.compose(t);
+
+      // compose() should return a Duplex-like stream with write method
+      expect(typeof composed.write).toBe("function");
+      expect(typeof composed.end).toBe("function");
+
+      const result: any[] = [];
+      for await (const chunk of composed) {
+        result.push(chunk);
+      }
+      expect(result).toEqual([2, 4, 6]);
+    });
+
+    it("Transform.compose() result should have write method", () => {
+      const t1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+      const t2 = createTransform<number, number>(n => n * 2, { objectMode: true });
+      const composed = (t1 as any).compose(t2);
+      expect(typeof composed.write).toBe("function");
+      expect(typeof composed.end).toBe("function");
+    });
+  });
+
+  describe("Fix #3: emitClose: false honored in destroy()", () => {
+    it("Readable with emitClose: false should not emit close on destroy", async () => {
+      const r = new Readable({
+        objectMode: true,
+        emitClose: false,
+        read() {}
+      });
+
+      let closeEmitted = false;
+      r.on("close", () => {
+        closeEmitted = true;
+      });
+
+      r.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(r.destroyed).toBe(true);
+      expect(closeEmitted).toBe(false);
+    });
+
+    it("Writable with emitClose: false should not emit close on destroy", async () => {
+      const w = new Writable({
+        objectMode: true,
+        emitClose: false,
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+
+      let closeEmitted = false;
+      w.on("close", () => {
+        closeEmitted = true;
+      });
+
+      w.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(w.destroyed).toBe(true);
+      expect(closeEmitted).toBe(false);
+    });
+
+    it("Transform with emitClose: false should not emit close on destroy", async () => {
+      const t = new Transform({
+        objectMode: true,
+        emitClose: false,
+        transform(chunk: any, _enc: string, cb: (err: null, data: any) => void) {
+          cb(null, chunk);
+        }
+      });
+
+      let closeEmitted = false;
+      t.on("close", () => {
+        closeEmitted = true;
+      });
+
+      t.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(t.destroyed).toBe(true);
+      expect(closeEmitted).toBe(false);
+    });
+
+    it("Readable with emitClose: true (default) should emit close on destroy", async () => {
+      const r = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      const closePromise = new Promise<void>(resolve => {
+        r.on("close", resolve);
+      });
+
+      r.destroy();
+      await closePromise;
+      expect(r.destroyed).toBe(true);
+    });
+  });
+
+  describe("Fix #4: some/every/find return correct values", () => {
+    it("some() should return false when no match found", async () => {
+      const r = Readable.from([1, 2, 3], { objectMode: true });
+      const result = await r.some((x: number) => x === 999);
+      expect(result).toBe(false);
+    });
+
+    it("every() should return true when all match", async () => {
+      const r = Readable.from([2, 4, 6], { objectMode: true });
+      const result = await r.every((x: number) => x % 2 === 0);
+      expect(result).toBe(true);
+    });
+
+    it("find() should return undefined when no match found", async () => {
+      const r = Readable.from([1, 2, 3], { objectMode: true });
+      const result = await r.find((x: number) => x === 999);
+      expect(result).toBeUndefined();
+    });
+
+    it("some() should return true on short-circuit (match found)", async () => {
+      const r = Readable.from([1, 2, 3, 4, 5], { objectMode: true });
+      const result = await r.some((x: number) => x === 2);
+      expect(result).toBe(true);
+    });
+
+    it("every() should return false on short-circuit (mismatch found)", async () => {
+      const r = Readable.from([2, 4, 5, 6], { objectMode: true });
+      const result = await r.every((x: number) => x % 2 === 0);
+      expect(result).toBe(false);
+    });
+
+    it("find() should return the matching chunk on short-circuit", async () => {
+      const r = Readable.from([1, 2, 3, 4, 5], { objectMode: true });
+      const result = await r.find((x: number) => x === 2);
+      expect(result).toBe(2);
+    });
+  });
+
+  describe("Fix #5: destroy() doesn't set readableEnded", () => {
+    it("readableEnded should remain false after destroy without prior end", async () => {
+      const r = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      r.push("data");
+      r.destroy();
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(r.destroyed).toBe(true);
+      expect(r.readableEnded).toBe(false);
+    });
+
+    it("writableFinished should remain false after destroy without prior end", async () => {
+      const w = new Writable({
+        objectMode: true,
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+
+      w.write("data");
+      w.destroy();
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(w.destroyed).toBe(true);
+      expect(w.writableFinished).toBe(false);
+    });
+  });
+
+  describe("Fix #6: readable setter doesn't corrupt readableEnded", () => {
+    it("setting readable = false should not affect readableEnded", () => {
+      const r = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      r.push("data");
+      expect(r.readableEnded).toBe(false);
+
+      // Setting readable to false should NOT set readableEnded to true
+      (r as any).readable = false;
+
+      expect(r.readable).toBe(false);
+      expect(r.readableEnded).toBe(false);
+    });
+
+    it("setting readable = true should work correctly", () => {
+      const r = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      (r as any).readable = false;
+      expect(r.readable).toBe(false);
+
+      (r as any).readable = true;
+      expect(r.readable).toBe(true);
+    });
+  });
+
+  describe("Fix #7: write() after end() emits error", () => {
+    it("should emit error event with ERR_STREAM_WRITE_AFTER_END code", async () => {
+      const w = new Writable({
+        objectMode: true,
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+
+      const errorPromise = new Promise<any>(resolve => {
+        w.on("error", resolve);
+      });
+
+      w.end();
+      w.write("after-end");
+
+      const err = await errorPromise;
+      expect(err).toBeInstanceOf(Error);
+      expect(err.code).toBe("ERR_STREAM_WRITE_AFTER_END");
+    });
+
+    it("write() after end() should return false", () => {
+      const w = new Writable({
+        objectMode: true,
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+      w.on("error", () => {}); // Prevent unhandled error
+
+      w.end();
+      const result = w.write("after-end");
+      expect(result).toBe(false);
+    });
+  });
+
   describe("API surface: writableAborted not on Duplex/Transform", () => {
     it("Writable should have writableAborted", () => {
       const w = new Writable({
@@ -5984,6 +6351,961 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const p = createPassThrough({ objectMode: true });
       expect("writableAborted" in p).toBe(false);
       expect((p as any).writableAborted).toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
+  // M3: _destroy(err, cb) hook
+  // ===========================================================================
+
+  describe("_destroy hook (M3)", () => {
+    it("Writable: close event waits for _destroy callback", async () => {
+      const events: string[] = [];
+      class MyWritable extends Writable {
+        _destroy(_err: Error | null, cb: (error?: Error | null) => void): void {
+          events.push("destroy-called");
+          setTimeout(() => {
+            events.push("destroy-callback");
+            cb();
+          }, 50);
+        }
+      }
+      const w = new MyWritable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      w.on("close", () => events.push("close"));
+      w.destroy();
+      await new Promise<void>(resolve => w.once("close", resolve));
+      expect(events).toEqual(["destroy-called", "destroy-callback", "close"]);
+    });
+
+    it("Readable: close event waits for _destroy callback", async () => {
+      const events: string[] = [];
+      class MyReadable extends Readable {
+        _destroy(_err: Error | null, cb: (error?: Error | null) => void): void {
+          events.push("destroy-called");
+          setTimeout(() => {
+            events.push("destroy-callback");
+            cb();
+          }, 50);
+        }
+      }
+      const r = new MyReadable({ read() {} });
+      r.on("close", () => events.push("close"));
+      r.destroy();
+      await new Promise<void>(resolve => r.once("close", resolve));
+      expect(events).toEqual(["destroy-called", "destroy-callback", "close"]);
+    });
+
+    it("Duplex: close event waits for _destroy callback", async () => {
+      const events: string[] = [];
+      class MyDuplex extends Duplex {
+        _destroy(_err: Error | null, cb: (error?: Error | null) => void): void {
+          events.push("destroy-called");
+          setTimeout(() => {
+            events.push("destroy-callback");
+            cb();
+          }, 50);
+        }
+      }
+      const d = new MyDuplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      d.on("close", () => events.push("close"));
+      d.destroy();
+      await new Promise<void>(resolve => d.once("close", resolve));
+      expect(events).toEqual(["destroy-called", "destroy-callback", "close"]);
+    });
+
+    it("Transform: close event waits for _destroy callback", async () => {
+      const events: string[] = [];
+      class MyTransform extends Transform {
+        _destroy(_err: Error | null, cb: (error?: Error | null) => void): void {
+          events.push("destroy-called");
+          setTimeout(() => {
+            events.push("destroy-callback");
+            cb();
+          }, 50);
+        }
+      }
+      const t = new MyTransform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      t.on("close", () => events.push("close"));
+      t.destroy();
+      await new Promise<void>(resolve => t.once("close", resolve));
+      expect(events).toEqual(["destroy-called", "destroy-callback", "close"]);
+    });
+
+    it("_destroy callback can change the error", async () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        },
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          cb(new Error("different error"));
+        }
+      });
+      const errorPromise = new Promise<Error>(resolve => w.once("error", resolve));
+      w.destroy(new Error("original"));
+      const err = await errorPromise;
+      expect(err.message).toBe("different error");
+    });
+
+    it("_destroy with no error emits close without error", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        },
+        destroy(err: Error | null, cb: (error?: Error | null) => void) {
+          events.push("destroy:err=" + err);
+          cb(null);
+        }
+      });
+      w.on("error", (e: Error) => events.push("error:" + e.message));
+      w.on("close", () => events.push("close"));
+      w.destroy();
+      await new Promise<void>(resolve => w.once("close", resolve));
+      expect(events).toEqual(["destroy:err=null", "close"]);
+    });
+  });
+
+  // ===========================================================================
+  // M3b: destroy/construct constructor options
+  // ===========================================================================
+
+  describe("destroy/construct constructor options (M3b)", () => {
+    it("Writable: destroy option works like subclass override", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        },
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          events.push("destroy-option-called");
+          setTimeout(() => {
+            events.push("destroy-option-done");
+            cb();
+          }, 30);
+        }
+      });
+      w.on("close", () => events.push("close"));
+      w.destroy();
+      await new Promise<void>(resolve => w.once("close", resolve));
+      expect(events).toEqual(["destroy-option-called", "destroy-option-done", "close"]);
+    });
+
+    it("Readable: destroy option works like subclass override", async () => {
+      const events: string[] = [];
+      const r = new Readable({
+        read() {},
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          events.push("destroy-option-called");
+          setTimeout(() => {
+            events.push("destroy-option-done");
+            cb();
+          }, 30);
+        }
+      });
+      r.on("close", () => events.push("close"));
+      r.destroy();
+      await new Promise<void>(resolve => r.once("close", resolve));
+      expect(events).toEqual(["destroy-option-called", "destroy-option-done", "close"]);
+    });
+
+    it("Duplex: destroy option works like subclass override", async () => {
+      const events: string[] = [];
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        },
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          events.push("destroy-option-called");
+          setTimeout(() => {
+            events.push("destroy-option-done");
+            cb();
+          }, 30);
+        }
+      });
+      d.on("close", () => events.push("close"));
+      d.destroy();
+      await new Promise<void>(resolve => d.once("close", resolve));
+      expect(events).toEqual(["destroy-option-called", "destroy-option-done", "close"]);
+    });
+
+    it("Transform: destroy option works like subclass override", async () => {
+      const events: string[] = [];
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        },
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          events.push("destroy-option-called");
+          setTimeout(() => {
+            events.push("destroy-option-done");
+            cb();
+          }, 30);
+        }
+      });
+      t.on("close", () => events.push("close"));
+      t.destroy();
+      await new Promise<void>(resolve => t.once("close", resolve));
+      expect(events).toEqual(["destroy-option-called", "destroy-option-done", "close"]);
+    });
+
+    it("Writable: construct option delays writes", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        construct(cb: (error?: Error | null) => void) {
+          events.push("construct-called");
+          setTimeout(() => {
+            events.push("construct-done");
+            cb();
+          }, 50);
+        },
+        write(chunk: any, _e: string, cb: () => void) {
+          events.push("write:" + chunk.toString());
+          cb();
+        }
+      });
+      w.write("hello");
+      events.push("write-called");
+      await new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("end-callback");
+          resolve();
+        });
+      });
+      expect(events).toEqual([
+        "write-called",
+        "construct-called",
+        "construct-done",
+        "write:hello",
+        "end-callback"
+      ]);
+    });
+
+    it("Readable: construct option delays _read", async () => {
+      const events: string[] = [];
+      const r = new Readable({
+        construct(cb: (error?: Error | null) => void) {
+          events.push("construct-called");
+          setTimeout(() => {
+            events.push("construct-done");
+            cb();
+          }, 50);
+        },
+        read() {
+          events.push("_read-called");
+          this.push("data");
+          this.push(null);
+        }
+      });
+      events.push("before-resume");
+      const chunks: string[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk.toString()));
+      await new Promise<void>(resolve => r.once("end", resolve));
+      expect(events).toEqual([
+        "before-resume",
+        "construct-called",
+        "construct-done",
+        "_read-called"
+      ]);
+      expect(chunks).toEqual(["data"]);
+    });
+
+    it("Writable: construct error destroys the stream", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        construct(cb: (error?: Error | null) => void) {
+          cb(new Error("construct failed"));
+        },
+        write(_c: any, _e: string, cb: () => void) {
+          events.push("write-should-not-happen");
+          cb();
+        }
+      });
+      w.on("error", (e: Error) => events.push("error:" + e.message));
+      await new Promise<void>(resolve => {
+        w.on("close", () => {
+          events.push("close");
+          resolve();
+        });
+      });
+      expect(events).toEqual(["error:construct failed", "close"]);
+      expect(w.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // M4: emitClose/autoDestroy suppression on Duplex/Transform child streams
+  // ===========================================================================
+
+  describe("emitClose/autoDestroy child suppression (M4)", () => {
+    it("Duplex destroy emits exactly one close event", async () => {
+      let closeCount = 0;
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      d.on("close", () => closeCount++);
+      d.destroy();
+      await new Promise<void>(resolve => d.once("close", resolve));
+      // Wait a bit for any stray events
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(closeCount).toBe(1);
+    });
+
+    it("Transform destroy emits exactly one close event", async () => {
+      let closeCount = 0;
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      t.on("close", () => closeCount++);
+      t.destroy();
+      await new Promise<void>(resolve => t.once("close", resolve));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(closeCount).toBe(1);
+    });
+
+    it("Duplex destroy with error emits exactly one error event", async () => {
+      let errorCount = 0;
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      d.on("error", () => errorCount++);
+      d.destroy(new Error("test"));
+      await new Promise<void>(resolve => d.once("close", resolve));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(errorCount).toBe(1);
+    });
+
+    it("Transform destroy with error emits exactly one error event", async () => {
+      let errorCount = 0;
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      t.on("error", () => errorCount++);
+      t.destroy(new Error("test"));
+      await new Promise<void>(resolve => t.once("close", resolve));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(errorCount).toBe(1);
+    });
+  });
+
+  // ===========================================================================
+  // M5: Symbol.asyncDispose
+  // ===========================================================================
+
+  describe("Symbol.asyncDispose (M5)", () => {
+    it("Writable has Symbol.asyncDispose", () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(Symbol.asyncDispose in w).toBe(true);
+    });
+
+    it("Readable has Symbol.asyncDispose", () => {
+      const r = new Readable({ read() {} });
+      expect(Symbol.asyncDispose in r).toBe(true);
+    });
+
+    it("Duplex has Symbol.asyncDispose", () => {
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(Symbol.asyncDispose in d).toBe(true);
+    });
+
+    it("Transform has Symbol.asyncDispose", () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      expect(Symbol.asyncDispose in t).toBe(true);
+    });
+
+    it("Writable: asyncDispose destroys and resolves after close", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        },
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          setTimeout(() => {
+            events.push("destroy-done");
+            cb();
+          }, 30);
+        }
+      });
+      w.on("close", () => events.push("close"));
+      await w[Symbol.asyncDispose]();
+      events.push("disposed");
+      expect(events).toEqual(["destroy-done", "close", "disposed"]);
+      expect(w.destroyed).toBe(true);
+    });
+
+    it("Readable: asyncDispose destroys and resolves after close", async () => {
+      const r = new Readable({ read() {} });
+      await r[Symbol.asyncDispose]();
+      expect(r.destroyed).toBe(true);
+    });
+
+    it("Duplex: asyncDispose destroys and resolves after close", async () => {
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      await d[Symbol.asyncDispose]();
+      expect(d.destroyed).toBe(true);
+    });
+
+    it("Transform: asyncDispose destroys and resolves after close", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      await t[Symbol.asyncDispose]();
+      expect(t.destroyed).toBe(true);
+    });
+
+    it("asyncDispose rejects with Premature close if already destroyed", async () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      w.destroy();
+      await new Promise<void>(resolve => w.once("close", resolve));
+      // Node rejects with "Premature close" when stream was destroyed (not gracefully ended)
+      await expect(w[Symbol.asyncDispose]()).rejects.toThrow("Premature close");
+    });
+  });
+
+  // ===========================================================================
+  // L1: Symbol.hasInstance (instanceof)
+  // ===========================================================================
+
+  describe("Symbol.hasInstance (L1)", () => {
+    it("Duplex instanceof Readable is true", () => {
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(d instanceof Readable).toBe(true);
+    });
+
+    it("Duplex instanceof Writable is true", () => {
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(d instanceof Writable).toBe(true);
+    });
+
+    it("Transform instanceof Readable is true", () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      expect(t instanceof Readable).toBe(true);
+    });
+
+    it("Transform instanceof Writable is true", () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _e: string, cb: (err: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      expect(t instanceof Writable).toBe(true);
+    });
+
+    it("Readable instanceof Writable is false", () => {
+      const r = new Readable({ read() {} });
+      expect(r instanceof Writable).toBe(false);
+    });
+
+    it("Writable instanceof Readable is false", () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(w instanceof Readable).toBe(false);
+    });
+
+    it("Readable instanceof Readable is true", () => {
+      const r = new Readable({ read() {} });
+      expect(r instanceof Readable).toBe(true);
+    });
+
+    it("Writable instanceof Writable is true", () => {
+      const w = new Writable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      expect(w instanceof Writable).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // L2: _construct(callback) hook
+  // ===========================================================================
+
+  describe("_construct hook (L2)", () => {
+    it("Writable subclass: _construct delays _write", async () => {
+      const events: string[] = [];
+      class ConstructWritable extends Writable {
+        _construct(cb: (error?: Error | null) => void): void {
+          events.push("construct-called");
+          setTimeout(() => {
+            events.push("construct-done");
+            cb();
+          }, 50);
+        }
+      }
+      const w = new ConstructWritable({
+        write(chunk: any, _e: string, cb: () => void) {
+          events.push("write:" + chunk.toString());
+          cb();
+        }
+      });
+      w.write("hello");
+      events.push("write-called");
+      await new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("end-callback");
+          resolve();
+        });
+      });
+      expect(events).toEqual([
+        "write-called",
+        "construct-called",
+        "construct-done",
+        "write:hello",
+        "end-callback"
+      ]);
+    });
+
+    it("Readable subclass: _construct delays _read", async () => {
+      const events: string[] = [];
+      class ConstructReadable extends Readable {
+        _construct(cb: (error?: Error | null) => void): void {
+          events.push("construct-called");
+          setTimeout(() => {
+            events.push("construct-done");
+            cb();
+          }, 50);
+        }
+      }
+      const r = new ConstructReadable({
+        read() {
+          events.push("_read-called");
+          this.push("data");
+          this.push(null);
+        }
+      });
+      events.push("before-resume");
+      const chunks: string[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk.toString()));
+      await new Promise<void>(resolve => r.once("end", resolve));
+      expect(events).toEqual([
+        "before-resume",
+        "construct-called",
+        "construct-done",
+        "_read-called"
+      ]);
+      expect(chunks).toEqual(["data"]);
+    });
+
+    it("Readable _construct error destroys the stream", async () => {
+      const events: string[] = [];
+      const r = new Readable({
+        construct(cb: (error?: Error | null) => void) {
+          cb(new Error("construct failed"));
+        },
+        read() {
+          events.push("read-should-not-happen");
+        }
+      });
+      r.on("error", (e: Error) => events.push("error:" + e.message));
+      await new Promise<void>(resolve => {
+        r.on("close", () => {
+          events.push("close");
+          resolve();
+        });
+      });
+      expect(events).toEqual(["error:construct failed", "close"]);
+      expect(r.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // L3: _writev(chunks, cb) batch write
+  // ===========================================================================
+
+  describe("_writev batch write (L3)", () => {
+    it("_writev is called with multiple corked chunks", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(chunk: any, _enc: string, cb: () => void) {
+          events.push("write:" + chunk.toString());
+          cb();
+        },
+        writev(
+          chunks: Array<{ chunk: any; encoding: string }>,
+          cb: (error?: Error | null) => void
+        ) {
+          events.push("writev:" + chunks.map(c => c.chunk.toString()).join(","));
+          cb();
+        }
+      });
+      w.cork();
+      w.write("a");
+      w.write("b");
+      w.write("c");
+      w.uncork();
+      await new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("finish");
+          resolve();
+        });
+      });
+      expect(events).toEqual(["writev:a,b,c", "finish"]);
+    });
+
+    it("_writev is NOT called for single corked chunk", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(chunk: any, _enc: string, cb: () => void) {
+          events.push("write:" + chunk.toString());
+          cb();
+        },
+        writev(
+          chunks: Array<{ chunk: any; encoding: string }>,
+          cb: (error?: Error | null) => void
+        ) {
+          events.push("writev:" + chunks.length);
+          cb();
+        }
+      });
+      w.cork();
+      w.write("only-one");
+      w.uncork();
+      await new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("finish");
+          resolve();
+        });
+      });
+      expect(events).toEqual(["write:only-one", "finish"]);
+    });
+
+    it("_writev subclass override works", async () => {
+      const events: string[] = [];
+      class BatchWritable extends Writable {
+        _writev(
+          chunks: Array<{ chunk: any; encoding: string }>,
+          cb: (error?: Error | null) => void
+        ): void {
+          events.push("writev:" + chunks.map(c => c.chunk.toString()).join(","));
+          cb();
+        }
+      }
+      const w = new BatchWritable({
+        write(chunk: any, _enc: string, cb: () => void) {
+          events.push("write:" + chunk.toString());
+          cb();
+        }
+      });
+      w.cork();
+      w.write("x");
+      w.write("y");
+      w.uncork();
+      await new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("finish");
+          resolve();
+        });
+      });
+      expect(events).toEqual(["writev:x,y", "finish"]);
+    });
+
+    it("_writev error propagates", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_c: any, _enc: string, cb: () => void) {
+          cb();
+        },
+        writev(
+          _chunks: Array<{ chunk: any; encoding: string }>,
+          cb: (error?: Error | null) => void
+        ) {
+          cb(new Error("writev failed"));
+        }
+      });
+      w.on("error", (e: Error) => events.push("error:" + e.message));
+      w.cork();
+      w.write("a");
+      w.write("b");
+      w.uncork();
+      await new Promise<void>(resolve => w.once("close", resolve));
+      expect(events).toContain("error:writev failed");
+    });
+  });
+
+  // ===========================================================================
+  // HWM precedence & per-side options on Duplex / Transform
+  // ===========================================================================
+  describe("HWM precedence & per-side options", () => {
+    // --- Duplex ---
+    it("Duplex: highWaterMark overrides per-side HWM when explicitly set", () => {
+      const d = new Duplex({
+        highWaterMark: 999,
+        readableHighWaterMark: 111,
+        writableHighWaterMark: 222,
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(d.readableHighWaterMark).toBe(999);
+      expect(d.writableHighWaterMark).toBe(999);
+      d.destroy();
+    });
+
+    it("Duplex: per-side HWM works when highWaterMark is not set", () => {
+      const d = new Duplex({
+        readableHighWaterMark: 111,
+        writableHighWaterMark: 222,
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(d.readableHighWaterMark).toBe(111);
+      expect(d.writableHighWaterMark).toBe(222);
+      d.destroy();
+    });
+
+    // --- Transform ---
+    it("Transform: highWaterMark is forwarded to both sides", () => {
+      const t = new Transform({
+        highWaterMark: 999,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableHighWaterMark).toBe(999);
+      expect(t.writableHighWaterMark).toBe(999);
+      t.destroy();
+    });
+
+    it("Transform: per-side HWM works when highWaterMark is not set", () => {
+      const t = new Transform({
+        readableHighWaterMark: 111,
+        writableHighWaterMark: 222,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableHighWaterMark).toBe(111);
+      expect(t.writableHighWaterMark).toBe(222);
+      t.destroy();
+    });
+
+    it("Transform: highWaterMark overrides per-side HWM when explicitly set", () => {
+      const t = new Transform({
+        highWaterMark: 999,
+        readableHighWaterMark: 111,
+        writableHighWaterMark: 222,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableHighWaterMark).toBe(999);
+      expect(t.writableHighWaterMark).toBe(999);
+      t.destroy();
+    });
+
+    // --- per-side objectMode ---
+    it("Transform: per-side objectMode overrides general objectMode", () => {
+      const t = new Transform({
+        readableObjectMode: true,
+        writableObjectMode: false,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableObjectMode).toBe(true);
+      expect(t.writableObjectMode).toBe(false);
+      t.destroy();
+    });
+
+    it("Transform: general objectMode applies when per-side not set", () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableObjectMode).toBe(true);
+      expect(t.writableObjectMode).toBe(true);
+      t.destroy();
+    });
+
+    it("Transform: readableObjectMode only affects readable side", () => {
+      const t = new Transform({
+        readableObjectMode: true,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableObjectMode).toBe(true);
+      expect(t.writableObjectMode).toBe(false);
+      t.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Transform write / final / writev constructor options
+  // ===========================================================================
+  describe("Transform write / final / writev constructor options", () => {
+    it("Transform: write option overrides transform-based write", async () => {
+      const events: string[] = [];
+      const t = new Transform({
+        write(chunk: any, _enc: string, cb: any) {
+          events.push("write:" + chunk);
+          (this as any).push(String(chunk).toUpperCase());
+          cb();
+        },
+        transform(_chunk: any, _enc: string, cb: any) {
+          events.push("transform-should-not-be-called");
+          cb();
+        }
+      });
+      const collected: string[] = [];
+      t.on("data", (d: any) => collected.push(String(d)));
+      t.write("hello");
+      t.end();
+      await new Promise<void>(resolve => t.once("finish", resolve));
+      expect(events).toEqual(["write:hello"]);
+      expect(collected).toEqual(["HELLO"]);
+    });
+
+    it("Transform: final option overrides default flush-based final", async () => {
+      let finalCalled = false;
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        },
+        final(cb: any) {
+          finalCalled = true;
+          cb();
+        }
+      });
+      t.resume();
+      t.write("x");
+      t.end();
+      await new Promise<void>(resolve => t.once("finish", resolve));
+      expect(finalCalled).toBe(true);
+    });
+
+    it("Transform: writev option enables batch writes", async () => {
+      let writevChunks: any[] = [];
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        },
+        writev(chunks: any[], cb: any) {
+          writevChunks = chunks.map((c: any) => String(c.chunk));
+          cb();
+        }
+      });
+      t.resume();
+      t.cork();
+      t.write("a");
+      t.write("b");
+      t.uncork();
+      t.end();
+      await new Promise<void>(resolve => t.once("finish", resolve));
+      expect(writevChunks).toEqual(["a", "b"]);
+    });
+  });
+
+  // ===========================================================================
+  // Duplex writev constructor option
+  // ===========================================================================
+  describe("Duplex writev constructor option", () => {
+    it("Duplex: writev option enables batch writes", async () => {
+      let writevChunks: any[] = [];
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        },
+        writev(chunks: any[], cb: any) {
+          writevChunks = chunks.map((c: any) => String(c.chunk));
+          cb();
+        }
+      });
+      d.cork();
+      d.write("a");
+      d.write("b");
+      d.uncork();
+      d.end();
+      await new Promise<void>(resolve => d.once("finish", resolve));
+      expect(writevChunks).toEqual(["a", "b"]);
+      d.destroy();
     });
   });
 }

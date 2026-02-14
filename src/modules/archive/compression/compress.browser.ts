@@ -99,15 +99,16 @@ export { DEFAULT_AUTO_WORKER_THRESHOLD };
  * Decide whether to use worker based on options and data size
  */
 function shouldUseWorker(data: Uint8Array, options: CompressOptions): boolean {
+  const workerSupported = hasWorkerSupport();
   if (options.useWorker === true) {
-    return hasWorkerSupport();
+    return workerSupported;
   }
   if (options.useWorker === false) {
     return false;
   }
 
   const threshold = options.autoWorkerThreshold ?? DEFAULT_AUTO_WORKER_THRESHOLD;
-  return hasWorkerSupport() && data.length >= threshold;
+  return workerSupported && data.length >= threshold;
 }
 
 /**
@@ -156,9 +157,11 @@ async function processWithStrategy(
   options: CompressOptions
 ): Promise<Uint8Array> {
   const canUseNative = strategy.hasNative();
+  const workerSupported = hasWorkerSupport();
+  const useWorker = options.useWorker;
 
   // If the user explicitly requested workers, honor it.
-  if (options.useWorker === true && hasWorkerSupport()) {
+  if (useWorker === true && workerSupported) {
     try {
       return await strategy.worker(data, {
         level: options.level,
@@ -178,7 +181,7 @@ async function processWithStrategy(
   }
 
   // Use worker in fallback environments (no native deflate-raw) when appropriate.
-  if (shouldUseWorker(data, options)) {
+  if (useWorker !== true && shouldUseWorker(data, options)) {
     return strategy.worker(data, {
       level: options.level,
       signal: options.signal,
@@ -208,7 +211,8 @@ export async function compress(
     return data;
   }
 
-  return processWithStrategy(deflateStrategy, data, { ...options, level });
+  const processOptions = options.level === undefined ? { ...options, level } : options;
+  return processWithStrategy(deflateStrategy, data, processOptions);
 }
 
 /**
@@ -350,8 +354,8 @@ export async function gzip(data: Uint8Array, options: CompressOptions = {}): Pro
   }
 
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  const deflated =
-    level === 0 ? deflateRawStore(data) : await compress(data, { ...options, level });
+  const compressOptions = options.level === undefined ? { ...options, level } : options;
+  const deflated = level === 0 ? deflateRawStore(data) : await compress(data, compressOptions);
   return wrapGzip(deflated, data);
 }
 
@@ -428,10 +432,7 @@ function parseZlibPayload(data: Uint8Array): {
  * 1. Native CompressionStream("deflate") when available
  * 2. Fallback: compress (deflate-raw) + manual Zlib wrapper
  */
-export async function zlib(
-  data: Uint8Array,
-  options: CompressOptions = {}
-): Promise<Uint8Array> {
+export async function zlib(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
   throwIfAborted(options.signal);
 
   // Native "deflate" format is Zlib
@@ -443,8 +444,8 @@ export async function zlib(
   }
 
   const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-  const deflated =
-    level === 0 ? deflateRawStore(data) : await compress(data, { ...options, level });
+  const compressOptions = options.level === undefined ? { ...options, level } : options;
+  const deflated = level === 0 ? deflateRawStore(data) : await compress(data, compressOptions);
   return wrapZlib(deflated, data, level);
 }
 
@@ -464,10 +465,7 @@ export function zlibSync(data: Uint8Array, options: CompressOptions = {}): Uint8
  * 1. Native DecompressionStream("deflate") when available
  * 2. Fallback: parse header + decompress (inflate-raw) + verify Adler-32
  */
-export async function unzlib(
-  data: Uint8Array,
-  options: CompressOptions = {}
-): Promise<Uint8Array> {
+export async function unzlib(data: Uint8Array, options: CompressOptions = {}): Promise<Uint8Array> {
   throwIfAborted(options.signal);
 
   // Native "deflate" format is Zlib

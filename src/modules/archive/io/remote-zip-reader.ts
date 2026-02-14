@@ -28,6 +28,7 @@ import {
   processEntryDataStream,
   LOCAL_HEADER_FIXED_SIZE
 } from "@archive/unzip/zip-extract-core";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import { pipeIterableToSink } from "@archive/io/archive-sink";
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import {
@@ -334,7 +335,8 @@ export class RemoteZipReader {
     });
 
     // Build entryMap
-    for (const entry of this.entries) {
+    for (let i = 0; i < this.entries.length; i++) {
+      const entry = this.entries[i]!;
       this.entryMap.set(entry.path, entry);
     }
   }
@@ -388,7 +390,7 @@ export class RemoteZipReader {
     throwIfAborted(signal);
 
     if (entry.compressedSize === 0) {
-      return new Uint8Array(0);
+      return EMPTY_UINT8ARRAY;
     }
 
     const dataOffset = await this.getEntryDataOffset(entry);
@@ -484,14 +486,26 @@ export class RemoteZipReader {
    * Get the number of file entries (excluding directories).
    */
   getFileCount(): number {
-    return this.entries.filter(e => e.type !== "directory").length;
+    let count = 0;
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i]!.type !== "directory") {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**
    * Get the number of directory entries.
    */
   getDirectoryCount(): number {
-    return this.entries.filter(e => e.type === "directory").length;
+    let count = 0;
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i]!.type === "directory") {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**
@@ -501,7 +515,14 @@ export class RemoteZipReader {
    * @returns Array of entries that pass the test
    */
   filterEntries(predicate: (entry: ZipEntryInfo) => boolean): ZipEntryInfo[] {
-    return this.entries.filter(predicate);
+    const results: ZipEntryInfo[] = [];
+    for (let i = 0; i < this.entries.length; i++) {
+      const entry = this.entries[i]!;
+      if (predicate(entry)) {
+        results.push(entry);
+      }
+    }
+    return results;
   }
 
   /**
@@ -522,7 +543,14 @@ export class RemoteZipReader {
           .replace(/\{\{GLOBSTAR\}\}/g, ".*") +
         "$"
     );
-    return this.entries.filter(e => regex.test(e.path));
+    const results: ZipEntryInfo[] = [];
+    for (let i = 0; i < this.entries.length; i++) {
+      const entry = this.entries[i]!;
+      if (regex.test(entry.path)) {
+        results.push(entry);
+      }
+    }
+    return results;
   }
 
   /**
@@ -531,7 +559,14 @@ export class RemoteZipReader {
    */
   hasEncryptedEntries(): boolean {
     if (this._hasEncryptedEntries === null) {
-      this._hasEncryptedEntries = this.entries.some(e => e.isEncrypted);
+      let hasEncrypted = false;
+      for (let i = 0; i < this.entries.length; i++) {
+        if (this.entries[i]!.isEncrypted) {
+          hasEncrypted = true;
+          break;
+        }
+      }
+      this._hasEncryptedEntries = hasEncrypted;
     }
     return this._hasEncryptedEntries;
   }
@@ -571,7 +606,7 @@ export class RemoteZipReader {
     const shouldCheckCrc = opts.checkCrc32 ?? this.options.checkCrc32 ?? false;
 
     if (entry.type === "directory") {
-      return new Uint8Array(0);
+      return EMPTY_UINT8ARRAY;
     }
 
     const dataOffset = await this.getEntryDataOffset(entry);
@@ -620,7 +655,13 @@ export class RemoteZipReader {
   async extractAll(
     options?: ExtractOptions | string | Uint8Array
   ): Promise<Map<string, Uint8Array>> {
-    const filePaths = this.entries.filter(e => e.type !== "directory").map(e => e.path);
+    const filePaths: string[] = [];
+    for (let i = 0; i < this.entries.length; i++) {
+      const entry = this.entries[i]!;
+      if (entry.type !== "directory") {
+        filePaths.push(entry.path);
+      }
+    }
     return this.extractMultiple(filePaths, options);
   }
 
@@ -640,17 +681,25 @@ export class RemoteZipReader {
     const opts = this.normalizeExtractOptions(options);
 
     // Get entries and sort by offset for efficient sequential reading
-    const entriesToExtract = paths
-      .map(p => ({ path: p, entry: this.entryMap.get(p) }))
-      .filter((e): e is { path: string; entry: ZipEntryInfo } => e.entry !== undefined)
-      .sort((a, b) => a.entry.localHeaderOffset - b.entry.localHeaderOffset);
+    const entriesToExtract: Array<{ path: string; entry: ZipEntryInfo }> = [];
+    for (let i = 0; i < paths.length; i++) {
+      const path = paths[i]!;
+      const entry = this.entryMap.get(path);
+      if (entry) {
+        entriesToExtract.push({ path, entry });
+      }
+    }
+    entriesToExtract.sort((a, b) => a.entry.localHeaderOffset - b.entry.localHeaderOffset);
 
     if (entriesToExtract.length === 0) {
       return result;
     }
 
     // Calculate total size for progress
-    const totalSize = entriesToExtract.reduce((sum, e) => sum + e.entry.compressedSize, 0);
+    let totalSize = 0;
+    for (let i = 0; i < entriesToExtract.length; i++) {
+      totalSize += entriesToExtract[i]!.entry.compressedSize;
+    }
     let processedSize = 0;
 
     // Pre-compute data offsets in batches to avoid per-entry local header reads.
@@ -723,7 +772,7 @@ export class RemoteZipReader {
       // Skip directories (no data to read)
       if (entriesToExtract[i].entry.type === "directory") {
         opts.onprogress?.(processedSize, totalSize);
-        result.set(entriesToExtract[i].path, new Uint8Array(0));
+        result.set(entriesToExtract[i].path, EMPTY_UINT8ARRAY);
         i++;
         continue;
       }
@@ -762,7 +811,7 @@ export class RemoteZipReader {
 
         if (entry.type === "directory") {
           opts.onprogress?.(processedSize, totalSize);
-          result.set(path, new Uint8Array(0));
+          result.set(path, EMPTY_UINT8ARRAY);
           continue;
         }
 
@@ -832,7 +881,8 @@ export class RemoteZipReader {
   ): AsyncGenerator<{ entry: ZipEntryInfo; getData: () => Promise<Uint8Array> }> {
     const opts = this.normalizeExtractOptions(options);
 
-    for (const entry of this.entries) {
+    for (let i = 0; i < this.entries.length; i++) {
+      const entry = this.entries[i]!;
       let dataPromise: Promise<Uint8Array> | null = null;
       const getData = () => {
         if (!dataPromise) {

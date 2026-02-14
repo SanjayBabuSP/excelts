@@ -21,6 +21,30 @@ import { PipeManager } from "./pipe-manager";
  * A wrapper around Web ReadableStream that provides Node.js-like API
  */
 export class Readable<T = Uint8Array> extends EventEmitter {
+  /**
+   * Allow duck-typed instanceof checks.
+   * Node.js Duplex passes `instanceof Readable` via prototype chain.
+   * Our browser Duplex composes a Readable, so we use Symbol.hasInstance
+   * to check for key Readable-like methods/properties.
+   */
+  static [Symbol.hasInstance](instance: any): boolean {
+    if (instance == null || typeof instance !== "object") {
+      return false;
+    }
+    // Fast path: actual Readable prototype
+    if (Readable.prototype.isPrototypeOf(instance)) {
+      return true;
+    }
+    // Duck-type: must have key Readable methods and the stream brand
+    return (
+      instance.__excelts_stream === true &&
+      typeof instance.read === "function" &&
+      typeof instance.pipe === "function" &&
+      typeof instance.on === "function" &&
+      "readableFlowing" in instance
+    );
+  }
+
   private _stream: ReadableStream<T> | null;
   private _reader: ReadableStreamDefaultReader<T> | null = null;
   private _buf!: ChunkBuffer<T>;
@@ -47,13 +71,24 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _emitClose: boolean;
   // User-provided read function (Node.js compatibility)
   private _read?: (size?: number) => void;
+  // User-provided construct function (Node.js compatibility)
+  private _constructFunc?: (callback: (error?: Error | null) => void) => void;
+  private _constructed: boolean = true;
 
   constructor(
     options?: ReadableStreamOptions & {
       stream?: ReadableStream<T>;
       autoDestroy?: boolean;
       emitClose?: boolean;
+      signal?: AbortSignal;
+      encoding?: string;
       read?: (this: Readable<T>, size?: number) => void;
+      destroy?: (
+        this: Readable<T>,
+        error: Error | null,
+        callback: (error?: Error | null) => void
+      ) => void;
+      construct?: (this: Readable<T>, callback: (error?: Error | null) => void) => void;
     }
   ) {
     super();
@@ -70,6 +105,16 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._pushMode = true; // User will call push()
     }
 
+    // Store user-provided destroy function
+    if (options?.destroy) {
+      this._destroy = options.destroy.bind(this);
+    }
+
+    // Store user-provided construct function
+    if (options?.construct) {
+      this._constructFunc = options.construct.bind(this);
+    }
+
     if (options?.stream) {
       this._stream = options.stream;
       this._webStreamMode = true; // Created from external Web Stream
@@ -78,6 +123,87 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // The webStream getter will create one lazily when accessed.
       this._stream = null;
     }
+
+    // M2: encoding constructor option — call setEncoding() if provided
+    if (options?.encoding) {
+      this.setEncoding(options.encoding);
+    }
+
+    // M1: signal constructor option — destroy stream when signal aborts
+    if (options?.signal) {
+      this._setupAbortSignal(options.signal);
+    }
+
+    // L2: _construct hook — if provided, delay _read until constructed
+    this._maybeConstruct();
+  }
+
+  /**
+   * Run _construct if provided (via options or subclass override).
+   * Delays _read calls until the callback fires.
+   */
+  private _maybeConstruct(): void {
+    const hasConstructHook =
+      this._constructFunc ||
+      Object.getPrototypeOf(this)._construct !== Readable.prototype._construct;
+    if (!hasConstructHook) {
+      return;
+    }
+    this._constructed = false;
+    // Call _construct on next microtask (matches Node.js which uses process.nextTick)
+    queueMicrotask(() => {
+      const fn = this._constructFunc ?? this._construct.bind(this);
+      fn(err => {
+        if (err) {
+          this.destroy(err);
+          return;
+        }
+        this._constructed = true;
+        // If _read was requested while not yet constructed, call it now
+        if (this._read && this._flowing && !this._ended && !this._destroyed) {
+          this._read(this._highWaterMark);
+        }
+      });
+    });
+  }
+
+  /**
+   * Base construct method - can be overridden by subclasses.
+   * Called once before _read, to set up async resources.
+   */
+  _construct(callback: (error?: Error | null) => void): void {
+    callback();
+  }
+
+  /**
+   * Wire up an AbortSignal to destroy this stream on abort.
+   */
+  private _setupAbortSignal(signal: AbortSignal): void {
+    if (signal.aborted) {
+      this.destroy(new Error("Aborted"));
+      return;
+    }
+
+    const onAbort = (): void => {
+      cleanup();
+      this.destroy(new Error("Aborted"));
+    };
+
+    const onDone = (): void => {
+      cleanup();
+    };
+
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", onAbort);
+      this.off("close", onDone);
+      this.off("end", onDone);
+      this.off("error", onDone);
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    this.on("close", onDone);
+    this.on("end", onDone);
+    this.on("error", onDone);
   }
 
   /**
@@ -234,7 +360,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     // size === 0: return null but may trigger internal _read
     if (size === 0) {
-      if (this._read && !this._ended && !this._destroyed) {
+      if (this._read && !this._ended && !this._destroyed && this._constructed) {
         const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
         if (bufSize < this._highWaterMark) {
           this._read(this._highWaterMark);
@@ -271,7 +397,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           result = this._applyEncoding(this._buf.consumeAll());
         } else {
           // Trigger internal read to fill buffer
-          if (this._read) {
+          if (this._read && this._constructed) {
             this._read(size);
           }
           return null;
@@ -381,7 +507,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // Call user-provided read function asynchronously
       // This allows multiple pipe() calls to register before data flows
       queueMicrotask(() => {
-        if (this._flowing && !this._ended && !this._destroyed) {
+        if (this._flowing && !this._ended && !this._destroyed && this._constructed) {
           this._read!(this._highWaterMark);
         }
       });
@@ -445,7 +571,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     this._destroyed = true;
-    this._ended = true;
 
     // Ensure we detach from destinations to avoid leaking listeners.
     this.unpipe();
@@ -465,20 +590,46 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         });
     }
 
-    // Set state synchronously (matches Node.js), defer event emission via queueMicrotask
-    // to match Node.js process.nextTick behavior
-    if (error) {
-      this._errored = error;
-    }
-    this._closed = true;
-
-    queueMicrotask(() => {
-      if (error) {
-        this.emit("error", error);
+    // If subclass overrides _destroy, call it and wait for callback before
+    // emitting error/close (matches Node.js behavior).
+    const afterDestroy = (finalError?: Error | null): void => {
+      const err = finalError ?? error;
+      if (err) {
+        this._errored = err;
       }
-      this.emit("close");
-    });
+      this._closed = true;
+      queueMicrotask(() => {
+        if (err) {
+          this.emit("error", err);
+        }
+        if (this._emitClose) {
+          this.emit("close");
+        }
+      });
+    };
+
+    if (this._hasDestroyHook()) {
+      this._destroy(error ?? null, afterDestroy);
+    } else {
+      afterDestroy(error);
+    }
     return this;
+  }
+
+  /**
+   * Override in subclass to customise destroy behaviour.
+   * Call `callback(err)` when cleanup is complete.
+   */
+  _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    callback(error);
+  }
+
+  /** Check if _destroy has been overridden by a subclass or constructor option. */
+  private _hasDestroyHook(): boolean {
+    return (
+      Object.prototype.hasOwnProperty.call(this, "_destroy") ||
+      Object.getPrototypeOf(this)._destroy !== Readable.prototype._destroy
+    );
   }
 
   /**
@@ -529,15 +680,17 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     return ws;
   }
 
+  private _readableOverride: boolean | undefined;
+
   get readable(): boolean {
+    if (this._readableOverride !== undefined) {
+      return this._readableOverride;
+    }
     return !this._destroyed && !this._ended;
   }
 
   set readable(val: boolean) {
-    // Node.js allows overriding the readable state directly
-    if (!val) {
-      this._ended = true;
-    }
+    this._readableOverride = val;
   }
 
   get readableEnded(): boolean {
@@ -576,15 +729,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     return this._hasFlowed ? false : null;
   }
 
-  set readableFlowing(val: boolean | null) {
-    if (val === true) {
+  set readableFlowing(value: boolean | null) {
+    if (value === true) {
       this._flowing = true;
       this._hasFlowed = true;
-    } else if (val === false) {
+    } else if (value === false) {
       this._flowing = false;
       this._hasFlowed = true;
     } else {
-      // null — reset to "never flowed"
+      // null: reset to initial state
       this._flowing = false;
       this._hasFlowed = false;
     }
@@ -819,6 +972,31 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
+   * Async dispose support (using await).
+   * Destroys the stream and resolves after the 'close' event.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    const selfInitiated = !this._destroyed;
+    if (selfInitiated) {
+      this.destroy();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const settle = (): void => {
+        if (selfInitiated || this._ended) {
+          resolve();
+        } else {
+          reject(new Error("Premature close"));
+        }
+      };
+      if (this._closed) {
+        settle();
+      } else {
+        this.once("close", settle);
+      }
+    });
+  }
+
+  /**
    * Explicit iterator method (same as Symbol.asyncIterator)
    */
   iterator(options?: { destroyOnReturn?: boolean }): AsyncIterableIterator<T> {
@@ -985,13 +1163,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         _throwIfAborted(signal);
         const result = await fn(chunk, { signal: innerSignal });
         if (result) {
+          this.destroy();
           return true;
         }
       }
       return false;
     } finally {
       ac.abort();
-      this.destroy();
     }
   }
 
@@ -1012,13 +1190,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         _throwIfAborted(signal);
         const result = await fn(chunk, { signal: innerSignal });
         if (result) {
+          this.destroy();
           return chunk;
         }
       }
       return undefined;
     } finally {
       ac.abort();
-      this.destroy();
     }
   }
 
@@ -1039,13 +1217,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         _throwIfAborted(signal);
         const result = await fn(chunk, { signal: innerSignal });
         if (!result) {
+          this.destroy();
           return false;
         }
       }
       return true;
     } finally {
       ac.abort();
-      this.destroy();
     }
   }
 
@@ -1218,8 +1396,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Compose this readable with a stream/transform, returning a new Readable.
-   * Equivalent to piping this readable through the given stream.
+   * Compose this readable with a stream/transform, returning a Duplex.
+   * Matches Node.js behavior where compose() returns a Duplex.
    */
   compose<U>(
     stream: WritableLike | ((source: AsyncIterable<T>) => AsyncIterable<U>),
@@ -1230,17 +1408,29 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       const source = this;
       const result = new Readable<U>({ objectMode: true });
       pumpAsyncIterableToReadable(result, stream(source) as AsyncIterable<U>);
+      if (_DuplexFromFactory) {
+        return _DuplexFromFactory(result);
+      }
       return result;
     }
 
     // If it's a transform/duplex with pipe support, pipe this into it and
-    // return its readable side wrapped as a Readable.
+    // return its readable side wrapped as a Duplex.
     const target = stream as any;
     this.pipe(target);
-    // If the target has a _readable (Transform/Duplex), return it.
-    // Otherwise, if target is a Readable itself, return it.
+    // If the target is already a Duplex-like, return it directly.
+    if (target._readable && target._writable) {
+      return target;
+    }
+    // If the target has a _readable (Transform/Duplex), wrap it.
     if (target._readable) {
+      if (_DuplexFromFactory) {
+        return _DuplexFromFactory(target._readable);
+      }
       return target._readable as Readable<U>;
+    }
+    if (_DuplexFromFactory) {
+      return _DuplexFromFactory(target);
     }
     return target as Readable<U>;
   }
@@ -1332,4 +1522,15 @@ export function pumpAsyncIterableToReadable<T>(
     })();
   };
   (readable as any)._pushMode = true;
+}
+
+// =============================================================================
+// Late-binding injection for Duplex (avoids circular import)
+// =============================================================================
+
+let _DuplexFromFactory: ((source: any) => any) | null = null;
+
+/** @internal — called from index.browser.ts to break circular dependency */
+export function _injectDuplexFrom(factory: (source: any) => any): void {
+  _DuplexFromFactory = factory;
 }

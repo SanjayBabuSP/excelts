@@ -31,6 +31,8 @@ const hasDeflateRaw = (() => {
   }
 })();
 
+const EMPTY_UINT8ARRAY = new Uint8Array(0);
+
 /**
  * Process data through a TransformStream (compress or decompress)
  */
@@ -39,12 +41,22 @@ async function processWithStream(stream, data) {
   const reader = stream.readable.getReader();
 
   // Start reading output
-  const chunks = [];
+  let firstChunk = null;
+  let chunks = null;
   const readPromise = (async () => {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
+      if (!value) {
+        continue;
+      }
+      if (firstChunk === null) {
+        firstChunk = value;
+      } else if (chunks === null) {
+        chunks = [firstChunk, value];
+      } else {
+        chunks.push(value);
+      }
     }
   })();
 
@@ -56,14 +68,18 @@ async function processWithStream(stream, data) {
   await readPromise;
 
   // Fast path for common cases
-  if (chunks.length === 0) return new Uint8Array(0);
-  if (chunks.length === 1) return chunks[0];
+  if (firstChunk === null) return EMPTY_UINT8ARRAY;
+  if (chunks === null) return firstChunk;
 
   // Pre-calculate total length and allocate once
-  const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+  let totalLen = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    totalLen += chunks[i].length;
+  }
   const result = new Uint8Array(totalLen);
   let offset = 0;
-  for (const chunk of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
     result.set(chunk, offset);
     offset += chunk.length;
   }
@@ -98,6 +114,25 @@ function closeSession(taskId) {
 
 // Signal ready
 self.postMessage({ type: 'ready' });
+
+function postError(taskId, err, startTime) {
+  const error = typeof err === 'string' ? err : err?.message || String(err);
+  const duration = performance.now() - startTime;
+  self.postMessage({
+    type: 'error',
+    taskId,
+    error,
+    duration
+  });
+}
+
+function postResult(taskId, data, startTime) {
+  const duration = performance.now() - startTime;
+  self.postMessage(
+    { type: 'result', taskId, data, duration },
+    [data.buffer]
+  );
+}
 
 /**
  * Handle incoming messages
@@ -151,6 +186,10 @@ self.onmessage = async function(event) {
         reader,
         startTime,
         closed: false,
+        startedMessage: { type: 'started', taskId },
+        outMessage: { type: 'out', taskId, data: null },
+        ackMessage: { type: 'ack', taskId },
+        doneMessage: { type: 'done', taskId, duration: 0 },
         readLoop: null
       };
 
@@ -160,7 +199,8 @@ self.onmessage = async function(event) {
             const { done, value } = await reader.read();
             if (done) break;
             if (value) {
-              self.postMessage({ type: 'out', taskId, data: value }, [value.buffer]);
+              session.outMessage.data = value;
+              self.postMessage(session.outMessage, [value.buffer]);
             }
           }
         } catch (err) {
@@ -169,15 +209,10 @@ self.onmessage = async function(event) {
       })();
 
       streamingSessions.set(taskId, session);
-      self.postMessage({ type: 'started', taskId });
+      self.postMessage(session.startedMessage);
       return;
     } catch (err) {
-      self.postMessage({
-        type: 'error',
-        taskId,
-        error: err?.message || String(err),
-        duration: performance.now() - startTime
-      });
+      postError(taskId, err, startTime);
       closeSession(taskId);
       return;
     }
@@ -193,14 +228,9 @@ self.onmessage = async function(event) {
     }
     try {
       await session.writer.write(data);
-      self.postMessage({ type: 'ack', taskId });
+      self.postMessage(session.ackMessage);
     } catch (err) {
-      self.postMessage({
-        type: 'error',
-        taskId,
-        error: err?.message || String(err),
-        duration: performance.now() - session.startTime
-      });
+      postError(taskId, err, session.startTime);
       session.closed = true;
       closeSession(taskId);
     }
@@ -220,18 +250,10 @@ self.onmessage = async function(event) {
       if (session.readLoop) {
         await session.readLoop;
       }
-      self.postMessage({
-        type: 'done',
-        taskId,
-        duration: performance.now() - session.startTime
-      });
+      session.doneMessage.duration = performance.now() - session.startTime;
+      self.postMessage(session.doneMessage);
     } catch (err) {
-      self.postMessage({
-        type: 'error',
-        taskId,
-        error: err?.message || String(err),
-        duration: performance.now() - session.startTime
-      });
+      postError(taskId, err, session.startTime);
     } finally {
       closeSession(taskId);
     }
@@ -247,12 +269,7 @@ self.onmessage = async function(event) {
     }
     session.closed = true;
     closeSession(taskId);
-    self.postMessage({
-      type: 'error',
-      taskId,
-      error: msg.error || 'aborted',
-      duration: performance.now() - session.startTime
-    });
+    postError(taskId, msg.error || 'aborted', session.startTime);
     return;
   }
 
@@ -266,29 +283,24 @@ self.onmessage = async function(event) {
         throw new Error('deflate-raw not supported in this worker');
       }
 
-      let result;
-      if (taskType === 'deflate') {
-        result = await processWithStream(new CompressionStream('deflate-raw'), data);
-      } else if (taskType === 'inflate') {
-        result = await processWithStream(new DecompressionStream('deflate-raw'), data);
-      } else {
-        throw new Error('Unknown task type: ' + taskType);
+      let stream;
+      switch (taskType) {
+        case 'deflate':
+          stream = new CompressionStream('deflate-raw');
+          break;
+        case 'inflate':
+          stream = new DecompressionStream('deflate-raw');
+          break;
+        default:
+          throw new Error('Unknown task type: ' + taskType);
       }
 
-      const duration = performance.now() - startTime;
+      const result = await processWithStream(stream, data);
 
       // Transfer the result buffer for zero-copy
-      self.postMessage(
-        { type: 'result', taskId, data: result, duration },
-        [result.buffer]
-      );
+      postResult(taskId, result, startTime);
     } catch (err) {
-      self.postMessage({
-        type: 'error',
-        taskId,
-        error: err?.message || String(err),
-        duration: performance.now() - startTime
-      });
+      postError(taskId, err, startTime);
     }
   }
 };

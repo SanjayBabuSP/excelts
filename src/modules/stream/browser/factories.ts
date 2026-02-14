@@ -23,7 +23,6 @@ import { Transform } from "./transform";
 import { Duplex } from "./duplex";
 import { PassThrough } from "./passthrough";
 import { Collector } from "./collector";
-import { addEmitterListener } from "./helpers";
 
 import { PullStream } from "@stream/pull-stream";
 import { BufferedStream, StringChunk, ByteChunk } from "@stream/buffered-stream";
@@ -164,93 +163,19 @@ export function createDuplex<TRead = Uint8Array, TWrite = Uint8Array>(
     destroy?: (this: any, error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IDuplex<TRead, TWrite> {
-  const readableObjectMode = options?.readableObjectMode ?? options?.objectMode;
-  const writableObjectMode = options?.writableObjectMode ?? options?.objectMode;
-
-  const underlyingWritable: any = options?.writable;
-
-  const duplex = new Duplex<TRead, TWrite>({
+  return new Duplex<TRead, TWrite>({
+    highWaterMark: options?.highWaterMark,
+    objectMode: options?.objectMode,
     allowHalfOpen: options?.allowHalfOpen,
     readableHighWaterMark: options?.readableHighWaterMark,
     writableHighWaterMark: options?.writableHighWaterMark,
-    readableObjectMode,
-    writableObjectMode,
+    readableObjectMode: options?.readableObjectMode,
+    writableObjectMode: options?.writableObjectMode,
     read: options?.read,
-    write:
-      options?.write ??
-      (underlyingWritable
-        ? (chunk: TWrite, encoding: string, callback: (error?: Error | null) => void) => {
-            if (typeof underlyingWritable.write === "function") {
-              underlyingWritable.write(chunk, encoding, callback);
-              return;
-            }
-            // Best-effort sync sink
-            try {
-              underlyingWritable.write?.(chunk);
-              callback(null);
-            } catch (err) {
-              callback(err as Error);
-            }
-          }
-        : undefined),
-    final:
-      options?.final ??
-      (underlyingWritable
-        ? (callback: (error?: Error | null) => void) => {
-            if (typeof underlyingWritable.end === "function") {
-              underlyingWritable.end((err: any) => callback(err ?? null));
-            } else {
-              underlyingWritable.end?.();
-              callback(null);
-            }
-          }
-        : undefined)
+    write: options?.write,
+    final: options?.final,
+    destroy: options?.destroy
   });
-
-  // If an underlying readable is provided, forward it into the duplex readable side.
-  if (options?.readable) {
-    const readable: any = options.readable;
-    const sink = new Writable<any>({
-      objectMode: duplex.readableObjectMode,
-      write(chunk, _encoding, callback) {
-        duplex.push(chunk);
-        callback(null);
-      },
-      final(callback) {
-        duplex.push(null);
-        callback(null);
-      }
-    });
-
-    if (typeof readable?.on === "function") {
-      const onError = (err: any): void => {
-        duplex.destroy(err);
-      };
-      const cleanupError = addEmitterListener(readable as any, "error", onError);
-      addEmitterListener(readable as any, "end", cleanupError, { once: true });
-      addEmitterListener(readable as any, "close", cleanupError, { once: true });
-      addEmitterListener(sink as any, "finish", cleanupError, { once: true });
-    }
-    readable.pipe?.(sink);
-  }
-
-  if (options?.destroy) {
-    const originalDestroy = duplex.destroy.bind(duplex);
-    duplex.destroy = function (error?: Error): Duplex<TRead, TWrite> {
-      options.destroy!.call(duplex, error ?? null, (err: Error | null) => {
-        if (err) {
-          // Defer error emission to match Node.js process.nextTick behavior
-          queueMicrotask(() => duplex.emit("error", err));
-          originalDestroy(err);
-        } else {
-          originalDestroy(error);
-        }
-      });
-      return duplex;
-    };
-  }
-
-  return duplex;
 }
 
 /**

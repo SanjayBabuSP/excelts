@@ -29,6 +29,7 @@ import {
 import { PatternScanner } from "@archive/unzip/pattern-scanner";
 import { inflateRaw as fallbackInflateRaw } from "@archive/compression/deflate-fallback";
 import { ByteQueue } from "@archive/shared/byte-queue";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import { hasDeflateRawDecompressionStream } from "@archive/compression/compress.base";
 
 // =============================================================================
@@ -366,19 +367,13 @@ class WorkerInflateRaw extends Duplex {
           this.push(null);
           this._terminateWorker();
           // Resolve any pending writes.
-          for (const cb of this._pendingAcks.values()) {
-            cb();
-          }
-          this._pendingAcks.clear();
+          this._settlePendingAcks();
           return;
         }
 
         const err = new Error(message);
         // Fail any pending writes.
-        for (const cb of this._pendingAcks.values()) {
-          cb(err);
-        }
-        this._pendingAcks.clear();
+        this._settlePendingAcks(err);
         this.emit("error", err);
         this._terminateWorker();
         return;
@@ -387,13 +382,21 @@ class WorkerInflateRaw extends Duplex {
 
     this.worker.onerror = (e: ErrorEvent) => {
       const err = new Error(e.message ?? "Worker error");
-      for (const cb of this._pendingAcks.values()) {
-        cb(err);
-      }
-      this._pendingAcks.clear();
+      this._settlePendingAcks(err);
       this.emit("error", err);
       this._terminateWorker();
     };
+  }
+
+  private _settlePendingAcks(err?: Error): void {
+    if (this._pendingAcks.size === 0) {
+      return;
+    }
+
+    for (const cb of this._pendingAcks.values()) {
+      cb(err);
+    }
+    this._pendingAcks.clear();
   }
 
   private _terminateWorker(): void {
@@ -552,6 +555,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     finished = false;
     match?: number;
     private _pendingResolve?: () => void;
+    private _pendingDataPromise?: Promise<void>;
     private _driverState: ParseDriverState = {};
     private _parsingDone: Promise<void> = Promise.resolve();
 
@@ -695,6 +699,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       if (this._pendingResolve) {
         const resolve = this._pendingResolve;
         this._pendingResolve = undefined;
+        this._pendingDataPromise = undefined;
         resolve();
       }
     }
@@ -713,14 +718,19 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     }
 
     private _waitForData(): Promise<void> {
-      return new Promise(resolve => {
+      if (this._pendingDataPromise) {
+        return this._pendingDataPromise;
+      }
+
+      this._pendingDataPromise = new Promise(resolve => {
         this._pendingResolve = resolve;
       });
+      return this._pendingDataPromise;
     }
 
     private async _pullInternal(length: number): Promise<Uint8Array> {
       if (length === 0) {
-        return new Uint8Array(0);
+        return EMPTY_UINT8ARRAY;
       }
 
       while (this._buffer.length < length) {
@@ -741,8 +751,28 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     }
 
     private async _pullUntilInternal(pattern: Uint8Array, includeEof = false): Promise<Uint8Array> {
-      const chunks: Uint8Array[] = [];
+      let firstChunk: Uint8Array | null = null;
+      let chunks: Uint8Array[] | null = null;
       const scanner = new PatternScanner(pattern);
+      const patternLen = pattern.length;
+
+      const appendChunk = (chunk: Uint8Array): void => {
+        if (chunk.length === 0) {
+          return;
+        }
+
+        if (!firstChunk) {
+          firstChunk = chunk;
+          return;
+        }
+
+        if (!chunks) {
+          chunks = [firstChunk, chunk];
+          return;
+        }
+
+        chunks.push(chunk);
+      };
 
       while (true) {
         const bufLen = this._buffer.length;
@@ -750,12 +780,15 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
 
         if (match !== -1) {
           this.match = match;
-          const toRead = match + (includeEof ? pattern.length : 0);
+          const toRead = match + (includeEof ? patternLen : 0);
           if (toRead > 0) {
-            chunks.push(this._buffer.read(toRead));
+            appendChunk(this._buffer.read(toRead));
             this._maybeReleaseWriteCallback();
           }
-          return chunks.length === 1 ? chunks[0] : concatUint8Arrays(chunks);
+          if (!firstChunk) {
+            return EMPTY_UINT8ARRAY;
+          }
+          return chunks ? concatUint8Arrays(chunks) : firstChunk;
         }
 
         // No match yet. Avoid rescanning bytes that can't start a match.
@@ -765,9 +798,9 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
           throw new Error("FILE_ENDED");
         }
 
-        const safeLen = Math.max(0, this._buffer.length - pattern.length);
+        const safeLen = this._buffer.length - patternLen;
         if (safeLen > 0) {
-          chunks.push(this._buffer.read(safeLen));
+          appendChunk(this._buffer.read(safeLen));
           scanner.onConsume(safeLen);
           this._maybeReleaseWriteCallback();
         }
@@ -781,6 +814,11 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       let remaining = length;
       let done = false;
       let waitingDrain = false;
+
+      const onDrain = (): void => {
+        waitingDrain = false;
+        pull();
+      };
 
       const pull = (): void => {
         if (done) {
@@ -799,10 +837,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
           this._maybeReleaseWriteCallback();
           if (!ok) {
             waitingDrain = true;
-            output.once("drain", () => {
-              waitingDrain = false;
-              pull();
-            });
+            output.once("drain", onDrain);
             return;
           }
         }
@@ -830,6 +865,11 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
       const scanner = new PatternScanner(pattern);
       let waitingDrain = false;
 
+      const onDrain = (): void => {
+        waitingDrain = false;
+        pull();
+      };
+
       const pull = (): void => {
         if (done || waitingDrain) {
           return;
@@ -852,10 +892,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
               this._maybeReleaseWriteCallback();
               if (!ok) {
                 waitingDrain = true;
-                output.once("drain", () => {
-                  waitingDrain = false;
-                  pull();
-                });
+                output.once("drain", onDrain);
                 return;
               }
             }
@@ -890,10 +927,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
 
           if (!ok) {
             waitingDrain = true;
-            output.once("drain", () => {
-              waitingDrain = false;
-              pull();
-            });
+            output.once("drain", onDrain);
             return;
           }
         }
@@ -913,7 +947,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
 
     pull(eof: number | Uint8Array, includeEof?: boolean): Promise<Uint8Array> {
       if (eof === 0) {
-        return Promise.resolve(new Uint8Array(0));
+        return Promise.resolve(EMPTY_UINT8ARRAY);
       }
 
       if (typeof eof === "number") {

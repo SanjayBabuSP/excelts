@@ -965,22 +965,22 @@ export class ZipEditor {
     if (allSourcesInMemory && allSourcesSync) {
       const normalEntries: ZipEntry[] = [
         ...recompressedPreserved,
-        ...sets.map(e => {
+        ...sets.map(entry => {
           // Type narrowing: we know source is in-memory and not Blob
-          const src = e.source as Uint8Array | ArrayBuffer | string;
+          const src = entry.source as Uint8Array | ArrayBuffer | string;
           return {
-            name: e.name,
+            name: entry.name,
             data: toUint8ArraySync(src),
-            level: e.options?.level,
-            modTime: e.options?.modTime,
-            atime: e.options?.atime,
-            ctime: e.options?.ctime,
-            birthTime: e.options?.birthTime,
-            comment: e.options?.comment,
-            mode: e.options?.mode,
-            msDosAttributes: e.options?.msDosAttributes,
-            externalAttributes: e.options?.externalAttributes,
-            versionMadeBy: e.options?.versionMadeBy
+            level: entry.options?.level,
+            modTime: entry.options?.modTime,
+            atime: entry.options?.atime,
+            ctime: entry.options?.ctime,
+            birthTime: entry.options?.birthTime,
+            comment: entry.options?.comment,
+            mode: entry.options?.mode,
+            msDosAttributes: entry.options?.msDosAttributes,
+            externalAttributes: entry.options?.externalAttributes,
+            versionMadeBy: entry.options?.versionMadeBy
           };
         })
       ];
@@ -989,36 +989,35 @@ export class ZipEditor {
     }
 
     // Async path: some sources need streaming collection (Blob or streaming)
-    const normalEntries: ZipEntry[] = [
-      ...recompressedPreserved,
-      ...(await Promise.all(
-        sets.map(async e => {
-          // Collect bytes from any source type
-          let data: Uint8Array;
-          if (isSyncArchiveSource(e.source)) {
-            data = toUint8ArraySync(e.source);
-          } else {
-            // Streaming source: collect all chunks (includes Blob via toAsyncIterable(Blob) which prefers Blob.stream())
-            data = await collectUint8ArrayStream(toAsyncIterable(e.source));
-          }
+    const resolvedEntries = await Promise.all(
+      sets.map(async entry => {
+        // Collect bytes from any source type
+        let data: Uint8Array;
+        if (isSyncArchiveSource(entry.source)) {
+          data = toUint8ArraySync(entry.source);
+        } else {
+          // Streaming source: collect all chunks (includes Blob via toAsyncIterable(Blob) which prefers Blob.stream())
+          data = await collectUint8ArrayStream(toAsyncIterable(entry.source));
+        }
 
-          return {
-            name: e.name,
-            data,
-            level: e.options?.level,
-            modTime: e.options?.modTime,
-            atime: e.options?.atime,
-            ctime: e.options?.ctime,
-            birthTime: e.options?.birthTime,
-            comment: e.options?.comment,
-            mode: e.options?.mode,
-            msDosAttributes: e.options?.msDosAttributes,
-            externalAttributes: e.options?.externalAttributes,
-            versionMadeBy: e.options?.versionMadeBy
-          };
-        })
-      ))
-    ];
+        return {
+          name: entry.name,
+          data,
+          level: entry.options?.level,
+          modTime: entry.options?.modTime,
+          atime: entry.options?.atime,
+          ctime: entry.options?.ctime,
+          birthTime: entry.options?.birthTime,
+          comment: entry.options?.comment,
+          mode: entry.options?.mode,
+          msDosAttributes: entry.options?.msDosAttributes,
+          externalAttributes: entry.options?.externalAttributes,
+          versionMadeBy: entry.options?.versionMadeBy
+        };
+      })
+    );
+
+    const normalEntries: ZipEntry[] = [...recompressedPreserved, ...resolvedEntries];
 
     return createZip([...rawEntries, ...normalEntries], this._getBuildOptions());
   }

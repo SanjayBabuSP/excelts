@@ -146,6 +146,23 @@ describe("WorkerPool", () => {
       const decompressed = await pool.execute("inflate", result.data);
       expect(decompressed.data).toEqual(originalCopy);
     });
+
+    it("should not detach input when allowTransfer is disabled", async () => {
+      if (!hasWorkerSupport()) {
+        return;
+      }
+
+      pool = new WorkerPool();
+      const original = createCompressibleData(8 * 1024);
+      const beforeLength = original.byteLength;
+
+      const compressed = await pool.execute("deflate", original, { allowTransfer: false });
+      expect(compressed.data.length).toBeGreaterThan(0);
+
+      expect(original.byteLength).toBe(beforeLength);
+      expect(original.length).toBe(beforeLength);
+      expect(original[0]).toBeGreaterThanOrEqual(0);
+    });
   });
 
   describe("pool lifecycle", () => {

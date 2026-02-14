@@ -44,7 +44,7 @@ import {
   writeLocalFileHeaderInto
 } from "@archive/zip-spec/zip-records";
 import type { Zip64Mode } from "@archive/zip-spec/zip-records";
-import { buildCentralDirectoryAndEocd, type ZipCentralDirectoryEntryInput } from "./writer-core";
+import { measureCentralDirectoryAndEocd, writeCentralDirectoryAndEocdInto } from "./writer-core";
 import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 
 interface ProcessedEntry {
@@ -144,17 +144,14 @@ function sortProcessedEntriesByName(entries: ProcessedEntry[]): void {
 
   const decorated = entries.map((entry, index) => ({ entry, index }));
   decorated.sort((a, b) => {
-    const ak = a.entry.sortKey;
-    const bk = b.entry.sortKey;
-    if (ak < bk) {
+    if (a.entry.sortKey < b.entry.sortKey) {
       return -1;
     }
-    if (ak > bk) {
+    if (a.entry.sortKey > b.entry.sortKey) {
       return 1;
     }
     return a.index - b.index;
   });
-
   for (let i = 0; i < decorated.length; i++) {
     entries[i] = decorated[i]!.entry;
   }
@@ -540,7 +537,6 @@ function finalizeZip(
   // Precompute offsets and effective extra fields (local vs central can differ for ZIP64).
   const localExtraFields: Uint8Array[] = new Array(processedEntries.length);
   const zip64EntryNeeded: boolean[] = new Array(processedEntries.length);
-  const compressedSizes: number[] = new Array(processedEntries.length);
 
   let localSectionSize = 0;
   for (let i = 0; i < processedEntries.length; i++) {
@@ -548,7 +544,6 @@ function finalizeZip(
     entry.offset = localSectionSize;
 
     const compressedSize = entry.compressedData.length;
-    compressedSizes[i] = compressedSize;
     const needsZip64Entry =
       forceZip64 ||
       entry.offset > UINT32_MAX ||
@@ -573,35 +568,13 @@ function finalizeZip(
   }
 
   const centralDirOffset = localSectionSize;
-
-  const cdEntries: ZipCentralDirectoryEntryInput[] = processedEntries.map((entry, i) => {
-    const compressedSize = compressedSizes[i]!;
-    return {
-      fileName: entry.name,
-      extraField: entry.extraField,
-      comment: entry.comment,
-      flags: entry.flags,
-      crc32: entry.crc,
-      compressedSize,
-      uncompressedSize: entry.uncompressedSize,
-      compressionMethod: entry.compressionMethod,
-      dosTime: entry.modTime,
-      dosDate: entry.modDate,
-      localHeaderOffset: entry.offset,
-      zip64: zip64EntryNeeded[i]!,
-      externalAttributes: entry.externalAttributes,
-      versionMadeBy: entry.versionMadeBy
-    };
-  });
-
-  const cdResult = buildCentralDirectoryAndEocd(cdEntries, {
+  const cdSizing = measureCentralDirectoryAndEocd(processedEntries, {
     zipComment,
     zip64Mode,
     centralDirOffset
   });
 
-  const trailerSize = cdResult.trailerRecords.reduce((sum, part) => sum + part.length, 0);
-  const totalSize = localSectionSize + cdResult.centralDirSize + trailerSize;
+  const totalSize = localSectionSize + cdSizing.totalSize;
   const out = new Uint8Array(totalSize);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
 
@@ -610,7 +583,7 @@ function finalizeZip(
   // Local file headers and data
   for (let i = 0; i < processedEntries.length; i++) {
     const entry = processedEntries[i]!;
-    const compressedSize = compressedSizes[i]!;
+    const compressedSize = entry.compressedData.length;
     const needsZip64Entry = zip64EntryNeeded[i]!;
 
     offset += writeLocalFileHeaderInto(out, view, offset, {
@@ -630,16 +603,13 @@ function finalizeZip(
     offset += compressedSize;
   }
 
-  // Central directory headers
-  for (const header of cdResult.centralDirectoryHeaders) {
-    out.set(header, offset);
-    offset += header.length;
-  }
-
-  for (const part of cdResult.trailerRecords) {
-    out.set(part, offset);
-    offset += part.length;
-  }
+  writeCentralDirectoryAndEocdInto(processedEntries, {
+    zipComment,
+    zip64Mode,
+    centralDirOffset,
+    out,
+    offset
+  });
 
   return out;
 }
@@ -663,60 +633,66 @@ export async function createZip(
     let nextIndex = 0;
     const workerCount = Math.min(limit, entries.length);
 
-    const workers = Array.from({ length: workerCount }, async () => {
+    const processEntryAt = async (idx: number): Promise<void> => {
+      const entry = entries[idx]!;
+
+      if (isZipRawEntry(entry)) {
+        processedEntries[idx] = buildProcessedRawEntry(entry, settings, path);
+        return;
+      }
+
+      const entryLevel = entry.level ?? settings.level;
+      const compressOptions: CompressOptions = {
+        level: entryLevel,
+        thresholdBytes
+      };
+      const { compressedData, deflate } = await compressEntryMaybe(
+        entry,
+        entryLevel,
+        compressOptions,
+        smartStore
+      );
+
+      // Handle encryption
+      const entryEncMethod = entry.encryptionMethod ?? settings.encryptionMethod;
+      const entryPassword = entry.password ?? settings.password;
+      let encryptionResult:
+        | { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }
+        | undefined;
+
+      if (entryEncMethod !== "none" && entryPassword) {
+        const originalCrc = crc32(entry.data);
+        const originalCompressionMethod = resolveZipCompressionMethod(deflate);
+        encryptionResult = await encryptData(
+          compressedData,
+          originalCrc,
+          entryEncMethod,
+          entryPassword,
+          originalCompressionMethod
+        );
+      }
+
+      processedEntries[idx] = buildProcessedEntry(
+        entry,
+        settings,
+        path,
+        compressedData,
+        deflate,
+        encryptionResult
+      );
+    };
+
+    const runWorker = async (): Promise<void> => {
       while (true) {
         const idx = nextIndex++;
         if (idx >= entries.length) {
           return;
         }
-        const entry = entries[idx]!;
-
-        if (isZipRawEntry(entry)) {
-          processedEntries[idx] = buildProcessedRawEntry(entry, settings, path);
-          continue;
-        }
-
-        const entryLevel = entry.level ?? settings.level;
-        const compressOptions: CompressOptions = {
-          level: entryLevel,
-          thresholdBytes
-        };
-        const { compressedData, deflate } = await compressEntryMaybe(
-          entry,
-          entryLevel,
-          compressOptions,
-          smartStore
-        );
-
-        // Handle encryption
-        const entryEncMethod = entry.encryptionMethod ?? settings.encryptionMethod;
-        const entryPassword = entry.password ?? settings.password;
-        let encryptionResult:
-          | { data: Uint8Array; extraField?: Uint8Array; compressionMethod: number }
-          | undefined;
-
-        if (entryEncMethod !== "none" && entryPassword) {
-          const originalCrc = crc32(entry.data);
-          const originalCompressionMethod = resolveZipCompressionMethod(deflate);
-          encryptionResult = await encryptData(
-            compressedData,
-            originalCrc,
-            entryEncMethod,
-            entryPassword,
-            originalCompressionMethod
-          );
-        }
-
-        processedEntries[idx] = buildProcessedEntry(
-          entry,
-          settings,
-          path,
-          compressedData,
-          deflate,
-          encryptionResult
-        );
+        await processEntryAt(idx);
       }
-    });
+    };
+
+    const workers = Array.from({ length: workerCount }, () => runWorker());
 
     await Promise.all(workers);
   }
@@ -739,11 +715,12 @@ export function createZipSync(entries: ZipBuildEntry[], options: ZipOptions = {}
     parseZipBuildOptions(options);
   validateEncryptionOptions(settings.encryptionMethod, settings.password, true);
 
-  const processedEntries: ProcessedEntry[] = [];
+  const processedEntries: ProcessedEntry[] = new Array(entries.length);
 
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
     if (isZipRawEntry(entry)) {
-      processedEntries.push(buildProcessedRawEntry(entry, settings, path));
+      processedEntries[index] = buildProcessedRawEntry(entry, settings, path);
       continue;
     }
 
@@ -778,8 +755,13 @@ export function createZipSync(entries: ZipBuildEntry[], options: ZipOptions = {}
       );
     }
 
-    processedEntries.push(
-      buildProcessedEntry(entry, settings, path, compressedData, deflate, encryptionResult)
+    processedEntries[index] = buildProcessedEntry(
+      entry,
+      settings,
+      path,
+      compressedData,
+      deflate,
+      encryptionResult
     );
   }
 

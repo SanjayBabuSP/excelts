@@ -39,7 +39,7 @@ import {
 import { isProbablyIncompressibleChunks } from "@archive/zip/compressibility";
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import { createAbortError, toError } from "@archive/shared/errors";
-import { buildCentralDirectoryAndEocd, centralDirEntryToInput } from "./writer-core";
+import { measureCentralDirectoryAndEocd, writeCentralDirectoryAndEocdInto } from "./writer-core";
 import type { ZipCentralDirEntry, ZipWritableFile } from "./writable-file";
 import {
   buildDataDescriptor,
@@ -380,14 +380,20 @@ export class ZipDeflateFile {
       return;
     }
 
-    // Concatenate all buffered chunks
-    const compressedData = new Uint8Array(this._aesBufferSize);
-    let offset = 0;
-    for (const chunk of this._aesBuffer) {
-      compressedData.set(chunk, offset);
-      offset += chunk.length;
+    let compressedData: Uint8Array;
+    if (this._aesBuffer.length === 1) {
+      compressedData = this._aesBuffer[0]!;
+    } else {
+      // Concatenate all buffered chunks
+      compressedData = new Uint8Array(this._aesBufferSize);
+      let offset = 0;
+      for (let i = 0; i < this._aesBuffer.length; i++) {
+        const chunk = this._aesBuffer[i]!;
+        compressedData.set(chunk, offset);
+        offset += chunk.length;
+      }
     }
-    this._aesBuffer = [];
+    this._aesBuffer.length = 0;
     this._aesBufferSize = 0;
 
     // Encrypt using AES
@@ -505,7 +511,7 @@ export class ZipDeflateFile {
     for (const chunk of this._pendingChunks) {
       await this._writeData(chunk);
     }
-    this._pendingChunks = [];
+    this._pendingChunks.length = 0;
   }
 
   private _enqueueData(data: Uint8Array, final: boolean): void {
@@ -529,7 +535,7 @@ export class ZipDeflateFile {
     for (let i = 0; i < len; i++) {
       this._ondata(this._dataQueue[i], i === finalIndex);
     }
-    this._dataQueue = [];
+    this._dataQueue.length = 0;
     this._finalQueued = false;
   }
 
@@ -913,6 +919,7 @@ export class ZipRawFile implements ZipWritableFile {
   private _zip64 = false;
 
   private _dataQueue: Uint8Array[] = [];
+  private _dataQueueHead = 0;
   private _finalQueued = false;
 
   private _ondata: ((data: Uint8Array, final: boolean) => void) | null = null;
@@ -1062,9 +1069,14 @@ export class ZipRawFile implements ZipWritableFile {
       return;
     }
 
-    while (this._dataQueue.length) {
-      const chunk = this._dataQueue.shift()!;
+    while (this._dataQueueHead < this._dataQueue.length) {
+      const chunk = this._dataQueue[this._dataQueueHead++]!;
       this._ondata(chunk, false);
+    }
+
+    if (this._dataQueueHead > 0) {
+      this._dataQueue.length = 0;
+      this._dataQueueHead = 0;
     }
 
     if (this._finalQueued) {
@@ -1314,19 +1326,20 @@ export class StreamingZip {
 
     const centralDirOffset = this.currentOffset;
 
-    let result: {
-      centralDirectoryHeaders: Uint8Array[];
-      centralDirSize: number;
-      trailerRecords: Uint8Array[];
-    };
+    let finalChunk: Uint8Array;
     try {
-      // Convert ZipCentralDirEntry to ZipCentralDirectoryEntryInput using helper
-      const cdEntries = this.entries.map(entry => centralDirEntryToInput(entry));
-
-      result = buildCentralDirectoryAndEocd(cdEntries, {
+      const sizing = measureCentralDirectoryAndEocd(this.entries, {
         zipComment: this.zipComment,
         zip64Mode: this.zip64Mode,
         centralDirOffset
+      });
+      finalChunk = new Uint8Array(sizing.totalSize);
+      writeCentralDirectoryAndEocdInto(this.entries, {
+        zipComment: this.zipComment,
+        zip64Mode: this.zip64Mode,
+        centralDirOffset,
+        out: finalChunk,
+        offset: 0
       });
     } catch (e) {
       const err = toError(e);
@@ -1334,15 +1347,7 @@ export class StreamingZip {
       return;
     }
 
-    for (const header of result.centralDirectoryHeaders) {
-      this.callback(null, header, false);
-    }
-
-    for (let i = 0; i < result.trailerRecords.length; i++) {
-      const record = result.trailerRecords[i]!;
-      const final = i === result.trailerRecords.length - 1;
-      this.callback(null, record, final);
-    }
+    this.callback(null, finalChunk, true);
   }
 
   end(): void {

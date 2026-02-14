@@ -90,21 +90,42 @@ export function decodeCp437(bytes: Uint8Array): string {
  * Characters not representable in CP437 are replaced with '?'.
  */
 export function encodeCp437(value: string): Uint8Array {
-  const bytes: number[] = [];
-  for (const ch of value) {
-    const code = ch.codePointAt(0);
-    if (code === undefined) {
-      bytes.push(0x3f);
-      continue;
-    }
-    if (code < 0x80) {
-      bytes.push(code);
-      continue;
-    }
-    const mapped = CP437_ENCODE_MAP.get(ch);
-    bytes.push(mapped ?? 0x3f);
+  if (value.length === 0) {
+    return EMPTY_UINT8ARRAY;
   }
-  return Uint8Array.from(bytes);
+
+  // One output byte per Unicode code point, so UTF-16 code unit length is a safe upper bound.
+  const bytes = new Uint8Array(value.length);
+  let out = 0;
+
+  for (let i = 0; i < value.length; i++) {
+    const first = value.charCodeAt(i);
+    let codePoint = first;
+
+    // Decode surrogate pairs so behavior matches `for...of` code point iteration.
+    if (first >= 0xd800 && first <= 0xdbff && i + 1 < value.length) {
+      const second = value.charCodeAt(i + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) {
+        codePoint = ((first - 0xd800) << 10) + (second - 0xdc00) + 0x10000;
+        i++;
+      }
+    }
+
+    if (codePoint < 0x80) {
+      bytes[out++] = codePoint;
+      continue;
+    }
+
+    if (codePoint > 0xffff) {
+      bytes[out++] = 0x3f;
+      continue;
+    }
+
+    const mapped = CP437_ENCODE_MAP.get(String.fromCharCode(codePoint));
+    bytes[out++] = mapped ?? 0x3f;
+  }
+
+  return out === bytes.length ? bytes : bytes.subarray(0, out);
 }
 
 const CP437_ENCODE_MAP: Map<string, number> = (() => {

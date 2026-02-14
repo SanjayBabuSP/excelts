@@ -10,11 +10,12 @@ import type {
   DuplexStreamOptions
 } from "@stream/types";
 import { UnsupportedStreamTypeError } from "@stream/errors";
-import { concatUint8Arrays, getTextDecoder, textDecoder } from "@utils/binary";
+import { concatUint8Arrays, createTextDecoder, stringToUint8Array } from "@utils/binary";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
 import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
+import { toBinaryChunk } from "@stream/common/binary-chunk";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";
@@ -60,10 +61,20 @@ export async function streamToString(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   encoding?: string
 ): Promise<string> {
-  const [chunks, totalLength] = await collectStreamChunks(stream);
-  const combined = concatUint8Arrays(chunks, totalLength);
-  const decoder = encoding ? getTextDecoder(encoding) : textDecoder;
-  return decoder.decode(combined);
+  const iterable = toReadableAsyncIterable(stream, "streamToString") as AsyncIterable<Uint8Array>;
+  const decoder = createTextDecoder(encoding);
+  let text = "";
+
+  for await (const chunk of iterable as any) {
+    const bytes = toTextBytes(chunk);
+    if (!bytes) {
+      throw new UnsupportedStreamTypeError("streamToString", typeof chunk);
+    }
+    text += decoder.decode(bytes, { stream: true });
+  }
+
+  text += decoder.decode();
+  return text;
 }
 
 /**
@@ -123,7 +134,7 @@ export function isDisturbed(stream: unknown): boolean {
     return Readable.isDisturbed(stream);
   }
   if (stream instanceof Duplex) {
-    return Readable.isDisturbed(stream._readable);
+    return Readable.isDisturbed((stream as any)._readable);
   }
 
   const s = stream as any;
@@ -146,7 +157,7 @@ export function isReadable(stream: unknown): stream is ReadableLike {
     return true;
   }
   if (stream instanceof Duplex) {
-    return stream._readable instanceof Readable;
+    return (stream as any)._readable instanceof Readable;
   }
   const o = stream as Record<string, unknown>;
   return typeof o.read === "function" && typeof o.pipe === "function";
@@ -163,7 +174,7 @@ export function isWritable(stream: unknown): stream is WritableLike {
     return true;
   }
   if (stream instanceof Duplex) {
-    return stream._writable instanceof Writable;
+    return (stream as any)._writable instanceof Writable;
   }
   const o = stream as Record<string, unknown>;
   return typeof o.write === "function" && typeof o.end === "function";
@@ -183,14 +194,12 @@ export function duplexPair<T = Uint8Array>(
   const stream1 = new Duplex<T, T>(options);
   const stream2 = new Duplex<T, T>(options);
 
-  // Override write to push to the other stream's readable
   stream1.write = function (
     chunk: T,
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
     const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-    // Push to stream2's readable side
     const ok = stream2.push(chunk);
     cb?.(null);
     return ok;
@@ -202,13 +211,11 @@ export function duplexPair<T = Uint8Array>(
     callback?: (error?: Error | null) => void
   ): boolean {
     const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-    // Push to stream1's readable side
     const ok = stream1.push(chunk);
     cb?.(null);
     return ok;
   };
 
-  // Override end to signal EOF to the other stream
   const originalEnd1 = stream1.end.bind(stream1);
   const originalEnd2 = stream2.end.bind(stream2);
 
@@ -264,6 +271,16 @@ function toReadableAsyncIterable<T>(
     return stream;
   }
   throw new UnsupportedStreamTypeError(name, typeof stream);
+}
+
+function toTextBytes(chunk: unknown): Uint8Array | null {
+  if (typeof chunk === "string") {
+    return stringToUint8Array(chunk);
+  }
+  if (Array.isArray(chunk)) {
+    return new Uint8Array(chunk);
+  }
+  return toBinaryChunk(chunk);
 }
 
 // =============================================================================

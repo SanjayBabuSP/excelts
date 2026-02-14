@@ -385,28 +385,38 @@ export interface Zip64EndOfCentralDirectoryInput {
   centralDirOffset: number;
 }
 
-export function buildZip64EndOfCentralDirectory(
+export function writeZip64EndOfCentralDirectoryInto(
+  out: Uint8Array,
+  view: DataView,
+  offset: number,
   input: Zip64EndOfCentralDirectoryInput
-): Uint8Array {
+): number {
   const versionMadeBy = input.versionMadeBy ?? VERSION_MADE_BY;
   const versionNeeded = input.versionNeeded ?? VERSION_ZIP64;
   const diskNumber = input.diskNumber ?? 0;
   const centralDirectoryDiskNumber = input.centralDirectoryDiskNumber ?? 0;
 
+  view.setUint32(offset + 0, ZIP64_END_OF_CENTRAL_DIR_SIG, true);
+  // Size of ZIP64 EOCD record (excluding signature + this 8-byte field)
+  writeUint64LE(view, offset + 4, 44);
+  view.setUint16(offset + 12, versionMadeBy, true);
+  view.setUint16(offset + 14, versionNeeded, true);
+  view.setUint32(offset + 16, diskNumber, true);
+  view.setUint32(offset + 20, centralDirectoryDiskNumber, true);
+  writeUint64LE(view, offset + 24, input.entryCountOnDisk);
+  writeUint64LE(view, offset + 32, input.entryCountTotal);
+  writeUint64LE(view, offset + 40, input.centralDirSize);
+  writeUint64LE(view, offset + 48, input.centralDirOffset);
+
+  return ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE;
+}
+
+export function buildZip64EndOfCentralDirectory(
+  input: Zip64EndOfCentralDirectoryInput
+): Uint8Array {
   const out = new Uint8Array(ZIP64_END_OF_CENTRAL_DIR_FIXED_SIZE);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
-
-  view.setUint32(0, ZIP64_END_OF_CENTRAL_DIR_SIG, true);
-  // Size of ZIP64 EOCD record (excluding signature + this 8-byte field)
-  writeUint64LE(view, 4, 44);
-  view.setUint16(12, versionMadeBy, true);
-  view.setUint16(14, versionNeeded, true);
-  view.setUint32(16, diskNumber, true);
-  view.setUint32(20, centralDirectoryDiskNumber, true);
-  writeUint64LE(view, 24, input.entryCountOnDisk);
-  writeUint64LE(view, 32, input.entryCountTotal);
-  writeUint64LE(view, 40, input.centralDirSize);
-  writeUint64LE(view, 48, input.centralDirOffset);
+  writeZip64EndOfCentralDirectoryInto(out, view, 0, input);
 
   return out;
 }
@@ -417,17 +427,28 @@ export interface Zip64EndOfCentralDirectoryLocatorInput {
   totalDisks?: number;
 }
 
-export function buildZip64EndOfCentralDirectoryLocator(
+export function writeZip64EndOfCentralDirectoryLocatorInto(
+  out: Uint8Array,
+  view: DataView,
+  offset: number,
   input: Zip64EndOfCentralDirectoryLocatorInput
-): Uint8Array {
+): number {
   const zip64EndOfCentralDirectoryDiskNumber = input.zip64EndOfCentralDirectoryDiskNumber ?? 0;
   const totalDisks = input.totalDisks ?? 1;
 
+  view.setUint32(offset + 0, ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG, true);
+  view.setUint32(offset + 4, zip64EndOfCentralDirectoryDiskNumber, true);
+  writeUint64LE(view, offset + 8, input.zip64EndOfCentralDirectoryOffset);
+  view.setUint32(offset + 16, totalDisks, true);
+
+  return ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE;
+}
+
+export function buildZip64EndOfCentralDirectoryLocator(
+  input: Zip64EndOfCentralDirectoryLocatorInput
+): Uint8Array {
   const out = new Uint8Array(ZIP64_END_OF_CENTRAL_DIR_LOCATOR_FIXED_SIZE);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
-  view.setUint32(0, ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG, true);
-  view.setUint32(4, zip64EndOfCentralDirectoryDiskNumber, true);
-  writeUint64LE(view, 8, input.zip64EndOfCentralDirectoryOffset);
-  view.setUint32(16, totalDisks, true);
+  writeZip64EndOfCentralDirectoryLocatorInto(out, view, 0, input);
   return out;
 }

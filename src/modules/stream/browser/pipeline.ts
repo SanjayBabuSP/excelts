@@ -29,6 +29,31 @@ export { isPipelineOptions } from "@stream/common/options";
 
 type PipelineStream = PipelineStreamLike;
 
+const supportsReadableSide = (stream: any): boolean => {
+  return (
+    "readableEnded" in stream ||
+    "readable" in stream ||
+    typeof stream.read === "function" ||
+    typeof stream.pipe === "function"
+  );
+};
+
+const supportsWritableSide = (stream: any): boolean => {
+  return "writableFinished" in stream || "writable" in stream || typeof stream.write === "function";
+};
+
+const isStreamCompleted = (stream: any): boolean => {
+  const readableDone = !supportsReadableSide(stream) || !!stream.readableEnded;
+  const writableDone = !supportsWritableSide(stream) || !!stream.writableFinished;
+  return readableDone && writableDone;
+};
+
+const createPrematureCloseError = (): Error & { code: string } => {
+  const err = new Error("Premature close") as Error & { code: string };
+  err.code = "ERR_STREAM_PREMATURE_CLOSE";
+  return err;
+};
+
 export const toBrowserPipelineStream = (stream: PipelineStream): any => {
   if (
     stream instanceof Readable ||
@@ -188,6 +213,18 @@ export function pipeline(
 
     // Handle completion
     registry.once(destination, "finish", () => cleanupWithSignal());
+
+    // Node parity: close before completion is a premature close error.
+    for (const stream of allStreams) {
+      registry.once(stream, "close", () => {
+        if (completed) {
+          return;
+        }
+        if (!isStreamCompleted(stream)) {
+          cleanupWithSignal(createPrematureCloseError());
+        }
+      });
+    }
 
     // Handle errors on all streams
     for (const stream of allStreams) {

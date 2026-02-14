@@ -18,7 +18,8 @@ import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards"
 import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
-import { getTextDecoder, textDecoder } from "@utils/binary";
+import { createTextDecoder } from "@utils/binary";
+import { toBinaryChunk } from "@stream/common/binary-chunk";
 
 import { Writable } from "./writable";
 import { pipeline, finished } from "./pipeline";
@@ -48,20 +49,21 @@ export async function streamToBuffer(
   } else {
     throw new UnsupportedStreamTypeError("streamToBuffer", typeof stream);
   }
-  const chunks: Buffer[] = [];
+  const chunks: Uint8Array[] = [];
   let totalLength = 0;
   for await (const chunk of iterable as any) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string | Uint8Array);
-    chunks.push(buf);
-    totalLength += buf.length;
+    const bytes =
+      typeof chunk === "string" ? Buffer.from(chunk) : (toBinaryChunk(chunk) ?? Buffer.from(chunk));
+    chunks.push(bytes);
+    totalLength += bytes.byteLength;
   }
 
   if (chunks.length === 0) {
     return new Uint8Array(0);
   }
   if (chunks.length === 1) {
-    const b = chunks[0]!;
-    return new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    const chunk = chunks[0]!;
+    return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   }
 
   // Use pre-calculated length for faster concat
@@ -85,9 +87,26 @@ export async function streamToString(
   stream: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   encoding?: string
 ): Promise<string> {
-  const bytes = await streamToUint8Array(stream);
-  const decoder = encoding ? getTextDecoder(encoding) : textDecoder;
-  return decoder.decode(bytes);
+  let iterable: AsyncIterable<Uint8Array>;
+  if (isReadableStream(stream)) {
+    iterable = (Readable as any).fromWeb(stream as any) as AsyncIterable<Uint8Array>;
+  } else if (isAsyncIterable(stream)) {
+    iterable = stream;
+  } else {
+    throw new UnsupportedStreamTypeError("streamToString", typeof stream);
+  }
+
+  const decoder = createTextDecoder(encoding);
+  let text = "";
+
+  for await (const chunk of iterable as any) {
+    const bytes =
+      typeof chunk === "string" ? Buffer.from(chunk) : (toBinaryChunk(chunk) ?? Buffer.from(chunk));
+    text += decoder.decode(bytes, { stream: true });
+  }
+
+  text += decoder.decode();
+  return text;
 }
 
 /**

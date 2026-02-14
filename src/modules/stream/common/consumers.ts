@@ -40,6 +40,9 @@ export function createConsumers(converters: StreamConverters): StreamConsumers {
   return {
     async arrayBuffer(stream: StreamInput): Promise<ArrayBuffer> {
       const bytes = await streamToUint8Array(stream);
+      if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+        return bytes.buffer as ArrayBuffer;
+      }
       return bytes.buffer.slice(
         bytes.byteOffset,
         bytes.byteOffset + bytes.byteLength

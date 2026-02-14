@@ -21,13 +21,25 @@ export interface WritableOptions<T = Uint8Array> extends WritableStreamOptions {
   autoDestroy?: boolean;
   emitClose?: boolean;
   defaultEncoding?: BufferEncoding;
+  signal?: AbortSignal;
   write?: (
     this: Writable<T>,
     chunk: T,
     encoding: BufferEncoding,
     callback: (error?: Error | null) => void
   ) => void;
+  writev?: (
+    this: Writable<T>,
+    chunks: Array<{ chunk: T; encoding: BufferEncoding }>,
+    callback: (error?: Error | null) => void
+  ) => void;
   final?: (this: Writable<T>, callback: (error?: Error | null) => void) => void;
+  destroy?: (
+    this: Writable<T>,
+    error: Error | null,
+    callback: (error?: Error | null) => void
+  ) => void;
+  construct?: (this: Writable<T>, callback: (error?: Error | null) => void) => void;
 }
 
 /**
@@ -36,6 +48,14 @@ export interface WritableOptions<T = Uint8Array> extends WritableStreamOptions {
  * Supports the same `{ stream }` option as browser version for wrapping existing streams.
  */
 export class Writable<T = Uint8Array> extends NodeWritable {
+  /**
+   * Duck-typing check so that native Duplex/Transform (which extend native
+   * stream.Writable, not our wrapper) pass `instanceof Writable`.
+   */
+  static [Symbol.hasInstance](instance: unknown): boolean {
+    return instance instanceof NodeWritable;
+  }
+
   constructor(options?: WritableOptions<T>) {
     // If wrapping an existing stream, proxy to it
     if (options?.stream) {
@@ -75,8 +95,15 @@ export class Writable<T = Uint8Array> extends NodeWritable {
       super({
         highWaterMark: options?.highWaterMark,
         objectMode: options?.objectMode,
+        autoDestroy: options?.autoDestroy,
+        emitClose: options?.emitClose,
+        defaultEncoding: options?.defaultEncoding,
+        signal: options?.signal,
         write: options?.write as any,
-        final: options?.final as any
+        writev: options?.writev as any,
+        final: options?.final as any,
+        destroy: options?.destroy as any,
+        construct: options?.construct as any
       });
     }
   }

@@ -46,19 +46,37 @@ function computeEntropyStatsFromChunks(
   let total = 0;
   let unique = 0;
 
-  for (const chunk of chunks) {
-    if (total >= maxBytes) {
-      break;
-    }
-    const limit = Math.min(chunk.length, maxBytes - total);
-    for (let i = 0; i < limit; i++) {
-      const b = chunk[i]!;
-      if (counts[b] === 0) {
-        unique += 1;
+  if (Array.isArray(chunks)) {
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      if (total >= maxBytes) {
+        break;
       }
-      counts[b] += 1;
+      const chunk = chunks[chunkIndex]!;
+      const limit = Math.min(chunk.length, maxBytes - total);
+      for (let i = 0; i < limit; i++) {
+        const b = chunk[i]!;
+        if (counts[b] === 0) {
+          unique += 1;
+        }
+        counts[b] += 1;
+      }
+      total += limit;
     }
-    total += limit;
+  } else {
+    for (const chunk of chunks) {
+      if (total >= maxBytes) {
+        break;
+      }
+      const limit = Math.min(chunk.length, maxBytes - total);
+      for (let i = 0; i < limit; i++) {
+        const b = chunk[i]!;
+        if (counts[b] === 0) {
+          unique += 1;
+        }
+        counts[b] += 1;
+      }
+      total += limit;
+    }
   }
 
   return { total, unique, counts };

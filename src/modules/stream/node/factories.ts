@@ -190,6 +190,8 @@ export function createDuplex<_TRead = Uint8Array, TWrite = Uint8Array>(
   }
 ): IDuplex<_TRead, TWrite> {
   return new Duplex({
+    highWaterMark: options?.highWaterMark,
+    objectMode: options?.objectMode,
     allowHalfOpen: (options as any)?.allowHalfOpen,
     readableHighWaterMark: options?.readableHighWaterMark,
     writableHighWaterMark: options?.writableHighWaterMark,

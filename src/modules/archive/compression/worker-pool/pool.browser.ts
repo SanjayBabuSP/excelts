@@ -34,6 +34,14 @@ import { getWorkerBlobUrl, releaseWorkerBlobUrl } from "./worker-script";
 export type { WorkerPoolOptions, WorkerPoolStats, TaskOptions, TaskResult, WorkerTaskType };
 export { hasWorkerSupport };
 
+const EMPTY_CHUNK = new Uint8Array(0);
+const DEFAULT_MAX_INFLIGHT_STREAM_CHUNKS = 8;
+const DEFAULT_STREAM_HANDLERS = {
+  onData: (_chunk: Uint8Array) => {},
+  onEnd: () => {},
+  onError: (_err: Error) => {}
+};
+
 /**
  * Internal task representation
  */
@@ -74,12 +82,37 @@ interface StreamSession {
   taskType: WorkerTaskType;
   startTime: number;
   started: boolean;
+  startReady: boolean;
   startPromise: Promise<void>;
   resolveStart: (() => void) | null;
   rejectStart: ((err: Error) => void) | null;
   level?: number;
   writeChain: Promise<void>;
-  inflightAck: { resolve: () => void; reject: (err: Error) => void } | null;
+  inflightChunkCount: number;
+  slotWaitPromise: Promise<void> | null;
+  resolveSlotWait: (() => void) | null;
+  drainWaitPromise: Promise<void> | null;
+  resolveDrainWait: (() => void) | null;
+  chunkMessage: {
+    type: "chunk";
+    taskId: number;
+    data: Uint8Array;
+  };
+  startMessage: {
+    type: "start";
+    taskId: number;
+    taskType: WorkerTaskType;
+    level: number | undefined;
+  };
+  endMessage: {
+    type: "end";
+    taskId: number;
+  };
+  abortMessage: {
+    type: "abort";
+    taskId: number;
+    error?: string;
+  };
   ended: boolean;
   onData: (chunk: Uint8Array) => void;
   onEnd: () => void;
@@ -113,6 +146,7 @@ export class WorkerPool {
   private readonly _options: ReturnType<typeof resolvePoolOptions>;
   private readonly _workers: Map<number, PoolWorker> = new Map();
   private readonly _taskQueue: PendingTask[] = [];
+  private _taskQueueHead = 0;
   private readonly _pendingTasks: Map<number, PendingTask> = new Map();
   private _nextTaskId = 1;
   private _nextWorkerId = 1;
@@ -122,6 +156,82 @@ export class WorkerPool {
   private readonly _workerUrl: string;
   private readonly _useCustomUrl: boolean;
   private readonly _pendingStreamRequests: Array<(worker: PoolWorker) => void> = [];
+  private _pendingStreamRequestHead = 0;
+
+  private _taskQueueSize(): number {
+    return this._taskQueue.length - this._taskQueueHead;
+  }
+
+  private _compactTaskQueueIfNeeded(): void {
+    if (this._taskQueueHead > 32 && this._taskQueueHead * 2 >= this._taskQueue.length) {
+      this._taskQueue.splice(0, this._taskQueueHead);
+      this._taskQueueHead = 0;
+    }
+  }
+
+  private _dequeueTask(): PendingTask | undefined {
+    if (this._taskQueueHead >= this._taskQueue.length) {
+      return undefined;
+    }
+    const task = this._taskQueue[this._taskQueueHead++]!;
+    this._compactTaskQueueIfNeeded();
+    return task;
+  }
+
+  private _compactPendingStreamRequestsIfNeeded(): void {
+    if (
+      this._pendingStreamRequestHead > 32 &&
+      this._pendingStreamRequestHead * 2 >= this._pendingStreamRequests.length
+    ) {
+      this._pendingStreamRequests.splice(0, this._pendingStreamRequestHead);
+      this._pendingStreamRequestHead = 0;
+    }
+  }
+
+  private _dequeuePendingStreamRequest(): ((worker: PoolWorker) => void) | undefined {
+    if (this._pendingStreamRequestHead >= this._pendingStreamRequests.length) {
+      return undefined;
+    }
+    const resolve = this._pendingStreamRequests[this._pendingStreamRequestHead++]!;
+    this._compactPendingStreamRequestsIfNeeded();
+    return resolve;
+  }
+
+  private _waitForStreamSlot(session: StreamSession): Promise<void> {
+    if (session.slotWaitPromise) {
+      return session.slotWaitPromise;
+    }
+    session.slotWaitPromise = new Promise<void>(resolve => {
+      session.resolveSlotWait = () => {
+        session.slotWaitPromise = null;
+        session.resolveSlotWait = null;
+        resolve();
+      };
+    });
+    return session.slotWaitPromise;
+  }
+
+  private _waitForStreamDrain(session: StreamSession): Promise<void> {
+    if (session.drainWaitPromise) {
+      return session.drainWaitPromise;
+    }
+    session.drainWaitPromise = new Promise<void>(resolve => {
+      session.resolveDrainWait = () => {
+        session.drainWaitPromise = null;
+        session.resolveDrainWait = null;
+        resolve();
+      };
+    });
+    return session.drainWaitPromise;
+  }
+
+  private _resolveSlotWaiter(session: StreamSession): void {
+    session.resolveSlotWait?.();
+  }
+
+  private _resolveDrainWaiter(session: StreamSession): void {
+    session.resolveDrainWait?.();
+  }
 
   constructor(options?: WorkerPoolOptions) {
     this._options = resolvePoolOptions(options);
@@ -211,7 +321,7 @@ export class WorkerPool {
       totalWorkers,
       activeWorkers,
       idleWorkers: totalWorkers - activeWorkers,
-      pendingTasks: this._taskQueue.length,
+      pendingTasks: this._taskQueueSize(),
       completedTasks: this._completedTasks,
       failedTasks: this._failedTasks
     };
@@ -240,6 +350,9 @@ export class WorkerPool {
     }
     this._pendingTasks.clear();
     this._taskQueue.length = 0;
+    this._taskQueueHead = 0;
+    this._pendingStreamRequests.length = 0;
+    this._pendingStreamRequestHead = 0;
 
     // Release blob URL if we created it
     if (!this._useCustomUrl) {
@@ -337,9 +450,10 @@ export class WorkerPool {
   private _enqueueTask(task: PendingTask): void {
     const queue = this._taskQueue;
     const priority = task.priorityValue;
+    this._compactTaskQueueIfNeeded();
 
     // Binary search for insertion point (higher priority first)
-    let lo = 0;
+    let lo = this._taskQueueHead;
     let hi = queue.length;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1;
@@ -356,38 +470,35 @@ export class WorkerPool {
    * Process the task queue
    */
   private _processQueue(): void {
-    if (this._terminated || this._taskQueue.length === 0) {
-      return;
-    }
+    while (!this._terminated && this._taskQueueSize() > 0) {
+      // Find an idle worker or create one.
+      const idleWorker = this._findIdleWorker() ?? this._createWorker() ?? undefined;
 
-    // Find an idle worker or create one
-    const idleWorker = this._findIdleWorker() ?? this._createWorker() ?? undefined;
-
-    // If still no worker available, wait for one to become idle
-    if (!idleWorker) {
-      return;
-    }
-
-    // Get the next task
-    const task = this._taskQueue.shift();
-    if (!task) {
-      return;
-    }
-
-    // Check if task was cancelled while queued
-    if (task.signal?.aborted) {
-      this._pendingTasks.delete(task.taskId);
-      this._cleanupTask(task);
-      task.reject(createAbortError());
-      // Continue processing next task (tail call optimization via setTimeout)
-      if (this._taskQueue.length > 0) {
-        setTimeout(() => this._processQueue(), 0);
+      // If still no worker available, wait for one to become idle.
+      if (!idleWorker) {
+        return;
       }
-      return;
-    }
 
-    // Assign task to worker
-    this._assignTask(idleWorker, task);
+      while (true) {
+        // Get the next task
+        const task = this._dequeueTask();
+        if (!task) {
+          return;
+        }
+
+        // Skip tasks cancelled while queued
+        if (task.signal?.aborted) {
+          this._pendingTasks.delete(task.taskId);
+          this._cleanupTask(task);
+          task.reject(createAbortError());
+          continue;
+        }
+
+        // Assign task to worker and move on to schedule more tasks/workers.
+        this._assignTask(idleWorker, task);
+        break;
+      }
+    }
   }
 
   /**
@@ -399,10 +510,10 @@ export class WorkerPool {
     poolWorker.busy = true;
     poolWorker.currentTaskId = task.taskId;
 
-    // If allowTransfer is enabled, we MAY transfer the buffer for performance.
-    // But never transfer a view into a larger shared buffer (that would detach
-    // unrelated data); compact it first.
-    const data = task.allowTransfer ? compactForTransfer(task.data) : task.data.slice();
+    // Only compact when we are actually transferring ownership.
+    // For normal postMessage cloning, avoid an eager extra copy here.
+    const shouldTransfer = this._options.useTransferables && task.allowTransfer === true;
+    const data = shouldTransfer ? compactForTransfer(task.data) : task.data;
 
     const message: WorkerRequestMessage = {
       type: "task",
@@ -413,7 +524,7 @@ export class WorkerPool {
     };
 
     // Use transferables for zero-copy
-    if (this._options.useTransferables) {
+    if (shouldTransfer) {
       poolWorker.worker.postMessage(message, [data.buffer]);
     } else {
       poolWorker.worker.postMessage(message);
@@ -432,103 +543,127 @@ export class WorkerPool {
     // Streaming session messages
     if (poolWorker.streamSession) {
       const session = poolWorker.streamSession;
-      if (message.type === "started") {
-        if (message.taskId !== session.taskId) {
+      const streamType = message.type;
+
+      switch (streamType) {
+        case "started": {
+          if (message.taskId !== session.taskId) {
+            return;
+          }
+          session.startReady = true;
+          session.resolveStart?.();
+          session.resolveStart = null;
+          session.rejectStart = null;
           return;
         }
-        session.resolveStart?.();
-        session.resolveStart = null;
-        session.rejectStart = null;
-        return;
-      }
-
-      if (message.type === "out") {
-        if (message.taskId !== session.taskId) {
+        case "out": {
+          if (message.taskId !== session.taskId) {
+            return;
+          }
+          session.onData(message.data);
           return;
         }
-        session.onData(message.data);
-        return;
-      }
+        case "ack": {
+          if (message.taskId !== session.taskId) {
+            return;
+          }
+          if (session.inflightChunkCount > 0) {
+            session.inflightChunkCount--;
+          }
 
-      if (message.type === "ack") {
-        if (message.taskId !== session.taskId) {
+          this._resolveSlotWaiter(session);
+
+          if (session.inflightChunkCount === 0 && session.resolveDrainWait) {
+            this._resolveDrainWaiter(session);
+          }
           return;
         }
-        session.inflightAck?.resolve();
-        session.inflightAck = null;
-        return;
-      }
+        case "done": {
+          if (message.taskId !== session.taskId) {
+            return;
+          }
+          session.ended = true;
+          session.inflightChunkCount = 0;
+          session.startReady = true;
+          // If we somehow complete without a start handshake, unblock writers.
+          session.resolveStart?.();
+          session.resolveStart = null;
+          session.rejectStart = null;
 
-      if (message.type === "done") {
-        if (message.taskId !== session.taskId) {
+          this._resolveSlotWaiter(session);
+          this._resolveDrainWaiter(session);
+
+          this._completedTasks++;
+          const duration = message.duration ?? performance.now() - session.startTime;
+          void duration;
+          session.onEnd();
+          poolWorker.streamSession = null;
+          this._workerBecameIdle(poolWorker);
           return;
         }
-        // If we somehow complete without a start handshake, unblock writers.
-        session.resolveStart?.();
-        session.resolveStart = null;
-        session.rejectStart = null;
-        // Resolve any in-flight ack just in case.
-        session.inflightAck?.resolve();
-        session.inflightAck = null;
-        this._completedTasks++;
-        const duration = message.duration ?? performance.now() - session.startTime;
-        void duration;
-        session.onEnd();
-        poolWorker.streamSession = null;
-        this._workerBecameIdle(poolWorker);
-        return;
-      }
+        case "error": {
+          if (message.taskId !== session.taskId) {
+            return;
+          }
+          const error = new Error(message.error ?? "Unknown worker error");
+          session.ended = true;
+          session.inflightChunkCount = 0;
+          session.startReady = true;
 
-      if (message.type === "error") {
-        if (message.taskId !== session.taskId) {
+          // If the error happens during start, fail fast so writes don't hang.
+          session.rejectStart?.(error);
+          session.resolveStart = null;
+          session.rejectStart = null;
+
+          this._resolveSlotWaiter(session);
+          this._resolveDrainWaiter(session);
+
+          this._failedTasks++;
+          session.onError(error);
+          poolWorker.streamSession = null;
+          this._workerBecameIdle(poolWorker);
           return;
         }
-        const error = new Error(message.error ?? "Unknown worker error");
-
-        // If the error happens during start, fail fast so writes don't hang.
-        session.rejectStart?.(error);
-        session.resolveStart = null;
-        session.rejectStart = null;
-
-        session.inflightAck?.reject(error);
-        session.inflightAck = null;
-        this._failedTasks++;
-        session.onError(error);
-        poolWorker.streamSession = null;
-        this._workerBecameIdle(poolWorker);
-        return;
+        default:
+          break;
       }
     }
 
-    if (message.type === "result" || message.type === "error") {
-      const taskId = message.taskId;
-      if (typeof taskId !== "number") {
-        return;
-      }
+    switch (message.type) {
+      case "result":
+      case "error": {
+        const taskId = message.taskId;
+        if (typeof taskId !== "number") {
+          return;
+        }
 
-      const task = this._pendingTasks.get(taskId);
-      if (!task) {
-        // Task was cancelled
+        const task = this._pendingTasks.get(taskId);
+        if (!task) {
+          // Task was cancelled
+          this._workerBecameIdle(poolWorker);
+          return;
+        }
+
+        this._pendingTasks.delete(taskId);
+        this._cleanupTask(task);
+
+        if (message.type === "result") {
+          this._completedTasks++;
+          const duration = message.duration ?? performance.now() - task.startTime;
+          task.resolve({
+            data: message.data!,
+            duration
+          });
+        } else {
+          this._failedTasks++;
+          task.reject(new Error(message.error ?? "Unknown worker error"));
+        }
+
         this._workerBecameIdle(poolWorker);
         return;
       }
-
-      this._pendingTasks.delete(taskId);
-      this._cleanupTask(task);
-
-      if (message.type === "result") {
-        this._completedTasks++;
-        const duration = message.duration ?? performance.now() - task.startTime;
-        task.resolve({
-          data: message.data!,
-          duration
-        });
-      } else {
-        this._failedTasks++;
-        task.reject(new Error(message.error ?? "Unknown worker error"));
-      }
-
-      this._workerBecameIdle(poolWorker);
+      default:
+        return;
     }
   }
 
@@ -564,8 +699,8 @@ export class WorkerPool {
     poolWorker.currentTaskId = null;
 
     // Prefer pending streaming requests (long-lived) over batch queue.
-    if (this._pendingStreamRequests.length > 0) {
-      const resolve = this._pendingStreamRequests.shift();
+    if (this._pendingStreamRequestHead < this._pendingStreamRequests.length) {
+      const resolve = this._dequeuePendingStreamRequest();
       if (resolve) {
         resolve(poolWorker);
         return;
@@ -573,7 +708,7 @@ export class WorkerPool {
     }
 
     // Process more tasks if available
-    if (this._taskQueue.length > 0) {
+    if (this._taskQueueSize() > 0) {
       this._processQueue();
     } else if (this._workers.size > this._options.minWorkers && this._options.idleTimeout > 0) {
       // Schedule idle timeout
@@ -604,11 +739,7 @@ export class WorkerPool {
       onData: (chunk: Uint8Array) => void;
       onEnd: () => void;
       onError: (err: Error) => void;
-    } = {
-      onData: () => {},
-      onEnd: () => {},
-      onError: () => {}
-    }
+    } = DEFAULT_STREAM_HANDLERS
   ): WorkerPoolStream {
     if (this._terminated) {
       throw new Error("Worker pool has been terminated");
@@ -618,72 +749,112 @@ export class WorkerPool {
     }
 
     const taskId = this._nextTaskId++;
+    const allowTransfer = options.allowTransfer === true;
+    const shouldTransfer = this._options.useTransferables && allowTransfer;
+    const preparePayload = shouldTransfer ? compactForTransfer : (chunk: Uint8Array) => chunk;
+    const postChunkMessage = shouldTransfer
+      ? (worker: Worker, message: StreamSession["chunkMessage"], payload: Uint8Array) => {
+          worker.postMessage(message, [payload.buffer]);
+        }
+      : (worker: Worker, message: StreamSession["chunkMessage"], _payload: Uint8Array) => {
+          worker.postMessage(message);
+        };
 
     let sessionWorker: PoolWorker | null = null;
+    let ensureWorkerPromise: Promise<PoolWorker> | null = null;
 
     const ensureWorker = async (): Promise<PoolWorker> => {
       if (sessionWorker) {
         return sessionWorker;
       }
+      if (ensureWorkerPromise) {
+        return ensureWorkerPromise;
+      }
 
-      const idleWorker = this._findIdleWorker() ?? this._createWorker() ?? undefined;
-      if (idleWorker) {
-        sessionWorker = idleWorker;
+      ensureWorkerPromise = (async () => {
+        const idleWorker = this._findIdleWorker() ?? this._createWorker() ?? undefined;
+        if (idleWorker) {
+          sessionWorker = idleWorker;
+          this._bindStreamSession(sessionWorker, taskId, taskType, options.level, options);
+          this._startStreamSession(sessionWorker);
+          return sessionWorker;
+        }
+
+        // Wait for a worker to become idle
+        sessionWorker = await new Promise<PoolWorker>(resolve => {
+          this._pendingStreamRequests.push(resolve);
+        });
+
         this._bindStreamSession(sessionWorker, taskId, taskType, options.level, options);
         this._startStreamSession(sessionWorker);
         return sessionWorker;
+      })();
+
+      try {
+        return await ensureWorkerPromise;
+      } finally {
+        ensureWorkerPromise = null;
       }
-
-      // Wait for a worker to become idle
-      sessionWorker = await new Promise<PoolWorker>(resolve => {
-        this._pendingStreamRequests.push(resolve);
-      });
-
-      this._bindStreamSession(sessionWorker, taskId, taskType, options.level, options);
-      this._startStreamSession(sessionWorker);
-      return sessionWorker;
     };
 
     // Kick off worker/session creation immediately to surface start errors early.
     void ensureWorker();
 
+    const sendChunk = (worker: PoolWorker, session: StreamSession, data: Uint8Array): void => {
+      const payload = preparePayload(data);
+
+      const message = session.chunkMessage;
+      message.data = payload;
+      postChunkMessage(worker.worker, message, payload);
+    };
+
+    const queueChunkWithBackpressure = (
+      worker: PoolWorker,
+      session: StreamSession,
+      data: Uint8Array
+    ): Promise<void> | void => {
+      if (session.inflightChunkCount >= DEFAULT_MAX_INFLIGHT_STREAM_CHUNKS) {
+        return this._waitForStreamSlot(session).then(() => {
+          if (session.ended) {
+            return;
+          }
+          session.inflightChunkCount++;
+          sendChunk(worker, session, data);
+        });
+      }
+
+      session.inflightChunkCount++;
+      sendChunk(worker, session, data);
+    };
+
     const write = async (data: Uint8Array): Promise<void> => {
-      const worker = await ensureWorker();
+      if (data.byteLength === 0) {
+        return;
+      }
+
+      const worker = sessionWorker ?? (await ensureWorker());
       const session = worker.streamSession;
       if (!session || session.ended) {
         throw new Error("Streaming session is not active");
       }
 
       // Serialize writes to guarantee ordering and keep a single in-flight ack.
-      session.writeChain = session.writeChain.then(async () => {
+      session.writeChain = session.writeChain.then(() => {
         if (session.ended) {
           return;
         }
 
         // Wait for the start handshake (or fail fast) before sending any chunks.
-        await session.startPromise;
-
-        // Avoid extra copies: postMessage() already clones when not transferring.
-        // When transferring, compact views to avoid transferring a larger-than-needed buffer.
-        const payload = options.allowTransfer ? compactForTransfer(data) : data;
-
-        const ackPromise = new Promise<void>((resolve, reject) => {
-          session.inflightAck = { resolve, reject };
-        });
-
-        const message: WorkerRequestMessage = {
-          type: "chunk",
-          taskId,
-          data: payload
-        };
-
-        if (this._options.useTransferables && options.allowTransfer) {
-          worker.worker.postMessage(message, [payload.buffer]);
-        } else {
-          worker.worker.postMessage(message);
+        if (!session.startReady) {
+          return session.startPromise.then(() => {
+            if (session.ended) {
+              return;
+            }
+            return queueChunkWithBackpressure(worker, session, data);
+          });
         }
 
-        await ackPromise;
+        return queueChunkWithBackpressure(worker, session, data);
       });
 
       await session.writeChain;
@@ -697,19 +868,29 @@ export class WorkerPool {
       }
 
       // If start failed, propagate the rejection.
-      await session.startPromise;
+      if (!session.startReady) {
+        await session.startPromise;
+      }
 
       // Flush any pending writes before ending.
       await session.writeChain;
 
+      if (session.inflightChunkCount > 0) {
+        await this._waitForStreamDrain(session);
+      }
+
       session.ended = true;
-      const message: WorkerRequestMessage = { type: "end", taskId };
-      worker.worker.postMessage(message);
+      worker.worker.postMessage(session.endMessage);
     };
 
     const abort = (reason?: string): void => {
       void ensureWorker().then(worker => {
-        const message: WorkerRequestMessage = { type: "abort", taskId, error: reason };
+        const session = worker.streamSession;
+        if (!session) {
+          return;
+        }
+        const message = session.abortMessage;
+        message.error = reason;
         worker.worker.postMessage(message);
       });
     };
@@ -751,12 +932,37 @@ export class WorkerPool {
       taskType,
       startTime: performance.now(),
       started: false,
+      startReady: false,
       startPromise,
       resolveStart,
       rejectStart,
       level,
       writeChain: Promise.resolve(),
-      inflightAck: null,
+      inflightChunkCount: 0,
+      slotWaitPromise: null,
+      resolveSlotWait: null,
+      drainWaitPromise: null,
+      resolveDrainWait: null,
+      chunkMessage: {
+        type: "chunk",
+        taskId,
+        data: EMPTY_CHUNK
+      },
+      startMessage: {
+        type: "start",
+        taskId,
+        taskType,
+        level
+      },
+      endMessage: {
+        type: "end",
+        taskId
+      },
+      abortMessage: {
+        type: "abort",
+        taskId,
+        error: undefined
+      },
       ended: false,
       onData: handlers.onData,
       onEnd: handlers.onEnd,
@@ -770,15 +976,7 @@ export class WorkerPool {
       return;
     }
     session.started = true;
-
-    const startMessage: WorkerRequestMessage = {
-      type: "start",
-      taskId: session.taskId,
-      taskType: session.taskType,
-      level: session.level
-    };
-
-    worker.worker.postMessage(startMessage);
+    worker.worker.postMessage(session.startMessage);
   }
 
   /**
@@ -795,7 +993,13 @@ export class WorkerPool {
     this._cleanupTask(task);
 
     // Remove from queue if still there
-    const queueIndex = this._taskQueue.findIndex(t => t.taskId === taskId);
+    let queueIndex = -1;
+    for (let i = this._taskQueueHead; i < this._taskQueue.length; i++) {
+      if (this._taskQueue[i]!.taskId === taskId) {
+        queueIndex = i;
+        break;
+      }
+    }
     if (queueIndex >= 0) {
       this._taskQueue.splice(queueIndex, 1);
     }
@@ -828,9 +1032,12 @@ export class WorkerPool {
       options?: TaskOptions & { level?: number };
     }>
   ): Promise<TaskResult[]> {
-    return Promise.all(
-      tasks.map(({ taskType, data, options }) => this.execute(taskType, data, options))
-    );
+    const pending = new Array<Promise<TaskResult>>(tasks.length);
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i]!;
+      pending[i] = this.execute(task.taskType, task.data, task.options);
+    }
+    return Promise.all(pending);
   }
 }
 
@@ -886,10 +1093,22 @@ async function executeBatchByType(
   taskType: WorkerTaskType,
   items: Array<{ data: Uint8Array; options?: TaskOptions & { level?: number } }>
 ): Promise<Uint8Array[]> {
-  const results = await getDefaultWorkerPool().executeBatch(
-    items.map(({ data, options }) => ({ taskType, data, options }))
-  );
-  return results.map(r => r.data);
+  const batchItems = new Array<{
+    taskType: WorkerTaskType;
+    data: Uint8Array;
+    options?: TaskOptions & { level?: number };
+  }>(items.length);
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    batchItems[i] = { taskType, data: item.data, options: item.options };
+  }
+
+  const results = await getDefaultWorkerPool().executeBatch(batchItems);
+  const output = new Array<Uint8Array>(results.length);
+  for (let i = 0; i < results.length; i++) {
+    output[i] = results[i]!.data;
+  }
+  return output;
 }
 
 /**

@@ -31,6 +31,14 @@ describe("StreamBuf", () => {
     expect(uint8ToString(chunk)).toBe("Hello, World!");
   });
 
+  it("read output supports Node toString() semantics", () => {
+    const stream = new StreamBuf();
+    stream.write("Hello, World!");
+    const chunk = stream.read();
+
+    expect(chunk.toString()).toContain("Hello, World!");
+  });
+
   // Note: Using async/await here because our ES6 module fix requires it
   // Original test worked synchronously due to CommonJS instanceof check succeeding
   it("writes StringBuf chunks", async () => {

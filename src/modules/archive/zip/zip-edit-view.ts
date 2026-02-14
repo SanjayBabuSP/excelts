@@ -194,6 +194,7 @@ export class ZipEditView<TInfo> {
     // Ensure prefix ends with "/" for proper matching
     const dirPrefix = normalizedPrefix.endsWith("/") ? normalizedPrefix : normalizedPrefix + "/";
 
+    let deleted = 0;
     const toDelete: string[] = [];
     for (const name of this._view.keys()) {
       // Match: exact directory entry (without slash) OR anything inside the directory
@@ -203,9 +204,11 @@ export class ZipEditView<TInfo> {
     }
 
     for (const name of toDelete) {
-      this._view.delete(name);
+      if (this._view.delete(name)) {
+        deleted++;
+      }
     }
-    return toDelete.length;
+    return deleted;
   }
 
   /**

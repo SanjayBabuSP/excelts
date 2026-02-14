@@ -58,6 +58,16 @@ export function getTextDecoder(encoding?: string): TextDecoder {
   return decoder;
 }
 
+/**
+ * Create a new TextDecoder instance.
+ *
+ * Use this for streaming decode (`decode(..., { stream: true })`) to avoid
+ * sharing mutable decoder state across concurrent operations.
+ */
+export function createTextDecoder(encoding?: string): TextDecoder {
+  return new TextDecoder(normalizeEncodingLabel(encoding), { ignoreBOM: true });
+}
+
 // =============================================================================
 // Binary Operations
 // =============================================================================
@@ -186,6 +196,27 @@ export function toUint8Array(input: string | Uint8Array | ArrayBuffer | number[]
     return new Uint8Array(input);
   }
   throw new TypeError(`Expected Uint8Array, got ${typeof input}`);
+}
+
+/**
+ * Convert Uint8Array to a Node.js Buffer view when available.
+ *
+ * In browser environments this returns the original Uint8Array unchanged.
+ */
+export function uint8ArrayToNodeBufferView(data: Uint8Array): Uint8Array {
+  const bufferCtor = (
+    globalThis as {
+      Buffer?: {
+        from: (arrayBuffer: ArrayBufferLike, byteOffset?: number, length?: number) => Uint8Array;
+      };
+    }
+  ).Buffer;
+
+  if (!bufferCtor) {
+    return data;
+  }
+
+  return bufferCtor.from(data.buffer, data.byteOffset, data.byteLength);
 }
 
 /**

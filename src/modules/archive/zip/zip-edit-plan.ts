@@ -248,7 +248,10 @@ export class ZipEditPlan {
 function uint8ArrayToBase64(bytes: Uint8Array): string {
   // Use btoa in browser, Buffer in Node.js
   if (typeof Buffer !== "undefined") {
-    return Buffer.from(bytes).toString("base64");
+    if (Buffer.isBuffer(bytes)) {
+      return bytes.toString("base64");
+    }
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
   }
   // Browser fallback using btoa
   let binary = "";
@@ -264,7 +267,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 function base64ToUint8Array(base64: string): Uint8Array {
   // Use Buffer in Node.js, atob in browser
   if (typeof Buffer !== "undefined") {
-    return new Uint8Array(Buffer.from(base64, "base64"));
+    return Buffer.from(base64, "base64");
   }
   // Browser fallback using atob
   const binary = atob(base64);

@@ -13,6 +13,7 @@
 import { EventEmitter } from "@stream";
 import { StringBuf } from "@excel/utils/string-buf";
 import { ExcelNotSupportedError, InvalidValueTypeError } from "@excel/errors";
+import { getTextDecoder, uint8ArrayToNodeBufferView } from "@utils/binary";
 
 // =============================================================================
 // Data Chunks - encapsulating incoming data
@@ -116,7 +117,7 @@ class ReadWriteBuf {
     if (this.iRead === 0 && this.iWrite === this.size) {
       return this.buffer;
     }
-    return this.buffer.slice(this.iRead, this.iWrite);
+    return this.buffer.subarray(this.iRead, this.iWrite);
   }
 
   get length(): number {
@@ -142,14 +143,14 @@ class ReadWriteBuf {
       return buf;
     }
 
-    const buf = this.buffer.slice(this.iRead, this.iRead + size);
+    const buf = this.buffer.subarray(this.iRead, this.iRead + size);
     this.iRead += size;
     return buf;
   }
 
   write(chunk: Chunk, offset: number, length: number): number {
     const size = Math.min(length, this.size - this.iWrite);
-    chunk.copy(this.buffer, this.iWrite, offset, offset + size);
+    chunk.copy(this.buffer, this.iWrite, offset, size);
     this.iWrite += size;
     return size;
   }
@@ -421,12 +422,12 @@ class StreamBuf extends EventEmitter {
           this.buffers.shift();
         }
       }
-      return concatUint8Arrays(buffers);
+      return uint8ArrayToNodeBufferView(concatUint8Arrays(buffers));
     }
 
     const buffers = this.buffers.map(buf => buf.toBuffer()).filter(Boolean) as Uint8Array[];
     this.buffers = [];
-    return concatUint8Arrays(buffers);
+    return uint8ArrayToNodeBufferView(concatUint8Arrays(buffers));
   }
 
   /**
@@ -436,10 +437,7 @@ class StreamBuf extends EventEmitter {
   readString(encoding?: TextEncoding): string {
     const enc = encoding ?? (this.encoding as TextEncoding) ?? "utf-8";
     const buf = this.read();
-    if (typeof Buffer !== "undefined" && buf instanceof Buffer) {
-      return buf.toString(enc);
-    }
-    return new TextDecoder(enc).decode(buf);
+    return getTextDecoder(enc).decode(buf);
   }
 
   /**
@@ -531,11 +529,6 @@ class StreamBuf extends EventEmitter {
  * Returns Buffer in Node.js for better toString() compatibility
  */
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  // In Node.js, use Buffer.concat for better compatibility (Buffer.toString() works)
-  if (typeof Buffer !== "undefined" && typeof Buffer.concat === "function") {
-    return Buffer.concat(arrays);
-  }
-
   if (arrays.length === 0) {
     return new Uint8Array(0);
   }
