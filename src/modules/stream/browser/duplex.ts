@@ -11,7 +11,7 @@ import { Readable } from "./readable";
 import { Writable } from "./writable";
 import { addEmitterListener, createListenerRegistry } from "./helpers";
 
-import { Transform } from "./transform";
+import type { Transform } from "./transform";
 
 // =============================================================================
 // Duplex Stream
