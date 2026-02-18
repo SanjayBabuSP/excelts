@@ -26,7 +26,6 @@ export interface PipeSource {
 interface PipeListeners<T> {
   data: (chunk: T) => void;
   end?: () => void;
-  error: (err: Error) => void;
   drain?: () => void;
   eventTarget: any;
 }
@@ -101,18 +100,9 @@ export class PipeManager<T> {
         }
       : undefined;
 
-    const errorListener = (err: Error): void => {
-      if (typeof dest.destroy === "function") {
-        dest.destroy(err);
-      } else {
-        eventTarget.emit?.("error", err);
-      }
-    };
-
     this._listeners.set(dest, {
       data: dataListener,
       end: endListener,
-      error: errorListener,
       eventTarget
     });
 
@@ -120,7 +110,8 @@ export class PipeManager<T> {
     if (endListener) {
       this._source.once("end", endListener);
     }
-    this._source.once("error", errorListener);
+    // Node.js pipe() does NOT forward errors from source to destination.
+    // Users must handle errors on each stream independently.
 
     // Emit 'pipe' event on destination (Node.js compatibility)
     eventTarget.emit?.("pipe", this._source);
@@ -166,7 +157,6 @@ export class PipeManager<T> {
     if (listeners.end) {
       this._source.off("end", listeners.end);
     }
-    this._source.off("error", listeners.error);
 
     if (listeners.drain) {
       removeEmitterListener(listeners.eventTarget, "drain", listeners.drain);

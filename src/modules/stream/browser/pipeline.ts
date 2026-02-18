@@ -142,19 +142,28 @@ export function pipeline(
       }
       completed = true;
 
-      registry.cleanup();
-
       if (onAbort && options.signal) {
         options.signal.removeEventListener("abort", onAbort);
       }
 
-      // Destroy all streams on error
-      if (error) {
-        for (const stream of allStreams) {
-          if (typeof stream.destroy === "function") {
-            stream.destroy(error);
-          }
+      // Node.js destroys ALL streams on pipeline completion (both success and error).
+      // On error, pass the error to destroy(); on success, destroy() with no args.
+      // Before destroying, add a safety error listener to each stream so that
+      // deferred error emissions from destroy() never become unhandled.
+      // (Node.js keeps its internal error listeners alive throughout.)
+      const noop = (): void => {};
+      for (const stream of allStreams) {
+        if (typeof stream.on === "function") {
+          stream.on("error", noop);
         }
+        if (typeof stream.destroy === "function" && !stream.destroyed) {
+          stream.destroy(error);
+        }
+      }
+
+      registry.cleanup();
+
+      if (error) {
         reject(error);
       } else {
         resolve();

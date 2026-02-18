@@ -733,21 +733,50 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         return EMPTY_UINT8ARRAY;
       }
 
-      while (this._buffer.length < length) {
-        if (this.finished) {
-          if (this._buffer.length > 0) {
-            const data = this._buffer.read(this._buffer.length);
-            this._maybeReleaseWriteCallback();
-            return data;
-          }
-          throw new Error("FILE_ENDED");
+      let remaining = length;
+      let firstChunk: Uint8Array | null = null;
+      let chunks: Uint8Array[] | null = null;
+
+      const appendChunk = (chunk: Uint8Array): void => {
+        if (chunk.length === 0) {
+          return;
         }
-        await this._waitForData();
+
+        if (!firstChunk) {
+          firstChunk = chunk;
+          return;
+        }
+
+        if (!chunks) {
+          chunks = [firstChunk, chunk];
+          return;
+        }
+
+        chunks.push(chunk);
+      };
+
+      while (remaining > 0) {
+        while (this._buffer.length === 0) {
+          if (this.finished) {
+            throw new Error("FILE_ENDED");
+          }
+          await this._waitForData();
+        }
+
+        const toRead = Math.min(remaining, this._buffer.length);
+        appendChunk(this._buffer.read(toRead));
+        remaining -= toRead;
+
+        if (this._buffer.length === 0) {
+          this._maybeReleaseWriteCallback();
+        }
       }
 
-      const out = this._buffer.read(length);
       this._maybeReleaseWriteCallback();
-      return out;
+      if (!firstChunk) {
+        return EMPTY_UINT8ARRAY;
+      }
+      return chunks ? concatUint8Arrays(chunks) : firstChunk;
     }
 
     private async _pullUntilInternal(pattern: Uint8Array, includeEof = false): Promise<Uint8Array> {
@@ -956,7 +985,9 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
           return Promise.reject(new Error("FILE_ENDED"));
         }
         if (this._buffer.length >= eof) {
-          return Promise.resolve(this._buffer.read(eof));
+          const out = this._buffer.read(eof);
+          this._maybeReleaseWriteCallback();
+          return Promise.resolve(out);
         }
         return this._pullInternal(eof);
       }

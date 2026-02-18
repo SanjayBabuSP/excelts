@@ -52,7 +52,7 @@ export function getTextDecoder(encoding?: string): TextDecoder {
   }
   let decoder = _decoderCache.get(key);
   if (!decoder) {
-    decoder = new TextDecoder(key);
+    decoder = createTextDecoderOrTypeError(key);
     _decoderCache.set(key, decoder);
   }
   return decoder;
@@ -65,7 +65,15 @@ export function getTextDecoder(encoding?: string): TextDecoder {
  * sharing mutable decoder state across concurrent operations.
  */
 export function createTextDecoder(encoding?: string): TextDecoder {
-  return new TextDecoder(normalizeEncodingLabel(encoding), { ignoreBOM: true });
+  return createTextDecoderOrTypeError(normalizeEncodingLabel(encoding), { ignoreBOM: true });
+}
+
+function createTextDecoderOrTypeError(encoding: string, options?: TextDecoderOptions): TextDecoder {
+  try {
+    return new TextDecoder(encoding, options);
+  } catch (error) {
+    throw new TypeError(`Unsupported text encoding: ${encoding}`, { cause: error as Error });
+  }
 }
 
 // =============================================================================

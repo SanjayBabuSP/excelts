@@ -11,21 +11,27 @@
 export * from "./index.base";
 
 // Core stream classes (browser implementations)
-export { Readable } from "@stream/browser/readable";
+import { Readable, _injectDuplexFrom as _injectReadableDuplexFrom } from "@stream/browser/readable";
 export { Writable, toWritable } from "@stream/browser/writable";
 export type { WritableOptions } from "@stream/browser/writable";
 export { Transform } from "@stream/browser/transform";
-export { Duplex } from "@stream/browser/duplex";
+import { Duplex } from "@stream/browser/duplex";
 export { PassThrough } from "@stream/browser/passthrough";
 export { Collector } from "@stream/browser/collector";
+export { Readable, Duplex };
 
 // Late-binding injection: break circular Readable ↔ Duplex and Transform ↔ Duplex
-import { Duplex } from "@stream/browser/duplex";
-import { _injectDuplexFrom as _injectReadableDuplexFrom } from "@stream/browser/readable";
 import { _injectDuplexFrom as _injectTransformDuplexFrom } from "@stream/browser/transform";
+import { _injectIsDisturbed } from "@stream/browser/writable";
 
 _injectReadableDuplexFrom(source => Duplex.from(source));
 _injectTransformDuplexFrom(source => Duplex.from(source));
+_injectIsDisturbed((stream: any) => {
+  if (stream && stream._readable instanceof Readable) {
+    return Readable.isDisturbed(stream._readable);
+  }
+  return Readable.isDisturbed(stream);
+});
 
 // Factory functions + re-exported helpers
 export {

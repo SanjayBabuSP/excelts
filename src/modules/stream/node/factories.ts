@@ -110,7 +110,8 @@ export function createWritable<T = Uint8Array>(
     highWaterMark: options?.highWaterMark,
     objectMode: options?.objectMode,
     write: options?.write as any,
-    final: options?.final as any
+    final: options?.final as any,
+    destroy: options?.destroy as any
   });
 }
 

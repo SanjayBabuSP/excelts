@@ -142,17 +142,53 @@ export class PullStream extends Duplex {
 
   private async _pullFixedLength(length: number): Promise<Uint8Array> {
     const queue = this._queue;
+    let remaining = length;
+    let firstChunk: Uint8Array | null = null;
+    let chunks: Uint8Array[] | null = null;
 
-    while (queue.length < length) {
-      if (this.finished) {
-        throw new Error("FILE_ENDED");
+    const appendChunk = (chunk: Uint8Array): void => {
+      if (chunk.length === 0) {
+        return;
       }
-      await this._waitForChunkSignal();
+
+      if (!firstChunk) {
+        firstChunk = chunk;
+        return;
+      }
+
+      if (!chunks) {
+        chunks = [firstChunk, chunk];
+        return;
+      }
+
+      chunks.push(chunk);
+    };
+
+    while (remaining > 0) {
+      while (queue.length === 0) {
+        if (this.finished) {
+          throw new Error("FILE_ENDED");
+        }
+        await this._waitForChunkSignal();
+      }
+
+      const toRead = Math.min(remaining, queue.length);
+      appendChunk(queue.read(toRead));
+      remaining -= toRead;
+
+      if (queue.length === 0) {
+        this._maybeReleaseWriteCallback();
+      }
     }
 
-    const out = queue.read(length);
     this._maybeReleaseWriteCallback();
-    return out;
+    if (!firstChunk) {
+      return EMPTY_UINT8ARRAY;
+    }
+    if (!chunks) {
+      return firstChunk;
+    }
+    return concatUint8Arrays(chunks);
   }
 
   _write(chunk: Uint8Array | string, _encoding: string, callback: () => void): void {

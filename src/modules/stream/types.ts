@@ -189,7 +189,7 @@ export interface IWritable<T = any> extends WritableLike {
 export interface ITransform<TInput = any, TOutput = any>
   extends IReadable<TOutput>, IWritable<TInput> {
   _transform(chunk: TInput, encoding: string, callback: TransformCallback<TOutput>): void;
-  _flush(callback: FlushCallback<TOutput>): void;
+  _flush?(callback: FlushCallback<TOutput>): void;
 }
 
 /**

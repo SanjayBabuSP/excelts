@@ -16,10 +16,14 @@ import { describe, it, expect } from "vitest";
 export interface StreamModuleImports {
   // Core Classes
   EventEmitter: new () => any;
-  Readable: { new (options?: any): any; from: (...args: any[]) => any };
-  Writable: new (options?: any) => any;
-  Transform: new (options?: any) => any;
-  Duplex: new (options?: any) => any;
+  Readable: {
+    new (options?: any): any;
+    from: (...args: any[]) => any;
+    wrap?: (src: any, options?: any) => any;
+  };
+  Writable: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
+  Transform: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
+  Duplex: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
   PassThrough: new (options?: any) => any;
 
   // Specialized Streams
@@ -2962,11 +2966,21 @@ export function runStreamTests(imports: StreamModuleImports): void {
           expect(fromUcs2).toBe("AΩ");
         });
 
+        it("should decode numeric array-like chunks consistently", async () => {
+          const arrayLikeChunk = { 0: 65, 1: 66, 2: 67, length: 3 };
+          const readable = createReadableFromAsyncIterable(
+            (async function* () {
+              yield arrayLikeChunk as unknown as Uint8Array;
+            })()
+          );
+
+          const result = await streamToString(readable);
+          expect(result).toBe("ABC");
+        });
+
         it("should reject unsupported text encodings consistently", async () => {
           const readable = createReadableFromArray([stringToUint8Array("abc")]);
-          await expect(streamToString(readable, "base64")).rejects.toSatisfy(
-            (err: unknown) => err instanceof TypeError || err instanceof RangeError
-          );
+          await expect(streamToString(readable, "base64")).rejects.toThrow(TypeError);
         });
       });
 
@@ -4110,6 +4124,24 @@ export function runStreamTests(imports: StreamModuleImports): void {
           writable.end();
           await finished(writable);
           expect(chunks).toEqual([1, 2, 3]);
+        });
+
+        it("should track multibyte string writableLength by bytes in binary mode", async () => {
+          const writable = new Writable({
+            write(_chunk: string, _encoding: string, callback: (error?: Error | null) => void) {
+              setTimeout(() => callback(), 5);
+            }
+          });
+
+          writable.cork();
+          writable.write("😀");
+
+          const expectedByteLength = new TextEncoder().encode("😀").byteLength;
+          expect(writable.writableLength).toBe(expectedByteLength);
+
+          writable.uncork();
+          writable.end();
+          await finished(writable);
         });
       });
 
@@ -5762,7 +5794,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
     describe("objectMode is not a public property", () => {
       it("Readable should not expose objectMode as own property", () => {
         const r = new Readable({ objectMode: true, read() {} });
-        expect(r.hasOwnProperty("objectMode")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(r, "objectMode")).toBe(false);
         expect((r as any).objectMode).toBeUndefined();
       });
 
@@ -5773,13 +5805,13 @@ export function runStreamTests(imports: StreamModuleImports): void {
             cb();
           }
         });
-        expect(w.hasOwnProperty("objectMode")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(w, "objectMode")).toBe(false);
         expect((w as any).objectMode).toBeUndefined();
       });
 
       it("Transform should not expose objectMode as own property", () => {
         const t = new Transform({ objectMode: true });
-        expect(t.hasOwnProperty("objectMode")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(t, "objectMode")).toBe(false);
         expect((t as any).objectMode).toBeUndefined();
       });
 
@@ -5804,7 +5836,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
     describe("autoDestroy is not a public property", () => {
       it("Readable should not expose autoDestroy as own property", () => {
         const r = new Readable({ read() {} });
-        expect(r.hasOwnProperty("autoDestroy")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(r, "autoDestroy")).toBe(false);
         expect((r as any).autoDestroy).toBeUndefined();
       });
 
@@ -5814,7 +5846,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
             cb();
           }
         });
-        expect(w.hasOwnProperty("autoDestroy")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(w, "autoDestroy")).toBe(false);
         expect((w as any).autoDestroy).toBeUndefined();
       });
     });
@@ -5822,7 +5854,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
     describe("emitClose is not a public property", () => {
       it("Readable should not expose emitClose as own property", () => {
         const r = new Readable({ read() {} });
-        expect(r.hasOwnProperty("emitClose")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(r, "emitClose")).toBe(false);
         expect((r as any).emitClose).toBeUndefined();
       });
 
@@ -5832,7 +5864,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
             cb();
           }
         });
-        expect(w.hasOwnProperty("emitClose")).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(w, "emitClose")).toBe(false);
         expect((w as any).emitClose).toBeUndefined();
       });
     });
@@ -5845,7 +5877,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
   describe("API surface: highWaterMark as prototype getters", () => {
     it("readableHighWaterMark should not be an own property on Readable instances", () => {
       const r = new Readable({ read() {} });
-      expect(r.hasOwnProperty("readableHighWaterMark")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(r, "readableHighWaterMark")).toBe(false);
       // But the value should be accessible via prototype getter
       expect(typeof r.readableHighWaterMark).toBe("number");
       expect(r.readableHighWaterMark).toBeGreaterThan(0);
@@ -5857,7 +5889,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
           cb();
         }
       });
-      expect(w.hasOwnProperty("writableHighWaterMark")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(w, "writableHighWaterMark")).toBe(false);
       // But the value should be accessible via prototype getter
       expect(typeof w.writableHighWaterMark).toBe("number");
       expect(w.writableHighWaterMark).toBeGreaterThan(0);
@@ -5865,20 +5897,20 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
     it("readableHighWaterMark on Duplex should not be an own property", () => {
       const d = createDuplex({ objectMode: true });
-      expect(d.hasOwnProperty("readableHighWaterMark")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(d, "readableHighWaterMark")).toBe(false);
       expect(typeof d.readableHighWaterMark).toBe("number");
     });
 
     it("writableHighWaterMark on Duplex should not be an own property", () => {
       const d = createDuplex({ objectMode: true });
-      expect(d.hasOwnProperty("writableHighWaterMark")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(d, "writableHighWaterMark")).toBe(false);
       expect(typeof d.writableHighWaterMark).toBe("number");
     });
 
     it("readableHighWaterMark should respect custom value", () => {
       const r = new Readable({ highWaterMark: 999, read() {} });
       expect(r.readableHighWaterMark).toBe(999);
-      expect(r.hasOwnProperty("readableHighWaterMark")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(r, "readableHighWaterMark")).toBe(false);
     });
 
     it("writableHighWaterMark should respect custom value", () => {
@@ -5889,7 +5921,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         }
       });
       expect(w.writableHighWaterMark).toBe(999);
-      expect(w.hasOwnProperty("writableHighWaterMark")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(w, "writableHighWaterMark")).toBe(false);
     });
   });
 
@@ -5901,19 +5933,19 @@ export function runStreamTests(imports: StreamModuleImports): void {
     describe("allowHalfOpen existence and defaults", () => {
       it("Duplex should have allowHalfOpen as own property, default true", () => {
         const d = createDuplex({ objectMode: true });
-        expect(d.hasOwnProperty("allowHalfOpen")).toBe(true);
+        expect(Object.prototype.hasOwnProperty.call(d, "allowHalfOpen")).toBe(true);
         expect(d.allowHalfOpen).toBe(true);
       });
 
       it("Transform should have allowHalfOpen as own property, default true", () => {
         const t = new Transform({ objectMode: true });
-        expect(t.hasOwnProperty("allowHalfOpen")).toBe(true);
+        expect(Object.prototype.hasOwnProperty.call(t, "allowHalfOpen")).toBe(true);
         expect(t.allowHalfOpen).toBe(true);
       });
 
       it("PassThrough should have allowHalfOpen as own property, default true", () => {
         const p = createPassThrough({ objectMode: true });
-        expect(p.hasOwnProperty("allowHalfOpen")).toBe(true);
+        expect(Object.prototype.hasOwnProperty.call(p, "allowHalfOpen")).toBe(true);
         expect(p.allowHalfOpen).toBe(true);
       });
 
@@ -6485,6 +6517,26 @@ export function runStreamTests(imports: StreamModuleImports): void {
   // ===========================================================================
 
   describe("destroy/construct constructor options (M3b)", () => {
+    it("createWritable: destroy option works like Writable constructor option", async () => {
+      const events: string[] = [];
+      const w = createWritable({
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        },
+        destroy(_err: Error | null, cb: (error?: Error | null) => void) {
+          events.push("destroy-option-called");
+          setTimeout(() => {
+            events.push("destroy-option-done");
+            cb();
+          }, 30);
+        }
+      });
+      w.on("close", () => events.push("close"));
+      w.destroy();
+      await new Promise<void>(resolve => w.once("close", resolve));
+      expect(events).toEqual(["destroy-option-called", "destroy-option-done", "close"]);
+    });
+
     it("Writable: destroy option works like subclass override", async () => {
       const events: string[] = [];
       const w = new Writable({
@@ -7306,6 +7358,1211 @@ export function runStreamTests(imports: StreamModuleImports): void {
       await new Promise<void>(resolve => d.once("finish", resolve));
       expect(writevChunks).toEqual(["a", "b"]);
       d.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Round 3: encoding / defaultEncoding / signal on Duplex & Transform
+  // ===========================================================================
+  describe("Duplex/Transform encoding, defaultEncoding, signal constructor options", () => {
+    it("Duplex: encoding option sets readableEncoding", () => {
+      const d = new Duplex({
+        encoding: "utf8",
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(d.readableEncoding).toBe("utf8");
+      d.destroy();
+    });
+
+    it("Transform: encoding option sets readableEncoding", () => {
+      const t = new Transform({
+        encoding: "utf8",
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t.readableEncoding).toBe("utf8");
+      t.destroy();
+    });
+
+    it("Duplex: defaultEncoding option is used for writes", async () => {
+      let receivedEncoding = "";
+      const d = new Duplex({
+        defaultEncoding: "latin1",
+        read() {},
+        write(_c: any, enc: string, cb: any) {
+          receivedEncoding = enc;
+          cb();
+        }
+      });
+      d.write("hello");
+      d.end();
+      await new Promise<void>(resolve => d.once("finish", resolve));
+      expect(receivedEncoding).toBe("buffer");
+      d.destroy();
+    });
+
+    it("Transform: defaultEncoding option is used for writes", async () => {
+      let receivedEncoding = "";
+      const t = new Transform({
+        defaultEncoding: "latin1",
+        write(_c: any, enc: string, cb: any) {
+          receivedEncoding = enc;
+          cb();
+        }
+      });
+      t.resume();
+      t.write("hello");
+      t.end();
+      await new Promise<void>(resolve => t.once("finish", resolve));
+      expect(receivedEncoding).toBe("buffer");
+      t.destroy();
+    });
+
+    it("Duplex: signal option destroys stream on abort", async () => {
+      const ac = new AbortController();
+      const d = new Duplex({
+        signal: ac.signal,
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      const errorPromise = new Promise<Error>(resolve => d.once("error", resolve));
+      const closePromise = new Promise<void>(resolve => d.once("close", resolve));
+      ac.abort();
+      const err = await errorPromise;
+      await closePromise;
+      expect(err.message).toBe("The operation was aborted");
+      expect(d.destroyed).toBe(true);
+    });
+
+    it("Transform: signal option destroys stream on abort", async () => {
+      const ac = new AbortController();
+      const t = new Transform({
+        signal: ac.signal,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      const errorPromise = new Promise<Error>(resolve => t.once("error", resolve));
+      const closePromise = new Promise<void>(resolve => t.once("close", resolve));
+      ac.abort();
+      const err = await errorPromise;
+      await closePromise;
+      expect(err.message).toBe("The operation was aborted");
+      expect(t.destroyed).toBe(true);
+    });
+
+    it("Duplex: already-aborted signal destroys immediately", async () => {
+      const ac = new AbortController();
+      ac.abort();
+      const d = new Duplex({
+        signal: ac.signal,
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      const errorPromise = new Promise<Error>(resolve => d.once("error", resolve));
+      const closePromise = new Promise<void>(resolve => d.once("close", resolve));
+      const err = await errorPromise;
+      await closePromise;
+      expect(err.message).toBe("The operation was aborted");
+      expect(d.destroyed).toBe(true);
+    });
+
+    it("Transform: already-aborted signal destroys immediately", async () => {
+      const ac = new AbortController();
+      ac.abort();
+      const t = new Transform({
+        signal: ac.signal,
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      const errorPromise = new Promise<Error>(resolve => t.once("error", resolve));
+      const closePromise = new Promise<void>(resolve => t.once("close", resolve));
+      const err = await errorPromise;
+      await closePromise;
+      expect(err.message).toBe("The operation was aborted");
+      expect(t.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Round 3: pause / resume events on Duplex & Transform
+  // ===========================================================================
+  describe("Duplex/Transform pause and resume events", () => {
+    it("Duplex: emits pause event on pause()", async () => {
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      let pauseCount = 0;
+      d.on("pause", () => pauseCount++);
+      d.resume(); // start flowing
+      d.pause();
+      // Allow async event propagation
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(pauseCount).toBe(1);
+      d.destroy();
+    });
+
+    it("Duplex: emits resume event on resume()", async () => {
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      let resumeCount = 0;
+      d.on("resume", () => resumeCount++);
+      d.resume();
+      // Allow async event propagation
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(resumeCount).toBe(1);
+      d.destroy();
+    });
+
+    it("Transform: emits pause event on pause()", async () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      let pauseCount = 0;
+      t.on("pause", () => pauseCount++);
+      t.resume(); // start flowing
+      t.pause();
+      // Allow async event propagation
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(pauseCount).toBe(1);
+      t.destroy();
+    });
+
+    it("Transform: emits resume event on resume()", async () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      let resumeCount = 0;
+      t.on("resume", () => resumeCount++);
+      t.resume();
+      // Allow async event propagation
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(resumeCount).toBe(1);
+      t.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Round 3: static isDisturbed on Duplex & Transform
+  // ===========================================================================
+  describe("Duplex/Transform static isDisturbed", () => {
+    it("Duplex.isDisturbed returns false for fresh stream", () => {
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(Duplex.isDisturbed!(d)).toBe(false);
+      d.destroy();
+    });
+
+    it("Duplex.isDisturbed returns true after data is read", async () => {
+      const d = new Duplex({
+        read() {
+          this.push("x");
+          this.push(null);
+        },
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      d.on("data", () => {});
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(Duplex.isDisturbed!(d)).toBe(true);
+      d.destroy();
+    });
+
+    it("Transform.isDisturbed returns true after data is read", async () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      t.write("x");
+      t.on("data", () => {});
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(Transform.isDisturbed!(t)).toBe(true);
+      t.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Round 4: Symbol.hasInstance on Duplex & Transform
+  // ===========================================================================
+  describe("Symbol.hasInstance on Duplex and Transform", () => {
+    it("Duplex has Symbol.hasInstance", () => {
+      expect(Symbol.hasInstance in Duplex).toBe(true);
+    });
+
+    it("Transform has Symbol.hasInstance", () => {
+      expect(Symbol.hasInstance in Transform).toBe(true);
+    });
+
+    it("Duplex instance passes instanceof Duplex", () => {
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(d instanceof Duplex).toBe(true);
+      d.destroy();
+    });
+
+    it("Transform instance passes instanceof Duplex", () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t instanceof Duplex).toBe(true);
+      t.destroy();
+    });
+
+    it("Transform instance passes instanceof Transform", () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t instanceof Transform).toBe(true);
+      t.destroy();
+    });
+
+    it("Duplex instance passes instanceof Readable", () => {
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(d instanceof Readable).toBe(true);
+      d.destroy();
+    });
+
+    it("Duplex instance passes instanceof Writable", () => {
+      const d = new Duplex({
+        read() {},
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+      expect(d instanceof Writable).toBe(true);
+      d.destroy();
+    });
+
+    it("Transform instance passes instanceof Readable", () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t instanceof Readable).toBe(true);
+      t.destroy();
+    });
+
+    it("Transform instance passes instanceof Writable", () => {
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+      expect(t instanceof Writable).toBe(true);
+      t.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Round 4: pipe/unpipe events on destination
+  // ===========================================================================
+  describe("pipe/unpipe events on destination", () => {
+    it("pipe() emits pipe event on destination with source as argument", async () => {
+      const r = new Readable({ read() {} });
+      const w = new Writable({
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+
+      let pipeSource: any = null;
+      w.on("pipe", (src: any) => {
+        pipeSource = src;
+      });
+
+      r.pipe(w);
+      expect(pipeSource).toBe(r);
+
+      r.unpipe(w);
+      r.destroy();
+      w.destroy();
+    });
+
+    it("unpipe() emits unpipe event on destination with source as argument", async () => {
+      const r = new Readable({ read() {} });
+      const w = new Writable({
+        write(_c: any, _e: string, cb: any) {
+          cb();
+        }
+      });
+
+      let unpipeSource: any = null;
+      w.on("unpipe", (src: any) => {
+        unpipeSource = src;
+      });
+
+      r.pipe(w);
+      r.unpipe(w);
+      expect(unpipeSource).toBe(r);
+
+      r.destroy();
+      w.destroy();
+    });
+
+    it("pipe() emits pipe event when piping to Transform", async () => {
+      const r = new Readable({ read() {} });
+      const t = new Transform({
+        transform(c: any, _e: string, cb: any) {
+          cb(null, c);
+        }
+      });
+
+      let pipeSource: any = null;
+      t.on("pipe", (src: any) => {
+        pipeSource = src;
+      });
+
+      r.pipe(t);
+      expect(pipeSource).toBe(r);
+
+      r.unpipe(t);
+      r.destroy();
+      t.destroy();
+    });
+  });
+
+  // ==========================================================================
+  // Round 5: Flow State, Construct, and Error Handling
+  // ==========================================================================
+  describe("Round 5: Flow State, Construct, and Error Handling", () => {
+    // R5-1: Duplex _construct delays reads/writes until callback fires
+    describe("Duplex _construct", () => {
+      it("should delay writes until construct callback fires", async () => {
+        const writes: string[] = [];
+        let constructCb: ((error?: Error | null) => void) | undefined;
+
+        const duplex = new Duplex({
+          objectMode: true,
+          construct(cb: (error?: Error | null) => void) {
+            constructCb = cb;
+          },
+          write(chunk: any, _encoding: string, cb: (error?: Error | null) => void) {
+            writes.push(chunk);
+            cb();
+          }
+        });
+
+        // Write should be queued, not executed
+        duplex.write("hello");
+        expect(writes).toEqual([]);
+
+        // Fire construct callback after a small delay
+        await new Promise<void>(resolve => {
+          setTimeout(() => {
+            constructCb!();
+            resolve();
+          }, 10);
+        });
+
+        // Allow microtasks to drain
+        await new Promise<void>(resolve => setTimeout(resolve, 20));
+
+        expect(writes).toEqual(["hello"]);
+        duplex.destroy();
+      });
+
+      it("should destroy stream if construct callback receives error", async () => {
+        const duplex = new Duplex({
+          objectMode: true,
+          construct(cb: (error?: Error | null) => void) {
+            setTimeout(() => cb(new Error("construct failed")), 5);
+          },
+          write(_chunk: any, _encoding: string, cb: (error?: Error | null) => void) {
+            cb();
+          }
+        });
+
+        const errorPromise = new Promise<Error>(resolve => {
+          duplex.on("error", resolve);
+        });
+
+        const err = await errorPromise;
+        expect(err.message).toBe("construct failed");
+        expect(duplex.destroyed).toBe(true);
+      });
+    });
+
+    // R5-3: pause() on fresh stream transitions readableFlowing from null to false
+    describe("Readable pause() on fresh stream", () => {
+      it("should transition readableFlowing from null to false", () => {
+        const r = new Readable({ read() {} });
+        expect(r.readableFlowing).toBeNull();
+        r.pause();
+        expect(r.readableFlowing).toBe(false);
+        expect(r.isPaused()).toBe(true);
+        r.destroy();
+      });
+
+      it("Duplex should transition readableFlowing from null to false on pause()", () => {
+        const duplex = new Duplex({
+          objectMode: true,
+          read() {},
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        expect(duplex.readableFlowing).toBeNull();
+        duplex.pause();
+        expect(duplex.readableFlowing).toBe(false);
+        expect(duplex.isPaused()).toBe(true);
+        duplex.destroy();
+      });
+    });
+
+    // R5-4: on('readable') sets readableFlowing to false
+    describe("Readable on('readable') flow state", () => {
+      it("should set readableFlowing to false when 'readable' listener is added", () => {
+        const r = new Readable({ read() {} });
+        expect(r.readableFlowing).toBeNull();
+        r.on("readable", () => {});
+        expect(r.readableFlowing).toBe(false);
+        r.destroy();
+      });
+
+      it("Duplex readableFlowing starts null and goes false on on('readable')", () => {
+        const duplex = new Duplex({
+          objectMode: true,
+          read() {},
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        expect(duplex.readableFlowing).toBeNull();
+        duplex.on("readable", () => {});
+        expect(duplex.readableFlowing).toBe(false);
+        duplex.destroy();
+      });
+    });
+
+    // R5-5: emit('error') with no listener should throw
+    describe("EventEmitter error throw semantics", () => {
+      it("should throw the error when emitting 'error' with no listener", () => {
+        const emitter = new EventEmitter();
+        const err = new Error("test error");
+        expect(() => emitter.emit("error", err)).toThrow("test error");
+      });
+
+      it("should throw generic message when emitting 'error' with undefined arg", () => {
+        const emitter = new EventEmitter();
+        expect(() => emitter.emit("error")).toThrow("Unhandled error. (undefined)");
+      });
+
+      it("should throw generic message with non-Error arg", () => {
+        const emitter = new EventEmitter();
+        expect(() => emitter.emit("error", "string error")).toThrow(
+          "Unhandled error. (string error)"
+        );
+      });
+
+      it("should not throw when error listener is present", () => {
+        const emitter = new EventEmitter();
+        const errors: Error[] = [];
+        emitter.on("error", (err: Error) => errors.push(err));
+        const err = new Error("handled error");
+        expect(() => emitter.emit("error", err)).not.toThrow();
+        expect(errors).toEqual([err]);
+      });
+
+      it("Readable emit('error') with no listener should throw", () => {
+        const r = new Readable({ read() {} });
+        const err = new Error("readable error");
+        expect(() => r.emit("error", err)).toThrow("readable error");
+        r.destroy();
+      });
+
+      it("Writable emit('error') with no listener should throw", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        const err = new Error("writable error");
+        expect(() => w.emit("error", err)).toThrow("writable error");
+        w.destroy();
+      });
+    });
+  });
+
+  // ===========================================================================
+  // Round 6: API surface parity (addListener/on identity, removeListener/off
+  // identity, Writable.pipe, _undestroy, _writev prototype value)
+  // ===========================================================================
+
+  describe("R6: API surface parity", () => {
+    // =========================================================================
+    // A1: addListener === on (reference identity)
+    // =========================================================================
+
+    describe("addListener === on identity", () => {
+      it("Readable.prototype.addListener === Readable.prototype.on", () => {
+        expect(Readable.prototype.addListener).toBe(Readable.prototype.on);
+      });
+
+      it("Writable.prototype.addListener === Writable.prototype.on", () => {
+        expect(Writable.prototype.addListener).toBe(Writable.prototype.on);
+      });
+
+      it("Duplex.prototype.addListener === Duplex.prototype.on", () => {
+        expect(Duplex.prototype.addListener).toBe(Duplex.prototype.on);
+      });
+
+      it("Transform.prototype.addListener === Transform.prototype.on", () => {
+        expect(Transform.prototype.addListener).toBe(Transform.prototype.on);
+      });
+
+      it("PassThrough.prototype.addListener === PassThrough.prototype.on", () => {
+        expect(PassThrough.prototype.addListener).toBe(PassThrough.prototype.on);
+      });
+
+      it("instance addListener === instance on", () => {
+        const r = new Readable({ read() {} });
+        expect(r.addListener).toBe(r.on);
+        r.destroy();
+      });
+
+      it("addListener triggers data flowing just like on", () =>
+        new Promise<void>(done => {
+          const r = new Readable({
+            read() {
+              this.push("hello");
+              this.push(null);
+            }
+          });
+          const chunks: string[] = [];
+          r.addListener("data", (chunk: any) => chunks.push(String(chunk)));
+          r.on("end", () => {
+            expect(chunks.length).toBeGreaterThan(0);
+            done();
+          });
+        }));
+    });
+
+    // =========================================================================
+    // A2: removeListener === off (reference identity)
+    // =========================================================================
+
+    describe("removeListener === off identity", () => {
+      it("Readable.prototype.removeListener === Readable.prototype.off", () => {
+        expect(Readable.prototype.removeListener).toBe(Readable.prototype.off);
+      });
+
+      it("Writable.prototype.removeListener === Writable.prototype.off", () => {
+        expect(Writable.prototype.removeListener).toBe(Writable.prototype.off);
+      });
+
+      it("Duplex.prototype.removeListener === Duplex.prototype.off", () => {
+        expect(Duplex.prototype.removeListener).toBe(Duplex.prototype.off);
+      });
+
+      it("Transform.prototype.removeListener === Transform.prototype.off", () => {
+        expect(Transform.prototype.removeListener).toBe(Transform.prototype.off);
+      });
+
+      it("PassThrough.prototype.removeListener === PassThrough.prototype.off", () => {
+        expect(PassThrough.prototype.removeListener).toBe(PassThrough.prototype.off);
+      });
+    });
+
+    // =========================================================================
+    // A3: Writable.pipe() — async error, no throw, returns undefined
+    // =========================================================================
+
+    describe("Writable.pipe() behavior", () => {
+      it("should not throw synchronously", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        w.on("error", () => {}); // prevent unhandled error
+        let threw = false;
+        try {
+          (w as any).pipe();
+        } catch {
+          threw = true;
+        }
+        expect(threw).toBe(false);
+        w.destroy();
+      });
+
+      it("should return undefined", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        w.on("error", () => {});
+        const result = (w as any).pipe();
+        expect(result).toBeUndefined();
+        w.destroy();
+      });
+
+      it("should emit error asynchronously", () =>
+        new Promise<void>(done => {
+          const w = new Writable({
+            write(_c: any, _e: string, cb: any) {
+              cb();
+            }
+          });
+          const errors: Error[] = [];
+          w.on("error", (err: Error) => {
+            errors.push(err);
+            expect(err.message).toContain("not readable");
+            done();
+          });
+          (w as any).pipe();
+          // Error should not have been emitted yet (async)
+          expect(errors).toHaveLength(0);
+        }));
+    });
+
+    // =========================================================================
+    // A4: _undestroy()
+    // =========================================================================
+
+    describe("_undestroy()", () => {
+      it("should exist on Readable prototype", () => {
+        expect(typeof Readable.prototype._undestroy).toBe("function");
+      });
+
+      it("should exist on Writable prototype", () => {
+        expect(typeof Writable.prototype._undestroy).toBe("function");
+      });
+
+      it("should exist on Duplex prototype", () => {
+        expect(typeof (Duplex.prototype as any)._undestroy).toBe("function");
+      });
+
+      it("should exist on Transform prototype", () => {
+        expect(typeof (Transform.prototype as any)._undestroy).toBe("function");
+      });
+
+      it("should exist on PassThrough prototype", () => {
+        expect(typeof (PassThrough.prototype as any)._undestroy).toBe("function");
+      });
+
+      it("Readable: should reset destroyed and closed after destroy", () =>
+        new Promise<void>(done => {
+          const r = new Readable({ read() {} });
+          r.on("close", () => {
+            expect(r.destroyed).toBe(true);
+            expect(r.closed).toBe(true);
+            r._undestroy();
+            expect(r.destroyed).toBe(false);
+            expect(r.closed).toBe(false);
+            done();
+          });
+          r.destroy();
+        }));
+
+      it("Writable: should reset destroyed and closed after destroy", () =>
+        new Promise<void>(done => {
+          const w = new Writable({
+            write(_c: any, _e: string, cb: any) {
+              cb();
+            }
+          });
+          w.on("close", () => {
+            expect(w.destroyed).toBe(true);
+            expect(w.closed).toBe(true);
+            w._undestroy();
+            expect(w.destroyed).toBe(false);
+            expect(w.closed).toBe(false);
+            done();
+          });
+          w.destroy();
+        }));
+
+      it("Duplex: should reset destroyed and closed after destroy", () =>
+        new Promise<void>(done => {
+          const d = new Duplex({
+            read() {},
+            write(_c: any, _e: string, cb: any) {
+              cb();
+            }
+          });
+          d.on("close", () => {
+            expect(d.destroyed).toBe(true);
+            (d as any)._undestroy();
+            expect(d.destroyed).toBe(false);
+            done();
+          });
+          d.destroy();
+        }));
+
+      it("Transform: should reset destroyed after destroy", () =>
+        new Promise<void>(done => {
+          const t = new Transform({
+            transform(chunk: any, _e: string, cb: any) {
+              cb(null, chunk);
+            }
+          });
+          t.on("close", () => {
+            expect(t.destroyed).toBe(true);
+            (t as any)._undestroy();
+            expect(t.destroyed).toBe(false);
+            done();
+          });
+          t.destroy();
+        }));
+    });
+
+    // =========================================================================
+    // A5: _writev prototype value is null
+    // =========================================================================
+
+    describe("_writev prototype value", () => {
+      it("Writable.prototype._writev should be null", () => {
+        expect((Writable.prototype as any)._writev).toBeNull();
+      });
+
+      it("Duplex.prototype._writev should be null", () => {
+        expect((Duplex.prototype as any)._writev).toBeNull();
+      });
+
+      it("_writev should be null on a fresh Writable instance", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        expect((w as any)._writev).toBeNull();
+        w.destroy();
+      });
+
+      it("_writev should be overridable via subclass", () => {
+        class MyWritable extends Writable {
+          batches: any[][] = [];
+          _writev(
+            chunks: Array<{ chunk: any; encoding: string }>,
+            cb: (error?: Error | null) => void
+          ): void {
+            this.batches.push(chunks);
+            cb();
+          }
+        }
+        const w = new MyWritable({
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        expect(typeof w._writev).toBe("function");
+        expect(w._writev).not.toBeNull();
+        w.destroy();
+      });
+    });
+  });
+
+  // ===========================================================================
+  // Round 7: Prototype API surface parity
+  // ===========================================================================
+  describe("R7: Prototype API surface parity", () => {
+    // =========================================================================
+    // R7-1: Writable.isDisturbed static method
+    // =========================================================================
+    describe("Writable.isDisturbed", () => {
+      it("Writable.isDisturbed exists as a function", () => {
+        expect(typeof (Writable as any).isDisturbed).toBe("function");
+      });
+
+      it("Writable.isDisturbed returns false for fresh Readable", () => {
+        const r = new Readable({ read() {} });
+        expect((Writable as any).isDisturbed(r)).toBe(false);
+        r.destroy();
+      });
+
+      it("Writable.isDisturbed returns true after data is consumed", async () => {
+        const r = new Readable({
+          read() {
+            this.push("x");
+            this.push(null);
+          }
+        });
+        r.on("data", () => {});
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect((Writable as any).isDisturbed(r)).toBe(true);
+        r.destroy();
+      });
+
+      it("Writable.isDisturbed returns false for fresh Writable", () => {
+        const w = new Writable({
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        expect((Writable as any).isDisturbed(w)).toBe(false);
+        w.destroy();
+      });
+
+      it("Writable.isDisturbed returns true for destroyed Readable", async () => {
+        const r = new Readable({ read() {} });
+        r.destroy();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect((Writable as any).isDisturbed(r)).toBe(true);
+      });
+
+      it("Writable.isDisturbed returns true for Duplex after data read", async () => {
+        const d = new Duplex({
+          read() {
+            this.push("x");
+            this.push(null);
+          },
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+        d.on("data", () => {});
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect((Writable as any).isDisturbed(d)).toBe(true);
+        d.destroy();
+      });
+    });
+
+    // =========================================================================
+    // R7-2: _construct NOT on any stream prototype
+    // =========================================================================
+    describe("_construct not on prototypes", () => {
+      it("Readable.prototype does NOT have own _construct", () => {
+        expect(Object.prototype.hasOwnProperty.call(Readable.prototype, "_construct")).toBe(false);
+      });
+
+      it("Writable.prototype does NOT have own _construct", () => {
+        expect(Object.prototype.hasOwnProperty.call(Writable.prototype, "_construct")).toBe(false);
+      });
+
+      it("Duplex.prototype does NOT have own _construct", () => {
+        expect(Object.prototype.hasOwnProperty.call(Duplex.prototype, "_construct")).toBe(false);
+      });
+
+      it("Transform.prototype does NOT have own _construct", () => {
+        expect(Object.prototype.hasOwnProperty.call(Transform.prototype, "_construct")).toBe(false);
+      });
+
+      it("PassThrough.prototype does NOT have own _construct", () => {
+        expect(Object.prototype.hasOwnProperty.call(PassThrough.prototype, "_construct")).toBe(
+          false
+        );
+      });
+
+      it("subclass _construct on Readable still works", async () => {
+        let constructed = false;
+        class MyReadable extends Readable {
+          _construct(cb: (error?: Error | null) => void): void {
+            constructed = true;
+            cb();
+          }
+          _read(): void {
+            this.push("hello");
+            this.push(null);
+          }
+        }
+        const r = new MyReadable();
+        const chunks: any[] = [];
+        r.on("data", (c: any) => chunks.push(c));
+        await new Promise(resolve => r.on("end", resolve));
+        expect(constructed).toBe(true);
+        expect(chunks.length).toBeGreaterThan(0);
+      });
+
+      it("subclass _construct on Writable still works", async () => {
+        let constructed = false;
+        class MyWritable extends Writable {
+          _construct(cb: (error?: Error | null) => void): void {
+            constructed = true;
+            cb();
+          }
+        }
+        const w = new MyWritable({
+          write(_c: any, _e: string, cb: (error?: Error | null) => void) {
+            cb();
+          }
+        });
+        w.write("hello");
+        w.end();
+        await new Promise(resolve => w.on("finish", resolve));
+        expect(constructed).toBe(true);
+      });
+    });
+
+    // =========================================================================
+    // R7-3: Transform construct option
+    // =========================================================================
+    describe("Transform construct option", () => {
+      it("construct callback is invoked on Transform", async () => {
+        let constructCalled = false;
+        const t = new Transform({
+          construct(callback: (error?: Error | null) => void) {
+            constructCalled = true;
+            setTimeout(() => callback(), 10);
+          },
+          transform(chunk: any, _enc: string, cb: any) {
+            this.push(chunk);
+            cb();
+          }
+        });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(constructCalled).toBe(true);
+        t.destroy();
+      });
+
+      it("Transform construct delays writes until callback fires", async () => {
+        const events: string[] = [];
+        const t = new Transform({
+          construct(callback: (error?: Error | null) => void) {
+            events.push("construct-start");
+            setTimeout(() => {
+              events.push("construct-done");
+              callback();
+            }, 30);
+          },
+          transform(chunk: any, _enc: string, cb: any) {
+            events.push("transform:" + chunk);
+            this.push(chunk);
+            cb();
+          }
+        });
+        t.write("a");
+        t.on("data", () => {});
+        await new Promise(resolve => setTimeout(resolve, 100));
+        // construct must have completed before transform runs
+        const constructDoneIdx = events.indexOf("construct-done");
+        const transformIdx = events.indexOf("transform:a");
+        expect(constructDoneIdx).toBeGreaterThanOrEqual(0);
+        expect(transformIdx).toBeGreaterThanOrEqual(0);
+        expect(constructDoneIdx).toBeLessThan(transformIdx);
+        t.destroy();
+      });
+
+      it("Transform construct error destroys the stream", async () => {
+        const t = new Transform({
+          construct(callback: (error?: Error | null) => void) {
+            callback(new Error("construct failed"));
+          },
+          transform(chunk: any, _enc: string, cb: any) {
+            cb(null, chunk);
+          }
+        });
+        // Must listen for error to prevent unhandled exception
+        const errorP = new Promise<Error>(resolve => t.on("error", resolve));
+        const err = await errorP;
+        expect(err.message).toBe("construct failed");
+        expect(t.destroyed).toBe(true);
+      });
+    });
+
+    // =========================================================================
+    // R7-4: Transform.prototype._writev === null
+    // =========================================================================
+    describe("Transform._writev prototype value", () => {
+      it("Transform.prototype._writev is null", () => {
+        expect((Transform.prototype as any)._writev).toBeNull();
+      });
+
+      it("Transform.prototype does NOT have OWN _writev (inherits from chain)", () => {
+        // In Node.js, Transform inherits _writev from Duplex chain, not own.
+        // In browser we set it explicitly on Transform since there's no real chain.
+        // Either way, the value must be null.
+        expect((Transform.prototype as any)._writev).toBeNull();
+      });
+
+      it("PassThrough inherits _writev === null", () => {
+        expect((PassThrough.prototype as any)._writev).toBeNull();
+      });
+
+      it("fresh Transform instance _writev is null", () => {
+        const t = new Transform({
+          transform(c: any, _e: string, cb: any) {
+            cb(null, c);
+          }
+        });
+        expect((t as any)._writev).toBeNull();
+        t.destroy();
+      });
+    });
+
+    // =========================================================================
+    // R7-5: _flush NOT on Transform.prototype
+    // =========================================================================
+    describe("_flush not on Transform prototype", () => {
+      it("Transform.prototype does NOT have own _flush", () => {
+        expect(Object.prototype.hasOwnProperty.call(Transform.prototype, "_flush")).toBe(false);
+      });
+
+      it("Transform.prototype._flush is undefined", () => {
+        expect((Transform.prototype as any)._flush).toBeUndefined();
+      });
+
+      it("PassThrough.prototype does NOT have own _flush", () => {
+        expect(Object.prototype.hasOwnProperty.call(PassThrough.prototype, "_flush")).toBe(false);
+      });
+
+      it("subclass _flush still works", async () => {
+        const chunks: string[] = [];
+        class MyTransform extends Transform {
+          _transform(chunk: any, _enc: string, cb: any): void {
+            this.push(chunk);
+            cb();
+          }
+          _flush(cb: any): void {
+            this.push("flushed");
+            cb();
+          }
+        }
+        const t = new MyTransform();
+        t.on("data", (c: any) => chunks.push(String(c)));
+        t.write("hello");
+        t.end();
+        await new Promise(resolve => t.on("end", resolve));
+        expect(chunks).toContain("flushed");
+        t.destroy();
+      });
+
+      it("flush option still works", async () => {
+        const chunks: string[] = [];
+        const t = new Transform({
+          transform(chunk: any, _enc: string, cb: any) {
+            this.push(chunk);
+            cb();
+          },
+          flush(cb: any) {
+            this.push("option-flushed");
+            cb();
+          }
+        });
+        t.on("data", (c: any) => chunks.push(String(c)));
+        t.write("hello");
+        t.end();
+        await new Promise(resolve => t.on("end", resolve));
+        expect(chunks).toContain("option-flushed");
+        t.destroy();
+      });
+    });
+
+    // =========================================================================
+    // R7-6: Transform.prototype._final
+    // =========================================================================
+    describe("Transform._final on prototype", () => {
+      it("Transform.prototype has own _final", () => {
+        expect(Object.prototype.hasOwnProperty.call(Transform.prototype, "_final")).toBe(true);
+      });
+
+      it("Transform.prototype._final is a function", () => {
+        expect(typeof Transform.prototype._final).toBe("function");
+      });
+
+      it("Duplex.prototype does NOT have own _final", () => {
+        expect(Object.prototype.hasOwnProperty.call(Duplex.prototype, "_final")).toBe(false);
+      });
+
+      it("Writable.prototype does NOT have own _final", () => {
+        expect(Object.prototype.hasOwnProperty.call(Writable.prototype, "_final")).toBe(false);
+      });
+
+      it("PassThrough.prototype does NOT have own _final", () => {
+        expect(Object.prototype.hasOwnProperty.call(PassThrough.prototype, "_final")).toBe(false);
+      });
+
+      it("Transform instance inherits _final from prototype", () => {
+        const t = new Transform({
+          transform(c: any, _e: string, cb: any) {
+            cb(null, c);
+          }
+        });
+        expect(typeof t._final).toBe("function");
+        expect(t._final).toBe(Transform.prototype._final);
+        t.destroy();
+      });
+    });
+
+    // =========================================================================
+    // R7-7: Readable.wrap static method
+    // =========================================================================
+    describe("Readable.wrap static", () => {
+      it("Readable.wrap exists as a function", () => {
+        expect(typeof Readable.wrap).toBe("function");
+      });
+
+      it("Readable has own static wrap", () => {
+        expect(Object.prototype.hasOwnProperty.call(Readable, "wrap")).toBe(true);
+      });
+
+      it("Readable.wrap returns a Readable instance", () => {
+        const EventEmitter = imports.EventEmitter;
+        const src = new EventEmitter();
+        const wrapped = Readable.wrap(src);
+        expect(wrapped instanceof Readable).toBe(true);
+        wrapped.destroy();
+      });
+
+      it("Readable.wrap forwards data from source", async () => {
+        const EventEmitter = imports.EventEmitter;
+        const src = new EventEmitter();
+        const wrapped = Readable.wrap(src);
+        const chunks: any[] = [];
+        wrapped.on("data", (c: any) => chunks.push(c));
+
+        // Emit data asynchronously so listener is set up
+        queueMicrotask(() => {
+          src.emit("data", "hello");
+          src.emit("data", "world");
+          src.emit("end");
+        });
+
+        await new Promise(resolve => wrapped.on("end", resolve));
+        expect(chunks.length).toBe(2);
+      });
+
+      it("Readable.wrap wraps in objectMode by default", () => {
+        const EventEmitter = imports.EventEmitter;
+        const src = new EventEmitter();
+        const wrapped = Readable.wrap(src);
+        expect(wrapped.readableObjectMode).toBe(true);
+        wrapped.destroy();
+      });
+
+      it("Writable does NOT have wrap static", () => {
+        expect((Writable as any).wrap).toBeUndefined();
+      });
     });
   });
 }

@@ -21,6 +21,7 @@ export interface WritableOptions<T = Uint8Array> extends WritableStreamOptions {
   stream?: WritableStream<T>;
   autoDestroy?: boolean;
   emitClose?: boolean;
+  decodeStrings?: boolean;
   defaultEncoding?: string;
   signal?: AbortSignal;
   write?: (
@@ -58,7 +59,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       return false;
     }
     // Fast path: actual Writable prototype
-    if (Writable.prototype.isPrototypeOf(instance)) {
+    if (Object.prototype.isPrototypeOf.call(Writable.prototype, instance)) {
       return true;
     }
     // Duck-type: must have key Writable methods and the stream brand
@@ -125,6 +126,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     chunks: Array<{ chunk: T; encoding: string }>,
     callback: (error?: Error | null) => void
   ) => void;
+  private _decodeStrings: boolean;
 
   constructor(options?: WritableOptions<T>) {
     super();
@@ -132,6 +134,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     this._highWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this._objectMode);
     this._autoDestroy = options?.autoDestroy ?? true;
     this._emitClose = options?.emitClose ?? true;
+    this._decodeStrings = options?.decodeStrings ?? true;
     this._defaultEncoding = options?.defaultEncoding ?? "utf8";
 
     // Store user-provided write function
@@ -179,7 +182,17 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._stream = new WritableStream<T>({
           write: async chunk => {
             // Subclass _write path (no user-provided _writeFunc)
-            (this as any)._write?.(chunk);
+            if ((this as any)._write) {
+              await new Promise<void>((resolve, reject) => {
+                (this as any)._write(chunk, "utf8", (err?: Error | null) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    resolve();
+                  }
+                });
+              });
+            }
           },
           close: async () => {
             this._finished = true;
@@ -209,15 +222,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    * Delays write operations until the callback fires.
    */
   private _maybeConstruct(): void {
-    const hasConstructHook =
-      this._constructFunc ||
-      Object.getPrototypeOf(this)._construct !== Writable.prototype._construct;
+    const hasConstructHook = this._constructFunc || this._hasSubclassConstruct();
     if (!hasConstructHook) {
       return;
     }
     this._constructed = false;
     queueMicrotask(() => {
-      const fn = this._constructFunc ?? this._construct.bind(this);
+      const fn = this._constructFunc ?? (this as any)._construct.bind(this);
       fn(err => {
         if (err) {
           this.destroy(err);
@@ -239,21 +250,33 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Base construct method - can be overridden by subclasses.
-   * Called once before _write, to set up async resources.
+   * Check if a subclass defines _construct on its own prototype.
+   * Node.js does NOT have _construct on any stream prototype — it only exists
+   * when provided via constructor options or defined by a subclass.
    */
-  _construct(callback: (error?: Error | null) => void): void {
-    callback();
+  private _hasSubclassConstruct(): boolean {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Writable.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, "_construct")) {
+        return true;
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return false;
   }
 
   /**
    * Base writev method - can be overridden by subclasses for batch writing.
    * If overridden, called instead of individual _write for corked chunks.
+   * Value is `null` on the prototype (matches Node.js Writable.prototype._writev === null).
+   * Assigned via prototype after the class definition.
    */
-  _writev?(
-    chunks: Array<{ chunk: T; encoding: string }>,
-    callback: (error?: Error | null) => void
-  ): void;
+  declare _writev:
+    | ((
+        chunks: Array<{ chunk: T; encoding: string }>,
+        callback: (error?: Error | null) => void
+      ) => void)
+    | null;
 
   /** Detect subclass _writev override or option-provided writev. */
   private _getWritevHook():
@@ -274,13 +297,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    */
   private _setupAbortSignal(signal: AbortSignal): void {
     if (signal.aborted) {
-      this.destroy(new Error("Aborted"));
+      this.destroy(new Error("The operation was aborted"));
       return;
     }
 
     const onAbort = (): void => {
       cleanup();
-      this.destroy(new Error("Aborted"));
+      this.destroy(new Error("The operation was aborted"));
     };
 
     const onDone = (): void => {
@@ -431,13 +454,19 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
     // If corked, buffer the write
     if (this._corked > 0) {
-      this._corkedChunks.push({ chunk, encoding, callback: cb });
-      const chunkSize = this._getChunkSize(chunk);
+      const normalized = this._normalizeWriteChunk(chunk, encoding);
+      this._corkedChunks.push({
+        chunk: normalized.chunk,
+        encoding: normalized.encoding,
+        callback: cb
+      });
+      const chunkSize = this._getChunkSize(normalized.chunk, normalized.encoding);
       this._writableLength += chunkSize;
       return this._writableLength < this._highWaterMark;
     }
 
-    const ok = this._doWrite(chunk, encoding, cb);
+    const normalized = this._normalizeWriteChunk(chunk, encoding);
+    const ok = this._doWrite(normalized.chunk, normalized.encoding, cb);
     if (!ok) {
       this._needDrain = true;
     }
@@ -445,7 +474,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   }
 
   private _doWrite(chunk: T, encoding: string, callback?: (error?: Error | null) => void): boolean {
-    const chunkSize = this._getChunkSize(chunk);
+    const chunkSize = this._getChunkSize(chunk, encoding);
     this._writableLength += chunkSize;
 
     if (this._directWrite) {
@@ -573,6 +602,12 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       this._finalFunc(err => {
         if (err) {
           this.emit("error", err);
+          // Match Node.js: auto-destroy and emit close after _final error
+          if (this._autoDestroy && !this._destroyed) {
+            this.destroy();
+          }
+          // Node.js always invokes the end() callback, even on _final error.
+          cb?.();
           return;
         }
         this._finished = true;
@@ -598,7 +633,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
   }
 
-  private _getChunkSize(chunk: T): number {
+  private _getChunkSize(chunk: T, encoding?: string): number {
     if (this._objectMode) {
       return 1;
     }
@@ -606,9 +641,26 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       return chunk.byteLength;
     }
     if (typeof chunk === "string") {
-      return chunk.length;
+      return getStringByteLength(chunk, encoding);
     }
     return 0;
+  }
+
+  private _normalizeWriteChunk(chunk: T, encoding: string): { chunk: T; encoding: string } {
+    // In Node.js, decodeStrings: true converts strings to Buffer and sets encoding
+    // to "buffer". In the browser there is no Buffer, and Uint8Array.toString()
+    // has completely different semantics (comma-separated bytes vs decoded text).
+    // We keep strings as-is but set encoding to "buffer" to match the Node.js API
+    // contract (callers that check encoding will see "buffer" as expected).
+    if (this._objectMode || typeof chunk !== "string") {
+      return { chunk, encoding };
+    }
+    if (!this._decodeStrings) {
+      // When decodeStrings is explicitly false, pass the original encoding through
+      return { chunk, encoding };
+    }
+    // decodeStrings: true (default) — report encoding as "buffer" to match Node.js
+    return { chunk, encoding: "buffer" };
   }
 
   /**
@@ -748,6 +800,16 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    */
   _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
     callback(error);
+  }
+
+  /**
+   * Reverse the effects of destroy() so the stream can potentially be reused.
+   * Matches Node.js _undestroy() which resets destroyed and closed flags.
+   */
+  _undestroy(): void {
+    this._destroyed = false;
+    this._closed = false;
+    this._errored = null;
   }
 
   /** Check if _destroy has been overridden by a subclass or constructor option. */
@@ -905,12 +967,14 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Pipe is not supported on Writable streams (matches Node.js behavior).
-   * Node's Writable inherits pipe() from Stream, but it always throws.
+   * Node's Writable emits ERR_STREAM_CANNOT_PIPE asynchronously and returns undefined.
    */
-  pipe(): never {
+  pipe(): undefined {
     const err = new StreamStateError("pipe", "not readable");
-    this.emit("error", err);
-    throw err;
+    // Node.js emits the error asynchronously (via process.nextTick).
+    // In the browser we use queueMicrotask for the same deferred semantics.
+    queueMicrotask(() => this.emit("error", err));
+    return undefined;
   }
 
   private _getWriter(): WritableStreamDefaultWriter<T> {
@@ -925,6 +989,18 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   // =========================================================================
 
   /**
+   * Check if a stream has been disturbed (data read or piped).
+   * In Node.js this is inherited from the Stream base class and exists on
+   * ALL stream classes (Readable, Writable, Duplex, Transform, PassThrough).
+   * Delegates to Readable.isDisturbed, checking internal _readable for Duplex/Transform.
+   */
+  static isDisturbed(stream: any): boolean {
+    // Late-bound to avoid circular import — Readable is imported at the top as type only.
+    // At runtime, _isDisturbedImpl is injected from index.browser.ts.
+    return _isDisturbedImpl(stream);
+  }
+
+  /**
    * Convert a Web WritableStream to Node.js Writable
    */
   static fromWeb<T>(webStream: WritableStream<T>, options?: WritableStreamOptions): Writable<T> {
@@ -937,6 +1013,20 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   static toWeb<T>(nodeStream: Writable<T>): WritableStream<T> {
     return nodeStream._webStream;
   }
+}
+
+// Node.js: Writable.prototype._writev === null (not undefined).
+(Writable.prototype as any)._writev = null;
+
+// =============================================================================
+// Late-binding injection for isDisturbed (avoids circular import with Readable)
+// =============================================================================
+
+let _isDisturbedImpl: (stream: any) => boolean = () => false;
+
+/** @internal — called from index.browser.ts to inject Readable.isDisturbed */
+export function _injectIsDisturbed(fn: (stream: any) => boolean): void {
+  _isDisturbedImpl = fn;
 }
 
 // =============================================================================
@@ -961,4 +1051,15 @@ export function toWritable<T = Uint8Array>(
 
   // Already a Node-like writable (e.g. StreamBuf)
   return stream as WritableLike;
+}
+
+function getStringByteLength(value: string, encoding?: string): number {
+  const normalized = (encoding ?? "utf8").toLowerCase();
+  if (normalized === "ascii" || normalized === "latin1" || normalized === "binary") {
+    return value.length;
+  }
+  if (normalized === "utf16le" || normalized === "utf-16le" || normalized === "ucs2") {
+    return value.length * 2;
+  }
+  return new TextEncoder().encode(value).byteLength;
 }

@@ -60,9 +60,11 @@ export function compose<T = any, R = any>(
     registry.add(t as any, "error", (err: Error) => composed.emit("error", err));
   }
 
-  // Forward writable-side backpressure/completion events from `first`.
+  // Forward writable-side backpressure from `first`.
   registry.add(first as any, "drain", () => composed.emit("drain"));
-  registry.once(first as any, "finish", () => composed.emit("finish"));
+  // Forward finish from `last` — the composed stream is only "finished" once
+  // data has fully flushed through the entire chain (matching Node.js compose).
+  registry.once(last as any, "finish", () => composed.emit("finish"));
 
   // Forward readable-side events from `last` lazily.
   let forwardData = false;
@@ -101,6 +103,9 @@ export function compose<T = any, R = any>(
     }
     return originalOn(event, listener);
   };
+
+  // Node.js: addListener === on (same function). Must also trigger lazy data forwarding.
+  (composed as any).addListener = (composed as any).on;
 
   (composed as any).once = (event: string | symbol, listener: (...args: any[]) => void): any => {
     if (event === "data") {

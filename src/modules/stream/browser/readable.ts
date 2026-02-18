@@ -32,7 +32,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       return false;
     }
     // Fast path: actual Readable prototype
-    if (Readable.prototype.isPrototypeOf(instance)) {
+    if (Object.prototype.isPrototypeOf.call(Readable.prototype, instance)) {
       return true;
     }
     // Duck-type: must have key Readable methods and the stream brand
@@ -56,6 +56,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _closed: boolean = false;
   private _paused: boolean = false;
   private _flowing: boolean = false;
+  private _resumeScheduled: boolean = false;
   private _hasFlowed: boolean = false;
   private _pipes!: PipeManager<T>;
   private _encoding: string | null = null;
@@ -143,16 +144,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Delays _read calls until the callback fires.
    */
   private _maybeConstruct(): void {
-    const hasConstructHook =
-      this._constructFunc ||
-      Object.getPrototypeOf(this)._construct !== Readable.prototype._construct;
+    const hasConstructHook = this._constructFunc || this._hasSubclassConstruct();
     if (!hasConstructHook) {
       return;
     }
     this._constructed = false;
     // Call _construct on next microtask (matches Node.js which uses process.nextTick)
     queueMicrotask(() => {
-      const fn = this._constructFunc ?? this._construct.bind(this);
+      const fn = this._constructFunc ?? (this as any)._construct.bind(this);
       fn(err => {
         if (err) {
           this.destroy(err);
@@ -168,11 +167,19 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Base construct method - can be overridden by subclasses.
-   * Called once before _read, to set up async resources.
+   * Check if a subclass defines _construct on its own prototype.
+   * Node.js does NOT have _construct on any stream prototype — it only exists
+   * when provided via constructor options or defined by a subclass.
    */
-  _construct(callback: (error?: Error | null) => void): void {
-    callback();
+  private _hasSubclassConstruct(): boolean {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Readable.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, "_construct")) {
+        return true;
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return false;
   }
 
   /**
@@ -180,13 +187,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   private _setupAbortSignal(signal: AbortSignal): void {
     if (signal.aborted) {
-      this.destroy(new Error("Aborted"));
+      this.destroy(new Error("The operation was aborted"));
       return;
     }
 
     const onAbort = (): void => {
       cleanup();
-      this.destroy(new Error("Aborted"));
+      this.destroy(new Error("The operation was aborted"));
     };
 
     const onDone = (): void => {
@@ -248,6 +255,23 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
+   * Static wrap method - wraps an old-style stream into a Readable.
+   * Matches Node.js Readable.wrap(stream, options).
+   */
+  static wrap<T>(src: any, options?: ReadableStreamOptions): Readable<T> {
+    return new Readable<T>({
+      objectMode: src.readableObjectMode ?? src.objectMode ?? true,
+      ...options,
+      destroy(err, callback) {
+        if (typeof src.destroy === "function") {
+          src.destroy(err ?? undefined);
+        }
+        callback(err);
+      }
+    }).wrap(src);
+  }
+
+  /**
    * Push data to the stream (when using controllable stream)
    */
   push(chunk: T | null, encoding?: string): boolean {
@@ -264,6 +288,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       chunk = encoder.encode(chunk) as any;
     }
 
+    // Reject push() after EOF (matches Node.js ERR_STREAM_PUSH_AFTER_EOF)
+    if (this._ended && chunk !== null) {
+      const err = new Error("stream.push() after EOF") as Error & { code: string };
+      err.code = "ERR_STREAM_PUSH_AFTER_EOF";
+      queueMicrotask(() => this.emit("error", err));
+      return false;
+    }
+
     if (chunk === null) {
       // Prevent duplicate end handling
       if (this._ended) {
@@ -273,8 +305,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
       // Emit 'end' only after buffered data is fully drained.
       // This avoids premature 'end' when producers push null while paused.
+      // Defer via queueMicrotask to match Node.js process.nextTick behavior —
+      // synchronous code after push(null) should not see 'end' yet.
       if (this._buf.length === 0) {
-        this._emitEndOnce();
+        queueMicrotask(() => this._emitEndOnce());
       }
       // Note: Don't call destroy() here, let the stream be consumed naturally
       // The reader will return done:true when it finishes reading
@@ -283,6 +317,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     if (this._flowing) {
       // In flowing mode, emit data directly without buffering
+      this._didRead = true;
       this.emit("data", this._applyEncoding(chunk));
       // Check if stream was paused during emit (backpressure from consumer)
       if (!this._flowing) {
@@ -474,6 +509,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._paused = true;
       this._flowing = false;
       this.emit("pause");
+    } else {
+      // Node.js: pause() on a fresh stream transitions readableFlowing
+      // from null to false and sets isPaused() to true.
+      this._paused = true;
+      this._hasFlowed = true;
     }
     return this;
   }
@@ -483,26 +523,32 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   resume(): this {
     if (!this._flowing) {
-      const wasPaused = this._paused;
       this._paused = false;
       this._flowing = true;
       this._hasFlowed = true;
 
-      if (wasPaused) {
-        // Emit asynchronously to match Node.js process.nextTick timing
-        queueMicrotask(() => this.emit("resume"));
+      // Emit asynchronously to match Node.js process.nextTick timing
+      // Use _resumeScheduled guard to prevent duplicate emissions when
+      // resume() is called multiple times synchronously (e.g. on("data") + resume())
+      if (!this._resumeScheduled) {
+        this._resumeScheduled = true;
+        queueMicrotask(() => {
+          this._resumeScheduled = false;
+          this.emit("resume");
+        });
       }
     }
 
     // Emit any buffered data first
     while (this._buf.length > 0 && this._flowing) {
       const chunk = this._buf.shift();
+      this._didRead = true;
       this.emit("data", this._applyEncoding(chunk));
     }
 
-    // If already ended, emit end event
+    // If already ended, defer end event (matches Node.js nextTick behavior)
     if (this._ended && this._buf.length === 0) {
-      this._emitEndOnce();
+      queueMicrotask(() => this._emitEndOnce());
     } else if (this._read) {
       // Call user-provided read function asynchronously
       // This allows multiple pipe() calls to register before data flows
@@ -532,6 +578,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // When a 'data' listener is added, switch to flowing mode
     if (event === "data") {
       this.resume();
+    } else if (event === "readable") {
+      // Node.js: adding a 'readable' listener sets readableFlowing to false
+      this._hasFlowed = true;
+      this._flowing = false;
     }
 
     return this;
@@ -624,6 +674,16 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     callback(error);
   }
 
+  /**
+   * Reverse the effects of destroy() so the stream can potentially be reused.
+   * Matches Node.js _undestroy() which resets destroyed and closed flags.
+   */
+  _undestroy(): void {
+    this._destroyed = false;
+    this._closed = false;
+    this._errored = null;
+  }
+
   /** Check if _destroy has been overridden by a subclass or constructor option. */
   private _hasDestroyHook(): boolean {
     return (
@@ -686,7 +746,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._readableOverride !== undefined) {
       return this._readableOverride;
     }
-    return !this._destroyed && !this._ended;
+    // Node.js: readable stays true while buffer has data, even after push(null).
+    // It only becomes false after the 'end' event has been emitted (or on destroy).
+    return !this._destroyed && !this._endEmitted;
   }
 
   set readable(val: boolean) {
@@ -694,7 +756,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   get readableEnded(): boolean {
-    return this._ended;
+    // Node.js: readableEnded only becomes true after the 'end' event has been emitted,
+    // not when push(null) is called.
+    return this._endEmitted;
   }
 
   get readableLength(): number {
@@ -822,6 +886,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           // In flowing mode, emit data directly without buffering
           // Only buffer if not flowing (paused mode)
           if (this._flowing) {
+            this._didRead = true;
             this.emit("data", this._applyEncoding(value));
           } else {
             this._buf.push(value);
@@ -968,6 +1033,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this.off("end", doneHandler);
       this.off("error", errorHandler);
       this.off("close", doneHandler);
+      // Node.js destroys the stream when the async iterator exits early (break/return/throw)
+      if (!this._destroyed) {
+        this.destroy();
+      }
     }
   }
 
@@ -1365,7 +1434,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const innerSignal = ac.signal;
 
     let accumulator: U;
-    let hasInitial = arguments.length >= 2;
+    const hasInitial = arguments.length >= 2;
     let first = true;
 
     try {
@@ -1435,6 +1504,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     return target as Readable<U>;
   }
 }
+
+// Node.js: `Readable.prototype.addListener === Readable.prototype.on` (same function).
+// Readable overrides `on` from EventEmitter, so we must re-alias `addListener`.
+Readable.prototype.addListener = Readable.prototype.on;
 
 // =============================================================================
 // Internal helpers – Functional method utilities

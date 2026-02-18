@@ -2,7 +2,7 @@
  * Browser Stream - Duplex
  */
 
-import type { DuplexStreamOptions } from "@stream/types";
+import type { DuplexStreamOptions, WritableLike } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
 import { parseEndArgs } from "@stream/common/end-args";
@@ -21,11 +21,49 @@ import { Transform } from "./transform";
  * A duplex stream that combines readable and writable
  */
 export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitter {
+  /**
+   * Allow duck-typed instanceof checks.
+   * Browser Duplex composes Readable + Writable, so we use Symbol.hasInstance
+   * to check for key Duplex-like methods/properties (both readable and writable).
+   * This makes `transform instanceof Duplex` return true.
+   */
+  static [Symbol.hasInstance](instance: any): boolean {
+    if (instance == null || typeof instance !== "object") {
+      return false;
+    }
+    // Fast path: actual Duplex prototype
+    if (Object.prototype.isPrototypeOf.call(Duplex.prototype, instance)) {
+      return true;
+    }
+    // Duck-type: must have both Readable and Writable characteristics + stream brand
+    return (
+      instance.__excelts_stream === true &&
+      typeof instance.read === "function" &&
+      typeof instance.pipe === "function" &&
+      typeof instance.write === "function" &&
+      typeof instance.end === "function" &&
+      typeof instance.on === "function" &&
+      "readableFlowing" in instance &&
+      "writableFinished" in instance
+    );
+  }
+
   /** @internal */
   private readonly _readable: Readable<TRead>;
   /** @internal */
   private readonly _writable: Writable<TWrite>;
   allowHalfOpen: boolean;
+
+  /**
+   * Check if a stream has been disturbed (data read or piped).
+   * Delegates to Readable.isDisturbed, checking internal _readable for Duplex/Transform.
+   */
+  static isDisturbed(stream: any): boolean {
+    if (stream && stream._readable instanceof Readable) {
+      return Readable.isDisturbed(stream._readable);
+    }
+    return Readable.isDisturbed(stream);
+  }
 
   /**
    * Create a Duplex stream from various sources
@@ -187,6 +225,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   private _emitClose: boolean;
   private _errored: Error | null = null;
   private _closed: boolean = false;
+  private _autoDestroy: boolean;
 
   private _sideForwardingCleanup: (() => void) | null = null;
   // User-provided construct function (Node.js compatibility)
@@ -199,6 +238,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       objectMode?: boolean;
       emitClose?: boolean;
       autoDestroy?: boolean;
+      encoding?: string;
+      decodeStrings?: boolean;
+      defaultEncoding?: string;
+      signal?: AbortSignal;
       read?: (this: Duplex<TRead, TWrite>, size?: number) => void;
       write?: (
         this: Duplex<TRead, TWrite>,
@@ -224,6 +267,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
     this.allowHalfOpen = options?.allowHalfOpen ?? true;
     this._emitClose = options?.emitClose ?? true;
+    this._autoDestroy = options?.autoDestroy ?? true;
     // Support shorthand objectMode option
     const objectMode = options?.objectMode ?? false;
     const readableObjMode = options?.readableObjectMode ?? objectMode;
@@ -235,26 +279,6 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     const readableHwm = hasGeneralHwm ? options!.highWaterMark : options?.readableHighWaterMark;
     const writableHwm = hasGeneralHwm ? options!.highWaterMark : options?.writableHighWaterMark;
 
-    this._readable = new Readable<TRead>({
-      highWaterMark: readableHwm,
-      objectMode: readableObjMode,
-      read: options?.read?.bind(this),
-      // Suppress child-level close/error — Duplex itself is the authority
-      emitClose: false,
-      autoDestroy: false
-    });
-
-    this._writable = new Writable<TWrite>({
-      highWaterMark: writableHwm,
-      objectMode: writableObjMode,
-      write: options?.write?.bind(this),
-      writev: options?.writev?.bind(this),
-      final: options?.final?.bind(this),
-      // Suppress child-level close/error — Duplex itself is the authority
-      emitClose: false,
-      autoDestroy: false
-    });
-
     // Store user-provided destroy function
     if (options?.destroy) {
       this._destroy = options.destroy.bind(this);
@@ -265,7 +289,98 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       this._constructFunc = options.construct.bind(this);
     }
 
+    // When Duplex has a construct hook, propagate delay to child streams
+    // so that reads/writes are queued until the Duplex-level construct fires.
+    let readableConstructCb: ((error?: Error | null) => void) | undefined;
+    let writableConstructCb: ((error?: Error | null) => void) | undefined;
+    const hasConstruct = this._hasConstructHook();
+
+    this._readable = new Readable<TRead>({
+      highWaterMark: readableHwm,
+      objectMode: readableObjMode,
+      read: options?.read?.bind(this),
+      encoding: options?.encoding,
+      // Suppress child-level close/error — Duplex itself is the authority
+      emitClose: false,
+      autoDestroy: false,
+      // Propagate construct delay to child readable
+      construct: hasConstruct
+        ? cb => {
+            readableConstructCb = cb;
+          }
+        : undefined
+    });
+
+    this._writable = new Writable<TWrite>({
+      highWaterMark: writableHwm,
+      objectMode: writableObjMode,
+      write: options?.write?.bind(this),
+      writev: options?.writev?.bind(this),
+      final: options?.final?.bind(this),
+      decodeStrings: options?.decodeStrings,
+      defaultEncoding: options?.defaultEncoding,
+      // Suppress child-level close/error — Duplex itself is the authority
+      emitClose: false,
+      autoDestroy: false,
+      // Propagate construct delay to child writable
+      construct: hasConstruct
+        ? cb => {
+            writableConstructCb = cb;
+          }
+        : undefined
+    });
+
+    // Prevent unhandled error throws on child streams.
+    // Errors are forwarded to the Duplex via _setupSideForwarding; these
+    // noop listeners act as safety nets after forwarding cleanup.
+    const noop = (): void => {};
+    this._readable.on("error", noop);
+    this._writable.on("error", noop);
+
     this._setupSideForwarding();
+
+    // signal option — destroy the Duplex when signal aborts (matching Node)
+    if (options?.signal) {
+      this._setupAbortSignal(options.signal);
+    }
+
+    // R5-1: _construct hook — if provided, delay reads/writes until constructed
+    if (hasConstruct) {
+      this._constructed = false;
+      queueMicrotask(() => {
+        const fn = this._constructFunc ?? (this as any)._construct.bind(this);
+        fn(err => {
+          if (err) {
+            readableConstructCb?.(err);
+            writableConstructCb?.(err);
+            this.destroy(err);
+            return;
+          }
+          this._constructed = true;
+          // Unblock child streams by firing their construct callbacks
+          readableConstructCb?.();
+          writableConstructCb?.();
+        });
+      });
+    }
+  }
+
+  private _setupAbortSignal(signal: AbortSignal): void {
+    if (signal.aborted) {
+      this.destroy(new Error("The operation was aborted"));
+      return;
+    }
+
+    const onAbort = (): void => {
+      this.destroy(new Error("The operation was aborted"));
+    };
+
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", onAbort);
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    this.once("close", cleanup);
   }
 
   private _setupSideForwarding(): void {
@@ -276,18 +391,52 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
     const registry = createListenerRegistry();
 
+    // Deduplicate error forwarding: when destroy(err) tears down both sides,
+    // both _readable and _writable emit "error". Node.js Duplex only emits
+    // one "error" event, so we guard against duplicate forwarding.
+    let errorForwarded = false;
+    const forwardError = (err: any): void => {
+      if (errorForwarded) {
+        return;
+      }
+      errorForwarded = true;
+      this.emit("error", err);
+    };
+
+    // Auto-destroy: when both sides finish, destroy the Duplex (matching Node.js).
+    let readableEnded = false;
+    let writableFinished = false;
+    const maybeAutoDestroy = (): void => {
+      if (this._autoDestroy && readableEnded && writableFinished && !this._destroyed) {
+        this.destroy();
+      }
+    };
+
     // Forward non-data events (data forwarding is lazy to avoid premature flowing)
     registry.once(this._readable, "end", () => {
       this.emit("end");
+      readableEnded = true;
       if (!this.allowHalfOpen) {
         this._writable.end();
       }
+      maybeAutoDestroy();
     });
-    registry.add(this._readable, "error", err => this.emit("error", err));
-    registry.add(this._readable, "readable", () => this.emit("readable"));
+    registry.add(this._readable, "error", forwardError);
+    // Use EventEmitter.prototype.on directly to register "readable" forwarding,
+    // bypassing Readable's on() override which sets readableFlowing = false.
+    const readableForwarder = (): void => {
+      this.emit("readable");
+    };
+    EventEmitter.prototype.on.call(this._readable, "readable", readableForwarder);
+    registry.add(this._readable, "pause", () => this.emit("pause"));
+    registry.add(this._readable, "resume", () => this.emit("resume"));
 
-    registry.add(this._writable, "error", err => this.emit("error", err));
-    registry.once(this._writable, "finish", () => this.emit("finish"));
+    registry.add(this._writable, "error", forwardError);
+    registry.once(this._writable, "finish", () => {
+      this.emit("finish");
+      writableFinished = true;
+      maybeAutoDestroy();
+    });
     registry.add(this._writable, "drain", () => this.emit("drain"));
     registry.once(this._writable, "close", () => {
       if (!this.allowHalfOpen && !this._readable.destroyed) {
@@ -295,7 +444,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       }
     });
 
-    this._sideForwardingCleanup = () => registry.cleanup();
+    this._sideForwardingCleanup = () => {
+      registry.cleanup();
+      this._readable.off("readable", readableForwarder);
+    };
   }
 
   /**
@@ -311,6 +463,9 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     if (event === "data" && !this._dataForwardingSetup) {
       this._dataForwardingSetup = true;
       this._readable.on("data", chunk => this.emit("data", chunk));
+    } else if (event === "readable") {
+      // Node.js: adding a 'readable' listener sets readableFlowing to false
+      this._readable.readableFlowing = false;
     }
     return this;
   }
@@ -422,10 +577,6 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     destination: W,
     options?: { end?: boolean }
   ): W {
-    if (destination instanceof Transform) {
-      this._readable.pipe((destination as any)._writable, options);
-      return destination;
-    }
     this._readable.pipe(destination, options);
     return destination;
   }
@@ -510,12 +661,43 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     callback(error);
   }
 
+  /**
+   * Reverse the effects of destroy() so the stream can potentially be reused.
+   * Matches Node.js _undestroy() which resets destroyed and closed flags.
+   */
+  _undestroy(): void {
+    this._readable._undestroy();
+    this._writable._undestroy();
+    this._destroyed = false;
+    this._closed = false;
+    this._errored = null;
+  }
+
   /** Check if _destroy has been overridden by a subclass or constructor option. */
   private _hasDestroyHook(): boolean {
     return (
       Object.prototype.hasOwnProperty.call(this, "_destroy") ||
       Object.getPrototypeOf(this)._destroy !== Duplex.prototype._destroy
     );
+  }
+
+  /**
+   * Check if a subclass defines _construct on its own prototype.
+   * Node.js does NOT have _construct on any stream prototype — it only exists
+   * when provided via constructor options or defined by a subclass.
+   */
+  private _hasConstructHook(): boolean {
+    if (this._constructFunc) {
+      return true;
+    }
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Duplex.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, "_construct")) {
+        return true;
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return false;
   }
 
   /**
@@ -749,11 +931,16 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   }
 
   compose<U>(
-    stream:
-      | import("@stream/types").WritableLike
-      | ((source: AsyncIterable<TRead>) => AsyncIterable<U>),
+    stream: WritableLike | ((source: AsyncIterable<TRead>) => AsyncIterable<U>),
     options?: { signal?: AbortSignal }
   ): Readable<U> {
     return this._readable.compose(stream, options);
   }
 }
+
+// Node.js: `Duplex.prototype.addListener === Duplex.prototype.on` (same function).
+// Duplex overrides `on` from EventEmitter, so we must re-alias `addListener`.
+Duplex.prototype.addListener = Duplex.prototype.on;
+
+// Node.js: Duplex.prototype._writev === null (copied from Writable).
+(Duplex.prototype as any)._writev = null;

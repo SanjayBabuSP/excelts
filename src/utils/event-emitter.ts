@@ -24,6 +24,8 @@ export class EventEmitter {
 
   static defaultMaxListeners: number = 10;
 
+  // addListener is re-assigned to `on` after the class definition to ensure
+  // reference identity: `addListener === on` (matches Node.js EventEmitter).
   addListener(event: string | symbol, listener: EventListener): this {
     return this.on(event, listener);
   }
@@ -104,6 +106,8 @@ export class EventEmitter {
     return this.prependListener(event, onceWrapper);
   }
 
+  // removeListener is re-assigned to `off` after the class definition to ensure
+  // reference identity: `removeListener === off` (matches Node.js EventEmitter).
   removeListener(event: string | symbol, listener: EventListener): this {
     return this.off(event, listener);
   }
@@ -160,6 +164,15 @@ export class EventEmitter {
   emit(event: string | symbol, ...args: any[]): boolean {
     const existing = this._listeners.get(event);
     if (!existing) {
+      // Node.js throws when "error" is emitted with no listener
+      if (event === "error") {
+        const err = args[0];
+        if (err instanceof Error) {
+          throw err;
+        }
+        const message = `Unhandled error.${err !== undefined ? ` (${err})` : " (undefined)"}`;
+        throw new Error(message);
+      }
       return false;
     }
 
@@ -177,6 +190,15 @@ export class EventEmitter {
     const listeners = existing;
     const len = listeners.length;
     if (len === 0) {
+      // Node.js throws when "error" is emitted with no listener
+      if (event === "error") {
+        const err = args[0];
+        if (err instanceof Error) {
+          throw err;
+        }
+        const message = `Unhandled error.${err !== undefined ? ` (${err})` : " (undefined)"}`;
+        throw new Error(message);
+      }
       return false;
     }
 
@@ -267,3 +289,10 @@ export class EventEmitter {
     return this._maxListeners;
   }
 }
+
+// Node.js guarantees `addListener === on` and `removeListener === off` on the
+// EventEmitter prototype.  We cannot achieve reference identity inside the
+// class body (TypeScript generates separate method slots), so we patch the
+// prototype immediately after the class is defined.
+EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+EventEmitter.prototype.removeListener = EventEmitter.prototype.off;

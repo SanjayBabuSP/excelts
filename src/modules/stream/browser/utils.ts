@@ -280,7 +280,39 @@ function toTextBytes(chunk: unknown): Uint8Array | null {
   if (Array.isArray(chunk)) {
     return new Uint8Array(chunk);
   }
-  return toBinaryChunk(chunk);
+  const binary = toBinaryChunk(chunk);
+  if (binary) {
+    return binary;
+  }
+  return toArrayLikeBytes(chunk);
+}
+
+function toArrayLikeBytes(chunk: unknown): Uint8Array | null {
+  if (chunk == null || typeof chunk !== "object") {
+    return null;
+  }
+
+  const lengthValue = (chunk as { length?: unknown }).length;
+  if (
+    typeof lengthValue !== "number" ||
+    !Number.isFinite(lengthValue) ||
+    lengthValue < 0 ||
+    !Number.isInteger(lengthValue)
+  ) {
+    return null;
+  }
+
+  const result = new Uint8Array(lengthValue);
+  const source = chunk as Record<number, unknown>;
+  for (let index = 0; index < lengthValue; index++) {
+    const value = source[index];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return null;
+    }
+    result[index] = value;
+  }
+
+  return result;
 }
 
 // =============================================================================
