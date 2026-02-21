@@ -127,7 +127,8 @@ export const addAbortSignal = createAddAbortSignal({
 // =============================================================================
 
 /**
- * Check if a readable stream has been disturbed (read from)
+ * Check if a readable stream has been disturbed (read from).
+ * For Web ReadableStreams, returns `locked` (matches Node.js behaviour).
  */
 export function isDisturbed(stream: unknown): boolean {
   if (stream instanceof Readable) {
@@ -137,12 +138,20 @@ export function isDisturbed(stream: unknown): boolean {
     return Readable.isDisturbed((stream as any)._readable);
   }
 
+  // Web ReadableStream: `locked` is the closest indicator of disturbance
+  // (a reader has been acquired). Matches the Node.js isDisturbed check.
+  if ((stream as any)?.locked !== undefined) {
+    return !!(stream as ReadableStream).locked;
+  }
+
   const s = stream as any;
-  return (
-    s?.readableDidRead === true ||
-    s?._didRead === true ||
-    s?._ended === true ||
-    s?._destroyed === true
+  return !!(
+    s?.readableDidRead ||
+    s?._didRead ||
+    s?.readableEnded ||
+    s?.destroyed ||
+    s?._ended ||
+    s?._destroyed
   );
 }
 
@@ -157,7 +166,7 @@ export function isReadable(stream: unknown): stream is ReadableLike {
     return true;
   }
   if (stream instanceof Duplex) {
-    return (stream as any)._readable instanceof Readable;
+    return true;
   }
   const o = stream as Record<string, unknown>;
   return typeof o.read === "function" && typeof o.pipe === "function";
@@ -174,7 +183,7 @@ export function isWritable(stream: unknown): stream is WritableLike {
     return true;
   }
   if (stream instanceof Duplex) {
-    return (stream as any)._writable instanceof Writable;
+    return true;
   }
   const o = stream as Record<string, unknown>;
   return typeof o.write === "function" && typeof o.end === "function";
@@ -188,11 +197,28 @@ export function isWritable(stream: unknown): stream is WritableLike {
  * Create a pair of connected Duplex streams
  * Data written to one stream can be read from the other
  */
-export function duplexPair<T = Uint8Array>(
-  options?: DuplexStreamOptions
-): [Duplex<T, T>, Duplex<T, T>] {
-  const stream1 = new Duplex<T, T>(options);
-  const stream2 = new Duplex<T, T>(options);
+export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, T>, IDuplex<T, T>] {
+  const objectMode =
+    options?.readableObjectMode ?? options?.writableObjectMode ?? options?.objectMode ?? false;
+
+  const duplexOpts: DuplexStreamOptions = {
+    objectMode,
+    // Only pass through the general highWaterMark if the user explicitly set it.
+    // Per-side values (readableHighWaterMark / writableHighWaterMark) take
+    // precedence — but they are lost when the Duplex constructor sees a general
+    // highWaterMark key on the options object.
+    ...(options != null && Object.prototype.hasOwnProperty.call(options, "highWaterMark")
+      ? { highWaterMark: options.highWaterMark }
+      : {}),
+    readableHighWaterMark: options?.readableHighWaterMark ?? options?.highWaterMark,
+    writableHighWaterMark: options?.writableHighWaterMark ?? options?.highWaterMark,
+    readableObjectMode: options?.readableObjectMode ?? objectMode,
+    writableObjectMode: options?.writableObjectMode ?? objectMode,
+    allowHalfOpen: options?.allowHalfOpen
+  };
+
+  const stream1 = new Duplex<T, T>(duplexOpts);
+  const stream2 = new Duplex<T, T>(duplexOpts);
 
   stream1.write = function (
     chunk: T,

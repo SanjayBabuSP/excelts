@@ -527,6 +527,13 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
     if (cb) {
       this.once("finish", cb);
+      // Node.js also fires the end() callback when the stream is destroyed,
+      // ensuring callers are notified even on abrupt teardown.
+      this.once("close", () => {
+        if (!this.writableFinished) {
+          cb();
+        }
+      });
     }
 
     if (chunk !== undefined) {

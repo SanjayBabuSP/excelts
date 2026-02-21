@@ -15,7 +15,9 @@ import type { ITransform } from "@stream/types";
 /**
  * Compose multiple transform streams into one
  */
-export function compose<_T = any, _R = any>(...transforms: Array<ITransform<any, any>>): Transform {
+export function compose<T = any, R = any>(
+  ...transforms: Array<ITransform<any, any>>
+): ITransform<T, R> {
   const len = transforms.length;
   if (len === 0) {
     return new Transform({

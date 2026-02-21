@@ -309,7 +309,7 @@ class WorkerInflateRaw extends Duplex {
   private readonly worker: Worker;
   private _nextId = 1;
   private _pendingAcks = new Map<number, (err?: Error | null) => void>();
-  private _closed = false;
+  private _workerClosed = false;
   private _junkError = false;
   private _terminated = false;
 
@@ -412,7 +412,7 @@ class WorkerInflateRaw extends Duplex {
   }
 
   private _doWrite(chunk: Uint8Array, callback: (error?: Error | null) => void): void {
-    if (this._closed || this._junkError) {
+    if (this._workerClosed || this._junkError) {
       callback();
       return;
     }
@@ -431,19 +431,19 @@ class WorkerInflateRaw extends Duplex {
   }
 
   private _doClose(callback: (error?: Error | null) => void): void {
-    if (this._closed) {
+    if (this._workerClosed) {
       callback();
       return;
     }
-    this._closed = true;
+    this._workerClosed = true;
 
     this.worker.postMessage({ t: "close" });
     callback();
   }
 
   override destroy(error?: Error | null): this {
-    if (!this._closed) {
-      this._closed = true;
+    if (!this._workerClosed) {
+      this._workerClosed = true;
       try {
         this.worker.postMessage({ t: "abort" });
       } catch {
@@ -608,7 +608,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
           this.emit("entry", entry);
         },
         pushEntry: (entry: ZipEntry) => {
-          this.push(entry);
+          this.push(entry as any);
         },
         // Browser version historically only pushed entries when forceStream=true.
         // Keep this behavior to avoid changing stream piping semantics.

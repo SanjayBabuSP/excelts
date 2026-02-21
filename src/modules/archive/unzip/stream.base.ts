@@ -81,7 +81,7 @@ export type PullFn = (length: number) => Promise<Uint8Array>;
 
 const STR_FUNCTION = "function";
 
-export class PullStream extends Duplex {
+export class PullStream<TRead = any> extends Duplex {
   protected readonly _queue = new ByteQueue();
 
   // Writable-side backpressure (Node.js)
@@ -119,6 +119,17 @@ export class PullStream extends Duplex {
       this.emit("chunk", false);
     });
   }
+
+  // Accept string writes as well (Node Readable.from([string]) compatibility).
+  declare write: {
+    (chunk: Uint8Array, callback?: (error?: Error | null) => void): boolean;
+    (chunk: Uint8Array, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+    (chunk: string, callback?: (error?: Error | null) => void): boolean;
+    (chunk: string, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+  };
+
+  // Improve public typing for consumers without relying on generic Duplex types.
+  declare push: (chunk: TRead | null) => boolean;
 
   private _notifyPendingChunkWaiter(): void {
     if (!this._pendingChunkResolve) {

@@ -962,7 +962,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    * Get the internal buffer contents as an array (matches Node.js behavior)
    */
   get writableBuffer(): T[] {
-    return this._corkedChunks.map(entry => entry.chunk);
+    const chunks: T[] = this._corkedChunks.map(entry => entry.chunk);
+    for (const entry of this._writeQueue) {
+      chunks.push(entry.chunk);
+    }
+    return chunks;
   }
 
   /**

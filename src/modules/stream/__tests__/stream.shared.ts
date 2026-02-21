@@ -8565,4 +8565,225 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
     });
   });
+
+  // ==========================================================================
+  // Parity Regression Tests
+  // ==========================================================================
+  describe("Parity Regression Tests", () => {
+    // ---------- compose: error propagation through inner transforms ----------
+    describe("compose error propagation", () => {
+      it("should destroy composed stream when an inner transform errors", async () => {
+        const stage1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+        const stage2 = createTransform<number, number>(
+          n => {
+            if (n === 3) {
+              throw new Error("inner-error");
+            }
+            return n;
+          },
+          { objectMode: true }
+        );
+
+        // Suppress uncaught error emissions from individual stages
+        stage1.on("error", () => {});
+        stage2.on("error", () => {});
+
+        const composed = compose(stage1, stage2);
+
+        const output: number[] = [];
+        composed.on("data", (chunk: number) => output.push(chunk));
+
+        const errorPromise = new Promise<Error>(resolve => {
+          composed.on("error", (err: Error) => resolve(err));
+        });
+
+        composed.write(1); // becomes 2 → passes
+        composed.write(2); // becomes 3 → error in stage2
+
+        const err = await errorPromise;
+        expect(err.message).toBe("inner-error");
+        expect(composed.destroyed).toBe(true);
+      });
+    });
+
+    // ---------- duplexPair allowHalfOpen ----------
+    describe("duplexPair allowHalfOpen", () => {
+      it("should support allowHalfOpen: true (peer stays writable after one side ends)", async () => {
+        const [side1, side2] = duplexPair({ objectMode: true, allowHalfOpen: true });
+
+        const received: unknown[] = [];
+        side1.on("data", (chunk: unknown) => received.push(chunk));
+
+        side1.end("from-side1");
+
+        // side2 should still be writable after side1 ended
+        await new Promise(resolve => setTimeout(resolve, 20));
+        side2.write("from-side2-late");
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(received).toContain("from-side2-late");
+        side2.end();
+      });
+    });
+
+    // ---------- duplexPair per-side options ----------
+    describe("duplexPair per-side options", () => {
+      it("should accept readableHighWaterMark and writableHighWaterMark", () => {
+        const [side1] = duplexPair({
+          objectMode: true,
+          readableHighWaterMark: 8,
+          writableHighWaterMark: 4
+        });
+
+        expect(side1.readableHighWaterMark).toBe(8);
+        expect(side1.writableHighWaterMark).toBe(4);
+      });
+    });
+
+    // ---------- isReadable / isWritable on Duplex ----------
+    describe("isReadable/isWritable on Duplex", () => {
+      it("should return true for both isReadable and isWritable on Duplex", () => {
+        const duplex = createDuplex({ objectMode: true });
+        expect(isReadable(duplex)).toBe(true);
+        expect(isWritable(duplex)).toBe(true);
+      });
+
+      it("should return true for both isReadable and isWritable on Transform", () => {
+        const transform = createTransform(x => x, { objectMode: true });
+        expect(isReadable(transform)).toBe(true);
+        expect(isWritable(transform)).toBe(true);
+      });
+    });
+
+    // ---------- isReadable / isWritable on destroyed/ended streams ----------
+    describe("isReadable/isWritable on destroyed and ended streams", () => {
+      it("isReadable should still return true for destroyed Readable (type check)", () => {
+        const readable = createReadableFromArray([1], { objectMode: true });
+        readable.destroy();
+        // isReadable is a type check, not a state check — it checks if the object
+        // IS a readable stream, not whether it's still in a readable state.
+        expect(isReadable(readable)).toBe(true);
+      });
+
+      it("isWritable should still return true for destroyed Writable (type check)", () => {
+        const writable = createNullWritable();
+        writable.destroy();
+        expect(isWritable(writable)).toBe(true);
+      });
+    });
+
+    // ---------- writableBuffer content verification (fix #14) ----------
+    describe("writableBuffer content", () => {
+      it("should contain buffered chunks when corked", async () => {
+        const chunks: unknown[] = [];
+        const writable = createWritable({
+          objectMode: true,
+          write(chunk: unknown, _enc: string, cb: () => void) {
+            chunks.push(chunk);
+            cb();
+          }
+        });
+
+        writable.cork();
+        writable.write("a");
+        writable.write("b");
+
+        // While corked, both chunks should be in the buffer
+        const buf = writable.writableBuffer;
+        expect(buf).toBeDefined();
+        expect(buf.length).toBeGreaterThanOrEqual(2);
+
+        writable.uncork();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        writable.end();
+      });
+    });
+
+    // ---------- Transform closed getter transitions to true (fix #12) ----------
+    describe("Transform closed getter", () => {
+      it("should transition from false to true after stream finishes", async () => {
+        const t = createTransform<number, number>(n => n, { objectMode: true });
+        expect(t.closed).toBe(false);
+
+        t.end();
+        // Consume readable side
+        t.resume();
+
+        await new Promise<void>(resolve => t.on("close", resolve));
+        expect(t.closed).toBe(true);
+      });
+
+      it("should become true after destroy()", async () => {
+        const t = createTransform<number, number>(n => n, { objectMode: true });
+        expect(t.closed).toBe(false);
+
+        t.destroy();
+
+        await new Promise<void>(resolve => t.on("close", resolve));
+        expect(t.closed).toBe(true);
+      });
+    });
+
+    // ---------- Duplex end() callback fires on destroy (fix #13) ----------
+    describe("Duplex end() callback on destroy", () => {
+      it("should fire end callback even when destroy is called before finish", async () => {
+        const duplex = createDuplex({ objectMode: true });
+
+        let endCallbackFired = false;
+        duplex.end(() => {
+          endCallbackFired = true;
+        });
+
+        // Destroy before finish completes
+        duplex.destroy();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(endCallbackFired).toBe(true);
+      });
+
+      it("should fire end callback normally when stream finishes", async () => {
+        const duplex = createDuplex({
+          objectMode: true,
+          read() {
+            this.push(null);
+          }
+        });
+
+        let endCallbackFired = false;
+        duplex.resume();
+        duplex.end(() => {
+          endCallbackFired = true;
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(endCallbackFired).toBe(true);
+      });
+    });
+
+    // ---------- addAbortSignal on Writable ----------
+    describe("addAbortSignal on Writable", () => {
+      it("should destroy writable when signal is aborted", async () => {
+        const controller = new AbortController();
+        const writable = createNullWritable();
+        writable.on("error", () => {}); // Prevent uncaught exception
+
+        addAbortSignal(controller.signal, writable);
+
+        controller.abort();
+
+        expect(writable.destroyed).toBe(true);
+      });
+
+      it("should destroy writable immediately if signal already aborted", () => {
+        const controller = new AbortController();
+        controller.abort();
+
+        const writable = createNullWritable();
+        writable.on("error", () => {}); // Prevent uncaught exception
+        addAbortSignal(controller.signal, writable);
+
+        expect(writable.destroyed).toBe(true);
+      });
+    });
+  });
 }

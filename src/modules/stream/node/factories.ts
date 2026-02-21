@@ -87,11 +87,14 @@ export function createReadableFromArray<T>(
     highWaterMark: options?.highWaterMark,
     objectMode: options?.objectMode ?? true,
     read() {
-      if (index < data.length) {
-        this.push(data[index++]);
-      } else {
-        this.push(null);
+      while (index < data.length) {
+        if (!this.push(data[index++])) {
+          // Backpressure - wait for next read
+          return;
+        }
       }
+      // All data pushed, end the stream
+      this.push(null);
     }
   });
 }

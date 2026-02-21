@@ -229,10 +229,12 @@ export function createEmptyReadable<T = Uint8Array>(options?: ReadableStreamOpti
 }
 
 // Reusable null write handler
-const nullWriteHandler: UnderlyingSink<any> = {
-  write: () => {
-    // Discard
-  }
+const nullWrite = (
+  _chunk: any,
+  _encoding: string,
+  callback: (error?: Error | null) => void
+): void => {
+  callback();
 };
 
 /**
@@ -241,6 +243,6 @@ const nullWriteHandler: UnderlyingSink<any> = {
 export function createNullWritable<T = any>(options?: WritableStreamOptions): IWritable<T> {
   return new Writable<T>({
     ...options,
-    stream: new WritableStream<T>(nullWriteHandler)
+    write: nullWrite
   });
 }

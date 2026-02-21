@@ -43,6 +43,13 @@ export class CsvFormatterStream extends Transform {
   /** Pre-allocated options object to avoid per-row allocation in streaming */
   declare private rowOptions: FormatRowOptions;
 
+  // Improve public typing without relying on generic Transform types.
+  declare push: (chunk: string | null) => boolean;
+  declare write: {
+    (chunk: Row, callback?: (error?: Error | null) => void): boolean;
+    (chunk: Row, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+  };
+
   constructor(options: CsvFormatOptions = {}) {
     super({
       objectMode: options.objectMode !== false,
@@ -94,7 +101,7 @@ export class CsvFormatterStream extends Transform {
     }
   }
 
-  override _transform(
+  _transform(
     chunk: Row,
     _encoding: string,
     callback: (error?: Error | null, data?: string) => void
@@ -138,13 +145,13 @@ export class CsvFormatterStream extends Transform {
     }
   }
 
-  override _destroy(error: Error | null, callback: (error: Error | null) => void): void {
+  _destroy(error: Error | null, callback: (error: Error | null) => void): void {
     this.keys = null;
     this.displayHeaders = null;
     callback(error);
   }
 
-  override _flush(callback: (error?: Error | null) => void): void {
+  _flush(callback: (error?: Error | null) => void): void {
     // Handle writeHeaders: true with no data - still write headers
     if (!this.headerWritten && this.displayHeaders && this.formatConfig.writeHeaders) {
       if (this.formatConfig.bom) {

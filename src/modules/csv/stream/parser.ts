@@ -94,7 +94,17 @@ export class CsvParserStream extends Transform {
   private backpressure: boolean = false;
   private pendingCallback: ((error?: Error | null) => void) | null = null;
 
+  // Improve public typing without relying on generic Transform types.
+  declare push: (chunk: Row | string | null) => boolean;
+  declare write: {
+    (chunk: Uint8Array, callback?: (error?: Error | null) => void): boolean;
+    (chunk: Uint8Array, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+    (chunk: string, callback?: (error?: Error | null) => void): boolean;
+    (chunk: string, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+  };
+
   constructor(options: CsvParseOptions = {}) {
+    // In objectMode (default), emit Row objects; when objectMode === false, emit JSON strings.
     super({ objectMode: options.objectMode !== false });
     this.options = options;
     this.chunkSize = options.chunkSize ?? 1000;
@@ -129,7 +139,7 @@ export class CsvParserStream extends Transform {
    * Called when downstream is ready for more data (backpressure released).
    * Resume processing if we were paused due to backpressure.
    */
-  override _read(_size: number): void {
+  _read(_size: number): void {
     if (this.backpressure && this.pendingCallback) {
       this.backpressure = false;
       const callback = this.pendingCallback;
@@ -193,7 +203,7 @@ export class CsvParserStream extends Transform {
     return this;
   }
 
-  override _transform(
+  _transform(
     chunk: Uint8Array | string,
     _encoding: string,
     callback: (error?: Error | null, data?: Row) => void
@@ -281,7 +291,7 @@ export class CsvParserStream extends Transform {
     }
   }
 
-  override _flush(callback: (error?: Error | null) => void): void {
+  _flush(callback: (error?: Error | null) => void): void {
     // If chunk callback aborted parsing or toLine reached, skip flush
     if (this.chunkAborted || this.toLineReached) {
       callback();
@@ -327,7 +337,7 @@ export class CsvParserStream extends Transform {
    * Clean up resources when stream is destroyed.
    * Handles pending backpressure callbacks and clears buffers.
    */
-  override _destroy(error: Error | null, callback: (error: Error | null) => void): void {
+  _destroy(error: Error | null, callback: (error: Error | null) => void): void {
     // Clear pending backpressure callback to prevent memory leaks
     // The callback is not invoked - the stream is being destroyed
     this.pendingCallback = null;

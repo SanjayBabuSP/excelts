@@ -119,7 +119,7 @@ type _NonClassExport_addAbortSignal = Assert<
   IsEqualStrict<NodeRuntimeNonClass["addAbortSignal"], BrowserRuntimeNonClass["addAbortSignal"]>
 >;
 type _NonClassExport_compose = Assert<
-  ParamsEqual<NodeRuntimeNonClass["compose"], BrowserRuntimeNonClass["compose"]>
+  IsEqualStrict<NodeRuntimeNonClass["compose"], BrowserRuntimeNonClass["compose"]>
 >;
 type _NonClassExport_consumers = Assert<
   IsEqualStrict<NodeRuntimeNonClass["consumers"], BrowserRuntimeNonClass["consumers"]>
@@ -197,7 +197,7 @@ type _NonClassExport_drainStream = Assert<
   IsEqualStrict<NodeRuntimeNonClass["drainStream"], BrowserRuntimeNonClass["drainStream"]>
 >;
 type _NonClassExport_duplexPair = Assert<
-  ParamsEqual<NodeRuntimeNonClass["duplexPair"], BrowserRuntimeNonClass["duplexPair"]>
+  IsEqualStrict<NodeRuntimeNonClass["duplexPair"], BrowserRuntimeNonClass["duplexPair"]>
 >;
 type _NonClassExport_finished = Assert<
   IsEqualStrict<NodeRuntimeNonClass["finished"], BrowserRuntimeNonClass["finished"]>

@@ -15,10 +15,10 @@ import type { FormattedValue as FormattedValueImpl } from "./format/formatted-va
 export type HeaderArray = (string | undefined | null)[];
 
 /** Row as array of [header, value] tuples */
-export type RowHashArray<V = any> = [string, V][];
+export type RowHashArray<V = unknown> = [string, V][];
 
 /** Row as string array (internal parsing output) */
-export type RowArray = string[];
+export type RowArray = Array<string | number | boolean | null | undefined>;
 
 /** Row as object (when headers are used) */
 export type RowMap = Record<string, string>;

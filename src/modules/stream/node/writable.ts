@@ -20,17 +20,18 @@ export interface WritableOptions<T = Uint8Array> extends WritableStreamOptions {
   stream?: NodeWritable;
   autoDestroy?: boolean;
   emitClose?: boolean;
-  defaultEncoding?: BufferEncoding;
+  decodeStrings?: boolean;
+  defaultEncoding?: string;
   signal?: AbortSignal;
   write?: (
     this: Writable<T>,
     chunk: T,
-    encoding: BufferEncoding,
+    encoding: string,
     callback: (error?: Error | null) => void
   ) => void;
   writev?: (
     this: Writable<T>,
-    chunks: Array<{ chunk: T; encoding: BufferEncoding }>,
+    chunks: Array<{ chunk: T; encoding: string }>,
     callback: (error?: Error | null) => void
   ) => void;
   final?: (this: Writable<T>, callback: (error?: Error | null) => void) => void;
@@ -97,7 +98,8 @@ export class Writable<T = Uint8Array> extends NodeWritable {
         objectMode: options?.objectMode,
         autoDestroy: options?.autoDestroy,
         emitClose: options?.emitClose,
-        defaultEncoding: options?.defaultEncoding,
+        decodeStrings: options?.decodeStrings,
+        defaultEncoding: options?.defaultEncoding as BufferEncoding | undefined,
         signal: options?.signal,
         write: options?.write as any,
         writev: options?.writev as any,

@@ -56,6 +56,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   allowHalfOpen: boolean;
 
   private _destroyed: boolean = false;
+  private _closed: boolean = false;
   private _ended: boolean = false;
   private _errored: Error | null = null;
   private _dataForwardingSetup: boolean = false;
@@ -872,6 +873,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         this._endCallback = null;
         ecb();
       }
+      this._closed = true;
       queueMicrotask(() => {
         if (err) {
           this.emit("error", err);
@@ -906,6 +908,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     this._readable._undestroy();
     this._writable._undestroy();
     this._destroyed = false;
+    this._closed = false;
     this._errored = null;
     this._setupSideForwarding();
   }
@@ -1165,7 +1168,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   get closed(): boolean {
-    return this._readable.closed && this._writable.closed;
+    return this._closed;
   }
 
   get readableBuffer(): TOutput[] {
@@ -1346,15 +1349,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   /**
    * Base transform method - can be overridden by subclasses.
-   * Default behavior: pass through chunk unchanged.
+   * Default behavior: throw ERR_METHOD_NOT_IMPLEMENTED (matches Node.js).
    */
   _transform(
-    chunk: TInput,
-    encoding: string,
-    callback: (error?: Error | null, data?: TOutput) => void
+    _chunk: TInput,
+    _encoding: string,
+    _callback: (error?: Error | null, data?: TOutput) => void
   ): void {
-    // Default: pass through unchanged
-    callback(null, chunk as any as TOutput);
+    throw new Error("_transform() is not implemented");
   }
 
   /**

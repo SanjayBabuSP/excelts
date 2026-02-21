@@ -100,8 +100,22 @@ export async function streamToString(
   let text = "";
 
   for await (const chunk of iterable as any) {
-    const bytes =
-      typeof chunk === "string" ? Buffer.from(chunk) : (toBinaryChunk(chunk) ?? Buffer.from(chunk));
+    let bytes: Uint8Array;
+    if (typeof chunk === "string") {
+      bytes = Buffer.from(chunk);
+    } else {
+      const converted = toBinaryChunk(chunk);
+      if (converted) {
+        bytes = converted;
+      } else {
+        // Try Buffer.from as last resort (handles array-like objects, etc.)
+        try {
+          bytes = Buffer.from(chunk);
+        } catch {
+          throw new UnsupportedStreamTypeError("streamToString", typeof chunk);
+        }
+      }
+    }
     text += decoder.decode(bytes, { stream: true });
   }
 
@@ -226,7 +240,7 @@ export function isDisturbed(stream: unknown): boolean {
 /**
  * Create a pair of connected Duplex streams
  */
-export function duplexPair<T = Uint8Array>(options?: DuplexStreamOptions): [Duplex, Duplex] {
+export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, T>, IDuplex<T, T>] {
   // Use PassThrough as the simplest implementation
   const objectMode =
     options?.readableObjectMode ?? options?.writableObjectMode ?? options?.objectMode ?? false;

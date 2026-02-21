@@ -39,7 +39,7 @@ export type ParseStream = Duplex & {
 export function createParseClass(createInflateRawFn: InflateFactory): {
   new (opts?: ParseOptions): ParseStream;
 } {
-  return class Parse extends PullStream {
+  return class Parse extends PullStream<ZipEntry> {
     private _opts: ParseOptions;
     private _driverState: ParseDriverState = {};
     private _done = false;

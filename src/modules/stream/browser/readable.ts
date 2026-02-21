@@ -1108,11 +1108,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const innerSignal = ac.signal;
 
     const result = new Readable<U>({ objectMode: true });
-    const source = this;
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* () {
+      (async function* (source: Readable<T>) {
         try {
           for await (const chunk of source) {
             _throwIfAborted(signal);
@@ -1122,7 +1121,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         } finally {
           ac.abort();
         }
-      })()
+      })(this)
     );
 
     if (signal) {
@@ -1148,11 +1147,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const innerSignal = ac.signal;
 
     const result = new Readable<T>({ objectMode: true });
-    const source = this;
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* () {
+      (async function* (source: Readable<T>) {
         try {
           for await (const chunk of source) {
             _throwIfAborted(signal);
@@ -1164,7 +1162,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         } finally {
           ac.abort();
         }
-      })()
+      })(this)
     );
 
     if (signal) {
@@ -1312,11 +1310,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     const innerSignal = ac.signal;
 
     const result = new Readable<U>({ objectMode: true });
-    const source = this;
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* () {
+      (async function* (source: Readable<T>) {
         try {
           for await (const chunk of source) {
             _throwIfAborted(signal);
@@ -1336,7 +1333,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         } finally {
           ac.abort();
         }
-      })()
+      })(this)
     );
 
     if (signal) {
@@ -1358,11 +1355,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     _validateNonNegativeInteger(limit, "limit");
 
     const result = new Readable<T>({ objectMode: true });
-    const source = this;
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* () {
+      (async function* (source: Readable<T>) {
         let count = 0;
         for await (const chunk of source) {
           _throwIfAborted(signal);
@@ -1371,7 +1367,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           }
           count++;
         }
-      })()
+      })(this)
     );
 
     if (signal) {
@@ -1393,11 +1389,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     _validateNonNegativeInteger(limit, "limit");
 
     const result = new Readable<T>({ objectMode: true });
-    const source = this;
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* () {
+      (async function* (source: Readable<T>) {
         let count = 0;
         for await (const chunk of source) {
           _throwIfAborted(signal);
@@ -1407,7 +1402,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           yield chunk;
           count++;
         }
-      })()
+      })(this)
     );
 
     if (signal) {
@@ -1474,9 +1469,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Readable<U> {
     // If it's an async generator function, pipe through it
     if (typeof stream === "function") {
-      const source = this;
       const result = new Readable<U>({ objectMode: true });
-      pumpAsyncIterableToReadable(result, stream(source) as AsyncIterable<U>);
+      pumpAsyncIterableToReadable(result, stream(this) as AsyncIterable<U>);
       if (_DuplexFromFactory) {
         return _DuplexFromFactory(result);
       }
