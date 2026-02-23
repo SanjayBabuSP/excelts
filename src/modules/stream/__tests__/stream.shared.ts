@@ -3530,6 +3530,10 @@ export function runStreamTests(imports: StreamModuleImports): void {
             }
           });
 
+          const closed = new Promise<void>(resolve => {
+            readable.once("close", resolve);
+          });
+
           readable.on("data", (n: number) => {
             results.push(n);
             if (n === 2) {
@@ -3537,9 +3541,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
             }
           });
 
-          // Wait a bit for any pending events
-          await new Promise(resolve => setTimeout(resolve, 50));
-
+          await closed;
           expect(results).toEqual([1, 2]);
         });
 
