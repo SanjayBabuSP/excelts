@@ -10,12 +10,12 @@ import type {
   DuplexStreamOptions
 } from "@stream/types";
 import { UnsupportedStreamTypeError } from "@stream/errors";
-import { concatUint8Arrays, createTextDecoder, stringToUint8Array } from "@utils/binary";
+import { concatUint8Arrays, createTextDecoder } from "@utils/binary";
 import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
 import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
-import { toBinaryChunk } from "@stream/common/binary-chunk";
+import { toStreamBytes } from "@stream/common/binary-chunk";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";
@@ -66,7 +66,7 @@ export async function streamToString(
   let text = "";
 
   for await (const chunk of iterable as any) {
-    const bytes = toTextBytes(chunk);
+    const bytes = toStreamBytes(chunk);
     if (!bytes) {
       throw new UnsupportedStreamTypeError("streamToString", typeof chunk);
     }
@@ -200,18 +200,12 @@ export function isWritable(stream: unknown): stream is WritableLike {
 export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, T>, IDuplex<T, T>] {
   const objectMode =
     options?.readableObjectMode ?? options?.writableObjectMode ?? options?.objectMode ?? false;
+  const highWaterMark =
+    options?.readableHighWaterMark ?? options?.writableHighWaterMark ?? options?.highWaterMark;
 
   const duplexOpts: DuplexStreamOptions = {
-    objectMode,
-    // Only pass through the general highWaterMark if the user explicitly set it.
-    // Per-side values (readableHighWaterMark / writableHighWaterMark) take
-    // precedence — but they are lost when the Duplex constructor sees a general
-    // highWaterMark key on the options object.
-    ...(options != null && Object.prototype.hasOwnProperty.call(options, "highWaterMark")
-      ? { highWaterMark: options.highWaterMark }
-      : {}),
-    readableHighWaterMark: options?.readableHighWaterMark ?? options?.highWaterMark,
-    writableHighWaterMark: options?.writableHighWaterMark ?? options?.highWaterMark,
+    readableHighWaterMark: options?.readableHighWaterMark ?? highWaterMark,
+    writableHighWaterMark: options?.writableHighWaterMark ?? highWaterMark,
     readableObjectMode: options?.readableObjectMode ?? objectMode,
     writableObjectMode: options?.writableObjectMode ?? objectMode,
     allowHalfOpen: options?.allowHalfOpen
@@ -226,7 +220,7 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
     read() {
       // Data will be pushed from stream2's write()
     },
-    write(chunk: T, encoding: string, callback: (error?: Error | null) => void) {
+    write(chunk: T, _encoding: string, callback: (error?: Error | null) => void) {
       // Push to peer; if peer signals backpressure, defer callback until drain.
       if (!pair.s2!.push(chunk)) {
         pair.s2!.once("drain", () => callback());
@@ -245,7 +239,7 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
     read() {
       // Data will be pushed from stream1's write()
     },
-    write(chunk: T, encoding: string, callback: (error?: Error | null) => void) {
+    write(chunk: T, _encoding: string, callback: (error?: Error | null) => void) {
       // Push to peer; if peer signals backpressure, defer callback until drain.
       if (!stream1.push(chunk)) {
         stream1.once("drain", () => callback());
@@ -281,18 +275,9 @@ async function collectStreamChunks(
   ) as AsyncIterable<Uint8Array>;
 
   for await (const chunk of iterable as any) {
-    let bytes: Uint8Array;
-    if (chunk instanceof Uint8Array) {
-      bytes = chunk;
-    } else if (typeof chunk === "string") {
-      bytes = stringToUint8Array(chunk);
-    } else {
-      const converted = toBinaryChunk(chunk);
-      if (converted) {
-        bytes = converted;
-      } else {
-        throw new UnsupportedStreamTypeError("streamToBuffer", typeof chunk);
-      }
+    const bytes = toStreamBytes(chunk);
+    if (!bytes) {
+      throw new UnsupportedStreamTypeError("streamToBuffer", typeof chunk);
     }
     chunks.push(bytes);
     totalLength += bytes.length;
@@ -311,48 +296,6 @@ function toReadableAsyncIterable<T>(
     return stream;
   }
   throw new UnsupportedStreamTypeError(name, typeof stream);
-}
-
-function toTextBytes(chunk: unknown): Uint8Array | null {
-  if (typeof chunk === "string") {
-    return stringToUint8Array(chunk);
-  }
-  if (Array.isArray(chunk)) {
-    return new Uint8Array(chunk);
-  }
-  const binary = toBinaryChunk(chunk);
-  if (binary) {
-    return binary;
-  }
-  return toArrayLikeBytes(chunk);
-}
-
-function toArrayLikeBytes(chunk: unknown): Uint8Array | null {
-  if (chunk == null || typeof chunk !== "object") {
-    return null;
-  }
-
-  const lengthValue = (chunk as { length?: unknown }).length;
-  if (
-    typeof lengthValue !== "number" ||
-    !Number.isFinite(lengthValue) ||
-    lengthValue < 0 ||
-    !Number.isInteger(lengthValue)
-  ) {
-    return null;
-  }
-
-  const result = new Uint8Array(lengthValue);
-  const source = chunk as Record<number, unknown>;
-  for (let index = 0; index < lengthValue; index++) {
-    const value = source[index];
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      return null;
-    }
-    result[index] = value;
-  }
-
-  return result;
 }
 
 // =============================================================================

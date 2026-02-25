@@ -103,7 +103,12 @@ export function concatUint8Arrays(arrays: readonly Uint8Array[], totalLength?: n
     return new Uint8Array(0);
   }
   if (len === 1) {
-    return arrays[0];
+    const single = arrays[0];
+    // Ensure we always return a plain Uint8Array, not a subclass (e.g. Buffer).
+    if (single.constructor === Uint8Array) {
+      return single;
+    }
+    return new Uint8Array(single.buffer, single.byteOffset, single.byteLength);
   }
 
   // Calculate total length with for loop for better performance

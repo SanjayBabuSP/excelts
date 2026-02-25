@@ -4,8 +4,7 @@
  * Stream utility functions, type guards, consumers, and state inspection.
  */
 
-import { Readable, Transform, Duplex, PassThrough } from "stream";
-import type { DuplexOptions } from "stream";
+import { Readable, Transform, Duplex } from "stream";
 import { UnsupportedStreamTypeError } from "@stream/errors";
 import type {
   DuplexStreamOptions,
@@ -18,8 +17,8 @@ import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards"
 import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
-import { createTextDecoder } from "@utils/binary";
-import { toBinaryChunk } from "@stream/common/binary-chunk";
+import { createTextDecoder, concatUint8Arrays } from "@utils/binary";
+import { toStreamBytes } from "@stream/common/binary-chunk";
 
 import { Writable } from "./writable";
 import { pipeline, finished } from "./pipeline";
@@ -52,23 +51,15 @@ export async function streamToBuffer(
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
   for await (const chunk of iterable as any) {
-    const bytes =
-      typeof chunk === "string" ? Buffer.from(chunk) : (toBinaryChunk(chunk) ?? Buffer.from(chunk));
+    const bytes = toStreamBytes(chunk);
+    if (!bytes) {
+      throw new UnsupportedStreamTypeError("streamToBuffer", typeof chunk);
+    }
     chunks.push(bytes);
     totalLength += bytes.byteLength;
   }
 
-  if (chunks.length === 0) {
-    return new Uint8Array(0);
-  }
-  if (chunks.length === 1) {
-    const chunk = chunks[0]!;
-    return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-  }
-
-  // Use pre-calculated length for faster concat
-  const buffer = Buffer.concat(chunks, totalLength);
-  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  return concatUint8Arrays(chunks, totalLength);
 }
 
 /**
@@ -100,21 +91,9 @@ export async function streamToString(
   let text = "";
 
   for await (const chunk of iterable as any) {
-    let bytes: Uint8Array;
-    if (typeof chunk === "string") {
-      bytes = Buffer.from(chunk);
-    } else {
-      const converted = toBinaryChunk(chunk);
-      if (converted) {
-        bytes = converted;
-      } else {
-        // Try Buffer.from as last resort (handles array-like objects, etc.)
-        try {
-          bytes = Buffer.from(chunk);
-        } catch {
-          throw new UnsupportedStreamTypeError("streamToString", typeof chunk);
-        }
-      }
+    const bytes = toStreamBytes(chunk);
+    if (!bytes) {
+      throw new UnsupportedStreamTypeError("streamToString", typeof chunk);
     }
     text += decoder.decode(bytes, { stream: true });
   }
@@ -239,20 +218,17 @@ export function isDisturbed(stream: unknown): boolean {
 
 /**
  * Create a pair of connected Duplex streams
+ * Data written to one stream can be read from the other
  */
 export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, T>, IDuplex<T, T>] {
-  // Use PassThrough as the simplest implementation
   const objectMode =
     options?.readableObjectMode ?? options?.writableObjectMode ?? options?.objectMode ?? false;
   const highWaterMark =
     options?.readableHighWaterMark ?? options?.writableHighWaterMark ?? options?.highWaterMark;
-  const nodeOpts: DuplexOptions = {
-    objectMode,
-    highWaterMark
-  };
 
-  const passthrough1 = new PassThrough(nodeOpts);
-  const passthrough2 = new PassThrough(nodeOpts);
+  // Holder object allows both streams to reference each other via closure
+  // while satisfying the `const` constraint (each variable is assigned once).
+  const pair: { s1?: Duplex; s2?: Duplex } = {};
 
   const duplex1 = new Duplex({
     allowHalfOpen: options?.allowHalfOpen,
@@ -261,13 +237,19 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
     readableObjectMode: options?.readableObjectMode ?? objectMode,
     writableObjectMode: options?.writableObjectMode ?? objectMode,
     read(): void {
-      // Will be pushed from duplex2
+      // Data will be pushed from duplex2's write()
     },
-    write(chunk: T, encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-      passthrough1.write(chunk, encoding, callback);
+    write(chunk: T, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+      // Push to peer; if peer signals backpressure, defer callback until drain.
+      if (!pair.s2!.push(chunk)) {
+        pair.s2!.once("drain", () => callback());
+      } else {
+        callback();
+      }
     },
     final(callback: (error?: Error | null) => void): void {
-      passthrough1.end(callback);
+      pair.s2!.push(null);
+      callback();
     }
   });
 
@@ -278,21 +260,24 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
     readableObjectMode: options?.readableObjectMode ?? objectMode,
     writableObjectMode: options?.writableObjectMode ?? objectMode,
     read(): void {
-      // Will be pushed from duplex1
+      // Data will be pushed from duplex1's write()
     },
-    write(chunk: T, encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-      passthrough2.write(chunk, encoding, callback);
+    write(chunk: T, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+      // Push to peer; if peer signals backpressure, defer callback until drain.
+      if (!duplex1.push(chunk)) {
+        duplex1.once("drain", () => callback());
+      } else {
+        callback();
+      }
     },
     final(callback: (error?: Error | null) => void): void {
-      passthrough2.end(callback);
+      duplex1.push(null);
+      callback();
     }
   });
 
-  // Connect them
-  passthrough1.on("data", chunk => duplex2.push(chunk));
-  passthrough1.on("end", () => duplex2.push(null));
-  passthrough2.on("data", chunk => duplex1.push(chunk));
-  passthrough2.on("end", () => duplex1.push(null));
+  pair.s1 = duplex1;
+  pair.s2 = duplex2;
 
   return [duplex1, duplex2];
 }

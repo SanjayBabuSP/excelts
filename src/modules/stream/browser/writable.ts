@@ -440,8 +440,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     callback?: (error?: Error | null) => void
   ): boolean {
     if (this._destroyed || this._ended) {
-      const err = new Error("write after end") as Error & { code: string };
-      err.code = "ERR_STREAM_WRITE_AFTER_END";
+      // Node.js distinguishes write-after-destroy (ERR_STREAM_DESTROYED) from
+      // write-after-end (ERR_STREAM_WRITE_AFTER_END).
+      const isDestroyed = this._destroyed && !this._ended;
+      const err = new Error(
+        isDestroyed ? "Cannot call write after a stream was destroyed" : "write after end"
+      ) as Error & { code: string };
+      err.code = isDestroyed ? "ERR_STREAM_DESTROYED" : "ERR_STREAM_WRITE_AFTER_END";
       const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
       queueMicrotask(() => this.emit("error", err));
       cb?.(err);
@@ -613,22 +618,25 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._finished = true;
         queueMicrotask(() => {
           this.emit("finish");
+          // Node.js fires the end() callback synchronously with 'finish'
+          // (it's registered as a once('finish') listener), BEFORE 'close'.
+          cb?.();
           this._closed = true;
           if (this._emitClose) {
             this.emit("close");
           }
-          cb?.();
         });
       });
     } else {
       this._finished = true;
       queueMicrotask(() => {
         this.emit("finish");
+        // Fire end() callback with 'finish', before 'close' (matches Node.js).
+        cb?.();
         this._closed = true;
         if (this._emitClose) {
           this.emit("close");
         }
-        cb?.();
       });
     }
   }
@@ -648,10 +656,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
   private _normalizeWriteChunk(chunk: T, encoding: string): { chunk: T; encoding: string } {
     // In Node.js, decodeStrings: true converts strings to Buffer and sets encoding
-    // to "buffer". In the browser there is no Buffer, and Uint8Array.toString()
-    // has completely different semantics (comma-separated bytes vs decoded text).
-    // We keep strings as-is but set encoding to "buffer" to match the Node.js API
-    // contract (callers that check encoding will see "buffer" as expected).
+    // to "buffer". We match that behavior by converting strings to Uint8Array.
     if (this._objectMode || typeof chunk !== "string") {
       return { chunk, encoding };
     }
@@ -659,8 +664,10 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       // When decodeStrings is explicitly false, pass the original encoding through
       return { chunk, encoding };
     }
-    // decodeStrings: true (default) — report encoding as "buffer" to match Node.js
-    return { chunk, encoding: "buffer" };
+    // decodeStrings: true (default) — convert string to Uint8Array matching Node.js
+    // behavior where strings are converted to Buffer with encoding set to "buffer".
+    const encoded = new TextEncoder().encode(chunk) as unknown as T;
+    return { chunk: encoded, encoding: "buffer" };
   }
 
   /**
@@ -752,6 +759,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     if (error && !this._errored) {
       this._errored = error;
     }
+
+    // Cancel pending writes in the write queue (matches Node.js behavior).
+    // Node.js discards queued writes on destroy, invoking their callbacks with
+    // the destroy error so callers are notified.
+    if (this._writeQueue.length > 0) {
+      this._flushWriteQueueOnError(error ?? new Error("Cannot call write after a stream was destroyed"));
+    }
+    this._pendingEnd = null;
+    this._writing = false;
 
     if (this._writer) {
       const writer = this._writer;
@@ -934,9 +950,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     return this._closed;
   }
 
-  /** Whether the stream needs drain (writableLength exceeds high water mark) */
+  /** Whether the stream needs drain (write() returned false and drain not yet emitted) */
   get writableNeedDrain(): boolean {
-    return this._writableLength >= this._highWaterMark;
+    return this._needDrain;
   }
 
   /** How many times cork() has been called without uncork() */
@@ -974,7 +990,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    * Node's Writable emits ERR_STREAM_CANNOT_PIPE asynchronously and returns undefined.
    */
   pipe(): undefined {
-    const err = new StreamStateError("pipe", "not readable");
+    const err = new StreamStateError("pipe", "not readable") as StreamStateError & { code: string };
+    err.code = "ERR_STREAM_CANNOT_PIPE";
     // Node.js emits the error asynchronously (via process.nextTick).
     // In the browser we use queueMicrotask for the same deferred semantics.
     queueMicrotask(() => this.emit("error", err));

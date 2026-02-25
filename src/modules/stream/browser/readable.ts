@@ -580,8 +580,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this.resume();
     } else if (event === "readable") {
       // Node.js: adding a 'readable' listener sets readableFlowing to false
+      // and schedules a 'readable' emission if data is already buffered.
       this._hasFlowed = true;
       this._flowing = false;
+      if (this._buf.length > 0 || this._ended) {
+        queueMicrotask(() => this.emit("readable"));
+      }
     }
 
     return this;

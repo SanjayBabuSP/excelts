@@ -42,6 +42,12 @@ export class EventEmitter {
   }
 
   on(event: string | symbol, listener: EventListener): this {
+    // Node.js emits 'newListener' BEFORE adding the listener, allowing
+    // newListener handlers to insert listeners that fire before this one.
+    if (event !== "newListener" && this._hasListeners("newListener")) {
+      this.emit("newListener", event, listener);
+    }
+
     const existing = this._listeners.get(event);
 
     // Warn if exceeding max listeners (skip check if maxListeners is 0 = unlimited)
@@ -65,14 +71,15 @@ export class EventEmitter {
       this._listeners.set(event, [existing, listener]);
     }
 
-    // Node emits 'newListener' only if someone is listening to it.
-    if (event !== "newListener" && this._hasListeners("newListener")) {
-      this.emit("newListener", event, listener);
-    }
     return this;
   }
 
   prependListener(event: string | symbol, listener: EventListener): this {
+    // Node.js emits 'newListener' BEFORE adding the listener.
+    if (event !== "newListener" && this._hasListeners("newListener")) {
+      this.emit("newListener", event, listener);
+    }
+
     const existing = this._listeners.get(event);
     if (!existing) {
       this._listeners.set(event, listener);
@@ -82,9 +89,6 @@ export class EventEmitter {
       this._listeners.set(event, [listener, existing]);
     }
 
-    if (event !== "newListener" && this._hasListeners("newListener")) {
-      this.emit("newListener", event, listener);
-    }
     return this;
   }
 
@@ -177,13 +181,8 @@ export class EventEmitter {
     }
 
     if (!isListenerList(existing)) {
-      try {
-        existing.apply(this, args);
-      } catch (err) {
-        if (event !== "error") {
-          this.emit("error", err);
-        }
-      }
+      // Node.js does NOT catch errors from listeners — they propagate to the caller.
+      existing.apply(this, args);
       return true;
     }
 
@@ -203,46 +202,16 @@ export class EventEmitter {
     }
 
     if (len === 1) {
-      try {
-        listeners[0].apply(this, args);
-      } catch (err) {
-        if (event !== "error") {
-          this.emit("error", err);
-        }
-      }
+      listeners[0].apply(this, args);
       return true;
     }
 
-    if (len === 2) {
-      const l0 = listeners[0];
-      const l1 = listeners[1];
-      try {
-        l0.apply(this, args);
-      } catch (err) {
-        if (event !== "error") {
-          this.emit("error", err);
-        }
-      }
-      try {
-        l1.apply(this, args);
-      } catch (err) {
-        if (event !== "error") {
-          this.emit("error", err);
-        }
-      }
-      return true;
-    }
-
-    // Snapshot to allow removal during emit
+    // Snapshot to allow removal during emit (matches Node.js behavior).
+    // This is necessary because a listener may remove other listeners
+    // (e.g. `once` removes itself before invoking the wrapped listener).
     const snapshot = listeners.slice();
     for (let i = 0; i < snapshot.length; i++) {
-      try {
-        snapshot[i].apply(this, args);
-      } catch (err) {
-        if (event !== "error") {
-          this.emit("error", err);
-        }
-      }
+      snapshot[i].apply(this, args);
     }
     return true;
   }

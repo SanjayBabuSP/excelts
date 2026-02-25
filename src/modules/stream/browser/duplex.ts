@@ -526,14 +526,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     );
 
     if (cb) {
+      // Node.js only registers the end() callback on 'finish'.
+      // If the stream is destroyed before finishing, the callback is not invoked
+      // (users should use finished() for that case).
       this.once("finish", cb);
-      // Node.js also fires the end() callback when the stream is destroyed,
-      // ensuring callers are notified even on abrupt teardown.
-      this.once("close", () => {
-        if (!this.writableFinished) {
-          cb();
-        }
-      });
     }
 
     if (chunk !== undefined) {

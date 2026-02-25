@@ -98,61 +98,23 @@ export function compose<T = any, R = any>(
   // data has fully flushed through the entire chain (matching Node.js compose).
   registry.once(last as any, "finish", () => composed.emit("finish"));
 
-  // Forward readable-side events from `last` lazily.
-  // Lazy registration avoids overhead when no one listens for data/end.
-  let forwardData = false;
-  let forwardEnd = false;
-
-  const ensureDataForwarding = (): void => {
-    if (forwardData) {
-      return;
+  // Eagerly attach data/end forwarding from `last` to composed (matching Node.js).
+  // Node.js compose immediately attaches last.on("data") so data flows into
+  // composed's buffer right away, ensuring no data is missed.
+  registry.add(last as any, "data", (chunk: R) => {
+    if (!(composed as any).push(chunk)) {
+      lastPaused = true;
+      (last as any).pause?.();
     }
-    forwardData = true;
-    // Forward data with backpressure: pause `last` when composed's buffer
-    // is full, matching Node.js compose behavior.
-    registry.add(last as any, "data", (chunk: R) => {
-      if (!(composed as any).push(chunk)) {
-        lastPaused = true;
-        (last as any).pause?.();
-      }
-    });
-  };
+  });
 
-  const ensureEndForwarding = (): void => {
-    if (forwardEnd) {
-      return;
+  registry.once(last as any, "end", () => {
+    // When flushing, the flush/end logic in end() handles stream termination.
+    // Otherwise (e.g. last ended independently), we must push(null) ourselves.
+    if (!flushing) {
+      (composed as any).push(null);
     }
-    forwardEnd = true;
-    registry.once(last as any, "end", () => {
-      // When flushing, the flush/end logic in end() handles stream termination.
-      // Otherwise (e.g. last ended independently), we must push(null) ourselves.
-      if (!flushing) {
-        (composed as any).push(null);
-      }
-    });
-  };
-
-  const originalOn = composed.on.bind(composed);
-  const originalOnce = composed.once.bind(composed);
-
-  (composed as any).on = (event: string | symbol, listener: (...args: any[]) => void): any => {
-    if (event === "data" || event === "end") {
-      ensureDataForwarding();
-      ensureEndForwarding();
-    }
-    return originalOn(event, listener);
-  };
-
-  // Node.js: addListener === on (same function). Must also trigger lazy data forwarding.
-  (composed as any).addListener = (composed as any).on;
-
-  (composed as any).once = (event: string | symbol, listener: (...args: any[]) => void): any => {
-    if (event === "data" || event === "end") {
-      ensureDataForwarding();
-      ensureEndForwarding();
-    }
-    return originalOnce(event, listener);
-  };
+  });
 
   // Delegate core stream methods
   const firstAny = first as any;
@@ -216,8 +178,6 @@ export function compose<T = any, R = any>(
   (composed as any).pipe = <W extends Writable<R> | Transform<R, any> | Duplex<any, R>>(
     destination: W
   ): W => {
-    ensureDataForwarding();
-    ensureEndForwarding();
     return Transform.prototype.pipe.call(composed, destination) as W;
   };
 
@@ -227,8 +187,6 @@ export function compose<T = any, R = any>(
       lastPaused = false;
       lastAny.resume?.();
     }
-    ensureDataForwarding();
-    ensureEndForwarding();
     return Transform.prototype.read.call(composed, size) as R | null;
   };
 
@@ -255,8 +213,6 @@ export function compose<T = any, R = any>(
   };
 
   (composed as any)[Symbol.asyncIterator] = async function* (): AsyncIterableIterator<R> {
-    ensureDataForwarding();
-    ensureEndForwarding();
     yield* Transform.prototype[Symbol.asyncIterator].call(composed);
   };
 

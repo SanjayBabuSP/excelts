@@ -154,6 +154,8 @@ export function compose<T = any, R = any>(
   };
   (last as any).once?.("finish", onLastFinish);
 
+  // Eagerly attach data/end forwarding from `last` to composed.
+  // This ensures data flows into composed's buffer immediately.
   (last as any).on?.("data", onLastData);
   (last as any).once?.("end", onLastEnd);
   (last as any).on?.("error", onAnyError);
@@ -169,16 +171,15 @@ export function compose<T = any, R = any>(
     transformErrorListeners.push({ t: tt, fn: onAnyError });
   }
 
-  // Delegate cork/uncork to the head of the chain (matches browser compose).
-  const originalCork = composed.cork.bind(composed);
-  const originalUncork = composed.uncork.bind(composed);
+  // Delegate cork/uncork to the head of the chain only.
+  // The composed Transform's own write() is overridden to forward to `first`,
+  // so corking composed itself has no effect — only `first` needs to be corked.
+  // writableCorked is already proxied to `first`, keeping the property in sync.
   composed.cork = (): void => {
     (first as any).cork?.();
-    originalCork();
   };
   composed.uncork = (): void => {
     (first as any).uncork?.();
-    originalUncork();
   };
 
   composed.once("close", () => {

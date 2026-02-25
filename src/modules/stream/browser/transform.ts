@@ -370,11 +370,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     const gen = ++this._endGeneration;
 
-    // Defer to the next macrotask so that all microtasks (Promise .then()
-    // chains, pipe end propagation, etc.) settle before we close the writable.
-    // Using queueMicrotask here would race ahead of async pipe chains and
-    // cause hangs in complex pipe topologies (e.g. archive unzip).
-    setTimeout(() => {
+    // Defer to the next microtask so that synchronous code following the
+    // readable push(null) can still register listeners or write data.
+    // Node.js uses process.nextTick here; queueMicrotask is the closest
+    // browser equivalent.
+    queueMicrotask(() => {
       if (gen !== this._endGeneration) {
         return;
       }
@@ -382,7 +382,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         return;
       }
       this._writable.end();
-    }, 0);
+    });
   }
 
   private _emitErrorOnce(err: any): void {
@@ -391,14 +391,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
     const error = err instanceof Error ? err : new Error(String(err));
     this._errored = error;
-    this.emit("error", error);
+    // Use destroy() so that _destroy hooks, cleanup, and close emission
+    // all go through the standard path (matching Node.js behavior).
+    // destroy() will emit both the error and the close event.
     if (!this._destroyed) {
-      this._destroyed = true;
-      this._readable.destroy();
-      this._writable.destroy();
-      if (this._emitClose) {
-        queueMicrotask(() => this.emit("close"));
-      }
+      this.destroy(error);
     }
   }
 
@@ -443,95 +440,90 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       throw new StreamStateError("write", this._errored ? "stream errored" : "stream destroyed");
     }
 
-    try {
-      if (this._hasSubclassTransform()) {
-        return new Promise<void>((resolve, reject) => {
-          this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
-        });
-      }
-
-      const userTransform = this._transformImpl;
-      if (!userTransform) {
-        this.push(chunk as any as TOutput);
-        return undefined; // sync
-      }
-
-      const paramCount = userTransform.length;
-
-      if (paramCount >= 3) {
-        return new Promise<void>((resolve, reject) => {
-          (
-            userTransform as (
-              this: Transform<TInput, TOutput>,
-              chunk: TInput,
-              encoding: string,
-              callback: (error?: Error | null, data?: TOutput) => void
-            ) => void
-          ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
-        });
-      }
-
-      if (paramCount === 2) {
-        return new Promise<void>((resolve, reject) => {
-          (
-            userTransform as (
-              this: Transform<TInput, TOutput>,
-              chunk: TInput,
-              callback: (error?: Error | null, data?: TOutput) => void
-            ) => void
-          ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
-        });
-      }
-
-      // paramCount 0 or 1: simple function, may return sync or async
-      const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
-        this,
-        chunk
-      );
-
-      if (result && typeof (result as any).then === "function") {
-        return (result as Promise<TOutput>).then(awaited => {
-          if (awaited !== undefined) {
-            this.push(awaited);
+    if (this._hasSubclassTransform()) {
+      return new Promise<void>((resolve, reject) => {
+        this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
           }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
         });
-      }
-
-      if (result !== undefined) {
-        this.push(result as TOutput);
-      }
-      return undefined; // sync
-    } catch (err) {
-      this._emitErrorOnce(err);
-      throw err;
+      });
     }
+
+    const userTransform = this._transformImpl;
+    if (!userTransform) {
+      this.push(chunk as any as TOutput);
+      return undefined; // sync
+    }
+
+    const paramCount = userTransform.length;
+
+    if (paramCount >= 3) {
+      return new Promise<void>((resolve, reject) => {
+        (
+          userTransform as (
+            this: Transform<TInput, TOutput>,
+            chunk: TInput,
+            encoding: string,
+            callback: (error?: Error | null, data?: TOutput) => void
+          ) => void
+        ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
+        });
+      });
+    }
+
+    if (paramCount === 2) {
+      return new Promise<void>((resolve, reject) => {
+        (
+          userTransform as (
+            this: Transform<TInput, TOutput>,
+            chunk: TInput,
+            callback: (error?: Error | null, data?: TOutput) => void
+          ) => void
+        ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
+        });
+      });
+    }
+
+    // paramCount 0 or 1: simple function, may return sync or async
+    const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
+      this,
+      chunk
+    );
+
+    if (result && typeof (result as any).then === "function") {
+      return (result as Promise<TOutput>).then(awaited => {
+        if (awaited !== undefined) {
+          this.push(awaited);
+        }
+      });
+    }
+
+    if (result !== undefined) {
+      this.push(result as TOutput);
+    }
+    return undefined; // sync
   }
 
   private async _runTransform(chunk: TInput, encoding: string): Promise<void> {
@@ -539,95 +531,90 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       throw new StreamStateError("write", this._errored ? "stream errored" : "stream destroyed");
     }
 
-    try {
-      if (this._hasSubclassTransform()) {
-        await new Promise<void>((resolve, reject) => {
-          this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
+    if (this._hasSubclassTransform()) {
+      await new Promise<void>((resolve, reject) => {
+        this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
         });
-        return;
-      }
+      });
+      return;
+    }
 
-      const userTransform = this._transformImpl;
-      if (!userTransform) {
-        this.push(chunk as any as TOutput);
-        return;
-      }
+    const userTransform = this._transformImpl;
+    if (!userTransform) {
+      this.push(chunk as any as TOutput);
+      return;
+    }
 
-      const paramCount = userTransform.length;
+    const paramCount = userTransform.length;
 
-      if (paramCount >= 3) {
-        await new Promise<void>((resolve, reject) => {
-          (
-            userTransform as (
-              this: Transform<TInput, TOutput>,
-              chunk: TInput,
-              encoding: string,
-              callback: (error?: Error | null, data?: TOutput) => void
-            ) => void
-          ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
+    if (paramCount >= 3) {
+      await new Promise<void>((resolve, reject) => {
+        (
+          userTransform as (
+            this: Transform<TInput, TOutput>,
+            chunk: TInput,
+            encoding: string,
+            callback: (error?: Error | null, data?: TOutput) => void
+          ) => void
+        ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
         });
-        return;
-      }
+      });
+      return;
+    }
 
-      if (paramCount === 2) {
-        await new Promise<void>((resolve, reject) => {
-          (
-            userTransform as (
-              this: Transform<TInput, TOutput>,
-              chunk: TInput,
-              callback: (error?: Error | null, data?: TOutput) => void
-            ) => void
-          ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
+    if (paramCount === 2) {
+      await new Promise<void>((resolve, reject) => {
+        (
+          userTransform as (
+            this: Transform<TInput, TOutput>,
+            chunk: TInput,
+            callback: (error?: Error | null, data?: TOutput) => void
+          ) => void
+        ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
         });
-        return;
-      }
+      });
+      return;
+    }
 
-      const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
-        this,
-        chunk
-      );
+    const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
+      this,
+      chunk
+    );
 
-      if (result && typeof result.then === "function") {
-        const awaited = await result;
-        if (awaited !== undefined) {
-          this.push(awaited);
-        }
-        return;
+    if (result && typeof result.then === "function") {
+      const awaited = await result;
+      if (awaited !== undefined) {
+        this.push(awaited);
       }
+      return;
+    }
 
-      if (result !== undefined) {
-        this.push(result);
-      }
-    } catch (err) {
-      this._emitErrorOnce(err);
-      throw err;
+    if (result !== undefined) {
+      this.push(result);
     }
   }
 
