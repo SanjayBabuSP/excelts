@@ -51,12 +51,7 @@ export function createReadable<_T = Uint8Array>(
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IReadable<_T> {
-  return new Readable({
-    highWaterMark: options?.highWaterMark,
-    objectMode: options?.objectMode,
-    read: options?.read,
-    destroy: options?.destroy
-  });
+  return new Readable(options);
 }
 
 /**
@@ -67,11 +62,9 @@ export function createReadableFromAsyncIterable<T>(
   options?: ReadableStreamOptions
 ): IReadable<T> {
   const opts: Record<string, unknown> = {
+    ...options,
     objectMode: options?.objectMode ?? true
   };
-  if (options?.highWaterMark !== undefined) {
-    opts.highWaterMark = options.highWaterMark;
-  }
   return Readable.from(iterable, opts);
 }
 
@@ -84,7 +77,7 @@ export function createReadableFromArray<T>(
 ): IReadable<T> {
   let index = 0;
   return new Readable({
-    highWaterMark: options?.highWaterMark,
+    ...options,
     objectMode: options?.objectMode ?? true,
     read() {
       while (index < data.length) {
@@ -109,13 +102,7 @@ export function createWritable<T = Uint8Array>(
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IWritable<T> {
-  return new Writable({
-    highWaterMark: options?.highWaterMark,
-    objectMode: options?.objectMode,
-    write: options?.write as any,
-    final: options?.final as any,
-    destroy: options?.destroy as any
-  });
+  return new Writable(options);
 }
 
 /**
@@ -128,8 +115,7 @@ export function createTransform<TInput = Uint8Array, TOutput = Uint8Array>(
   }
 ): ITransform<TInput, TOutput> {
   return new Transform({
-    highWaterMark: options?.highWaterMark,
-    objectMode: options?.objectMode,
+    ...options,
     transform(chunk: TInput, encoding: BufferEncoding, callback: NodeTransformCallback) {
       try {
         const result = transformFn(chunk, encoding);
@@ -212,10 +198,7 @@ export function createDuplex<_TRead = Uint8Array, TWrite = Uint8Array>(
  * Create a passthrough stream
  */
 export function createPassThrough<_T = any>(options?: TransformStreamOptions): IPassThrough<_T> {
-  return new PassThrough({
-    highWaterMark: options?.highWaterMark,
-    objectMode: options?.objectMode
-  });
+  return new PassThrough(options);
 }
 
 /**
@@ -226,7 +209,7 @@ export function createReadableFromGenerator<T>(
   options?: ReadableStreamOptions
 ): IReadable<T> {
   return Readable.from(generator(), {
-    highWaterMark: options?.highWaterMark,
+    ...options,
     objectMode: options?.objectMode ?? true
   });
 }
@@ -239,7 +222,7 @@ export function createReadableFromPromise<T>(
   options?: ReadableStreamOptions
 ): IReadable<T> {
   const readable = new Readable({
-    highWaterMark: options?.highWaterMark,
+    ...options,
     objectMode: options?.objectMode ?? true,
     read() {}
   });
@@ -268,8 +251,7 @@ export function createEmptyReadable<_T = Uint8Array>(
   options?: ReadableStreamOptions
 ): IReadable<_T> {
   return new Readable({
-    highWaterMark: options?.highWaterMark,
-    objectMode: options?.objectMode,
+    ...options,
     read: emptyRead
   });
 }
@@ -288,8 +270,7 @@ const nullWrite = (
  */
 export function createNullWritable<_T = any>(options?: WritableStreamOptions): IWritable<_T> {
   return new Writable({
-    highWaterMark: options?.highWaterMark,
-    objectMode: options?.objectMode,
+    ...options,
     write: nullWrite
   });
 }

@@ -7,6 +7,7 @@
 import { Transform } from "stream";
 import type { TransformCallback as NodeTransformCallback } from "stream";
 import type { ITransform } from "@stream/types";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 // =============================================================================
 // Compose
@@ -43,9 +44,14 @@ export function compose<T = any, R = any>(
   // Track whether last is paused due to backpressure from composed.
   let lastPaused = false;
 
+  // Use per-side objectMode matching browser compose behavior.
+  // When the property is missing, default to false (same as browser).
+  const readableObjMode = (last as any).readableObjectMode ?? false;
+  const writableObjMode = (first as any).writableObjectMode ?? false;
+
   const composed = new Transform({
-    readableObjectMode: (last as any).readableObjectMode,
-    writableObjectMode: (first as any).writableObjectMode,
+    readableObjectMode: readableObjMode,
+    writableObjectMode: writableObjMode,
     transform(chunk: any, encoding: BufferEncoding, callback: NodeTransformCallback) {
       try {
         // Forward writes into the head of the chain.
@@ -87,6 +93,7 @@ export function compose<T = any, R = any>(
     },
     destroy(this: Transform, err: Error | null, callback: (error: Error | null) => void) {
       try {
+        cleanupListeners();
         for (const t of transforms) {
           (t as any).destroy?.(err ?? undefined);
         }
@@ -126,28 +133,99 @@ export function compose<T = any, R = any>(
     (last as any).off?.("data", onLastData);
     (last as any).off?.("end", onLastEnd);
     (last as any).off?.("error", onAnyError);
+    (first as any).off?.("drain", onFirstDrain);
+    (last as any).off?.("finish", onLastFinish);
     for (const { t, fn } of transformErrorListeners) {
       t.off?.("error", fn);
     }
     transformErrorListeners.length = 0;
   };
 
+  // Forward drain from `first` to composed (matches browser compose).
+  const onFirstDrain = (): void => {
+    composed.emit("drain");
+  };
+  (first as any).on?.("drain", onFirstDrain);
+
+  // Forward finish from `last` — the composed stream is only "finished" once
+  // data has fully flushed through the entire chain (matching browser compose).
+  const onLastFinish = (): void => {
+    composed.emit("finish");
+  };
+  (last as any).once?.("finish", onLastFinish);
+
   (last as any).on?.("data", onLastData);
   (last as any).once?.("end", onLastEnd);
-  (last as any).once?.("error", onAnyError);
+  (last as any).on?.("error", onAnyError);
 
-  // Forward errors from all intermediate transforms.
+  // Forward errors from all transforms (including last, using persistent
+  // listeners to match browser compose which uses registry.add).
   for (const t of transforms) {
     if (t === last) {
       continue;
     }
     const tt = t as any;
-    tt.once?.("error", onAnyError);
+    tt.on?.("error", onAnyError);
     transformErrorListeners.push({ t: tt, fn: onAnyError });
   }
 
+  // Delegate cork/uncork to the head of the chain (matches browser compose).
+  const originalCork = composed.cork.bind(composed);
+  const originalUncork = composed.uncork.bind(composed);
+  composed.cork = (): void => {
+    (first as any).cork?.();
+    originalCork();
+  };
+  composed.uncork = (): void => {
+    (first as any).uncork?.();
+    originalUncork();
+  };
+
   composed.once("close", () => {
     cleanupListeners();
+  });
+
+  // Proxy readable/writable to reflect underlying chain state (matches browser compose).
+  Object.defineProperty(composed, "readable", {
+    get: () => (last as any).readable
+  });
+  Object.defineProperty(composed, "writable", {
+    get: () => (first as any).writable
+  });
+
+  // Proxy writable-side state to `first` so properties like writableEnded and
+  // writableFinished reflect the actual head-of-chain state.
+  Object.defineProperty(composed, "writableEnded", {
+    get: () => (first as any).writableEnded ?? false
+  });
+  Object.defineProperty(composed, "writableFinished", {
+    get: () => (first as any).writableFinished ?? false
+  });
+  Object.defineProperty(composed, "writableLength", {
+    get: () => (first as any).writableLength ?? 0
+  });
+  Object.defineProperty(composed, "writableHighWaterMark", {
+    get: () => (first as any).writableHighWaterMark ?? getDefaultHighWaterMark(false)
+  });
+  Object.defineProperty(composed, "writableCorked", {
+    get: () => (first as any).writableCorked ?? 0
+  });
+  Object.defineProperty(composed, "writableNeedDrain", {
+    get: () => (first as any).writableNeedDrain ?? false
+  });
+
+  // Proxy readable-side state to `last`.
+  Object.defineProperty(composed, "readableEnded", {
+    get: () => (last as any).readableEnded ?? false
+  });
+  Object.defineProperty(composed, "readableLength", {
+    get: () => (last as any).readableLength ?? 0
+  });
+  Object.defineProperty(composed, "readableHighWaterMark", {
+    get: () => (last as any).readableHighWaterMark ?? getDefaultHighWaterMark(false)
+  });
+  Object.defineProperty(composed, "readableFlowing", {
+    get: () => (last as any).readableFlowing ?? null
   });
 
   return composed;

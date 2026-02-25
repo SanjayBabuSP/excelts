@@ -6,7 +6,7 @@
 
 import { StreamTypeError } from "@stream/errors";
 import type { WritableStreamOptions, ICollector } from "@stream/types";
-import { chunksToString } from "@utils/binary";
+import { chunksToString, concatUint8Arrays } from "@utils/binary";
 import { toBinaryChunk } from "@stream/common/binary-chunk";
 
 import { Writable } from "./writable";
@@ -23,7 +23,7 @@ export class Collector<T = Uint8Array> extends Writable {
 
   constructor(options?: WritableStreamOptions) {
     super({
-      highWaterMark: options?.highWaterMark,
+      ...options,
       objectMode: options?.objectMode ?? true,
       write: ((chunk: T, _encoding: BufferEncoding, callback: (error?: Error | null) => void) => {
         this.chunks.push(chunk);
@@ -54,17 +54,10 @@ export class Collector<T = Uint8Array> extends Writable {
     }
 
     if (len === 1) {
-      return binaryChunks[0];
+      return binaryChunks[0]!;
     }
 
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-    for (let i = 0; i < len; i++) {
-      const arr = binaryChunks[i]!;
-      result.set(arr, offset);
-      offset += arr.length;
-    }
-    return result;
+    return concatUint8Arrays(binaryChunks, totalLength);
   }
 
   /**

@@ -217,49 +217,47 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
     allowHalfOpen: options?.allowHalfOpen
   };
 
-  const stream1 = new Duplex<T, T>(duplexOpts);
-  const stream2 = new Duplex<T, T>(duplexOpts);
+  // We must declare both before we can reference each other in constructors.
+  let stream1: Duplex<T, T>;
+  let stream2: Duplex<T, T>;
 
-  stream1.write = function (
-    chunk: T,
-    encodingOrCallback?: string | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-    const ok = stream2.push(chunk);
-    cb?.(null);
-    return ok;
-  };
-
-  stream2.write = function (
-    chunk: T,
-    encodingOrCallback?: string | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-    const ok = stream1.push(chunk);
-    cb?.(null);
-    return ok;
-  };
-
-  const originalEnd1 = stream1.end.bind(stream1);
-  const originalEnd2 = stream2.end.bind(stream2);
-
-  stream1.end = function (chunk?: T | (() => void)): any {
-    if (chunk !== undefined && typeof chunk !== "function") {
-      stream2.push(chunk);
+  stream1 = new Duplex<T, T>({
+    ...duplexOpts,
+    read() {
+      // Data will be pushed from stream2's write()
+    },
+    write(chunk: T, encoding: string, callback: (error?: Error | null) => void) {
+      // Push to peer; if peer signals backpressure, defer callback until drain.
+      if (!stream2.push(chunk)) {
+        stream2.once("drain", () => callback());
+      } else {
+        callback();
+      }
+    },
+    final(callback: (error?: Error | null) => void) {
+      stream2.push(null);
+      callback();
     }
-    stream2.push(null);
-    return originalEnd1(typeof chunk === "function" ? chunk : undefined);
-  };
+  });
 
-  stream2.end = function (chunk?: T | (() => void)): any {
-    if (chunk !== undefined && typeof chunk !== "function") {
-      stream1.push(chunk);
+  stream2 = new Duplex<T, T>({
+    ...duplexOpts,
+    read() {
+      // Data will be pushed from stream1's write()
+    },
+    write(chunk: T, encoding: string, callback: (error?: Error | null) => void) {
+      // Push to peer; if peer signals backpressure, defer callback until drain.
+      if (!stream1.push(chunk)) {
+        stream1.once("drain", () => callback());
+      } else {
+        callback();
+      }
+    },
+    final(callback: (error?: Error | null) => void) {
+      stream1.push(null);
+      callback();
     }
-    stream1.push(null);
-    return originalEnd2(typeof chunk === "function" ? chunk : undefined);
-  };
+  });
 
   return [stream1, stream2];
 }
@@ -279,9 +277,22 @@ async function collectStreamChunks(
     "collectStreamChunks"
   ) as AsyncIterable<Uint8Array>;
 
-  for await (const chunk of iterable) {
-    chunks.push(chunk);
-    totalLength += chunk.length;
+  for await (const chunk of iterable as any) {
+    let bytes: Uint8Array;
+    if (chunk instanceof Uint8Array) {
+      bytes = chunk;
+    } else if (typeof chunk === "string") {
+      bytes = stringToUint8Array(chunk);
+    } else {
+      const converted = toBinaryChunk(chunk);
+      if (converted) {
+        bytes = converted;
+      } else {
+        throw new UnsupportedStreamTypeError("streamToBuffer", typeof chunk);
+      }
+    }
+    chunks.push(bytes);
+    totalLength += bytes.length;
   }
   return [chunks, totalLength];
 }

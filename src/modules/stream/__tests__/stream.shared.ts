@@ -4414,6 +4414,20 @@ export function runStreamTests(imports: StreamModuleImports): void {
         await new Promise<void>(resolve => passThrough.on("finish", resolve));
         expect(results).toEqual(["hello", "world"]);
       });
+
+      it("should work in binary mode", async () => {
+        const passThrough = createPassThrough();
+        const results: Uint8Array[] = [];
+
+        passThrough.on("data", (chunk: Uint8Array) => results.push(chunk));
+
+        passThrough.write(stringToUint8Array("test"));
+        passThrough.end();
+
+        await new Promise<void>(resolve => passThrough.on("finish", resolve));
+        expect(results.length).toBe(1);
+        expect(results[0]).toBeInstanceOf(Uint8Array);
+      });
     });
 
     describe("createWritable Helper", () => {

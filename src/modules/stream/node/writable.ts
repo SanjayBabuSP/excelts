@@ -66,6 +66,11 @@ export class Writable<T = Uint8Array> extends NodeWritable {
       super({
         highWaterMark: options?.highWaterMark,
         objectMode: options?.objectMode,
+        autoDestroy: options?.autoDestroy,
+        emitClose: options?.emitClose,
+        decodeStrings: options?.decodeStrings,
+        defaultEncoding: options?.defaultEncoding as BufferEncoding | undefined,
+        signal: options?.signal,
         write(chunk, encoding, callback) {
           underlying.write(chunk, encoding, callback);
         },

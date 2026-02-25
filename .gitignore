@@ -22,3 +22,5 @@ __screenshots__
 
 # Temporary local smoke-test projects
 tmp/
+
+.claude
