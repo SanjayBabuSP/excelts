@@ -217,30 +217,30 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
     allowHalfOpen: options?.allowHalfOpen
   };
 
-  // We must declare both before we can reference each other in constructors.
-  let stream1: Duplex<T, T>;
-  let stream2: Duplex<T, T>;
+  // Holder object allows both streams to reference each other via closure
+  // while satisfying the `const` constraint (each variable is assigned once).
+  const pair: { s1?: Duplex<T, T>; s2?: Duplex<T, T> } = {};
 
-  stream1 = new Duplex<T, T>({
+  const stream1 = new Duplex<T, T>({
     ...duplexOpts,
     read() {
       // Data will be pushed from stream2's write()
     },
     write(chunk: T, encoding: string, callback: (error?: Error | null) => void) {
       // Push to peer; if peer signals backpressure, defer callback until drain.
-      if (!stream2.push(chunk)) {
-        stream2.once("drain", () => callback());
+      if (!pair.s2!.push(chunk)) {
+        pair.s2!.once("drain", () => callback());
       } else {
         callback();
       }
     },
     final(callback: (error?: Error | null) => void) {
-      stream2.push(null);
+      pair.s2!.push(null);
       callback();
     }
   });
 
-  stream2 = new Duplex<T, T>({
+  const stream2 = new Duplex<T, T>({
     ...duplexOpts,
     read() {
       // Data will be pushed from stream1's write()
@@ -258,6 +258,9 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
       callback();
     }
   });
+
+  pair.s1 = stream1;
+  pair.s2 = stream2;
 
   return [stream1, stream2];
 }
