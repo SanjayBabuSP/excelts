@@ -146,18 +146,17 @@ export function pipeline(
         options.signal.removeEventListener("abort", onAbort);
       }
 
-      // Node.js destroys ALL streams on pipeline completion (both success and error).
-      // On error, pass the error to destroy(); on success, destroy() with no args.
-      // Before destroying, add a safety error listener to each stream so that
-      // deferred error emissions from destroy() never become unhandled.
-      // (Node.js keeps its internal error listeners alive throughout.)
-      const noop = (): void => {};
-      for (const stream of allStreams) {
-        if (typeof stream.on === "function") {
-          stream.on("error", noop);
-        }
-        if (typeof stream.destroy === "function" && !stream.destroyed) {
-          stream.destroy(error);
+      // Node.js only destroys streams on ERROR, NOT on success.
+      // On error, pass the error to destroy(); on success, leave streams intact.
+      if (error) {
+        const noop = (): void => {};
+        for (const stream of allStreams) {
+          if (typeof stream.on === "function") {
+            stream.on("error", noop);
+          }
+          if (typeof stream.destroy === "function" && !stream.destroyed) {
+            stream.destroy(error);
+          }
         }
       }
 
@@ -322,6 +321,24 @@ export function finished(
       }
       onAbort = () => done(createAbortError((options.signal as any).reason));
       options.signal.addEventListener("abort", onAbort);
+    }
+
+    // Node.js: if the stream is already destroyed, resolve/reject immediately.
+    // An already-destroyed stream with an error rejects; otherwise it's premature close.
+    const s = normalizedStream as any;
+    if (s.destroyed || s._destroyed) {
+      if (s.errored || s._errored) {
+        done(s.errored ?? s._errored);
+      } else {
+        // Already destroyed without error — check if it finished gracefully
+        const isGraceful = !!(s.readableEnded || s.writableFinished || s._endEmitted || s._finished);
+        if (isGraceful) {
+          done();
+        } else {
+          done(createPrematureCloseError());
+        }
+      }
+      return;
     }
 
     const supportsReadable =

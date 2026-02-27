@@ -138,13 +138,14 @@ export class EventEmitter {
       return this;
     }
 
-    // Fast path: direct match
-    const directIdx = listeners.indexOf(listener);
+    // Node.js removes the LAST (most recently added) matching listener,
+    // not the first. Use lastIndexOf for direct match, reverse search for once-wrapper.
+    const directIdx = listeners.lastIndexOf(listener);
     if (directIdx !== -1) {
       listeners.splice(directIdx, 1);
     } else {
-      // Slow path: check for once wrapper
-      for (let i = 0, len = listeners.length; i < len; i++) {
+      // Slow path: check for once wrapper (search from end for most-recent)
+      for (let i = listeners.length - 1; i >= 0; i--) {
         if ((listeners[i] as any).listener === listener) {
           listeners.splice(i, 1);
           break;
@@ -218,8 +219,43 @@ export class EventEmitter {
 
   removeAllListeners(event?: string | symbol): this {
     if (event !== undefined) {
+      // Node.js emits 'removeListener' for each removed listener (if 'removeListener' has listeners).
+      const hasRemoveListener = event !== "removeListener" && this._hasListeners("removeListener");
+      if (hasRemoveListener) {
+        const value = this._listeners.get(event);
+        if (value) {
+          const listeners = isListenerList(value) ? value.slice() : [value];
+          this._listeners.delete(event);
+          for (const listener of listeners) {
+            // Unwrap once-wrappers to emit the original listener
+            const original = (listener as any).listener ?? listener;
+            this.emit("removeListener", event, original);
+          }
+          return this;
+        }
+      }
       this._listeners.delete(event);
     } else {
+      // Removing ALL events — Node.js emits 'removeListener' for every listener
+      // on every event (except 'removeListener' itself). We process 'removeListener'
+      // last to avoid issues while emitting.
+      const hasRemoveListener = this._hasListeners("removeListener");
+      if (hasRemoveListener) {
+        const events = [...this._listeners.keys()];
+        for (const evt of events) {
+          if (evt !== "removeListener") {
+            const value = this._listeners.get(evt);
+            if (value) {
+              const listeners = isListenerList(value) ? value.slice() : [value];
+              this._listeners.delete(evt);
+              for (const listener of listeners) {
+                const original = (listener as any).listener ?? listener;
+                this.emit("removeListener", evt, original);
+              }
+            }
+          }
+        }
+      }
       this._listeners.clear();
     }
     return this;
@@ -234,7 +270,10 @@ export class EventEmitter {
     if (!value) {
       return [];
     }
-    return isListenerList(value) ? value.slice() : [value];
+    // Node.js: listeners() returns the ORIGINAL listener functions,
+    // unwrapping once-wrappers. rawListeners() returns the wrappers.
+    const raw = isListenerList(value) ? value : [value];
+    return raw.map(fn => (fn as any).listener ?? fn);
   }
 
   rawListeners(event: string | symbol): EventListener[] {
@@ -242,6 +281,7 @@ export class EventEmitter {
     if (!value) {
       return [];
     }
+    // rawListeners returns the actual wrapper functions (including once-wrappers)
     return isListenerList(value) ? value.slice() : [value];
   }
 

@@ -156,10 +156,16 @@ export function isDisturbed(stream: unknown): boolean {
 }
 
 /**
- * Check if a stream is readable
+ * Check if a stream is readable.
+ * Node.js checks that the stream is not destroyed and not ended.
  */
 export function isReadable(stream: unknown): stream is ReadableLike {
   if (stream == null) {
+    return false;
+  }
+  const s = stream as any;
+  // Node.js: a destroyed or ended stream is not readable
+  if (s.destroyed || s.readableEnded || s._destroyed || s._endEmitted) {
     return false;
   }
   if (stream instanceof Readable || stream instanceof Transform) {
@@ -173,10 +179,16 @@ export function isReadable(stream: unknown): stream is ReadableLike {
 }
 
 /**
- * Check if a stream is writable
+ * Check if a stream is writable.
+ * Node.js checks that the stream is not destroyed and not finished.
  */
 export function isWritable(stream: unknown): stream is WritableLike {
   if (stream == null) {
+    return false;
+  }
+  const s = stream as any;
+  // Node.js: a destroyed or finished stream is not writable
+  if (s.destroyed || s.writableFinished || s._destroyed || s._finished) {
     return false;
   }
   if (stream instanceof Writable || stream instanceof Transform) {
@@ -255,6 +267,18 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
 
   pair.s1 = stream1;
   pair.s2 = stream2;
+
+  // Node.js: destroying one side of a duplexPair destroys the other.
+  stream1.on("close", () => {
+    if (!stream2.destroyed) {
+      stream2.destroy(stream1.errored ?? undefined);
+    }
+  });
+  stream2.on("close", () => {
+    if (!stream1.destroyed) {
+      stream1.destroy(stream2.errored ?? undefined);
+    }
+  });
 
   return [stream1, stream2];
 }

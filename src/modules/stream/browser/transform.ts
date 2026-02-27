@@ -680,7 +680,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         this.push(result as TOutput);
       }
     } catch (err) {
-      this._emitErrorOnce(err);
+      // Let the error propagate to the Writable callback which handles
+      // error emission (matching Node.js behavior). Do NOT call
+      // _emitErrorOnce here to avoid double error handling.
       throw err;
     }
   }
@@ -854,12 +856,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       const err = finalError ?? error;
       this._readable.destroy();
       this._writable.destroy();
-      // Call pending end() callback — Node.js calls it even when destroyed
-      const ecb = this._endCallback;
-      if (ecb) {
-        this._endCallback = null;
-        ecb();
-      }
+      // Node.js does NOT call the pending end() callback when the stream
+      // is destroyed — it only fires on 'finish'. Discard it.
+      this._endCallback = null;
       this._closed = true;
       queueMicrotask(() => {
         if (err) {
@@ -1336,14 +1335,17 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   /**
    * Base transform method - can be overridden by subclasses.
-   * Default behavior: throw ERR_METHOD_NOT_IMPLEMENTED (matches Node.js).
+   * Default behavior: call callback with ERR_METHOD_NOT_IMPLEMENTED (matches Node.js).
+   * Node.js calls callback(err) rather than throwing synchronously.
    */
   _transform(
     _chunk: TInput,
     _encoding: string,
-    _callback: (error?: Error | null, data?: TOutput) => void
+    callback: (error?: Error | null, data?: TOutput) => void
   ): void {
-    throw new Error("_transform() is not implemented");
+    const err = new Error("_transform() is not implemented") as Error & { code: string };
+    err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+    callback(err);
   }
 
   /**

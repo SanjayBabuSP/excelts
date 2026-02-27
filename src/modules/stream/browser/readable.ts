@@ -353,7 +353,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   private _emitEndOnce(): void {
-    if (this._endEmitted) {
+    if (this._endEmitted || this._destroyed) {
       return;
     }
     this._endEmitted = true;
@@ -377,7 +377,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       const encoder = new TextEncoder();
       chunk = encoder.encode(chunk) as any;
     }
+    const wasEmpty = this._buf.length === 0;
     this._buf.unshift(chunk);
+    // Node.js emits 'readable' when data is unshifted into an empty buffer
+    // while in paused mode, so that consumers know data is available.
+    if (wasEmpty && !this._flowing) {
+      queueMicrotask(() => this.emit("readable"));
+    }
   }
 
   /**
@@ -413,6 +419,16 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       const chunk = this._buf.shift();
       if (this._ended && this._buf.length === 0) {
         queueMicrotask(() => this._emitEndOnce());
+      }
+      // Node.js triggers _read() to refill buffer after consuming an object
+      if (this._read && !this._ended && !this._destroyed && this._constructed) {
+        if (this._buf.length < this._highWaterMark) {
+          queueMicrotask(() => {
+            if (!this._ended && !this._destroyed) {
+              this._read!(this._highWaterMark);
+            }
+          });
+        }
       }
       return chunk;
     }
@@ -458,6 +474,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       queueMicrotask(() => this._emitEndOnce());
     }
 
+    // Node.js re-emits 'readable' when there is still data in the buffer
+    // after a read(), so consumers know more data is available.
+    if (!this._flowing && this._buf.length > 0) {
+      queueMicrotask(() => this.emit("readable"));
+    }
+
     return result;
   }
 
@@ -481,7 +503,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (!this._decoder) {
         this._decoder = getTextDecoder(this._encoding);
       }
-      return this._decoder.decode(chunk) as any;
+      // Pass {stream: true} to handle multi-byte characters that may span
+      // chunk boundaries (matches Node.js StringDecoder behavior).
+      return this._decoder.decode(chunk, { stream: true }) as any;
     }
     return chunk;
   }
@@ -539,15 +563,22 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       }
     }
 
-    // Emit any buffered data first
-    while (this._buf.length > 0 && this._flowing) {
-      const chunk = this._buf.shift();
-      this._didRead = true;
-      this.emit("data", this._applyEncoding(chunk));
-    }
-
-    // If already ended, defer end event (matches Node.js nextTick behavior)
-    if (this._ended && this._buf.length === 0) {
+    // Drain buffered data asynchronously (matches Node.js process.nextTick behavior).
+    // Node.js does NOT drain synchronously on resume() — it defers to nextTick
+    // so that multiple resume()/pipe() calls can register before data flows.
+    if (this._buf.length > 0) {
+      queueMicrotask(() => {
+        while (this._buf.length > 0 && this._flowing) {
+          const chunk = this._buf.shift();
+          this._didRead = true;
+          this.emit("data", this._applyEncoding(chunk));
+        }
+        // After draining, check for end
+        if (this._ended && this._buf.length === 0) {
+          this._emitEndOnce();
+        }
+      });
+    } else if (this._ended && this._buf.length === 0) {
       queueMicrotask(() => this._emitEndOnce());
     } else if (this._read) {
       // Call user-provided read function asynchronously
@@ -579,10 +610,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (event === "data") {
       this.resume();
     } else if (event === "readable") {
-      // Node.js: adding a 'readable' listener sets readableFlowing to false
-      // and schedules a 'readable' emission if data is already buffered.
-      this._hasFlowed = true;
-      this._flowing = false;
+      // Node.js: adding a 'readable' listener on a fresh (not yet flowing) stream
+      // sets readableFlowing to false. But if the stream is ALREADY flowing
+      // (e.g., via on('data')), Node.js does NOT pause it — it stays flowing.
+      if (!this._flowing) {
+        this._hasFlowed = true;
+        this._flowing = false;
+      }
       if (this._buf.length > 0 || this._ended) {
         queueMicrotask(() => this.emit("readable"));
       }
@@ -625,6 +659,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     this._destroyed = true;
+
+    // Node.js clears the readable buffer on destroy so that
+    // readableLength returns 0 and no stale data is accessible.
+    this._buf.clear();
 
     // Ensure we detach from destinations to avoid leaking listeners.
     this.unpipe();

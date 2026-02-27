@@ -78,6 +78,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   private _finished: boolean = false;
   private _destroyed: boolean = false;
   private _errored: Error | null = null;
+  private _errorEmitted: boolean = false;
   private _closed: boolean = false;
   private _writableLength: number = 0;
   private _needDrain: boolean = false;
@@ -439,6 +440,16 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean {
+    // Node.js: writing null is always an error (even in object mode).
+    if (chunk === null) {
+      const err = new Error("May not write null values to stream") as Error & { code: string };
+      err.code = "ERR_STREAM_NULL_VALUES";
+      const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+      queueMicrotask(() => this.emit("error", err));
+      cb?.(err);
+      return false;
+    }
+
     if (this._destroyed || this._ended) {
       // Node.js distinguishes write-after-destroy (ERR_STREAM_DESTROYED) from
       // write-after-end (ERR_STREAM_WRITE_AFTER_END).
@@ -538,6 +549,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           this._writableLength -= chunkSize;
           if (!this._destroyed) {
             this._errored = err;
+            this._errorEmitted = true;
             this.emit("error", err);
           }
           callback?.(err);
@@ -606,10 +618,12 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     if (this._finalFunc) {
       this._finalFunc(err => {
         if (err) {
+          this._errorEmitted = true;
           this.emit("error", err);
-          // Match Node.js: auto-destroy and emit close after _final error
+          // Match Node.js: auto-destroy and emit close after _final error.
+          // Pass the error to destroy() so it can be stored and propagated.
           if (this._autoDestroy && !this._destroyed) {
-            this.destroy();
+            this.destroy(err);
           }
           // Node.js always invokes the end() callback, even on _final error.
           cb?.();
@@ -682,6 +696,14 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     callback?: () => void
   ): this {
     if (this._ended) {
+      // Node.js calls the end() callback with ERR_STREAM_ALREADY_FINISHED
+      // when end() is called more than once.
+      const { cb: endCb } = parseEndArgs<T>(chunkOrCallback, encodingOrCallback, callback);
+      if (endCb) {
+        const err = new Error("write after end") as Error & { code: string };
+        err.code = "ERR_STREAM_ALREADY_FINISHED";
+        queueMicrotask(() => endCb());
+      }
       return this;
     }
 
@@ -693,7 +715,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       // Direct-write path: enqueue final chunk (if any), then wait for the
       // write queue to drain before running _finalFunc + emitting finish.
       if (chunk !== undefined) {
-        this._doWrite(chunk, encoding ?? this._defaultEncoding);
+        // Normalize the end chunk (decodeStrings etc.) just like write()
+        const normalized = this._normalizeWriteChunk(chunk, encoding ?? this._defaultEncoding);
+        this._doWrite(normalized.chunk, normalized.encoding);
       }
 
       // If writes are still in-flight or queued, defer finalization.
@@ -793,7 +817,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       }
       this._closed = true;
       queueMicrotask(() => {
-        if (err) {
+        if (err && !this._errorEmitted) {
+          this._errorEmitted = true;
           this.emit("error", err);
         }
         if (this._emitClose) {
@@ -960,9 +985,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     return this._corked;
   }
 
-  /** Whether the stream was destroyed before finishing */
+  /** Whether the stream was destroyed before finishing (only meaningful after end() was called) */
   get writableAborted(): boolean {
-    return this._destroyed && !this._finished;
+    // Node.js: writableAborted is true when the stream was destroyed after
+    // end() was called but before 'finish' was emitted.
+    return this._destroyed && this._ended && !this._finished;
   }
 
   /** Whether the stream is in object mode */
