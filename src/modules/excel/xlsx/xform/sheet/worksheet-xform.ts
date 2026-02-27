@@ -202,17 +202,22 @@ class WorkSheetXform extends BaseXform {
     });
 
     // prepare comment relationships
+    // Use fileIndex (sequential 1-based) for file naming instead of model.id
+    // (the workbook-level sheet ID) because model.id can have gaps when sheets
+    // have been deleted, causing a mismatch between the relationship targets
+    // and the actual ZIP entry paths written by addWorksheets().
+    const { fileIndex } = model;
     if (model.comments.length > 0) {
       const comment = {
         Id: nextRid(rels),
         Type: RelType.Comments,
-        Target: commentsRelTargetFromWorksheet(model.id)
+        Target: commentsRelTargetFromWorksheet(fileIndex)
       };
       rels.push(comment);
       const vmlDrawing = {
         Id: nextRid(rels),
         Type: RelType.VmlDrawing,
-        Target: vmlDrawingRelTargetFromWorksheet(model.id)
+        Target: vmlDrawingRelTargetFromWorksheet(fileIndex)
       };
       rels.push(vmlDrawing);
 
@@ -221,8 +226,8 @@ class WorkSheetXform extends BaseXform {
       });
 
       options.commentRefs.push({
-        commentName: `comments${model.id}`,
-        vmlDrawing: `vmlDrawing${model.id}`
+        commentName: `comments${fileIndex}`,
+        vmlDrawing: `vmlDrawing${fileIndex}`
       });
     }
 
@@ -387,7 +392,7 @@ class WorkSheetXform extends BaseXform {
         rels.push({
           Id: nextRid(rels),
           Type: RelType.VmlDrawing,
-          Target: vmlDrawingRelTargetFromWorksheet(model.id)
+          Target: vmlDrawingRelTargetFromWorksheet(fileIndex)
         });
       }
 

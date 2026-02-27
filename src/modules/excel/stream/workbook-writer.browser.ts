@@ -382,8 +382,14 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
 
   addContentTypes(): Promise<void> {
     return new Promise(resolve => {
+      const worksheets = this._worksheets.filter(Boolean);
+      // In the streaming path, ZIP entries use ws.id which is always sequential.
+      // Set fileIndex = id to satisfy the ContentTypesXform contract.
+      worksheets.forEach((ws: any) => {
+        ws.fileIndex = ws.id;
+      });
       const model = {
-        worksheets: this._worksheets.filter(Boolean),
+        worksheets,
         sharedStrings: this.sharedStrings,
         commentRefs: this.commentRefs,
         media: this.media,
