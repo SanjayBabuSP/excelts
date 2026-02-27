@@ -87,7 +87,8 @@ import {
   vmlDrawingRelTargetFromWorksheetName,
   vmlDrawingPath,
   worksheetPath,
-  worksheetRelsPath
+  worksheetRelsPath,
+  worksheetRelTarget
 } from "@excel/utils/ooxml-paths";
 import { PassthroughManager } from "@excel/utils/passthrough-manager";
 
@@ -1390,13 +1391,13 @@ class XLSX {
         });
       }
     });
-    model.worksheets.forEach((worksheet: any, index: number) => {
+    model.worksheets.forEach((worksheet: any) => {
       worksheet.rId = `rId${count++}`;
-      worksheet.fileIndex = index + 1;
+      // fileIndex is assigned once in prepareModel() — use it directly
       relationships.push({
         Id: worksheet.rId,
         Type: XLSX.RelType.Worksheet,
-        Target: `worksheets/sheet${worksheet.fileIndex}.xml`
+        Target: worksheetRelTarget(worksheet.fileIndex)
       });
     });
     const xform = new RelationshipsXform();
@@ -1437,8 +1438,8 @@ class XLSX {
     const vmlDrawingXform = new VmlDrawingXform();
     const ctrlPropXform = new CtrlPropXform();
 
-    model.worksheets.forEach((worksheet: any, index: number) => {
-      const fileIndex = worksheet.fileIndex || index + 1;
+    model.worksheets.forEach((worksheet: any) => {
+      const { fileIndex } = worksheet;
       let xmlStream = new XmlStream();
       worksheetXform.render(xmlStream, worksheet);
       zip.append(xmlStream.xml, { name: worksheetPath(fileIndex) });
@@ -1674,7 +1675,13 @@ class XLSX {
     worksheetOptions.formControlRefs = model.formControlRefs = [];
     let tableCount = 0;
     model.tables = [];
-    model.worksheets.forEach((worksheet: any) => {
+    model.worksheets.forEach((worksheet: any, index: number) => {
+      // Assign fileIndex early so that worksheet-xform.prepare() can use it
+      // for comment/VML relationship targets and content type names.
+      // This ensures consistency with addWorksheets() which writes ZIP entries
+      // using the same fileIndex.
+      worksheet.fileIndex = index + 1;
+
       worksheet.tables.forEach((table: any) => {
         tableCount++;
         table.target = `table${tableCount}.xml`;
