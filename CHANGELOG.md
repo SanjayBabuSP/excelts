@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.5](https://github.com/cjnoname/excelts/compare/v5.1.4...v5.1.5) (2026-02-27)
+
+
+### Bug Fixes
+
+* use optional chaining for date1904 property access in XLSX class ([4e74f80](https://github.com/cjnoname/excelts/commit/4e74f805b1817a0a917c5fd73d7faf34f791810d))
+
 ## [5.1.4](https://github.com/cjnoname/excelts/compare/v5.1.3...v5.1.4) (2026-02-27)
 
 
