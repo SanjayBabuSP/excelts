@@ -795,7 +795,7 @@ class XLSX {
       sharedStrings: model.sharedStrings,
       media: model.media,
       mediaIndex: model.mediaIndex,
-      date1904: model.properties && model.properties.date1904,
+      date1904: model.properties?.date1904,
       drawings: model.drawings,
       drawingRels: model.drawingRels,
       comments: model.comments,
@@ -1654,7 +1654,7 @@ class XLSX {
     const worksheetOptions: any = {
       sharedStrings: model.sharedStrings,
       styles: model.styles,
-      date1904: model.properties.date1904,
+      date1904: model.properties?.date1904,
       drawingsCount: 0,
       media: model.media
     };
