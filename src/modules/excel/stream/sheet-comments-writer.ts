@@ -18,11 +18,11 @@ interface SheetCommentsWriterOptions {
 class SheetCommentsWriter {
   id: number;
   count: number;
-  _worksheet: any;
-  _workbook: any;
-  _sheetRelsWriter: any;
-  _commentsStream?: any;
-  _vmlStream?: any;
+  private _worksheet: any;
+  private _workbook: any;
+  private _sheetRelsWriter: any;
+  private _commentsStream?: any;
+  private _vmlStream?: any;
   vmlRelId?: string;
   startedData?: boolean;
 
@@ -49,7 +49,7 @@ class SheetCommentsWriter {
     return this._vmlStream;
   }
 
-  _addRelationships(): void {
+  private _addRelationships(): void {
     const commentRel = {
       Type: RelType.Comments,
       Target: commentsRelTargetFromWorksheet(this.id)
@@ -63,14 +63,14 @@ class SheetCommentsWriter {
     this.vmlRelId = this._sheetRelsWriter.addRelationship(vmlDrawingRel);
   }
 
-  _addCommentRefs(): void {
+  private _addCommentRefs(): void {
     this._workbook.commentRefs.push({
       commentName: `comments${this.id}`,
       vmlDrawing: `vmlDrawing${this.id}`
     });
   }
 
-  _writeOpen(): void {
+  private _writeOpen(): void {
     this.commentsStream.write(
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
@@ -90,7 +90,7 @@ class SheetCommentsWriter {
     );
   }
 
-  _writeComment(comment: any, index: number): void {
+  private _writeComment(comment: any, index: number): void {
     const commentXform = new CommentXform();
     const commentsXmlStream = new XmlStream();
     commentXform.render(commentsXmlStream, comment);
@@ -102,7 +102,7 @@ class SheetCommentsWriter {
     this.vmlStream.write(vmlXmlStream.xml);
   }
 
-  _writeClose(): void {
+  private _writeClose(): void {
     this.commentsStream.write("</commentList></comments>");
     this.vmlStream.write("</xml>");
   }

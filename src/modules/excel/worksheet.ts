@@ -578,11 +578,12 @@ class Worksheet {
   // =========================================================================
   // Rows
 
+  /** @internal */
   _commitRow(row: Row): void {
     // nop - allows streaming reader to fill a document
   }
 
-  get _lastRowNumber(): number {
+  private get _lastRowNumber(): number {
     // need to cope with results of splice
     const rows = this._rows;
     let n = rows.length;
@@ -592,7 +593,7 @@ class Worksheet {
     return n;
   }
 
-  get _nextRow(): number {
+  private get _nextRow(): number {
     return this._lastRowNumber + 1;
   }
 
@@ -703,7 +704,7 @@ class Worksheet {
   }
 
   // set row at position to same style as of either pervious row (option 'i') or next row (option 'o')
-  _setStyleOption(pos: number, style: string = "n"): void {
+  private _setStyleOption(pos: number, style: string = "n"): void {
     if (style[0] === "o" && this.findRow(pos + 1) !== undefined) {
       this._copyStyle(pos + 1, pos, style[1] === "+");
     } else if (style[0] === "i" && this.findRow(pos - 1) !== undefined) {
@@ -711,7 +712,7 @@ class Worksheet {
     }
   }
 
-  _copyStyle(src: number, dest: number, styleEmpty: boolean = false): void {
+  private _copyStyle(src: number, dest: number, styleEmpty: boolean = false): void {
     const rSrc = this.getRow(src);
     const rDst = this.getRow(dest);
     rDst.style = copyStyle(rSrc.style);
@@ -1003,7 +1004,7 @@ class Worksheet {
     this._mergeCellsInternal(dimensions, true);
   }
 
-  _mergeCellsInternal(dimensions: Range, ignoreStyle?: boolean): void {
+  private _mergeCellsInternal(dimensions: Range, ignoreStyle?: boolean): void {
     // check cells aren't already merged
     Object.values(this._merges).forEach((merge: Range) => {
       if (merge.intersects(dimensions)) {
@@ -1026,7 +1027,7 @@ class Worksheet {
     this._merges[master.address] = dimensions;
   }
 
-  _unMergeMaster(master: Cell): void {
+  private _unMergeMaster(master: Cell): void {
     // master is always top left of a rectangle
     const merge = this._merges[master.address];
     if (merge) {
@@ -1462,7 +1463,7 @@ class Worksheet {
     return model;
   }
 
-  _parseRows(model: WorksheetModel): void {
+  private _parseRows(model: WorksheetModel): void {
     this._rows = [];
     if (model.rows) {
       model.rows.forEach(rowModel => {
@@ -1473,7 +1474,7 @@ class Worksheet {
     }
   }
 
-  _parseMergeCells(model: WorksheetModel): void {
+  private _parseMergeCells(model: WorksheetModel): void {
     if (model.mergeCells) {
       model.mergeCells.forEach((merge: string) => {
         // Do not merge styles when importing an Excel file

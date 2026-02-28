@@ -134,8 +134,8 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
   useSharedStrings: boolean;
   sharedStrings: SharedStrings;
   styles: StylesXform;
-  _definedNames: DefinedNames;
-  _worksheets: TWorksheetWriter[];
+  private _definedNames: DefinedNames;
+  private _worksheets: TWorksheetWriter[];
   views: WorkbookView[];
   zipOptions?: Partial<ZipOptions>;
   compressionLevel: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
@@ -217,6 +217,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return this._definedNames;
   }
 
+  /** @internal */
   _openStream(path: string): InstanceType<typeof StreamBuf> {
     const stream = new StreamBuf({
       bufSize: this._trueStreaming ? 4096 : 65536,
@@ -238,7 +239,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return stream;
   }
 
-  _addFile(data: string | Uint8Array, name: string, base64?: boolean): void {
+  protected _addFile(data: string | Uint8Array, name: string, base64?: boolean): void {
     const zipFile = new ZipDeflate(name, { level: this.compressionLevel });
     this.zip.add(zipFile);
 
@@ -255,7 +256,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     zipFile.push(buffer, true);
   }
 
-  _commitWorksheets(): Promise<void> {
+  private _commitWorksheets(): Promise<void> {
     const commitWorksheet = (worksheet: TWorksheetWriter): Promise<void> => {
       if (!worksheet.committed) {
         return new Promise(resolve => {
@@ -522,7 +523,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     });
   }
 
-  _finalize(): Promise<this> {
+  private _finalize(): Promise<this> {
     return new Promise((resolve, reject) => {
       const onError = (err: Error) => {
         this.stream.removeListener("finish", onFinish);

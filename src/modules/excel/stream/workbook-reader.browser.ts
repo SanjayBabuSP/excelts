@@ -198,7 +198,7 @@ export abstract class WorkbookReaderBase<
   }
 
   // Default implementation for CommonInput types
-  _getStream(input: TInput): Readable {
+  protected _getStream(input: TInput): Readable {
     if (input instanceof Readable) {
       return input;
     }
@@ -244,7 +244,7 @@ export abstract class WorkbookReaderBase<
     waitingWorksheets: TWaitingWorksheet[]
   ): AsyncIterableIterator<WorksheetReadyEvent<TWorksheetReader>>;
 
-  _cleanupWaitingWorksheets(_waitingWorksheets: TWaitingWorksheet[]): void {
+  protected _cleanupWaitingWorksheets(_waitingWorksheets: TWaitingWorksheet[]): void {
     // Default: attempt best-effort cleanup if the stored object provides it.
     for (const ws of _waitingWorksheets as any[]) {
       if (ws && typeof ws.cleanup === "function") {
@@ -254,7 +254,7 @@ export abstract class WorkbookReaderBase<
   }
 
   // Unified implementations using passed-in classes
-  _createWorksheetReader(params: {
+  private _createWorksheetReader(params: {
     id: number;
     iterator: AsyncIterable<unknown>;
     options: InternalWorksheetOptions;
@@ -267,7 +267,7 @@ export abstract class WorkbookReaderBase<
     });
   }
 
-  _createHyperlinkReader(params: {
+  private _createHyperlinkReader(params: {
     id: number;
     iterator: AsyncIterable<unknown>;
     options: InternalWorksheetOptions;
@@ -337,13 +337,13 @@ export abstract class WorkbookReaderBase<
     }
   }
 
-  _emitEntry(payload: EntryPayload): void {
+  private _emitEntry(payload: EntryPayload): void {
     if (this.options.entries === "emit") {
       this.emit("entry", payload);
     }
   }
 
-  async _parseRels(entry: Parameters<typeof iterateStream>[0]): Promise<void> {
+  private async _parseRels(entry: Parameters<typeof iterateStream>[0]): Promise<void> {
     const xform = new RelationshipsXform();
     this.workbookRels = await xform.parseStream(iterateStream(entry));
 
@@ -356,7 +356,7 @@ export abstract class WorkbookReaderBase<
     }
   }
 
-  async _parseWorkbook(entry: Parameters<typeof iterateStream>[0]): Promise<void> {
+  private async _parseWorkbook(entry: Parameters<typeof iterateStream>[0]): Promise<void> {
     this._emitEntry({ type: "workbook" });
     const workbook = new WorkbookXform();
     this.model = await workbook.parseStream(iterateStream(entry));
@@ -369,7 +369,7 @@ export abstract class WorkbookReaderBase<
     }
   }
 
-  async *_parseSharedStrings(
+  private async *_parseSharedStrings(
     entry: Parameters<typeof iterateStream>[0]
   ): AsyncIterableIterator<{ index: number; text: SharedStringValue }> {
     this._emitEntry({ type: "shared-strings" });
@@ -489,7 +489,7 @@ export abstract class WorkbookReaderBase<
     }
   }
 
-  async _parseStyles(entry: Parameters<typeof iterateStream>[0]): Promise<void> {
+  private async _parseStyles(entry: Parameters<typeof iterateStream>[0]): Promise<void> {
     this._emitEntry({ type: "styles" });
     if (this.options.styles === "cache") {
       this.styles = new StylesXform();
@@ -497,7 +497,7 @@ export abstract class WorkbookReaderBase<
     }
   }
 
-  *_parseWorksheet(
+  protected *_parseWorksheet(
     iterator: AsyncIterable<unknown>,
     sheetNo: string
   ): IterableIterator<WorksheetReadyEvent<TWorksheetReader>> {

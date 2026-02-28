@@ -406,6 +406,7 @@ class Cell {
     return this.text;
   }
 
+  /** @internal */
   _upgradeToHyperlink(hyperlink: string): void {
     // if this cell is a string, turn it into a Hyperlink
     if (this.type === Cell.Types.String) {

@@ -33,10 +33,11 @@ interface SheetRelsWriterOptions {
 class SheetRelsWriter {
   id: number;
   count: number;
+  /** @internal */
   _hyperlinks: Array<{ rId: string; address: string }>;
-  _workbook: any;
-  _stream?: any;
-  _hyperlinksProxy?: HyperlinksProxy;
+  private _workbook: any;
+  private _stream?: any;
+  private _hyperlinksProxy?: HyperlinksProxy;
 
   constructor(options: SheetRelsWriterOptions) {
     // in a workbook, each sheet will have a number
@@ -103,15 +104,14 @@ class SheetRelsWriter {
     }
   }
 
-  // ================================================================================
-  _writeOpen(): void {
+  private _writeOpen(): void {
     this.stream.write(
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
     );
   }
 
-  _writeRelationship(relationship: Relationship): string {
+  private _writeRelationship(relationship: Relationship): string {
     if (!this.count) {
       this._writeOpen();
     }
@@ -135,7 +135,7 @@ class SheetRelsWriter {
     return rId;
   }
 
-  _writeClose(): void {
+  private _writeClose(): void {
     this.stream.write("</Relationships>");
   }
 }
