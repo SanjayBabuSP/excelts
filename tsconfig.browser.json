@@ -5,7 +5,8 @@
     "moduleResolution": "bundler",
     "outDir": "./dist/browser",
     "declaration": true,
-    "emitDeclarationOnly": false
+    "emitDeclarationOnly": false,
+    "stripInternal": true
   },
   "include": ["src/**/*"],
   "exclude": [

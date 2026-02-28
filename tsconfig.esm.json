@@ -6,7 +6,8 @@
     "outDir": "./dist/esm",
     "declaration": true,
     "declarationDir": "./dist/types",
-    "emitDeclarationOnly": false
+    "emitDeclarationOnly": false,
+    "stripInternal": true
   },
   "include": ["src/**/*"],
   "exclude": [

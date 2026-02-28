@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.7](https://github.com/cjnoname/excelts/compare/v5.1.6...v5.1.7) (2026-02-28)
+
+
+### Bug Fixes
+
+* add main, module, and types fields to package.json for legacy moduleResolution compatibility ([3f67511](https://github.com/cjnoname/excelts/commit/3f67511325b183a0752debaebca223b6cbe99d67)), closes [#69](https://github.com/cjnoname/excelts/issues/69)
+* hide internal underscore-prefixed members from public type declarations ([f94d157](https://github.com/cjnoname/excelts/commit/f94d1579a2c964e4b4d42269e560d3642f1e06cb)), closes [#68](https://github.com/cjnoname/excelts/issues/68)
+
+## [5.1.6](https://github.com/cjnoname/excelts/compare/v5.1.5...v5.1.6) (2026-02-28)
+
+
+### Bug Fixes
+
+* revert unnecessary optional chaining for date1904 property access ([042f6c3](https://github.com/cjnoname/excelts/commit/042f6c35981208e284c4aeb60f6f2631cb32362b))
+
+## [5.1.5](https://github.com/cjnoname/excelts/compare/v5.1.4...v5.1.5) (2026-02-27)
+
+
+### Bug Fixes
+
+* use optional chaining for date1904 property access in XLSX class ([4e74f80](https://github.com/cjnoname/excelts/commit/4e74f805b1817a0a917c5fd73d7faf34f791810d))
+
 ## [5.1.4](https://github.com/cjnoname/excelts/compare/v5.1.3...v5.1.4) (2026-02-27)
 
 

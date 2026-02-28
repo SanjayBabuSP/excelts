@@ -232,7 +232,7 @@ class Range {
     this.model.sheetName = value;
   }
 
-  get _serialisedSheetName(): string {
+  private get _serialisedSheetName(): string {
     const { sheetName } = this.model;
     if (sheetName) {
       if (/^[a-zA-Z0-9]*$/.test(sheetName)) {

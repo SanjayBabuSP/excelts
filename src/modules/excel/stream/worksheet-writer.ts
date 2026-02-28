@@ -96,23 +96,23 @@ class WorksheetWriter {
   name: string;
   state: WorksheetState;
   /** Rows stored while being worked on. Set to null after commit. */
-  _rows: Row[] | null;
+  private _rows: Row[] | null;
   /** Column definitions */
-  _columns: Column[] | null;
+  private _columns: Column[] | null;
   /** Column keys mapping: key => Column */
-  _keys: { [key: string]: Column };
+  private _keys: { [key: string]: Column };
   /** Merged cell ranges */
-  _merges: Dimensions[];
-  _sheetRelsWriter: SheetRelsWriter;
-  _sheetCommentsWriter: SheetCommentsWriter;
-  _dimensions: Dimensions;
-  _rowZero: number;
-  _rowOffset: number;
+  private _merges: Dimensions[];
+  private _sheetRelsWriter: SheetRelsWriter;
+  private _sheetCommentsWriter: SheetCommentsWriter;
+  private _dimensions: Dimensions;
+  private _rowZero: number;
+  private _rowOffset: number;
   committed: boolean;
   dataValidations: DataValidations;
   /** Shared formulae by address */
-  _formulae: { [key: string]: unknown };
-  _siFormulae: number;
+  private _formulae: { [key: string]: unknown };
+  private _siFormulae: number;
   conditionalFormatting: ConditionalFormattingOptions[];
   rowBreaks: RowBreak[];
   colBreaks: ColBreak[];
@@ -126,11 +126,11 @@ class WorksheetWriter {
   pageSetup: Partial<PageSetup> & { margins: PageSetup["margins"] };
   useSharedStrings: boolean;
   // WorkbookWriter - circular dependency, keep as any
-  _workbook: any;
+  private _workbook: any;
   hasComments: boolean;
-  _views: Partial<WorksheetView>[];
+  private _views: Partial<WorksheetView>[];
   autoFilter: AutoFilter | null;
-  _media: unknown[];
+  private _media: unknown[];
   sheetProtection: {
     sheet?: boolean;
     algorithmName?: string;
@@ -139,10 +139,10 @@ class WorksheetWriter {
     hashValue?: string;
     [key: string]: unknown;
   } | null;
-  _stream?: InstanceType<typeof StreamBuf>;
+  private _stream?: InstanceType<typeof StreamBuf>;
   startedData: boolean;
-  _background?: { imageId?: number; rId?: string };
-  _headerRowCount?: number;
+  private _background?: { imageId?: number; rId?: string };
+  private _headerRowCount?: number;
   /** Relationship Id - assigned by WorkbookWriter */
   rId?: string;
 
@@ -433,7 +433,7 @@ class WorksheetWriter {
 
   // =========================================================================
   // Rows
-  get _nextRow(): number {
+  private get _nextRow(): number {
     return this._rowZero + (this._rows!.length - this._rowOffset);
   }
 
@@ -467,7 +467,7 @@ class WorksheetWriter {
     }
   }
 
-  _commitRow(cRow: Row): void {
+  private _commitRow(cRow: Row): void {
     // since rows must be written in order, we commit all rows up till and including cRow
     let found = false;
 
@@ -640,13 +640,13 @@ class WorksheetWriter {
 
   // ================================================================================
 
-  _write(text: string): void {
+  private _write(text: string): void {
     xmlBuffer.reset();
     xmlBuffer.addText(text);
     this.stream.write(xmlBuffer);
   }
 
-  _writeSheetProperties(
+  private _writeSheetProperties(
     xmlBuf: StringBuf,
     properties: Partial<WorksheetProperties> | undefined,
     pageSetup: Partial<PageSetup> | undefined
@@ -665,7 +665,7 @@ class WorksheetWriter {
     xmlBuf.addText(xform.sheetProperties.toXml(sheetPropertiesModel));
   }
 
-  _writeSheetFormatProperties(
+  private _writeSheetFormatProperties(
     xmlBuf: StringBuf,
     properties: Partial<WorksheetProperties> | undefined
   ): void {
@@ -684,7 +684,7 @@ class WorksheetWriter {
     xmlBuf.addText(xform.sheetFormatProperties.toXml(sheetFormatPropertiesModel));
   }
 
-  _writeOpenWorksheet(): void {
+  private _writeOpenWorksheet(): void {
     xmlBuffer.reset();
 
     xmlBuffer.addText('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>');
@@ -705,7 +705,7 @@ class WorksheetWriter {
     this.stream.write(xmlBuffer);
   }
 
-  _writeColumns(): void {
+  private _writeColumns(): void {
     const cols = (Column as any).toModel(this.columns);
     if (cols) {
       xform.columns.prepare(cols, { styles: this._workbook.styles });
@@ -713,11 +713,11 @@ class WorksheetWriter {
     }
   }
 
-  _writeOpenSheetData(): void {
+  private _writeOpenSheetData(): void {
     this._write("<sheetData>");
   }
 
-  _writeRow(row: any): void {
+  private _writeRow(row: any): void {
     if (!this.startedData) {
       this._writeColumns();
       this._writeOpenSheetData();
@@ -745,11 +745,11 @@ class WorksheetWriter {
     }
   }
 
-  _writeCloseSheetData(): void {
+  private _writeCloseSheetData(): void {
     this._write("</sheetData>");
   }
 
-  _writeMergeCells(): void {
+  private _writeMergeCells(): void {
     if (this._merges.length) {
       xmlBuffer.reset();
       xmlBuffer.addText(`<mergeCells count="${this._merges.length}">`);
@@ -762,11 +762,11 @@ class WorksheetWriter {
     }
   }
 
-  _writeHyperlinks(): void {
+  private _writeHyperlinks(): void {
     this.stream.write(xform.hyperlinks.toXml(this._sheetRelsWriter._hyperlinks));
   }
 
-  _writeConditionalFormatting(): void {
+  private _writeConditionalFormatting(): void {
     const options = {
       styles: this._workbook.styles
     };
@@ -774,39 +774,39 @@ class WorksheetWriter {
     this.stream.write(xform.conditionalFormattings.toXml(this.conditionalFormatting));
   }
 
-  _writeRowBreaks(): void {
+  private _writeRowBreaks(): void {
     this.stream.write(xform.rowBreaks.toXml(this.rowBreaks));
   }
 
-  _writeColBreaks(): void {
+  private _writeColBreaks(): void {
     this.stream.write(xform.colBreaks.toXml(this.colBreaks));
   }
 
-  _writeDataValidations(): void {
+  private _writeDataValidations(): void {
     this.stream.write(xform.dataValidations.toXml(this.dataValidations.model));
   }
 
-  _writeSheetProtection(): void {
+  private _writeSheetProtection(): void {
     this.stream.write(xform.sheetProtection.toXml(this.sheetProtection));
   }
 
-  _writePageMargins(): void {
+  private _writePageMargins(): void {
     this.stream.write(xform.pageMargins.toXml(this.pageSetup.margins));
   }
 
-  _writePageSetup(): void {
+  private _writePageSetup(): void {
     this.stream.write(xform.pageSeteup.toXml(this.pageSetup));
   }
 
-  _writeHeaderFooter(): void {
+  private _writeHeaderFooter(): void {
     this.stream.write(xform.headerFooter.toXml(this.headerFooter));
   }
 
-  _writeAutoFilter(): void {
+  private _writeAutoFilter(): void {
     this.stream.write(xform.autoFilter.toXml(this.autoFilter));
   }
 
-  _writeBackground(): void {
+  private _writeBackground(): void {
     if (this._background) {
       if (this._background.imageId !== undefined) {
         const image = this._workbook.getImage(this._background.imageId);
@@ -824,7 +824,7 @@ class WorksheetWriter {
     }
   }
 
-  _writeLegacyData(): void {
+  private _writeLegacyData(): void {
     if (this.hasComments) {
       xmlBuffer.reset();
       xmlBuffer.addText(`<legacyDrawing r:id="${this._sheetCommentsWriter.vmlRelId}"/>`);
@@ -832,13 +832,13 @@ class WorksheetWriter {
     }
   }
 
-  _writeDimensions(): void {
+  private _writeDimensions(): void {
     // for some reason, Excel can't handle dimensions at the bottom of the file
     // and we don't know the dimensions until the commit, so don't write them.
     // this._write('<dimension ref="' + this._dimensions + '"/>');
   }
 
-  _writeCloseWorksheet(): void {
+  private _writeCloseWorksheet(): void {
     this._write("</worksheet>");
   }
 }
