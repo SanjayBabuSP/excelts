@@ -646,7 +646,7 @@ class Worksheet {
   }
 
   // get a row by row number.
-  getRow(r: number): any {
+  getRow(r: number): Row {
     let row = this._rows[r - 1];
     if (!row) {
       row = this._rows[r - 1] = new Row(this, r);
@@ -655,18 +655,18 @@ class Worksheet {
   }
 
   // get multiple rows by row number.
-  getRows(start: number, length: number): any[] | undefined {
+  getRows(start: number, length: number): Row[] | undefined {
     if (length < 1) {
       return undefined;
     }
-    const rows: any[] = [];
+    const rows: Row[] = [];
     for (let i = start; i < start + length; i++) {
       rows.push(this.getRow(i));
     }
     return rows;
   }
 
-  addRow(value: any, style: string = "n"): any {
+  addRow(value: any, style: string = "n"): Row {
     const rowNo = this._nextRow;
     const row = this.getRow(rowNo);
     row.values = value;
@@ -674,7 +674,7 @@ class Worksheet {
     return row;
   }
 
-  addRows(value: any[], style: string = "n"): any[] {
+  addRows(value: any[], style: string = "n"): Row[] {
     const rows: Row[] = [];
     value.forEach(row => {
       rows.push(this.addRow(row, style));
@@ -682,7 +682,7 @@ class Worksheet {
     return rows;
   }
 
-  insertRow(pos: number, value: any, style: string = "n"): any {
+  insertRow(pos: number, value: any, style: string = "n"): Row {
     this.spliceRows(pos, 0, value);
     this._setStyleOption(pos, style);
     return this.getRow(pos);

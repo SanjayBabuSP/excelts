@@ -1,4 +1,5 @@
 import { colCache } from "@excel/utils/col-cache";
+import type { ValueType, FormulaType } from "@excel/enums";
 import { Enums } from "@excel/enums";
 import { Note } from "@excel/note";
 import { escapeHtml } from "@excel/utils/under-dash";
@@ -70,7 +71,7 @@ export interface NoteModel {
 
 export interface CellModel {
   address: string;
-  type: number;
+  type: ValueType;
   // Internal value storage - type depends on cell type
   value?:
     | number
@@ -101,12 +102,12 @@ export interface CellModel {
 interface ICellValue {
   model: CellModel;
   value: CellValueType;
-  type: number;
-  effectiveType: number;
+  type: ValueType;
+  effectiveType: ValueType;
   address: string;
   formula?: string;
   result?: FormulaResult;
-  formulaType?: number;
+  formulaType?: FormulaType;
   hyperlink?: string;
   master?: Cell;
   text?: string;
@@ -283,11 +284,11 @@ class Cell {
   // =========================================================================
   // Value stuff
 
-  get type(): number {
+  get type(): ValueType {
     return this._value.type;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return this._value.effectiveType;
   }
 
@@ -427,7 +428,7 @@ class Cell {
     return this._value.result;
   }
 
-  get formulaType(): number {
+  get formulaType(): FormulaType {
     return this._value.formulaType;
   }
 
@@ -622,11 +623,11 @@ class NullValue {
     // nothing to do
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Null;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Null;
   }
 
@@ -668,11 +669,11 @@ class NumberValue {
     this.model.value = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Number;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Number;
   }
 
@@ -714,11 +715,11 @@ class StringValue {
     this.model.value = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.String;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.String;
   }
 
@@ -764,11 +765,11 @@ class RichTextValue {
     return this.model.value.richText.map(t => t.text).join("");
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.RichText;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.RichText;
   }
 
@@ -810,11 +811,11 @@ class DateValue {
     this.model.value = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Date;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Date;
   }
 
@@ -884,11 +885,11 @@ class HyperlinkValue {
     this.model.hyperlink = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Hyperlink;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Hyperlink;
   }
 
@@ -951,11 +952,11 @@ class MergeValue {
     return this._master;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Merge;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return this._master.effectiveType;
   }
 
@@ -1075,7 +1076,7 @@ class FormulaValue {
     this.model.formula = value;
   }
 
-  get formulaType(): number {
+  get formulaType(): FormulaType {
     if (this.model.formula) {
       return Enums.FormulaType.Master;
     }
@@ -1093,11 +1094,11 @@ class FormulaValue {
     this.model.result = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Formula;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     const v = this.model.result;
     if (v === null || v === undefined) {
       return Enums.ValueType.Null;
@@ -1166,11 +1167,11 @@ class SharedStringValue {
     this.model.value = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.SharedString;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.SharedString;
   }
 
@@ -1212,11 +1213,11 @@ class BooleanValue {
     this.model.value = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Boolean;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Boolean;
   }
 
@@ -1263,11 +1264,11 @@ class CheckboxValue {
     this.model.value = value.checkbox;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Checkbox;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Boolean;
   }
 
@@ -1309,11 +1310,11 @@ class ErrorValue {
     this.model.value = value;
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.Error;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.Error;
   }
 
@@ -1357,11 +1358,11 @@ class JSONValue {
     this.model.value = JSON.stringify(value);
   }
 
-  get type(): number {
+  get type(): ValueType {
     return Cell.Types.String;
   }
 
-  get effectiveType(): number {
+  get effectiveType(): ValueType {
     return Cell.Types.String;
   }
 
