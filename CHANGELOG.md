@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.8](https://github.com/cjnoname/excelts/compare/v5.1.7...v5.1.8) (2026-02-28)
+
+
+### Bug Fixes
+
+* improve public API return types and enum types ([d261785](https://github.com/cjnoname/excelts/commit/d261785d4ade30ad5db953a17286e309a0753193))
+
 ## [5.1.7](https://github.com/cjnoname/excelts/compare/v5.1.6...v5.1.7) (2026-02-28)
 
 
