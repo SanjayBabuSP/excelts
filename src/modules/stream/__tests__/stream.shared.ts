@@ -9237,5 +9237,317 @@ export function runStreamTests(imports: StreamModuleImports): void {
         }
       });
     });
+
+    // ---- Transform finish fires before end ----
+    describe("Transform finish/end event ordering", () => {
+      it("should emit both finish and end on a simple transform", async () => {
+        const events: string[] = [];
+        const t = createTransform<string, string>(s => s, { objectMode: true });
+
+        t.on("finish", () => events.push("finish"));
+        t.on("end", () => events.push("end"));
+
+        t.resume(); // put in flowing mode so end fires promptly
+        t.write("data");
+        t.end();
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(events).toContain("finish");
+        expect(events).toContain("end");
+        // Node.js emits end before finish on transforms; verify consistent ordering
+        const endIdx = events.indexOf("end");
+        const finishIdx = events.indexOf("finish");
+        expect(endIdx).toBeLessThanOrEqual(finishIdx);
+      });
+
+      it("should deliver flush data before end event", async () => {
+        const events: string[] = [];
+        const received: any[] = [];
+
+        const t = createTransform<string, string>(s => s, {
+          objectMode: true,
+          flush() {
+            return "flush-data";
+          }
+        });
+
+        t.on("finish", () => events.push("finish"));
+        t.on("end", () => events.push("end"));
+        t.on("data", (chunk: any) => received.push(chunk));
+
+        t.write("hello");
+        t.end();
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(received).toContain("hello");
+        expect(received).toContain("flush-data");
+        expect(events).toContain("finish");
+        expect(events).toContain("end");
+        // end should come before or at same time as finish
+        const endIdx = events.indexOf("end");
+        const finishIdx = events.indexOf("finish");
+        expect(endIdx).toBeLessThanOrEqual(finishIdx);
+      });
+    });
+
+    // ---- compose() end callback on flush error ----
+    describe("compose() end callback edge cases", () => {
+      it("should invoke end callback even when flush succeeds", async () => {
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        composed.resume(); // consume output
+
+        const callbackCalled = await new Promise<boolean>(resolve => {
+          composed.end("data", () => {
+            resolve(true);
+          });
+          setTimeout(() => resolve(false), 500);
+        });
+
+        expect(callbackCalled).toBe(true);
+      });
+
+      it("should not throw when end() is called with no arguments", async () => {
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        // This should not throw — even though end() passes no chunk
+        composed.end();
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(composed.destroyed || (composed as any).writableFinished).toBe(true);
+      });
+    });
+
+    // ---- compose() write() error handling ----
+    describe("compose() write error handling", () => {
+      it("should handle errors from first.write via error event (not throw)", async () => {
+        const throwingTransform = createTransform<string, string>(
+          () => {
+            throw new Error("write-failed");
+          },
+          { objectMode: true }
+        );
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        // Suppress errors on individual transforms
+        throwingTransform.on("error", () => {});
+        t2.on("error", () => {});
+
+        const composed = compose(throwingTransform, t2);
+        composed.resume();
+
+        const errPromise = new Promise<Error>(resolve => {
+          composed.on("error", resolve);
+        });
+
+        composed.write("test");
+
+        const err = await errPromise;
+        expect(err.message).toBe("write-failed");
+      });
+    });
+
+    // ---- Duplex allowHalfOpen: false ends writable when readable ends (via subclass) ----
+    describe("Duplex allowHalfOpen: false writable end behavior", () => {
+      it("should end writable when readable side emits end and allowHalfOpen is false", async () => {
+        let writableEnded = false;
+        const d = createDuplex({
+          objectMode: true,
+          allowHalfOpen: false,
+          read() {},
+          write(_chunk: any, _enc: any, cb: () => void) {
+            cb();
+          }
+        });
+
+        d.on("finish", () => {
+          writableEnded = true;
+        });
+
+        // Put in flowing mode so that push(null) triggers end event
+        d.resume();
+        // End the readable side by pushing null
+        d.push(null);
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(writableEnded).toBe(true);
+      });
+    });
+
+    // =========================================================================
+    // compose() bug-hunting tests — designed to EXPOSE browser discrepancies
+    // =========================================================================
+
+    describe("compose() double-end guard", () => {
+      it("should not crash or duplicate push(null) when end() is called twice", async () => {
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        const endCallbackResults: Array<string> = [];
+
+        // Suppress errors from both compose and child transforms — double-end
+        // may emit ERR_STREAM_WRITE_AFTER_END or ERR_STREAM_ALREADY_FINISHED.
+        composed.on("error", () => {});
+        t1.on("error", () => {});
+        t2.on("error", () => {});
+
+        // First end — should succeed
+        composed.end("first-data", () => {
+          endCallbackResults.push("first-callback");
+        });
+
+        // Wait for first end to propagate before calling second end
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Second end — should be handled gracefully, not crash.
+        try {
+          composed.end(() => {
+            endCallbackResults.push("second-callback");
+          });
+        } catch (_err) {
+          // end() should not throw synchronously
+          endCallbackResults.push("threw");
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // The first callback must always be called
+        expect(endCallbackResults).toContain("first-callback");
+        // Must NOT have thrown synchronously
+        expect(endCallbackResults).not.toContain("threw");
+      });
+    });
+
+    describe("compose() end callback on flush error", () => {
+      it("should invoke end callback when an error occurs during flush", async () => {
+        // t1 is a normal passthrough
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+
+        // t2 will error during flush (after all data has passed through, when
+        // the chain is ending). This simulates a transform that fails during
+        // its cleanup/finalization phase.
+        const t2 = createTransform<string, string>(s => s, {
+          objectMode: true,
+          flush() {
+            throw new Error("flush-failed");
+          }
+        });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        // Suppress error events to avoid unhandled error crashes
+        composed.on("error", () => {});
+        t1.on("error", () => {});
+        t2.on("error", () => {});
+
+        // Write some data first so the composed stream is in a normal state
+        composed.write("hello");
+
+        // Now end with a callback — this triggers flush on t2 which will throw.
+        // The callback MUST be called (possibly with an error) — it must NOT
+        // be silently lost.
+        const callbackResult = await new Promise<string>(resolve => {
+          const timeout = setTimeout(() => resolve("timeout-callback-lost"), 1000);
+
+          composed.end(() => {
+            clearTimeout(timeout);
+            resolve("callback-invoked");
+          });
+        });
+
+        expect(callbackResult).toBe("callback-invoked");
+      });
+    });
+
+    describe("compose() destroy resilience", () => {
+      it("should still emit close even if a child destroy throws", async () => {
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        // Override t1's destroy to throw — simulates a buggy stream
+        t1.destroy = ((_err?: Error) => {
+          throw new Error("child-destroy-exploded");
+        }) as any;
+
+        // Suppress errors
+        composed.on("error", () => {});
+        t1.on("error", () => {});
+        t2.on("error", () => {});
+
+        // The composed stream should still emit 'close' even if t1.destroy throws
+        const gotClose = await new Promise<boolean>(resolve => {
+          const timeout = setTimeout(() => resolve(false), 1000);
+          composed.on("close", () => {
+            clearTimeout(timeout);
+            resolve(true);
+          });
+
+          try {
+            composed.destroy(new Error("test-error"));
+          } catch (_e) {
+            // If destroy itself throws, that's the bug we're testing for.
+            // We still want to check if close fires.
+          }
+        });
+
+        expect(gotClose).toBe(true);
+      });
+    });
+
+    describe("compose() write synchronous throw handling", () => {
+      it("should catch synchronous throws from first.write and emit error", async () => {
+        // Create a normal transform, then monkey-patch its write to throw.
+        // This directly tests the compose wrapper's write() delegation.
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        // Monkey-patch t1.write AFTER compose has set up. Compose captured the
+        // `first` reference, so calling composed.write() → first.write() will
+        // invoke this override that throws synchronously.
+        (t1 as any).write = () => {
+          throw new Error("sync-write-boom");
+        };
+
+        // Suppress error on child transforms
+        t1.on("error", () => {});
+        t2.on("error", () => {});
+
+        const result = await new Promise<string>(resolve => {
+          const timeout = setTimeout(() => resolve("no-error-emitted"), 500);
+
+          composed.on("error", (err: Error) => {
+            clearTimeout(timeout);
+            resolve(err.message);
+          });
+
+          // This must NOT throw — the error should be caught and emitted
+          try {
+            composed.write("data");
+          } catch (e: any) {
+            clearTimeout(timeout);
+            resolve("threw:" + e.message);
+          }
+        });
+
+        // Should emit error, not throw
+        expect(result).toBe("sync-write-boom");
+      });
+    });
   });
 }

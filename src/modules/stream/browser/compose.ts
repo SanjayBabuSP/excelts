@@ -125,10 +125,15 @@ export function compose<T = any, R = any>(
     encodingOrCallback?: string | ((error?: Error | null) => void),
     callback?: (error?: Error | null) => void
   ): boolean => {
-    if (typeof encodingOrCallback === "function") {
-      return firstAny.write(chunk, encodingOrCallback);
+    try {
+      if (typeof encodingOrCallback === "function") {
+        return firstAny.write(chunk, encodingOrCallback);
+      }
+      return firstAny.write(chunk, encodingOrCallback, callback);
+    } catch (err) {
+      composed.destroy(err as Error);
+      return false;
     }
-    return firstAny.write(chunk, encodingOrCallback, callback);
   };
 
   // end() with flush semantics: end the head of the chain, then wait for `last`
@@ -139,6 +144,19 @@ export function compose<T = any, R = any>(
     encodingOrCallback?: string | (() => void),
     callback?: () => void
   ): any => {
+    // Guard against double-end: if already flushing, delegate to first's end()
+    // which will handle ERR_STREAM_ALREADY_FINISHED natively, matching Node.js.
+    if (flushing) {
+      if (typeof chunkOrCallback === "function") {
+        firstAny.end(chunkOrCallback);
+      } else if (typeof encodingOrCallback === "function") {
+        firstAny.end(chunkOrCallback, encodingOrCallback);
+      } else {
+        firstAny.end(chunkOrCallback, encodingOrCallback, callback);
+      }
+      return composed;
+    }
+
     flushing = true;
 
     const onFlushEnd = (): void => {
@@ -154,6 +172,16 @@ export function compose<T = any, R = any>(
     };
     const onFlushError = (err: Error): void => {
       cleanupFlush();
+      // Invoke the user's end callback before destroying — matching Node.js
+      // where flush(callback) calls callback(err) which propagates both the
+      // error AND fires the user's end callback.
+      if (typeof chunkOrCallback === "function") {
+        (chunkOrCallback as () => void)();
+      } else if (typeof encodingOrCallback === "function") {
+        (encodingOrCallback as () => void)();
+      } else if (callback) {
+        callback();
+      }
       composed.destroy(err);
     };
     const cleanupFlush = (): void => {
@@ -218,11 +246,14 @@ export function compose<T = any, R = any>(
 
   const originalDestroy = composed.destroy.bind(composed);
   composed.destroy = ((error?: Error) => {
-    registry.cleanup();
-    for (const t of transforms) {
-      t.destroy(error);
+    try {
+      registry.cleanup();
+      for (const t of transforms) {
+        t.destroy(error);
+      }
+    } finally {
+      originalDestroy(error);
     }
-    originalDestroy(error);
   }) as any;
 
   composed.once("close", () => {
