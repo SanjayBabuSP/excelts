@@ -149,8 +149,33 @@ export function normalizeWritable<T = Uint8Array>(
   }
 
   // Web WritableStream: detect by getWriter() (avoid relying on global WritableStream).
+  // Avoid `Writable.fromWeb()` — it is buggy on some runtimes (e.g. Bun).
+  // Instead, wrap manually by piping through the WritableStream's writer.
   if ((stream as any)?.getWriter) {
-    return (NodeWritable as any).fromWeb(stream as any) as WritableLike;
+    const ws = stream as WritableStream<any>;
+    let writer: WritableStreamDefaultWriter<any> | undefined;
+    const getWriter = () => (writer ??= ws.getWriter());
+
+    return new Writable({
+      write(_chunk: any, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+        getWriter()
+          .write(_chunk)
+          .then(() => callback(null), callback);
+      },
+      final(callback: (error?: Error | null) => void) {
+        const w = getWriter();
+        w.close().then(
+          () => {
+            w.releaseLock();
+            callback(null);
+          },
+          (err: Error) => {
+            w.releaseLock();
+            callback(err);
+          }
+        );
+      }
+    }) as WritableLike;
   }
 
   // Assume it structurally matches Node's Writable.
