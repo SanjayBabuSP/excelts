@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.9](https://github.com/cjnoname/excelts/compare/v5.1.8...v5.1.9) (2026-03-02)
+
+
+### Bug Fixes
+
+* improve normalizeWritable function to handle Web WritableStream correctly ([f5cf6f5](https://github.com/cjnoname/excelts/commit/f5cf6f5fd5167004d90d7f12ae9bfb0ddb053c08))
+
 ## [5.1.8](https://github.com/cjnoname/excelts/compare/v5.1.7...v5.1.8) (2026-02-28)
 
 
