@@ -7,6 +7,8 @@ import { EventEmitter } from "@utils/event-emitter";
 import { parseEndArgs } from "@stream/common/end-args";
 import { StreamStateError } from "@stream/errors";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
+import { createTextDecoder } from "@utils/binary";
+import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 
 import type { Writable as NodeWritable } from "stream";
 
@@ -328,6 +330,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    * Set default encoding for string writes
    */
   setDefaultEncoding(encoding: string): this {
+    // Validate encoding (Node.js throws ERR_UNKNOWN_ENCODING)
+    stringToEncodedBytes("", encoding);
     this._defaultEncoding = encoding;
     return this;
   }
@@ -364,7 +368,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
       // L3: If _writev is available and there are multiple chunks, batch them
       const writevFn = this._writevFunc ?? this._getWritevHook();
-      if (writevFn && chunks.length > 1 && this._directWrite) {
+      if (writevFn && chunks.length > 1) {
         const batchChunks = chunks.map(({ chunk, encoding }) => ({ chunk, encoding }));
         const totalSize = batchChunks.reduce(
           (sum, { chunk }) => sum + this._getChunkSize(chunk),
@@ -395,7 +399,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
             if (this._needDrain && this._writableLength < this._highWaterMark) {
               this._needDrain = false;
-              this.emit("drain");
+              queueMicrotask(() => this.emit("drain"));
             }
 
             // Call individual callbacks with success
@@ -514,7 +518,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           this._writableLength -= chunkSize;
           if (this._needDrain && this._writableLength < this._highWaterMark) {
             this._needDrain = false;
-            this.emit("drain");
+            queueMicrotask(() => this.emit("drain"));
           }
           callback?.(null);
         })
@@ -563,7 +567,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._writableLength -= chunkSize;
         if (this._needDrain && this._writableLength < this._highWaterMark) {
           this._needDrain = false;
-          this.emit("drain");
+          queueMicrotask(() => this.emit("drain"));
         }
         callback?.(null);
 
@@ -629,8 +633,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           cb?.();
           return;
         }
-        this._finished = true;
         queueMicrotask(() => {
+          // If destroyed between end() and this microtask, suppress finish
+          // and let destroy() handle close emission. Fire the end-cb so the
+          // caller is notified (Node.js fires it via the 'close' listener).
+          if (this._destroyed) {
+            cb?.();
+            return;
+          }
+          this._finished = true;
           this.emit("finish");
           // Node.js fires the end() callback synchronously with 'finish'
           // (it's registered as a once('finish') listener), BEFORE 'close'.
@@ -642,8 +653,14 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         });
       });
     } else {
-      this._finished = true;
       queueMicrotask(() => {
+        // If destroyed between end() and this microtask, suppress finish
+        // and let destroy() handle close emission.
+        if (this._destroyed) {
+          cb?.();
+          return;
+        }
+        this._finished = true;
         this.emit("finish");
         // Fire end() callback with 'finish', before 'close' (matches Node.js).
         cb?.();
@@ -680,8 +697,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
     // decodeStrings: true (default) — convert string to Uint8Array matching Node.js
     // behavior where strings are converted to Buffer with encoding set to "buffer".
-    const encoded = new TextEncoder().encode(chunk) as unknown as T;
-    return { chunk: encoded, encoding: "buffer" };
+    // We also override toString() so that it behaves like Node.js Buffer.toString(),
+    // which returns a UTF-8 decoded string by default (not comma-separated byte values).
+    const encoded = stringToEncodedBytes(chunk, encoding);
+    (encoded as any).toString = (enc?: string): string => {
+      return createTextDecoder(enc).decode(encoded);
+    };
+    return { chunk: encoded as unknown as T, encoding: "buffer" };
   }
 
   /**
@@ -696,13 +718,30 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     callback?: () => void
   ): this {
     if (this._ended) {
-      // Node.js calls the end() callback with ERR_STREAM_ALREADY_FINISHED
-      // when end() is called more than once.
-      const { cb: endCb } = parseEndArgs<T>(chunkOrCallback, encodingOrCallback, callback);
-      if (endCb) {
+      const {
+        chunk,
+        encoding,
+        cb: endCb
+      } = parseEndArgs<T>(chunkOrCallback, encodingOrCallback, callback);
+
+      // If a chunk was provided, this is a write-after-end error (Node.js behavior).
+      if (chunk !== undefined) {
+        this.write(chunk, encoding ?? this._defaultEncoding, err => {
+          (endCb as any)?.(err ?? null);
+        });
+        return this;
+      }
+
+      // If we've already finished, Node.js calls the callback with
+      // ERR_STREAM_ALREADY_FINISHED (but does not emit an error event).
+      if (this._finished && endCb) {
         const err = new Error("write after end") as Error & { code: string };
         err.code = "ERR_STREAM_ALREADY_FINISHED";
-        queueMicrotask(() => endCb());
+        queueMicrotask(() => (endCb as any)(err));
+      } else {
+        // Otherwise, a redundant end() is a no-op; if a callback was provided,
+        // Node.js calls it with no error.
+        queueMicrotask(() => (endCb as any)?.(null));
       }
       return this;
     }
@@ -788,7 +827,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // Node.js discards queued writes on destroy, invoking their callbacks with
     // the destroy error so callers are notified.
     if (this._writeQueue.length > 0) {
-      this._flushWriteQueueOnError(error ?? new Error("Cannot call write after a stream was destroyed"));
+      this._flushWriteQueueOnError(
+        error ?? new Error("Cannot call write after a stream was destroyed")
+      );
     }
     this._pendingEnd = null;
     this._writing = false;
@@ -985,11 +1026,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     return this._corked;
   }
 
-  /** Whether the stream was destroyed before finishing (only meaningful after end() was called) */
+  /** Whether the stream was destroyed before finishing */
   get writableAborted(): boolean {
-    // Node.js: writableAborted is true when the stream was destroyed after
-    // end() was called but before 'finish' was emitted.
-    return this._destroyed && this._ended && !this._finished;
+    // Node.js: writableAborted is true when the stream was destroyed
+    // before 'finish' was emitted, regardless of whether end() was called.
+    return this._destroyed && !this._finished;
   }
 
   /** Whether the stream is in object mode */

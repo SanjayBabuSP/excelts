@@ -145,6 +145,7 @@ class BrowserInflateRaw extends Duplex {
           break;
         }
         this._bytesOut += value.length;
+
         // Directly push to the readable side of Duplex
         this.push(value);
       }

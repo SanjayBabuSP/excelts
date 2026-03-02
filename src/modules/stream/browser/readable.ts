@@ -6,6 +6,7 @@ import type { ReadableStreamOptions, WritableLike } from "@stream/types";
 import { EventEmitter } from "@utils/event-emitter";
 import { getTextDecoder } from "@utils/binary";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
+import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 
 import type { Writable } from "./writable";
 import type { Transform } from "./transform";
@@ -217,17 +218,46 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Create a Readable from an iterable (static factory method)
    */
   static from<T>(
-    iterable: Iterable<T> | AsyncIterable<T>,
+    iterable: Iterable<T> | AsyncIterable<T> | ReadableStream<T>,
     options?: ReadableStreamOptions
   ): Readable<T> {
+    // Node.js also supports creating from a Web ReadableStream.
+    // Detect it explicitly (do not rely on Symbol.asyncIterator presence).
+    if (iterable && typeof (iterable as any).getReader === "function") {
+      return Readable.fromWeb(iterable as ReadableStream<T>, options);
+    }
+
+    // Validate argument type early (Node.js throws ERR_INVALID_ARG_TYPE).
+    if (iterable == null || (typeof iterable !== "object" && typeof iterable !== "string")) {
+      const err = new TypeError(
+        `The "iterable" argument must be an instance of Iterable. Received type ${typeof iterable} (${String(
+          iterable
+        )})`
+      ) as TypeError & { code: string };
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    const hasIter = typeof (iterable as any)[Symbol.iterator] === "function";
+    const hasAsyncIter = typeof (iterable as any)[Symbol.asyncIterator] === "function";
+    if (!hasIter && !hasAsyncIter && typeof iterable !== "string") {
+      const name = (iterable as any)?.constructor?.name ?? "Object";
+      const err = new TypeError(
+        `The "iterable" argument must be an instance of Iterable. Received an instance of ${name}`
+      ) as TypeError & { code: string };
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+
     const readable = new Readable<T>({ ...options, objectMode: options?.objectMode ?? true });
+
+    const iter = iterable as unknown;
 
     // Node.js treats strings as a single chunk, not as Iterable<char>.
     // Match that behavior by wrapping strings in an array.
     const source =
-      typeof iterable === "string"
-        ? toAsyncIterable([iterable] as Iterable<T>)
-        : toAsyncIterable(iterable);
+      typeof iter === "string"
+        ? toAsyncIterable([iter] as Iterable<T>)
+        : toAsyncIterable(iter as Iterable<T> | AsyncIterable<T>);
     pumpAsyncIterableToReadable(readable, source);
 
     return readable;
@@ -284,8 +314,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     // Handle string encoding (Node.js compatibility)
     if (chunk !== null && typeof chunk === "string" && encoding && !this._objectMode) {
-      const encoder = new TextEncoder();
-      chunk = encoder.encode(chunk) as any;
+      chunk = stringToEncodedBytes(chunk, encoding) as any;
     }
 
     // Reject push() after EOF (matches Node.js ERR_STREAM_PUSH_AFTER_EOF)
@@ -316,7 +345,19 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     if (this._flowing) {
-      // In flowing mode, emit data directly without buffering
+      // IMPORTANT: If there is still buffered data waiting to be drained (from a
+      // resume() microtask that hasn't fired yet), we must NOT emit this chunk
+      // directly — doing so would deliver it out-of-order, ahead of the buffered
+      // chunks.  Buffer it instead and let the drain microtask deliver everything
+      // in the correct sequence.
+      if (this._buf.length > 0) {
+        this._buf.push(chunk);
+        return this._objectMode
+          ? this._buf.length < this._highWaterMark
+          : this._buf.byteSize < this._highWaterMark;
+      }
+
+      // In flowing mode with empty buffer, emit data directly
       this._didRead = true;
       this.emit("data", this._applyEncoding(chunk));
       // Check if stream was paused during emit (backpressure from consumer)
@@ -372,10 +413,29 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._destroyed) {
       return;
     }
+    // Node.js: unshift(null) signals EOF, just like push(null)
+    if (chunk === null || chunk === undefined) {
+      if (!this._ended) {
+        this._ended = true;
+        if (this._buf.length === 0) {
+          queueMicrotask(() => this._emitEndOnce());
+        }
+      }
+      return;
+    }
+    // Node.js emits ERR_STREAM_UNSHIFT_AFTER_END_EVENT when unshifting data
+    // after the 'end' event has been emitted (readableEnded === true).
+    // Note: unshift(data) right after push(null) but before end event is
+    // silently ignored by Node.js — we match that by checking _endEmitted.
+    if (this._endEmitted) {
+      const err = new Error("stream.unshift() after end event") as Error & { code: string };
+      err.code = "ERR_STREAM_UNSHIFT_AFTER_END_EVENT";
+      queueMicrotask(() => this.emit("error", err));
+      return;
+    }
     // Handle string encoding (Node.js compatibility)
     if (typeof chunk === "string" && encoding && !this._objectMode) {
-      const encoder = new TextEncoder();
-      chunk = encoder.encode(chunk) as any;
+      chunk = stringToEncodedBytes(chunk, encoding) as any;
     }
     const wasEmpty = this._buf.length === 0;
     this._buf.unshift(chunk);
@@ -577,9 +637,25 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         if (this._ended && this._buf.length === 0) {
           this._emitEndOnce();
         }
+
+        // If we were paused due to backpressure while reading from a Web Stream,
+        // resume reading once the buffered chunks have been drained.
+        if (
+          this._flowing &&
+          this._buf.length === 0 &&
+          this._webStreamMode &&
+          !this._pushMode &&
+          !this._ended &&
+          !this._destroyed
+        ) {
+          this._startReading();
+        }
       });
     } else if (this._ended && this._buf.length === 0) {
       queueMicrotask(() => this._emitEndOnce());
+    } else if (this._webStreamMode && !this._pushMode) {
+      // Start reading from underlying Web Stream when resuming.
+      this._startReading();
     } else if (this._read) {
       // Call user-provided read function asynchronously
       // This allows multiple pipe() calls to register before data flows
@@ -588,11 +664,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           this._read!(this._highWaterMark);
         }
       });
-    } else if (this._webStreamMode && !this._pushMode) {
-      // Only start reading from underlying Web Stream if:
-      // 1. Stream was created from external Web Stream (_webStreamMode)
-      // 2. Not in push mode (no one called push() yet)
-      this._startReading();
     }
 
     return this;
@@ -919,19 +990,33 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
         if (done) {
           this._ended = true;
-          this._emitEndOnce();
+          if (this._buf.length === 0) {
+            // Defer end to match Node.js nextTick-ish timing.
+            queueMicrotask(() => this._emitEndOnce());
+          }
           this._releaseReader();
           break;
         }
 
         if (value !== undefined) {
-          // In flowing mode, emit data directly without buffering
-          // Only buffer if not flowing (paused mode)
-          if (this._flowing) {
+          // Always buffer Web Stream chunks (Node.js Readable buffers internally).
+          // If flowing, immediately drain the buffer into 'data' events.
+          const wasEmpty = this._buf.length === 0;
+          this._buf.push(value);
+          if (wasEmpty) {
+            queueMicrotask(() => this.emit("readable"));
+          }
+
+          while (this._buf.length > 0 && this._flowing) {
+            const chunk = this._buf.shift();
             this._didRead = true;
-            this.emit("data", this._applyEncoding(value));
-          } else {
-            this._buf.push(value);
+            this.emit("data", this._applyEncoding(chunk));
+          }
+
+          // Backpressure: if paused, stop reading from the underlying Web Stream
+          // until resume() drains buffered chunks.
+          if (!this._flowing) {
+            break;
           }
         }
       }
@@ -1093,7 +1178,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
     return new Promise<void>((resolve, reject) => {
       const settle = (): void => {
-        if (selfInitiated || this._ended) {
+        if (selfInitiated || this._endEmitted) {
           resolve();
         } else {
           reject(new Error("Premature close"));

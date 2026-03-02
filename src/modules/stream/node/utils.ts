@@ -279,6 +279,18 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
   pair.s1 = duplex1;
   pair.s2 = duplex2;
 
+  // Node.js: destroying one side of a duplexPair destroys the other.
+  duplex1.on("close", () => {
+    if (!duplex2.destroyed) {
+      duplex2.destroy(duplex1.errored ?? undefined);
+    }
+  });
+  duplex2.on("close", () => {
+    if (!duplex1.destroyed) {
+      duplex1.destroy(duplex2.errored ?? undefined);
+    }
+  });
+
   return [duplex1, duplex2];
 }
 

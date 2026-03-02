@@ -23,7 +23,11 @@ export interface StreamModuleImports {
   };
   Writable: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
   Transform: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
-  Duplex: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
+  Duplex: {
+    new (options?: any): any;
+    from: (source: any) => any;
+    isDisturbed?: (stream: any) => boolean;
+  };
   PassThrough: new (options?: any) => any;
 
   // Specialized Streams
@@ -8338,6 +8342,42 @@ export function runStreamTests(imports: StreamModuleImports): void {
         await new Promise(resolve => w.on("finish", resolve));
         expect(constructed).toBe(true);
       });
+
+      it("subclass _read on Duplex still works", async () => {
+        class MyDuplex extends Duplex {
+          _read(): void {
+            this.push("hello" as any);
+            this.push(null);
+          }
+          _write(_chunk: any, _enc: string, cb: (error?: Error | null) => void): void {
+            cb();
+          }
+        }
+
+        const d = new MyDuplex({ objectMode: true });
+        const chunks: any[] = [];
+        for await (const chunk of d as any) {
+          chunks.push(chunk);
+        }
+        expect(chunks).toEqual(["hello"]);
+      });
+
+      it("subclass _write on Duplex still works", async () => {
+        const received: any[] = [];
+        class MyDuplex extends Duplex {
+          _read(): void {}
+          _write(chunk: any, _enc: string, cb: (error?: Error | null) => void): void {
+            received.push(chunk);
+            cb();
+          }
+        }
+
+        const d = new MyDuplex({ objectMode: true });
+        d.write({ key: "value" });
+        d.end();
+        await new Promise<void>(resolve => d.on("finish", resolve));
+        expect(received).toEqual([{ key: "value" }]);
+      });
     });
 
     // =========================================================================
@@ -8642,6 +8682,37 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
     });
 
+    // ---------- duplexPair cross-destruction ----------
+    describe("duplexPair cross-destruction", () => {
+      it("should destroy peer when one side is destroyed", async () => {
+        const [side1, side2] = duplexPair({ objectMode: true });
+
+        side1.destroy();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(side1.destroyed).toBe(true);
+        expect(side2.destroyed).toBe(true);
+      });
+
+      it("should propagate error to peer when destroyed with error", async () => {
+        const [side1, side2] = duplexPair({ objectMode: true });
+
+        const error = new Error("test error");
+        // Must listen on both sides to prevent unhandled error exceptions
+        side1.on("error", () => {});
+        const errorPromise = new Promise<Error>(resolve => {
+          side2.on("error", resolve);
+        });
+
+        side1.destroy(error);
+
+        const receivedError = await errorPromise;
+        expect(receivedError).toBe(error);
+        expect(side2.destroyed).toBe(true);
+      });
+    });
+
     // ---------- duplexPair per-side options ----------
     describe("duplexPair per-side options", () => {
       it("should accept readableHighWaterMark and writableHighWaterMark", () => {
@@ -8799,6 +8870,371 @@ export function runStreamTests(imports: StreamModuleImports): void {
         addAbortSignal(controller.signal, writable);
 
         expect(writable.destroyed).toBe(true);
+      });
+    });
+  });
+
+  // ===========================================================================
+  // Round 3 Cross-Platform Parity Fixes
+  // ===========================================================================
+
+  describe("Round 3: Cross-Platform Parity Fixes", () => {
+    // ---- push() with non-UTF8 encodings ----
+    describe("Readable push() with non-UTF8 encodings", () => {
+      it("should encode string as latin1 bytes", async () => {
+        const r = new Readable();
+        // Latin1: each char maps to its code point (0x00-0xFF)
+        r.push("\xff\xfe\xfd", "latin1");
+        r.push(null);
+
+        const chunks: any[] = [];
+        for await (const chunk of r) {
+          chunks.push(chunk);
+        }
+        expect(chunks.length).toBe(1);
+        expect(chunks[0] instanceof Uint8Array).toBe(true);
+        expect(Array.from(chunks[0] as Uint8Array)).toEqual([0xff, 0xfe, 0xfd]);
+      });
+
+      it("should encode string as ascii bytes (7-bit)", async () => {
+        const r = new Readable();
+        r.push("ABC", "ascii");
+        r.push(null);
+
+        const chunks: any[] = [];
+        for await (const chunk of r) {
+          chunks.push(chunk);
+        }
+        expect(chunks.length).toBe(1);
+        expect(chunks[0] instanceof Uint8Array).toBe(true);
+        expect(Array.from(chunks[0] as Uint8Array)).toEqual([0x41, 0x42, 0x43]);
+      });
+
+      it("should encode string as hex bytes", async () => {
+        const r = new Readable();
+        r.push("deadbeef", "hex");
+        r.push(null);
+
+        const chunks: any[] = [];
+        for await (const chunk of r) {
+          chunks.push(chunk);
+        }
+        expect(chunks.length).toBe(1);
+        expect(chunks[0] instanceof Uint8Array).toBe(true);
+        expect(Array.from(chunks[0] as Uint8Array)).toEqual([0xde, 0xad, 0xbe, 0xef]);
+      });
+
+      it("should encode string as base64 bytes", async () => {
+        const r = new Readable();
+        // "SGVsbG8=" is base64 for "Hello"
+        r.push("SGVsbG8=", "base64");
+        r.push(null);
+
+        const chunks: any[] = [];
+        for await (const chunk of r) {
+          chunks.push(chunk);
+        }
+        expect(chunks.length).toBe(1);
+        expect(chunks[0] instanceof Uint8Array).toBe(true);
+        expect(Array.from(chunks[0] as Uint8Array)).toEqual([72, 101, 108, 108, 111]);
+      });
+
+      it("should throw ERR_UNKNOWN_ENCODING for unknown encoding", () => {
+        const r = new Readable();
+        try {
+          r.push("a", "nope");
+          expect.unreachable("Expected push() to throw");
+        } catch (e: any) {
+          expect(e.code).toBe("ERR_UNKNOWN_ENCODING");
+        }
+      });
+    });
+
+    // ---- Writable setDefaultEncoding validation ----
+    describe("Writable setDefaultEncoding validation", () => {
+      it("should throw ERR_UNKNOWN_ENCODING for unknown encoding", () => {
+        const w = new Writable({
+          write(_chunk: any, _enc: any, cb: any) {
+            cb();
+          }
+        });
+        try {
+          w.setDefaultEncoding("nope");
+          expect.unreachable("Expected setDefaultEncoding() to throw");
+        } catch (e: any) {
+          expect(e.code).toBe("ERR_UNKNOWN_ENCODING");
+        }
+      });
+    });
+
+    // ---- unshift(null) signals EOF, unshift(data) after end emits error ----
+    describe("Readable unshift behavior", () => {
+      it("unshift(null) should signal EOF like push(null)", async () => {
+        const r = new Readable({ read() {} });
+        r.unshift(null);
+
+        let ended = false;
+        r.on("end", () => {
+          ended = true;
+        });
+        r.resume();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(ended).toBe(true);
+      });
+
+      it("unshift(data) after end event should emit ERR_STREAM_UNSHIFT_AFTER_END_EVENT error", async () => {
+        // Use autoDestroy: false so the stream isn't destroyed after end,
+        // allowing us to call unshift() and observe the error.
+        const r = new Readable({ read() {}, autoDestroy: false });
+
+        const errors: any[] = [];
+        r.on("error", (e: any) => errors.push(e));
+
+        r.push(null); // signal EOF
+
+        // Wait for end event to fire
+        await new Promise<void>(resolve => {
+          r.on("end", () => resolve());
+          r.resume();
+        });
+
+        // Now try to unshift data after end has been emitted
+        r.unshift("data" as any);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(errors.length).toBe(1);
+        expect(errors[0].code).toBe("ERR_STREAM_UNSHIFT_AFTER_END_EVENT");
+      });
+    });
+
+    // ---- Writable end() + synchronous destroy() (Fix A) ----
+    describe("Writable end() + synchronous destroy()", () => {
+      it("should not emit finish after end + destroy", async () => {
+        const events: string[] = [];
+        const w = new Writable({
+          write(_chunk: any, _enc: any, cb: () => void) {
+            cb();
+          }
+        });
+        w.on("finish", () => events.push("finish"));
+        w.on("close", () => events.push("close"));
+
+        w.end();
+        w.destroy();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // destroy() should suppress the 'finish' event
+        expect(events).not.toContain("finish");
+        expect(events).toContain("close");
+      });
+    });
+
+    // ---- Writable redundant end() behavior (Node.js parity) ----
+    describe("Writable redundant end() behavior", () => {
+      it("end() called twice before finish should not error", async () => {
+        const w = new Writable({
+          write(_chunk: any, _enc: any, cb: any) {
+            cb();
+          }
+        });
+        w.end();
+        let cbCalled = false;
+        w.end((err: any) => {
+          cbCalled = true;
+          expect(err).toBeFalsy();
+        });
+        await new Promise(resolve => w.on("finish", resolve));
+        expect(cbCalled).toBe(true);
+      });
+
+      it("end() called after finish should call callback with ERR_STREAM_ALREADY_FINISHED", async () => {
+        const events: string[] = [];
+        const w = new Writable({
+          write(_chunk: any, _enc: any, cb: any) {
+            cb();
+          }
+        });
+        w.on("error", (e: any) => events.push("error:" + e.code));
+
+        w.end();
+        await new Promise(resolve => w.on("finish", resolve));
+
+        const err: any = await new Promise(resolve => w.end((e: any) => resolve(e)));
+        expect(err?.code).toBe("ERR_STREAM_ALREADY_FINISHED");
+        expect(events).toEqual([]);
+      });
+    });
+
+    // ---- Transform end() callback fires on destroy (Fix B) ----
+    describe("Transform end() callback fires on destroy", () => {
+      it("should fire end callback when destroyed before finish", async () => {
+        let endCallbackFired = false;
+        const t = new Transform({
+          transform(chunk: any, _enc: any, cb: (err: any, chunk: any) => void) {
+            cb(null, chunk);
+          }
+        });
+        t.resume();
+        t.end(() => {
+          endCallbackFired = true;
+        });
+        t.destroy();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(endCallbackFired).toBe(true);
+      });
+    });
+
+    // ---- Transform with custom final pushes null (Fix E) ----
+    describe("Transform with custom final option", () => {
+      it("should end readable side even with custom final", async () => {
+        let finalCalled = false;
+        const t = new Transform({
+          transform(chunk: any, _enc: any, cb: (err: any, chunk: any) => void) {
+            cb(null, chunk);
+          },
+          final(cb: () => void) {
+            finalCalled = true;
+            cb();
+          }
+        });
+
+        t.write("data");
+        t.end();
+
+        const chunks: any[] = [];
+        for await (const chunk of t) {
+          chunks.push(chunk);
+        }
+
+        expect(finalCalled).toBe(true);
+        expect(chunks.length).toBe(1);
+        // Stream should end (for..await should complete)
+      });
+    });
+
+    // ---- Transform ignores return values (Node.js behavior) ----
+    describe("Transform ignores return values", () => {
+      it("should ignore return value of transform function and use callback output", async () => {
+        const t = new Transform({
+          objectMode: true,
+          transform(chunk: any) {
+            const cb = arguments[2] as (err: Error | null, data?: any) => void;
+            cb(null, String(chunk) + "!");
+            return "ignored";
+          }
+        });
+
+        t.end("a" as any);
+        const chunks: any[] = [];
+        for await (const chunk of t as any) {
+          chunks.push(chunk);
+        }
+        expect(chunks).toEqual(["a!"]);
+      });
+
+      it("should ignore return value of flush function and use callback output", async () => {
+        const t = new Transform({
+          objectMode: true,
+          transform(chunk: any, _enc: string, cb: any) {
+            cb(null, chunk);
+          },
+          flush() {
+            const cb = arguments[0] as (err: Error | null, data?: any) => void;
+            cb(null, "flushed");
+            return "ignored";
+          }
+        });
+
+        t.write("x" as any);
+        t.end();
+
+        const chunks: any[] = [];
+        for await (const chunk of t as any) {
+          chunks.push(chunk);
+        }
+        expect(chunks).toEqual(["x", "flushed"]);
+      });
+    });
+
+    // ---- Duplex.from(Writable) objectMode (Fix D) ----
+    describe("Duplex.from(Writable) objectMode", () => {
+      it("should inherit objectMode from source writable", async () => {
+        const chunks: any[] = [];
+        const w = new Writable({
+          objectMode: true,
+          write(chunk: any, _enc: any, cb: () => void) {
+            chunks.push(chunk);
+            cb();
+          }
+        });
+
+        const d = Duplex.from(w);
+        d.write({ key: "value" });
+        d.end();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(chunks.length).toBe(1);
+        expect(chunks[0]).toEqual({ key: "value" });
+      });
+
+      it("should not force objectMode when writable is in binary mode", async () => {
+        const chunks: any[] = [];
+        const w = new Writable({
+          write(chunk: any, _enc: any, cb: () => void) {
+            chunks.push(chunk);
+            cb();
+          }
+        });
+
+        const d = Duplex.from(w);
+        expect(d.writableObjectMode).toBe(false);
+      });
+    });
+
+    // ---- finished() respects options on destroyed streams ----
+    describe("finished() respects options on destroyed streams", () => {
+      it("should resolve for destroyed duplex when only checking writable (finished)", async () => {
+        const d = new Duplex({
+          read() {},
+          write(_chunk: any, _enc: any, cb: () => void) {
+            cb();
+          }
+        });
+
+        // End writable side, then destroy
+        d.end();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        d.destroy();
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        // Only check writable side — it finished, so should resolve
+        await finished(d, { readable: false });
+      });
+
+      it("should reject for destroyed duplex when checking unfinished readable side", async () => {
+        const d = new Duplex({
+          read() {},
+          write(_chunk: any, _enc: any, cb: () => void) {
+            cb();
+          }
+        });
+
+        // End writable side, then destroy (readable never ended)
+        d.end();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        d.destroy();
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        // Check readable side — it never ended, so should reject
+        try {
+          await finished(d, { writable: false });
+          expect.unreachable("Should have rejected");
+        } catch (e: any) {
+          expect(e.message).toMatch(/premature/i);
+        }
       });
     });
   });

@@ -223,7 +223,17 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     const finalHandler = options?.final
       ? (callback: (error?: Error | null) => void) => {
-          options.final!.call(this, callback);
+          options.final!.call(this, (err?: Error | null) => {
+            if (err) {
+              callback(err);
+              return;
+            }
+            // Even with a custom _final, the readable side must end (push null).
+            // Node.js Transform always ends the readable side when the writable
+            // side finishes, regardless of custom _final.
+            this._readable.push(null);
+            callback(null);
+          });
         }
       : (callback: (error?: Error | null) => void) => {
           this._runFlush()
@@ -461,69 +471,85 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return undefined; // sync
     }
 
-    const paramCount = userTransform.length;
+    // Node.js always invokes the user transform as (chunk, encoding, callback),
+    // regardless of declared parameter count. Users may access the callback via
+    // `arguments[2]` even when the function signature omits it.
+    // We also support a convenience shorthand where the return value (or promise)
+    // is used, but ONLY if the callback was not called.
+    let sync = true;
+    let syncDone = false;
+    let syncErr: Error | null = null;
+    let syncData: TOutput | undefined;
 
-    if (paramCount >= 3) {
-      return new Promise<void>((resolve, reject) => {
-        (
-          userTransform as (
-            this: Transform<TInput, TOutput>,
-            chunk: TInput,
-            encoding: string,
-            callback: (error?: Error | null, data?: TOutput) => void
-          ) => void
-        ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          if (data !== undefined) {
-            this.push(data);
-          }
-          resolve();
-        });
-      });
+    let resolveAsync: (() => void) | null = null;
+    let rejectAsync: ((err: any) => void) | null = null;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveAsync = resolve;
+      rejectAsync = reject;
+    });
+
+    const out = (
+      userTransform as (
+        this: Transform<TInput, TOutput>,
+        chunk: TInput,
+        encoding: string,
+        callback: (error?: Error | null, data?: TOutput) => void
+      ) => any
+    ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
+      if (sync) {
+        syncDone = true;
+        syncErr = err ?? null;
+        syncData = data;
+        return;
+      }
+
+      if (err) {
+        rejectAsync?.(err);
+        return;
+      }
+      if (data !== undefined) {
+        this.push(data);
+      }
+      resolveAsync?.();
+    });
+
+    sync = false;
+
+    if (syncDone) {
+      // Callback was called synchronously — ignore return value (Node.js behavior).
+      if (syncErr) {
+        throw syncErr;
+      }
+      if (syncData !== undefined) {
+        this.push(syncData);
+      }
+      return undefined;
     }
 
-    if (paramCount === 2) {
-      return new Promise<void>((resolve, reject) => {
-        (
-          userTransform as (
-            this: Transform<TInput, TOutput>,
-            chunk: TInput,
-            callback: (error?: Error | null, data?: TOutput) => void
-          ) => void
-        ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          if (data !== undefined) {
-            this.push(data);
-          }
-          resolve();
-        });
-      });
-    }
-
-    // paramCount 0 or 1: simple function, may return sync or async
-    const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
-      this,
-      chunk
-    );
-
-    if (result && typeof (result as any).then === "function") {
-      return (result as Promise<TOutput>).then(awaited => {
-        if (awaited !== undefined) {
-          this.push(awaited);
+    // Callback was NOT called synchronously. Check if the function returned
+    // a value/promise (convenience shorthand for our browser shim).
+    if (out && typeof (out as any).then === "function") {
+      return (out as Promise<TOutput>).then(data => {
+        if (data !== undefined) {
+          this.push(data);
         }
       });
     }
-
-    if (result !== undefined) {
-      this.push(result as TOutput);
+    if (out !== undefined) {
+      this.push(out as TOutput);
+      return undefined;
     }
-    return undefined; // sync
+
+    // If the function declares fewer than 3 parameters, it's a shorthand
+    // transform that doesn't know about the callback. When it returns
+    // undefined (e.g. filtering), treat as synchronous completion instead
+    // of waiting for a callback that will never be called.
+    if ((userTransform as any).length < 3) {
+      return undefined;
+    }
+
+    // Callback not yet called, no return value — wait for async callback.
+    return promise;
   }
 
   private async _runTransform(chunk: TInput, encoding: string): Promise<void> {
@@ -553,69 +579,63 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return;
     }
 
-    const paramCount = userTransform.length;
-
-    if (paramCount >= 3) {
-      await new Promise<void>((resolve, reject) => {
-        (
-          userTransform as (
-            this: Transform<TInput, TOutput>,
-            chunk: TInput,
-            encoding: string,
-            callback: (error?: Error | null, data?: TOutput) => void
-          ) => void
-        ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          if (data !== undefined) {
-            this.push(data);
-          }
-          resolve();
-        });
+    // Node.js always invokes the user transform as (chunk, encoding, callback),
+    // regardless of declared parameter count. If the callback is called, its
+    // result takes priority; otherwise we fall back to the return value.
+    let callbackCalled = false;
+    const cbPromise = new Promise<void>((resolve, reject) => {
+      const out = (
+        userTransform as (
+          this: Transform<TInput, TOutput>,
+          chunk: TInput,
+          encoding: string,
+          callback: (error?: Error | null, data?: TOutput) => void
+        ) => any
+      ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
+        callbackCalled = true;
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (data !== undefined) {
+          this.push(data);
+        }
+        resolve();
       });
-      return;
-    }
 
-    if (paramCount === 2) {
-      await new Promise<void>((resolve, reject) => {
-        (
-          userTransform as (
-            this: Transform<TInput, TOutput>,
-            chunk: TInput,
-            callback: (error?: Error | null, data?: TOutput) => void
-          ) => void
-        ).call(this, chunk, (err?: Error | null, data?: TOutput) => {
-          if (err) {
-            reject(err);
-            return;
+      // If callback was not called synchronously, check return value.
+      if (!callbackCalled) {
+        if (out && typeof (out as any).then === "function") {
+          (out as Promise<TOutput>)
+            .then(data => {
+              if (!callbackCalled) {
+                if (data !== undefined) {
+                  this.push(data as TOutput);
+                }
+                resolve();
+              }
+            })
+            .catch(err => {
+              if (!callbackCalled) {
+                reject(err);
+              }
+            });
+        } else if (out !== undefined) {
+          if (!callbackCalled) {
+            this.push(out as TOutput);
+            resolve();
           }
-          if (data !== undefined) {
-            this.push(data);
-          }
+        } else if ((userTransform as any).length < 3) {
+          // Shorthand transform (fewer than 3 declared params) returned
+          // undefined and didn't call the callback — treat as synchronous
+          // completion (e.g. filtering out values) instead of waiting for
+          // a callback that will never be called.
           resolve();
-        });
-      });
-      return;
-    }
-
-    const result = (userTransform as (chunk: TInput) => TOutput | Promise<TOutput>).call(
-      this,
-      chunk
-    );
-
-    if (result && typeof result.then === "function") {
-      const awaited = await result;
-      if (awaited !== undefined) {
-        this.push(awaited);
+        }
       }
-      return;
-    }
+    });
 
-    if (result !== undefined) {
-      this.push(result);
-    }
+    await cbPromise;
   }
 
   private async _runFlush(): Promise<void> {
@@ -623,68 +643,81 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return;
     }
 
-    try {
-      if (this._hasSubclassFlush()) {
-        await new Promise<void>((resolve, reject) => {
-          (this as any)._flush((err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
+    if (this._hasSubclassFlush()) {
+      await new Promise<void>((resolve, reject) => {
+        (this as any)._flush((err?: Error | null, data?: TOutput) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          if (data !== undefined) {
+            this.push(data);
+          }
+          resolve();
         });
-        return;
-      }
-
-      const userFlush = this._flushImpl;
-      if (!userFlush) {
-        return;
-      }
-
-      const paramCount = userFlush.length;
-      if (paramCount >= 1) {
-        await new Promise<void>((resolve, reject) => {
-          (
-            userFlush as (
-              this: Transform<TInput, TOutput>,
-              callback: (error?: Error | null, data?: TOutput) => void
-            ) => void
-          ).call(this, (err?: Error | null, data?: TOutput) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            if (data !== undefined) {
-              this.push(data);
-            }
-            resolve();
-          });
-        });
-        return;
-      }
-
-      const result = (userFlush as () => TOutput | void | Promise<TOutput | void>).call(this);
-      if (result && typeof result.then === "function") {
-        const awaited = await result;
-        if (awaited !== undefined && awaited !== null) {
-          this.push(awaited as TOutput);
-        }
-        return;
-      }
-
-      if (result !== undefined && result !== null) {
-        this.push(result as TOutput);
-      }
-    } catch (err) {
-      // Let the error propagate to the Writable callback which handles
-      // error emission (matching Node.js behavior). Do NOT call
-      // _emitErrorOnce here to avoid double error handling.
-      throw err;
+      });
+      return;
     }
+
+    const userFlush = this._flushImpl;
+    if (!userFlush) {
+      return;
+    }
+
+    // Node.js always invokes flush as (callback), regardless of declared
+    // parameter count. Users may access the callback via `arguments[0]`
+    // even when the function signature has zero parameters.
+    // If the callback is called, its result takes priority; otherwise we
+    // fall back to the return value (convenience shorthand).
+    let callbackCalled = false;
+    await new Promise<void>((resolve, reject) => {
+      const out = (
+        userFlush as (
+          this: Transform<TInput, TOutput>,
+          callback: (error?: Error | null, data?: TOutput) => void
+        ) => any
+      ).call(this, (err?: Error | null, data?: TOutput) => {
+        callbackCalled = true;
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (data !== undefined) {
+          this.push(data);
+        }
+        resolve();
+      });
+
+      // If callback was not called synchronously, check return value.
+      if (!callbackCalled) {
+        if (out && typeof (out as any).then === "function") {
+          (out as Promise<TOutput | void>)
+            .then(data => {
+              if (!callbackCalled) {
+                if (data !== undefined) {
+                  this.push(data as TOutput);
+                }
+                resolve();
+              }
+            })
+            .catch(err => {
+              if (!callbackCalled) {
+                reject(err);
+              }
+            });
+        } else if (out !== undefined) {
+          if (!callbackCalled) {
+            this.push(out as TOutput);
+            resolve();
+          }
+        } else if ((userFlush as any).length < 1) {
+          // Shorthand flush (zero declared params) returned undefined and
+          // didn't call the callback — treat as synchronous completion
+          // instead of waiting for a callback that will never be called.
+          resolve();
+        }
+      }
+    });
   }
 
   /**
@@ -856,11 +889,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       const err = finalError ?? error;
       this._readable.destroy();
       this._writable.destroy();
-      // Node.js does NOT call the pending end() callback when the stream
-      // is destroyed — it only fires on 'finish'. Discard it.
+      // Fire the pending end() callback before discarding it.
+      // Node.js fires the end() callback on destroy (it listens on both
+      // 'finish' and 'close'; destroy emits 'close').
+      const endCb = this._endCallback;
       this._endCallback = null;
       this._closed = true;
       queueMicrotask(() => {
+        if (endCb) {
+          endCb();
+        }
         if (err) {
           this.emit("error", err);
         }

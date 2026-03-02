@@ -147,14 +147,18 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       (Symbol.asyncIterator in (source as object) || Symbol.iterator in (source as object))
     ) {
       const readable = Readable.from(source as AsyncIterable<R> | Iterable<R>);
-      const duplex = new Duplex<R, W>();
+      const duplex = new Duplex<R, W>({
+        objectMode: readable.readableObjectMode
+      });
       forwardReadableToDuplex(readable, duplex);
       return duplex;
     }
 
     // If it's a Readable
     if (source instanceof Readable) {
-      const duplex = new Duplex<R, W>();
+      const duplex = new Duplex<R, W>({
+        objectMode: source.readableObjectMode
+      });
       forwardReadableToDuplex(source, duplex);
       return duplex;
     }
@@ -162,7 +166,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     // If it's a Writable
     if (source instanceof Writable) {
       return new Duplex<R, W>({
-        objectMode: true,
+        objectMode: source.writableObjectMode,
         write(chunk, encoding, callback) {
           source.write(chunk as W, encoding, callback);
         },
@@ -232,6 +236,28 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   private _constructFunc?: (callback: (error?: Error | null) => void) => void;
   private _constructed: boolean = true;
 
+  /**
+   * Detect a subclass-defined implementation hook (e.g. _read/_write/_writev/_final).
+   *
+   * Node.js allows implementing Duplex by subclassing and defining _read/_write on the
+   * subclass prototype. Since the browser Duplex composes internal Readable/Writable
+   * instances, we must explicitly forward these prototype hooks.
+   */
+  private _getSubclassHook(name: string): ((...args: any[]) => any) | undefined {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Duplex.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, name)) {
+        const fn = (this as any)[name];
+        if (typeof fn === "function") {
+          return fn.bind(this);
+        }
+        return undefined;
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return undefined;
+  }
+
   constructor(
     options?: DuplexStreamOptions & {
       allowHalfOpen?: boolean;
@@ -295,10 +321,33 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     let writableConstructCb: ((error?: Error | null) => void) | undefined;
     const hasConstruct = this._hasConstructHook();
 
+    const readHook = options?.read ? options.read.bind(this) : this._getSubclassHook("_read");
+
+    // Prefer constructor options over subclass hooks (matches Node's behavior where
+    // options.{read,write,final,writev} override prototype hooks).
+    const writeHook = options?.write
+      ? options.write.bind(this)
+      : (this._getSubclassHook("_write") as
+          | ((chunk: TWrite, encoding: string, callback: (error?: Error | null) => void) => void)
+          | undefined);
+    const writevHook = options?.writev
+      ? options.writev.bind(this)
+      : (this._getSubclassHook("_writev") as
+          | ((
+              chunks: Array<{ chunk: TWrite; encoding: string }>,
+              callback: (error?: Error | null) => void
+            ) => void)
+          | undefined);
+    const finalHook = options?.final
+      ? options.final.bind(this)
+      : (this._getSubclassHook("_final") as
+          | ((callback: (error?: Error | null) => void) => void)
+          | undefined);
+
     this._readable = new Readable<TRead>({
       highWaterMark: readableHwm,
       objectMode: readableObjMode,
-      read: options?.read?.bind(this),
+      read: readHook as any,
       encoding: options?.encoding,
       // Suppress child-level close/error — Duplex itself is the authority
       emitClose: false,
@@ -314,9 +363,9 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     this._writable = new Writable<TWrite>({
       highWaterMark: writableHwm,
       objectMode: writableObjMode,
-      write: options?.write?.bind(this),
-      writev: options?.writev?.bind(this),
-      final: options?.final?.bind(this),
+      write: writeHook as any,
+      writev: writevHook as any,
+      final: finalHook as any,
       decodeStrings: options?.decodeStrings,
       defaultEncoding: options?.defaultEncoding,
       // Suppress child-level close/error — Duplex itself is the authority
@@ -526,10 +575,18 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     );
 
     if (cb) {
-      // Node.js only registers the end() callback on 'finish'.
-      // If the stream is destroyed before finishing, the callback is not invoked
-      // (users should use finished() for that case).
-      this.once("finish", cb);
+      // Node.js fires the end() callback on 'finish', but also on 'close'
+      // (which is emitted after destroy). This ensures the callback fires
+      // even when the stream is destroyed before finishing.
+      let called = false;
+      const onceCb = (): void => {
+        if (!called) {
+          called = true;
+          cb();
+        }
+      };
+      this.once("finish", onceCb);
+      this.once("close", onceCb);
     }
 
     if (chunk !== undefined) {

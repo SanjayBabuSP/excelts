@@ -330,9 +330,18 @@ export function finished(
       if (s.errored || s._errored) {
         done(s.errored ?? s._errored);
       } else {
-        // Already destroyed without error — check if it finished gracefully
-        const isGraceful = !!(s.readableEnded || s.writableFinished || s._endEmitted || s._finished);
-        if (isGraceful) {
+        // Already destroyed without error — check if it finished gracefully.
+        // Respect options.readable / options.writable to match Node.js behavior:
+        // if the caller only cares about one side, only check that side.
+        const supportsReadable =
+          "readableEnded" in s || "readable" in s || typeof s.read === "function";
+        const supportsWritable =
+          "writableFinished" in s || "writable" in s || typeof s.write === "function";
+        const checkReadable = options.readable !== false && supportsReadable;
+        const checkWritable = options.writable !== false && supportsWritable;
+        const readableOk = !checkReadable || !!(s.readableEnded || s._endEmitted);
+        const writableOk = !checkWritable || !!(s.writableFinished || s._finished);
+        if (readableOk && writableOk) {
           done();
         } else {
           done(createPrematureCloseError());

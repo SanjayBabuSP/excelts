@@ -156,16 +156,12 @@ export function isDisturbed(stream: unknown): boolean {
 }
 
 /**
- * Check if a stream is readable.
- * Node.js checks that the stream is not destroyed and not ended.
+ * Check if an object is a readable stream (type check, not state check).
+ * Returns true even for destroyed or ended streams — this checks whether the
+ * object IS a readable stream, not whether it is still in a readable state.
  */
 export function isReadable(stream: unknown): stream is ReadableLike {
   if (stream == null) {
-    return false;
-  }
-  const s = stream as any;
-  // Node.js: a destroyed or ended stream is not readable
-  if (s.destroyed || s.readableEnded || s._destroyed || s._endEmitted) {
     return false;
   }
   if (stream instanceof Readable || stream instanceof Transform) {
@@ -179,16 +175,12 @@ export function isReadable(stream: unknown): stream is ReadableLike {
 }
 
 /**
- * Check if a stream is writable.
- * Node.js checks that the stream is not destroyed and not finished.
+ * Check if an object is a writable stream (type check, not state check).
+ * Returns true even for destroyed or finished streams — this checks whether the
+ * object IS a writable stream, not whether it is still in a writable state.
  */
 export function isWritable(stream: unknown): stream is WritableLike {
   if (stream == null) {
-    return false;
-  }
-  const s = stream as any;
-  // Node.js: a destroyed or finished stream is not writable
-  if (s.destroyed || s.writableFinished || s._destroyed || s._finished) {
     return false;
   }
   if (stream instanceof Writable || stream instanceof Transform) {
