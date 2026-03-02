@@ -9120,8 +9120,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
       it("should ignore return value of transform function and use callback output", async () => {
         const t = new Transform({
           objectMode: true,
-          transform(chunk: any) {
-            const cb = arguments[2] as (err: Error | null, data?: any) => void;
+          transform(chunk: any, _enc: string, ...args: any[]) {
+            const cb = args[0] as (err: Error | null, data?: any) => void;
             cb(null, String(chunk) + "!");
             return "ignored";
           }
@@ -9141,8 +9141,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
           transform(chunk: any, _enc: string, cb: any) {
             cb(null, chunk);
           },
-          flush() {
-            const cb = arguments[0] as (err: Error | null, data?: any) => void;
+          flush(...args: any[]) {
+            const cb = args[0] as (err: Error | null, data?: any) => void;
             cb(null, "flushed");
             return "ignored";
           }
