@@ -120,6 +120,13 @@ interface ICellValue {
 // Type for cell values (what users set/get) - alias for CellValue from types.ts
 export type CellValueType = CellValue;
 
+// Returns true if the value is a non-empty object (has at least one own key),
+// or any truthy non-object value. Returns false for undefined, null, false, 0,
+// empty string, and empty objects `{}`. This is used to prevent an empty `{}`
+// style property on a row from shadowing a real style property on a column.
+const hasOwnKeys = (v: unknown): boolean =>
+  !!v && (typeof v !== "object" || Object.keys(v as object).length > 0);
+
 // Cell requirements
 //  Operate inside a worksheet
 //  Store and retrieve a value with a range of types: text, number, date, hyperlink, reference, formula, etc.
@@ -235,27 +242,37 @@ class Cell {
       style.numFmt = numFmt;
     }
 
-    const font = (rowStyle && rowStyle.font) || (colStyle && colStyle.font);
+    const font =
+      (rowStyle && hasOwnKeys(rowStyle.font) && rowStyle.font) ||
+      (colStyle && hasOwnKeys(colStyle.font) && colStyle.font);
     if (font) {
       style.font = font;
     }
 
-    const alignment = (rowStyle && rowStyle.alignment) || (colStyle && colStyle.alignment);
+    const alignment =
+      (rowStyle && hasOwnKeys(rowStyle.alignment) && rowStyle.alignment) ||
+      (colStyle && hasOwnKeys(colStyle.alignment) && colStyle.alignment);
     if (alignment) {
       style.alignment = alignment;
     }
 
-    const border = (rowStyle && rowStyle.border) || (colStyle && colStyle.border);
+    const border =
+      (rowStyle && hasOwnKeys(rowStyle.border) && rowStyle.border) ||
+      (colStyle && hasOwnKeys(colStyle.border) && colStyle.border);
     if (border) {
       style.border = border;
     }
 
-    const fill = (rowStyle && rowStyle.fill) || (colStyle && colStyle.fill);
+    const fill =
+      (rowStyle && hasOwnKeys(rowStyle.fill) && rowStyle.fill) ||
+      (colStyle && hasOwnKeys(colStyle.fill) && colStyle.fill);
     if (fill) {
       style.fill = fill;
     }
 
-    const protection = (rowStyle && rowStyle.protection) || (colStyle && colStyle.protection);
+    const protection =
+      (rowStyle && hasOwnKeys(rowStyle.protection) && rowStyle.protection) ||
+      (colStyle && hasOwnKeys(colStyle.protection) && colStyle.protection);
     if (protection) {
       style.protection = protection;
     }
