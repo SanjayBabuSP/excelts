@@ -2,7 +2,7 @@
  * Browser Stream - Duplex
  */
 
-import type { DuplexStreamOptions, WritableLike } from "@stream/types";
+import type { DuplexStreamOptions, IDuplex, WritableLike } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
 import { parseEndArgs } from "@stream/common/end-args";
@@ -10,8 +10,6 @@ import { parseEndArgs } from "@stream/common/end-args";
 import { Readable } from "./readable";
 import { Writable } from "./writable";
 import { addEmitterListener, createListenerRegistry } from "./helpers";
-
-import type { Transform } from "./transform";
 
 // =============================================================================
 // Duplex Stream
@@ -75,6 +73,11 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       | Writable<W>
       | AsyncIterable<R>
       | Iterable<R>
+      | string
+      | Blob
+      | Promise<any>
+      | ReadableStream<R>
+      | WritableStream<W>
       | {
           readable?: Readable<R>;
           writable?: Writable<W>;
@@ -108,6 +111,36 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       readable.pipe(sink);
     };
 
+    // Promise source — resolve and recursively call from()
+    if (source instanceof Promise) {
+      const duplex = new Duplex<R, W>({ objectMode: true });
+      source
+        .then(value => {
+          const inner = Duplex.from<R, W>(value);
+          forwardReadableToDuplex(inner as unknown as Readable<R>, duplex);
+        })
+        .catch(err => {
+          duplex.destroy(err instanceof Error ? err : new Error(String(err)));
+        });
+      return duplex;
+    }
+
+    // String source — wrap as a single-chunk readable
+    if (typeof source === "string") {
+      const readable = Readable.from([source] as Iterable<any>);
+      const duplex = new Duplex<R, W>({ objectMode: true });
+      forwardReadableToDuplex(readable as unknown as Readable<R>, duplex);
+      return duplex;
+    }
+
+    // Blob source — convert to ReadableStream then to Readable
+    if (typeof Blob !== "undefined" && source instanceof Blob) {
+      const readable = Readable.fromWeb(source.stream() as ReadableStream);
+      const duplex = new Duplex<R, W>();
+      forwardReadableToDuplex(readable as unknown as Readable<R>, duplex);
+      return duplex;
+    }
+
     // If it has readable and/or writable properties
     if (
       typeof source === "object" &&
@@ -131,13 +164,64 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
           ? callback => {
               pair.writable!.end(callback);
             }
-          : undefined
+          : undefined,
+        destroy: (error, callback) => {
+          // Propagate destroy to the original source streams so they are cleaned
+          // up when the wrapping Duplex is destroyed. Node.js does this too.
+          if (pair.readable && !pair.readable.destroyed) {
+            pair.readable.destroy(error ?? undefined);
+          }
+          if (pair.writable && !pair.writable.destroyed) {
+            pair.writable.destroy(error ?? undefined);
+          }
+          callback(error);
+        }
       });
 
       if (pair.readable) {
         forwardReadableToDuplex(pair.readable, duplex);
       }
       return duplex;
+    }
+
+    // Web ReadableStream — wrap as readable-only Duplex (matches Node.js Duplex.from(ReadableStream))
+    if (
+      typeof source === "object" &&
+      source !== null &&
+      typeof (source as any).getReader === "function" &&
+      typeof (source as any).cancel === "function"
+    ) {
+      const readable = Readable.fromWeb(source as ReadableStream<R>);
+      const duplex = new Duplex<R, W>({
+        objectMode: readable.readableObjectMode
+      });
+      forwardReadableToDuplex(readable, duplex);
+      return duplex;
+    }
+
+    // Web WritableStream — wrap as writable-only Duplex (matches Node.js Duplex.from(WritableStream))
+    if (
+      typeof source === "object" &&
+      source !== null &&
+      typeof (source as any).getWriter === "function" &&
+      typeof (source as any).close === "function"
+    ) {
+      const writable = Writable.fromWeb(source as WritableStream<W>);
+      return new Duplex<R, W>({
+        objectMode: writable.writableObjectMode,
+        write(chunk, encoding, callback) {
+          writable.write(chunk as W, encoding, callback);
+        },
+        final(callback) {
+          writable.end(callback);
+        },
+        destroy(error, callback) {
+          if (!writable.destroyed) {
+            writable.destroy(error ?? undefined);
+          }
+          callback(error);
+        }
+      });
     }
 
     // If it's an iterable
@@ -481,17 +565,13 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     registry.add(this._readable, "resume", () => this.emit("resume"));
 
     registry.add(this._writable, "error", forwardError);
+    registry.once(this._writable, "prefinish", () => this.emit("prefinish"));
     registry.once(this._writable, "finish", () => {
       this.emit("finish");
       writableFinished = true;
       maybeAutoDestroy();
     });
     registry.add(this._writable, "drain", () => this.emit("drain"));
-    registry.once(this._writable, "close", () => {
-      if (!this.allowHalfOpen && !this._readable.destroyed) {
-        this._readable.destroy();
-      }
-    });
 
     this._sideForwardingCleanup = () => {
       registry.cleanup();
@@ -514,7 +594,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       this._readable.on("data", chunk => this.emit("data", chunk));
     } else if (event === "readable") {
       // Node.js: adding a 'readable' listener sets readableFlowing to false
-      this._readable.readableFlowing = false;
+      this._readable._setReadableFlowing(false);
     }
     return this;
   }
@@ -631,12 +711,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   }
 
   /**
-   * Pipe readable side to destination
+   * Pipe readable side to destination.
+   * Accepts any writable-like object (duck-typed, matching Node.js behavior).
    */
-  pipe<W extends Writable<TRead> | Transform<TRead, any>>(
-    destination: W,
-    options?: { end?: boolean }
-  ): W {
+  pipe<W extends WritableLike>(destination: W, options?: { end?: boolean }): W {
     this._readable.pipe(destination, options);
     return destination;
   }
@@ -706,7 +784,11 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     };
 
     if (this._hasDestroyHook()) {
-      this._destroy(error ?? null, afterDestroy);
+      try {
+        this._destroy(error ?? null, afterDestroy);
+      } catch (err) {
+        afterDestroy(err instanceof Error ? err : new Error(String(err)));
+      }
     } else {
       afterDestroy(error);
     }
@@ -758,6 +840,16 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       proto = Object.getPrototypeOf(proto);
     }
     return false;
+  }
+
+  /**
+   * Synchronous dispose — destroys the stream.
+   * Matches Node.js Symbol.dispose support (v20+, experimental).
+   */
+  [Symbol.dispose](): void {
+    if (!this._destroyed) {
+      this.destroy();
+    }
   }
 
   /**
@@ -855,10 +947,6 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
   get readableFlowing(): boolean | null {
     return this._readable.readableFlowing;
-  }
-
-  set readableFlowing(value: boolean | null) {
-    this._readable.readableFlowing = value;
   }
 
   get readableAborted(): boolean {
@@ -993,7 +1081,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   compose<U>(
     stream: WritableLike | ((source: AsyncIterable<TRead>) => AsyncIterable<U>),
     options?: { signal?: AbortSignal }
-  ): Readable<U> {
+  ): IDuplex<U, TRead> {
     return this._readable.compose(stream, options);
   }
 }

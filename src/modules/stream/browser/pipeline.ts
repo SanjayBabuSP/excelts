@@ -78,6 +78,29 @@ export const toBrowserPipelineStream = (stream: PipelineStream): any => {
 };
 
 /**
+ * Check if a pipeline stage is a generator/async generator function.
+ * These are used as transform stages: fn(source) => AsyncIterable.
+ */
+const isGeneratorFunction = (
+  fn: any
+): fn is (source: any) => AsyncIterable<any> | Iterable<any> => {
+  return typeof fn === "function" && !(fn instanceof Readable) && !(fn instanceof Writable);
+};
+
+/**
+ * Apply a generator function as a transform stage.
+ * Consumes the source stream via its async iterator, passes it through the
+ * generator function, and produces a new Readable from the resulting iterable.
+ */
+const applyGeneratorStage = (
+  source: any,
+  fn: (source: any) => AsyncIterable<any> | Iterable<any>
+): Readable => {
+  const iterable = fn(source);
+  return Readable.from(iterable as AsyncIterable<any>);
+};
+
+/**
  * Pipeline streams together with proper error handling and cleanup.
  * Supports both callback and promise-based usage like Node.js.
  *
@@ -125,13 +148,57 @@ export function pipeline(
       return;
     }
 
-    const normalized = streams.map(toBrowserPipelineStream);
-    const source = normalized[0];
-    const destination = normalized[normalized.length - 1];
-    const transforms = normalized.slice(1, -1);
+    // Pre-process: normalize streams and resolve generator functions.
+    // Generator functions consume their source as an async iterable and produce
+    // a new Readable — they do NOT participate in .pipe() chains.
+    // We build a flat list of pipe-able stream stages.
+    const rawStages = streams.map(toBrowserPipelineStream);
+
+    // allStreams: every stream created (for cleanup on error).
+    // pipeStages: only the streams that need .pipe() chaining.
+    const allStreams: any[] = [];
+    const pipeStages: any[] = [];
+
+    let current: any = rawStages[0];
+    allStreams.push(current);
+    pipeStages.push(current);
+
+    for (let i = 1; i < rawStages.length; i++) {
+      const stage = rawStages[i];
+      if (isGeneratorFunction(stage)) {
+        // Generator consumes `current` internally → produces a new Readable.
+        // This Readable replaces `current` as the source for subsequent stages.
+        current = applyGeneratorStage(current, stage);
+        allStreams.push(current);
+        // Replace the last entry in pipeStages (the consumed source) with
+        // the generator-produced Readable, so the next real stream stage
+        // will be piped FROM this Readable.
+        pipeStages[pipeStages.length - 1] = current;
+      } else {
+        allStreams.push(stage);
+        pipeStages.push(stage);
+        current = stage;
+      }
+    }
+
+    const source = pipeStages[0];
+    const destination = pipeStages[pipeStages.length - 1];
+    const transforms = pipeStages.slice(1, -1);
+
+    // Check for already-destroyed streams upfront.
+    // If a stream is already destroyed and its close event has already fired,
+    // our close listener would never fire — causing the pipeline to hang.
+    // Node.js detects this and immediately rejects with ERR_STREAM_PREMATURE_CLOSE.
+    for (const stream of allStreams) {
+      if (stream.destroyed) {
+        if (!isStreamCompleted(stream)) {
+          reject(createPrematureCloseError());
+          return;
+        }
+      }
+    }
 
     let completed = false;
-    const allStreams = [source, ...transforms, destination];
 
     const registry = createListenerRegistry();
 
@@ -180,7 +247,7 @@ export function pipeline(
     }
 
     // Chain the streams
-    let current: any = source;
+    current = source;
     for (const transform of transforms) {
       current.pipe(transform);
       current = transform;
@@ -306,7 +373,7 @@ export function finished(
 
       cleanup();
 
-      if (err && options?.error !== false) {
+      if (err) {
         reject(err);
       } else {
         resolve();
@@ -365,16 +432,32 @@ export function finished(
     let readableDone = !checkReadable || !!(normalizedStream as any).readableEnded;
     let writableDone = !checkWritable || !!(normalizedStream as any).writableFinished;
 
+    // Node.js finished() waits for the 'close' event before resolving when
+    // the stream will actually emit 'close'.  Node.js computes willEmitClose as:
+    //   state.autoDestroy && state.emitClose && state.closed === false
+    // This means: if autoDestroy is false, close won't fire automatically after
+    // finish, so finished() must NOT wait for it — otherwise it deadlocks.
+    const s2 = normalizedStream as any;
+    const willEmitClose = s2._emitClose !== false && s2._autoDestroy !== false && !s2._closed;
+
     const maybeDone = (): void => {
       if (readableDone && writableDone) {
+        if (willEmitClose) {
+          // Don't resolve yet — wait for 'close' event
+          return;
+        }
         done();
       }
     };
 
     // Already finished?
     if (readableDone && writableDone) {
-      done();
-      return;
+      // If the stream is already closed (or won't emit close), resolve now
+      if (!willEmitClose || (normalizedStream as any).closed) {
+        done();
+        return;
+      }
+      // Otherwise wait for 'close'
     }
 
     // Listen for events
@@ -392,7 +475,11 @@ export function finished(
       });
     }
 
-    registry.once(normalizedStream, "error", (err: Error) => done(err));
+    // Node.js: with error:false, don't listen for the 'error' event.
+    // Errors are still detected via stream.errored in the close handler.
+    if (options.error !== false) {
+      registry.once(normalizedStream, "error", (err: Error) => done(err));
+    }
     registry.once(normalizedStream, "close", () => {
       const closedReadableDone = readableDone || !!(normalizedStream as any).readableEnded;
       const closedWritableDone = writableDone || !!(normalizedStream as any).writableFinished;
@@ -400,12 +487,18 @@ export function finished(
       if (closedReadableDone && closedWritableDone) {
         readableDone = closedReadableDone;
         writableDone = closedWritableDone;
-        maybeDone();
+        // Even with error:false, check stream.errored — Node.js close handler
+        // still passes errors detected via stream.errored to the callback.
+        const streamErr = (normalizedStream as any).errored ?? (normalizedStream as any)._errored;
+        done(streamErr ?? undefined);
         return;
       }
 
-      if (options.error === false) {
-        done();
+      // Premature close — stream closed before finishing.
+      // Check for stream error first (e.g. destroyed with error).
+      const streamErr = (normalizedStream as any).errored ?? (normalizedStream as any)._errored;
+      if (streamErr) {
+        done(streamErr);
         return;
       }
 

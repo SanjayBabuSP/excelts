@@ -141,37 +141,49 @@ export const addAbortSignal = createAddAbortSignal({
 // =============================================================================
 
 /**
- * Check if an object is a readable stream
+ * Check if an object is a readable stream that is still in a readable state.
+ * Returns false for destroyed or ended/finished streams (matches Node.js behavior).
  */
 export function isReadable(obj: unknown): obj is ReadableLike {
   if (obj == null) {
     return false;
   }
-  if (obj instanceof Readable || obj instanceof Transform) {
-    return true;
+  const s = obj as any;
+  if (s.destroyed) {
+    return false;
   }
-  if (obj instanceof Duplex) {
-    return true;
+  if (!(obj instanceof Readable || obj instanceof Transform || obj instanceof Duplex)) {
+    if (!(typeof s.read === "function" && typeof s.pipe === "function")) {
+      return false;
+    }
   }
-  const o = obj as Record<string, unknown>;
-  return typeof o.read === "function" && typeof o.pipe === "function";
+  if (s.readableEnded === true) {
+    return false;
+  }
+  return true;
 }
 
 /**
- * Check if an object is a writable stream
+ * Check if an object is a writable stream that is still in a writable state.
+ * Returns false for destroyed or ended/finished streams (matches Node.js behavior).
  */
 export function isWritable(obj: unknown): obj is WritableLike {
   if (obj == null) {
     return false;
   }
-  if (obj instanceof Writable || obj instanceof Transform) {
-    return true;
+  const s = obj as any;
+  if (s.destroyed) {
+    return false;
   }
-  if (obj instanceof Duplex) {
-    return true;
+  if (!(obj instanceof Writable || obj instanceof Transform || obj instanceof Duplex)) {
+    if (!(typeof s.write === "function" && typeof s.end === "function")) {
+      return false;
+    }
   }
-  const o = obj as Record<string, unknown>;
-  return typeof o.write === "function" && typeof o.end === "function";
+  if (s.writableEnded === true) {
+    return false;
+  }
+  return true;
 }
 
 /** Check if an object is a transform stream */
@@ -195,21 +207,15 @@ export const isStream: (obj: unknown) => obj is ReadableLike | WritableLike = cr
 // =============================================================================
 
 /**
- * Check if a readable stream has been disturbed (read from)
+ * Check if a readable stream has been disturbed (read from or cancelled).
+ * Matches Node.js native: readableDidRead || readableAborted.
  */
 export function isDisturbed(stream: unknown): boolean {
   if ((stream as any)?.locked !== undefined) {
     return !!(stream as ReadableStream).locked;
   }
   const s = stream as any;
-  return !!(
-    s?.readableDidRead ||
-    s?._didRead ||
-    s?.readableEnded ||
-    s?.destroyed ||
-    s?._ended ||
-    s?._destroyed
-  );
+  return !!(s?.readableDidRead || s?._didRead || s?.readableAborted);
 }
 
 // =============================================================================
@@ -278,18 +284,6 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
 
   pair.s1 = duplex1;
   pair.s2 = duplex2;
-
-  // Node.js: destroying one side of a duplexPair destroys the other.
-  duplex1.on("close", () => {
-    if (!duplex2.destroyed) {
-      duplex2.destroy(duplex1.errored ?? undefined);
-    }
-  });
-  duplex2.on("close", () => {
-    if (!duplex1.destroyed) {
-      duplex1.destroy(duplex2.errored ?? undefined);
-    }
-  });
 
   return [duplex1, duplex2];
 }

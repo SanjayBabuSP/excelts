@@ -2,7 +2,7 @@
  * Browser Stream - Transform
  */
 
-import type { DuplexStreamOptions, WritableLike } from "@stream/types";
+import type { DuplexStreamOptions, IDuplex, WritableLike } from "@stream/types";
 import { StreamStateError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
 import { parseEndArgs } from "@stream/common/end-args";
@@ -75,6 +75,13 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   /** Cached result of _hasSubclassTransform (called per-chunk, so worth caching) */
   private _isSubclassTransform: boolean | undefined;
+
+  /**
+   * Deferred write callback, stored when the readable buffer is full (backpressure).
+   * Released when the internal readable's _read() is called (i.e. when the consumer
+   * pulls data), matching Node.js Transform's kCallback mechanism.
+   */
+  private _afterTransformCallback: ((error?: Error | null) => void) | null = null;
 
   private _transformImpl:
     | ((chunk: TInput) => TOutput | Promise<TOutput>)
@@ -197,6 +204,17 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         : undefined
     });
 
+    // Node.js Transform uses _read() as the backpressure release mechanism:
+    // when the consumer pulls data (read() or flowing-mode drain), the Readable
+    // internals call _read(), which fires the deferred write callback.
+    (this._readable as any)._read = () => {
+      if (this._afterTransformCallback) {
+        const cb = this._afterTransformCallback;
+        this._afterTransformCallback = null;
+        cb(null);
+      }
+    };
+
     // Determine write/final handlers.
     // If a `write` option is provided, it replaces the transform-based write (matching Node).
     const writeHandler = options?.write
@@ -204,6 +222,33 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           options.write!.call(this, chunk, encoding, callback);
         }
       : (chunk: TInput, encoding: string, callback: (error?: Error | null) => void) => {
+          // Capture readable length before transform to detect if data was pushed.
+          // This mirrors Node.js Transform._write which captures rState.length
+          // before calling _transform, then uses it in the afterTransform check.
+          const lengthBefore = this._readable.readableLength;
+
+          // Helper: call the write callback only when the readable side has room.
+          // Matches Node.js afterTransform logic exactly:
+          //   if (wState.ended || length === rState.length || rState.length < rState.highWaterMark)
+          //     callback();
+          //   else
+          //     this[kCallback] = callback;  // defer
+          const afterTransform = (): void => {
+            const rLen = this._readable.readableLength;
+            const rHwm = this._readable.readableHighWaterMark;
+            if (
+              this._writable.writableEnded ||
+              lengthBefore === rLen || // No data pushed (filtered) — don't defer
+              rLen < rHwm
+            ) {
+              callback(null);
+            } else {
+              // Readable backpressure — store callback to be released when
+              // the readable's _read() is called by the consumer.
+              this._afterTransformCallback = callback;
+            }
+          };
+
           // Try synchronous transform first.  If the transform completes
           // synchronously we MUST call the callback synchronously so that
           // the Writable write-queue drains in the same microtask, preventing
@@ -211,11 +256,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           const maybePromise = this._runTransformSync(chunk, encoding);
           if (maybePromise === undefined) {
             // Completed synchronously
-            callback(null);
+            afterTransform();
           } else {
             // Async – wait for the promise
             maybePromise.then(
-              () => callback(null),
+              () => afterTransform(),
               err => callback(err)
             );
           }
@@ -351,6 +396,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     registry.add(this._readable, "pause", () => this.emit("pause"));
     registry.add(this._readable, "resume", () => this.emit("resume"));
 
+    registry.once(this._writable, "prefinish", () => this.emit("prefinish"));
     registry.once(this._writable, "finish", () => {
       this.emit("finish");
       writableFinished = true;
@@ -413,6 +459,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     if (this._isSubclassTransform !== undefined) {
       return this._isSubclassTransform;
     }
+    // When options.transform was provided, it takes priority over prototype
+    // overrides (matching Node.js behavior where the constructor stores
+    // options.transform and uses it directly).
     if (this._transformImpl) {
       this._isSubclassTransform = false;
       return false;
@@ -423,6 +472,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   private _hasSubclassFlush(): boolean {
+    // When options.flush was provided, it takes priority (matching Node.js).
     if (this._flushImpl) {
       return false;
     }
@@ -526,29 +576,20 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       return undefined;
     }
 
-    // Callback was NOT called synchronously. Check if the function returned
-    // a value/promise (convenience shorthand for our browser shim).
-    if (out && typeof (out as any).then === "function") {
-      return (out as Promise<TOutput>).then(data => {
-        if (data !== undefined) {
-          this.push(data);
-        }
-      });
-    }
-    if (out !== undefined) {
-      this.push(out as TOutput);
-      return undefined;
-    }
-
-    // If the function declares fewer than 3 parameters, it's a shorthand
-    // transform that doesn't know about the callback. When it returns
-    // undefined (e.g. filtering), treat as synchronous completion instead
-    // of waiting for a callback that will never be called.
+    // Callback was NOT called synchronously.
+    // Node.js ignores the return value of _transform — it always waits for the callback.
+    // However, if the function declares fewer than 3 parameters (shorthand),
+    // it doesn't know about the callback, so treat as synchronous completion.
     if ((userTransform as any).length < 3) {
+      // Shorthand: function doesn't expect a callback.
+      // If it returned a promise, wait for it (but don't push the resolved value).
+      if (out && typeof (out as any).then === "function") {
+        return (out as Promise<any>).then(() => {});
+      }
       return undefined;
     }
 
-    // Callback not yet called, no return value — wait for async callback.
+    // Callback not yet called, standard transform — wait for async callback.
     return promise;
   }
 
@@ -603,35 +644,30 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         resolve();
       });
 
-      // If callback was not called synchronously, check return value.
+      // If callback was not called synchronously, check for shorthand functions.
+      // Node.js ignores the return value of _transform — only the callback matters.
       if (!callbackCalled) {
-        if (out && typeof (out as any).then === "function") {
-          (out as Promise<TOutput>)
-            .then(data => {
-              if (!callbackCalled) {
-                if (data !== undefined) {
-                  this.push(data as TOutput);
+        if ((userTransform as any).length < 3) {
+          // Shorthand transform (fewer than 3 declared params) — doesn't know
+          // about the callback. If it returned a promise, wait for it (but don't
+          // push the resolved value).
+          if (out && typeof (out as any).then === "function") {
+            (out as Promise<any>)
+              .then(() => {
+                if (!callbackCalled) {
+                  resolve();
                 }
-                resolve();
-              }
-            })
-            .catch(err => {
-              if (!callbackCalled) {
-                reject(err);
-              }
-            });
-        } else if (out !== undefined) {
-          if (!callbackCalled) {
-            this.push(out as TOutput);
+              })
+              .catch(err => {
+                if (!callbackCalled) {
+                  reject(err);
+                }
+              });
+          } else {
             resolve();
           }
-        } else if ((userTransform as any).length < 3) {
-          // Shorthand transform (fewer than 3 declared params) returned
-          // undefined and didn't call the callback — treat as synchronous
-          // completion (e.g. filtering out values) instead of waiting for
-          // a callback that will never be called.
-          resolve();
         }
+        // Standard transform (>= 3 params): wait for the callback to be called.
       }
     });
 
@@ -665,10 +701,12 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
 
     // Node.js always invokes flush as (callback), regardless of declared
-    // parameter count. Users may access the callback via `arguments[0]`
-    // even when the function signature has zero parameters.
-    // If the callback is called, its result takes priority; otherwise we
-    // fall back to the return value (convenience shorthand).
+    // parameter count. Node.js ignores the return value of _flush —
+    // it always waits for the callback. If the function declares fewer than
+    // 1 parameter (shorthand), and the callback is not called, we wait for
+    // the async callback promise (matching Node.js which would hang).
+    // However, if the function returns a Promise and doesn't call the
+    // callback, we await the promise but don't push its result.
     let callbackCalled = false;
     await new Promise<void>((resolve, reject) => {
       const out = (
@@ -688,34 +726,29 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         resolve();
       });
 
-      // If callback was not called synchronously, check return value.
+      // If callback was not called synchronously, check for shorthand functions.
+      // Node.js ignores the return value of _flush — only the callback matters.
       if (!callbackCalled) {
-        if (out && typeof (out as any).then === "function") {
-          (out as Promise<TOutput | void>)
-            .then(data => {
-              if (!callbackCalled) {
-                if (data !== undefined) {
-                  this.push(data as TOutput);
+        if ((userFlush as any).length < 1) {
+          // Shorthand flush (zero declared params) — doesn't know about the callback.
+          // If it returned a promise, wait for it (but don't push the resolved value).
+          if (out && typeof (out as any).then === "function") {
+            (out as Promise<any>)
+              .then(() => {
+                if (!callbackCalled) {
+                  resolve();
                 }
-                resolve();
-              }
-            })
-            .catch(err => {
-              if (!callbackCalled) {
-                reject(err);
-              }
-            });
-        } else if (out !== undefined) {
-          if (!callbackCalled) {
-            this.push(out as TOutput);
+              })
+              .catch(err => {
+                if (!callbackCalled) {
+                  reject(err);
+                }
+              });
+          } else {
             resolve();
           }
-        } else if ((userFlush as any).length < 1) {
-          // Shorthand flush (zero declared params) returned undefined and
-          // didn't call the callback — treat as synchronous completion
-          // instead of waiting for a callback that will never be called.
-          resolve();
         }
+        // Standard flush (>= 1 param): wait for the callback to be called.
       }
     });
   }
@@ -732,10 +765,12 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     if (event === "data" && !this._dataForwardingSetup) {
       this._dataForwardingSetup = true;
-      this._readable.on("data", chunk => this.emit("data", chunk));
+      this._readable.on("data", chunk => {
+        this.emit("data", chunk);
+      });
     } else if (event === "readable") {
       // Node.js: adding a 'readable' listener sets readableFlowing to false
-      this._readable.readableFlowing = false;
+      this._readable._setReadableFlowing(false);
     }
     return this;
   }
@@ -821,19 +856,19 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   /**
-   * Read from the transform stream
+   * Read from the transform stream.
+   * Backpressure release is handled by _read() on the internal readable,
+   * which is called automatically by the Readable when it needs more data.
    */
   read(size?: number): TOutput | null {
     return this._readable.read(size);
   }
 
   /**
-   * Pipe readable side to destination
+   * Pipe readable side to destination.
+   * Accepts any writable-like object (duck-typed, matching Node.js behavior).
    */
-  pipe<W extends Writable<TOutput> | Transform<TOutput, any> | Duplex<any, TOutput>>(
-    destination: W,
-    options?: { end?: boolean }
-  ): W {
+  pipe<W extends WritableLike>(destination: W, options?: { end?: boolean }): W {
     return this._readable.pipe(destination, options) as W;
   }
 
@@ -909,7 +944,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     };
 
     if (this._hasDestroyHook()) {
-      this._destroy(error ?? null, afterDestroy);
+      try {
+        this._destroy(error ?? null, afterDestroy);
+      } catch (err) {
+        afterDestroy(err instanceof Error ? err : new Error(String(err)));
+      }
     } else {
       afterDestroy(error);
     }
@@ -962,6 +1001,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       proto = Object.getPrototypeOf(proto);
     }
     return false;
+  }
+
+  /**
+   * Synchronous dispose — destroys the stream.
+   * Matches Node.js Symbol.dispose support (v20+, experimental).
+   */
+  [Symbol.dispose](): void {
+    if (!this._destroyed) {
+      this.destroy();
+    }
   }
 
   /**
@@ -1089,10 +1138,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   get readableFlowing(): boolean | null {
     return (this as any)._readable.readableFlowing;
-  }
-
-  set readableFlowing(value: boolean | null) {
-    (this as any)._readable.readableFlowing = value;
   }
 
   get destroyed(): boolean {
@@ -1292,7 +1337,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   compose<U>(
     stream: WritableLike | ((source: AsyncIterable<TOutput>) => AsyncIterable<U>),
     options?: { signal?: AbortSignal }
-  ): Readable<U> {
+  ): IDuplex<U, TOutput> {
     return this._readable.compose(stream, options);
   }
 

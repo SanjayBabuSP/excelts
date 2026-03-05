@@ -2,7 +2,7 @@
  * Browser Stream - Collector
  */
 
-import type { WritableStreamOptions } from "@stream/types";
+import type { ICollector, WritableStreamOptions } from "@stream/types";
 import { StreamTypeError } from "@stream/errors";
 import { concatUint8Arrays, chunksToString } from "@utils/binary";
 import { toBinaryChunk } from "@stream/common/binary-chunk";
@@ -74,4 +74,11 @@ export class Collector<T = Uint8Array> extends Writable<T> {
     // Use inherited writable property
     return this.writableFinished;
   }
+}
+
+/**
+ * Create a collector stream (factory function, matches Node.js module structure)
+ */
+export function createCollector<T = Uint8Array>(options?: WritableStreamOptions): ICollector<T> {
+  return new Collector<T>(options);
 }

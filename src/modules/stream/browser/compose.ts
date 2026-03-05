@@ -94,9 +94,24 @@ export function compose<T = any, R = any>(
 
   // Forward writable-side backpressure from `first`.
   registry.add(first as any, "drain", () => composed.emit("drain"));
+
+  // Track whether both sides have completed so we can auto-destroy the composed
+  // stream (emitting 'close'), matching Node.js compose behavior.
+  let composedEndFired = false;
+  let composedFinishFired = false;
+  const maybeAutoDestroy = (): void => {
+    if (composedEndFired && composedFinishFired && !composed.destroyed) {
+      composed.destroy();
+    }
+  };
+
   // Forward finish from `last` — the composed stream is only "finished" once
   // data has fully flushed through the entire chain (matching Node.js compose).
-  registry.once(last as any, "finish", () => composed.emit("finish"));
+  registry.once(last as any, "finish", () => {
+    composed.emit("finish");
+    composedFinishFired = true;
+    maybeAutoDestroy();
+  });
 
   // Eagerly attach data/end forwarding from `last` to composed (matching Node.js).
   // Node.js compose immediately attaches last.on("data") so data flows into
@@ -114,6 +129,12 @@ export function compose<T = any, R = any>(
     if (!flushing) {
       (composed as any).push(null);
     }
+  });
+
+  // Track when the composed stream's own 'end' fires (from push(null)).
+  composed.once("end", () => {
+    composedEndFired = true;
+    maybeAutoDestroy();
   });
 
   // Delegate core stream methods

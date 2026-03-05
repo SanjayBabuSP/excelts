@@ -127,7 +127,8 @@ export const addAbortSignal = createAddAbortSignal({
 // =============================================================================
 
 /**
- * Check if a readable stream has been disturbed (read from).
+ * Check if a readable stream has been disturbed (read from or cancelled).
+ * Matches Node.js native: readableDidRead || readableAborted.
  * For Web ReadableStreams, returns `locked` (matches Node.js behaviour).
  */
 export function isDisturbed(stream: unknown): boolean {
@@ -145,52 +146,59 @@ export function isDisturbed(stream: unknown): boolean {
   }
 
   const s = stream as any;
-  return !!(
-    s?.readableDidRead ||
-    s?._didRead ||
-    s?.readableEnded ||
-    s?.destroyed ||
-    s?._ended ||
-    s?._destroyed
-  );
+  return !!(s?.readableDidRead || s?._didRead || s?.readableAborted);
 }
 
 /**
- * Check if an object is a readable stream (type check, not state check).
- * Returns true even for destroyed or ended streams — this checks whether the
- * object IS a readable stream, not whether it is still in a readable state.
+ * Check if an object is a readable stream that is still in a readable state.
+ * Returns false for destroyed or ended/finished streams (matches Node.js behavior).
  */
 export function isReadable(stream: unknown): stream is ReadableLike {
   if (stream == null) {
     return false;
   }
-  if (stream instanceof Readable || stream instanceof Transform) {
-    return true;
+  const s = stream as any;
+  // Check if destroyed
+  if (s.destroyed) {
+    return false;
   }
-  if (stream instanceof Duplex) {
-    return true;
+  // Must be a readable stream type
+  if (!(stream instanceof Readable || stream instanceof Transform || stream instanceof Duplex)) {
+    if (!(typeof s.read === "function" && typeof s.pipe === "function")) {
+      return false;
+    }
   }
-  const o = stream as Record<string, unknown>;
-  return typeof o.read === "function" && typeof o.pipe === "function";
+  // Check if reading has finished (readableEnded or equivalent)
+  if (s.readableEnded === true) {
+    return false;
+  }
+  return true;
 }
 
 /**
- * Check if an object is a writable stream (type check, not state check).
- * Returns true even for destroyed or finished streams — this checks whether the
- * object IS a writable stream, not whether it is still in a writable state.
+ * Check if an object is a writable stream that is still in a writable state.
+ * Returns false for destroyed or ended/finished streams (matches Node.js behavior).
  */
 export function isWritable(stream: unknown): stream is WritableLike {
   if (stream == null) {
     return false;
   }
-  if (stream instanceof Writable || stream instanceof Transform) {
-    return true;
+  const s = stream as any;
+  // Check if destroyed
+  if (s.destroyed) {
+    return false;
   }
-  if (stream instanceof Duplex) {
-    return true;
+  // Must be a writable stream type
+  if (!(stream instanceof Writable || stream instanceof Transform || stream instanceof Duplex)) {
+    if (!(typeof s.write === "function" && typeof s.end === "function")) {
+      return false;
+    }
   }
-  const o = stream as Record<string, unknown>;
-  return typeof o.write === "function" && typeof o.end === "function";
+  // Check if writing has ended (writableEnded or equivalent)
+  if (s.writableEnded === true) {
+    return false;
+  }
+  return true;
 }
 
 // =============================================================================
@@ -259,18 +267,6 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
 
   pair.s1 = stream1;
   pair.s2 = stream2;
-
-  // Node.js: destroying one side of a duplexPair destroys the other.
-  stream1.on("close", () => {
-    if (!stream2.destroyed) {
-      stream2.destroy(stream1.errored ?? undefined);
-    }
-  });
-  stream2.on("close", () => {
-    if (!stream1.destroyed) {
-      stream1.destroy(stream2.errored ?? undefined);
-    }
-  });
 
   return [stream1, stream2];
 }

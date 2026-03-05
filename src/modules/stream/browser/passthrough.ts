@@ -11,13 +11,19 @@ import { Transform } from "./transform";
 // =============================================================================
 
 /**
- * A passthrough stream that passes data through unchanged
+ * A passthrough stream that passes data through unchanged.
+ * Uses a prototype _transform override (matching Node.js PassThrough behavior).
  */
 export class PassThrough<T = Uint8Array> extends Transform<T, T> {
   constructor(options?: TransformStreamOptions & { allowHalfOpen?: boolean }) {
-    super({
-      ...options,
-      transform: chunk => chunk
-    });
+    super(options);
+  }
+
+  override _transform(
+    chunk: T,
+    _encoding: string,
+    callback: (error?: Error | null, data?: T) => void
+  ): void {
+    callback(null, chunk);
   }
 }

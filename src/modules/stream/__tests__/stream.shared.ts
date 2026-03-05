@@ -8684,7 +8684,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
     // ---------- duplexPair cross-destruction ----------
     describe("duplexPair cross-destruction", () => {
-      it("should destroy peer when one side is destroyed", async () => {
+      it("should NOT destroy peer when one side is destroyed", async () => {
         const [side1, side2] = duplexPair({ objectMode: true });
 
         side1.destroy();
@@ -8692,24 +8692,35 @@ export function runStreamTests(imports: StreamModuleImports): void {
         await new Promise(resolve => setTimeout(resolve, 50));
 
         expect(side1.destroyed).toBe(true);
-        expect(side2.destroyed).toBe(true);
+        // Node.js duplexPair does NOT cross-destroy
+        expect(side2.destroyed).toBe(false);
+
+        // Clean up
+        side2.destroy();
       });
 
-      it("should propagate error to peer when destroyed with error", async () => {
+      it("should NOT propagate error to peer when destroyed with error", async () => {
         const [side1, side2] = duplexPair({ objectMode: true });
 
         const error = new Error("test error");
         // Must listen on both sides to prevent unhandled error exceptions
         side1.on("error", () => {});
-        const errorPromise = new Promise<Error>(resolve => {
-          side2.on("error", resolve);
+
+        let side2Error = false;
+        side2.on("error", () => {
+          side2Error = true;
         });
 
         side1.destroy(error);
 
-        const receivedError = await errorPromise;
-        expect(receivedError).toBe(error);
-        expect(side2.destroyed).toBe(true);
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Node.js duplexPair does NOT propagate errors to peer
+        expect(side2.destroyed).toBe(false);
+        expect(side2Error).toBe(false);
+
+        // Clean up
+        side2.destroy();
       });
     });
 
@@ -8744,18 +8755,18 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
     // ---------- isReadable / isWritable on destroyed/ended streams ----------
     describe("isReadable/isWritable on destroyed and ended streams", () => {
-      it("isReadable should still return true for destroyed Readable (type check)", () => {
+      it("isReadable should return false for destroyed Readable (state check)", () => {
         const readable = createReadableFromArray([1], { objectMode: true });
         readable.destroy();
-        // isReadable is a type check, not a state check — it checks if the object
-        // IS a readable stream, not whether it's still in a readable state.
-        expect(isReadable(readable)).toBe(true);
+        // isReadable is a state check — it returns false for destroyed streams
+        // (matches Node.js stream.isReadable behavior).
+        expect(isReadable(readable)).toBe(false);
       });
 
-      it("isWritable should still return true for destroyed Writable (type check)", () => {
+      it("isWritable should return false for destroyed Writable (state check)", () => {
         const writable = createNullWritable();
         writable.destroy();
-        expect(isWritable(writable)).toBe(true);
+        expect(isWritable(writable)).toBe(false);
       });
     });
 
@@ -9238,6 +9249,39 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
     });
 
+    // =========================================================================
+    // Fix #29: finished() should wait for 'close' event before resolving
+    // =========================================================================
+    describe("finished() waits for close event", () => {
+      it("should have stream.closed === true after await finished(readable)", async () => {
+        const r = new Readable({
+          read() {
+            this.push(null);
+          }
+        });
+        r.resume();
+
+        await finished(r);
+        // Node.js finished() waits for 'close' before resolving
+        expect((r as any).closed).toBe(true);
+        expect(r.destroyed).toBe(true);
+      });
+
+      it("should have stream.closed === true after await finished(writable)", async () => {
+        const w = new Writable({
+          write(_chunk: any, _enc: any, cb: () => void) {
+            cb();
+          }
+        });
+        w.end("done");
+
+        await finished(w);
+        // Node.js finished() waits for 'close' before resolving
+        expect((w as any).closed).toBe(true);
+        expect(w.destroyed).toBe(true);
+      });
+    });
+
     // ---- Transform finish fires before end ----
     describe("Transform finish/end event ordering", () => {
       it("should emit both finish and end on a simple transform", async () => {
@@ -9548,6 +9592,2246 @@ export function runStreamTests(imports: StreamModuleImports): void {
         // Should emit error, not throw
         expect(result).toBe("sync-write-boom");
       });
+    });
+  });
+
+  // ===========================================================================
+  // Fix #2: Writable end callback invoked on destroy (not dropped)
+  // ===========================================================================
+  describe("Writable end callback on destroy", () => {
+    it("should invoke end() callback when destroy() is called during finalization", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_chunk, _encoding, callback) {
+          // Simulate async write
+          setTimeout(() => callback(), 10);
+        },
+        final(callback) {
+          // While _final is running, destroy will be called
+          setTimeout(() => callback(), 200);
+        }
+      });
+
+      w.on("error", () => {
+        events.push("error");
+      });
+
+      w.write(new TextEncoder().encode("data"), () => {
+        events.push("write-cb");
+      });
+
+      const endCallbackPromise = new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("end-cb");
+          resolve();
+        });
+      });
+
+      // Wait for the write to complete and _final to start
+      await new Promise(r => setTimeout(r, 30));
+
+      // Destroy while _final is pending
+      w.destroy(new Error("destroy-during-final"));
+
+      // The end callback should still be invoked
+      await Promise.race([endCallbackPromise, new Promise<void>(r => setTimeout(r, 300))]);
+
+      expect(events).toContain("end-cb");
+    });
+  });
+
+  // ===========================================================================
+  // Fix #3: Readable wrap() resumes paused source when downstream drains
+  // ===========================================================================
+  describe("Readable wrap() resume", () => {
+    it("should resume a paused wrapped source when the readable is consumed", async () => {
+      // Create a mock old-style stream with pause/resume
+      const oldStream = new (class extends EventEmitter {
+        paused = false;
+        pause() {
+          this.paused = true;
+        }
+        resume() {
+          this.paused = false;
+        }
+      })();
+
+      const readable = new Readable({
+        highWaterMark: 2,
+        read() {
+          // no-op — data comes from wrapped stream
+        }
+      });
+
+      readable.wrap(oldStream as any);
+
+      // Push enough data to fill the buffer and trigger backpressure
+      // With HWM=2, pushing chunks should eventually cause push() to return false
+      oldStream.emit("data", "a");
+      oldStream.emit("data", "b");
+      oldStream.emit("data", "c");
+      oldStream.emit("data", "d");
+
+      // The old stream should be paused due to backpressure
+      // (push() returned false at some point)
+
+      // Now consume data to drain the buffer
+      const chunks: string[] = [];
+      await new Promise<void>(resolve => {
+        readable.on("data", chunk => {
+          chunks.push(String(chunk));
+          if (chunks.length >= 4) {
+            resolve();
+          }
+        });
+        // If the source stays paused forever, we'll time out
+        setTimeout(() => resolve(), 500);
+      });
+
+      // We should have received all 4 chunks, meaning the source was resumed
+      expect(chunks.length).toBeGreaterThanOrEqual(4);
+      // And the old stream should not be stuck in paused state
+      expect(oldStream.paused).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #4: Pipeline supports generator/async generator functions
+  // ===========================================================================
+  describe("Pipeline generator function support", () => {
+    it("should support an async generator function as a transform stage", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {
+          this.push("hello");
+          this.push("world");
+          this.push(null);
+        }
+      });
+
+      const chunks: string[] = [];
+      const dest = new Writable({
+        objectMode: true,
+        write(chunk, _encoding, callback) {
+          chunks.push(String(chunk));
+          callback();
+        }
+      });
+
+      // Async generator as a transform stage
+      async function* upperCase(source: AsyncIterable<string>): AsyncIterable<string> {
+        for await (const chunk of source) {
+          yield String(chunk).toUpperCase();
+        }
+      }
+
+      await pipeline(source, upperCase, dest);
+
+      expect(chunks).toEqual(["HELLO", "WORLD"]);
+    });
+
+    it("should support multiple generator function stages", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {
+          this.push(1);
+          this.push(2);
+          this.push(3);
+          this.push(null);
+        }
+      });
+
+      const chunks: number[] = [];
+      const dest = new Writable({
+        objectMode: true,
+        write(chunk, _encoding, callback) {
+          chunks.push(chunk as number);
+          callback();
+        }
+      });
+
+      async function* double(source: AsyncIterable<number>): AsyncIterable<number> {
+        for await (const n of source) {
+          yield (n as number) * 2;
+        }
+      }
+
+      async function* addOne(source: AsyncIterable<number>): AsyncIterable<number> {
+        for await (const n of source) {
+          yield (n as number) + 1;
+        }
+      }
+
+      await pipeline(source, double, addOne, dest);
+
+      // 1*2+1=3, 2*2+1=5, 3*2+1=7
+      expect(chunks).toEqual([3, 5, 7]);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #5: Writable _writev called for naturally-queued writes (not just uncork)
+  // ===========================================================================
+  describe("Writable _writev for naturally-queued writes", () => {
+    it("should call _writev for writes that queue up during an async _write", async () => {
+      const writevCalls: Array<Array<{ chunk: any; encoding: string }>> = [];
+      const writeCalls: any[] = [];
+
+      const w = new Writable({
+        objectMode: true,
+        write(chunk, encoding, callback) {
+          writeCalls.push(chunk);
+          // Simulate async — while this is pending, more writes will queue up
+          setTimeout(() => callback(), 20);
+        },
+        writev(chunks, callback) {
+          writevCalls.push(chunks.map(c => ({ chunk: c.chunk, encoding: c.encoding })));
+          callback();
+        }
+      });
+
+      // First write goes to _write (nothing queued yet)
+      w.write("first");
+      // These writes queue up while first write is in-flight
+      w.write("second");
+      w.write("third");
+
+      await new Promise<void>(resolve => {
+        w.end(() => resolve());
+      });
+
+      // First chunk should go through _write
+      expect(writeCalls).toEqual(["first"]);
+      // Queued chunks should be batched through _writev
+      expect(writevCalls.length).toBe(1);
+      expect(writevCalls[0]!.map(c => c.chunk)).toEqual(["second", "third"]);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #6: Writable close emitted separately from finish
+  // ===========================================================================
+  describe("Writable finish and close timing", () => {
+    it("should emit finish and close as separate events (not synchronously in same call stack)", async () => {
+      const events: string[] = [];
+      let finishCallStack = false;
+
+      const w = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        }
+      });
+
+      w.on("finish", () => {
+        events.push("finish");
+        finishCallStack = true;
+      });
+      w.on("close", () => {
+        events.push("close");
+        // In Node.js, close fires on a separate process.nextTick from finish.
+        // The key check is that both events fire in order.
+      });
+
+      w.end();
+
+      await new Promise(r => setTimeout(r, 100));
+
+      // Both events should have fired
+      expect(events).toEqual(["finish", "close"]);
+      expect(finishCallStack).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #7: Writable end callback fires before finish listeners
+  // ===========================================================================
+  describe("Writable end callback ordering with finish listeners", () => {
+    it("should invoke end callback before finish listeners (Node.js prefinish behavior)", async () => {
+      const events: string[] = [];
+
+      const w = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        }
+      });
+
+      // Register a finish listener BEFORE end()
+      w.on("finish", () => {
+        events.push("finish-listener-before");
+      });
+
+      // end() callback — in Node.js this fires during prefinish, before finish
+      w.end(() => {
+        events.push("end-callback");
+      });
+
+      // Register a finish listener AFTER end()
+      w.on("finish", () => {
+        events.push("finish-listener-after");
+      });
+
+      await new Promise(r => setTimeout(r, 100));
+
+      // Node.js order: end-callback (prefinish) -> finish listeners in order
+      expect(events).toEqual(["end-callback", "finish-listener-before", "finish-listener-after"]);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #8: Readable async iterator with destroyOnReturn: false
+  // ===========================================================================
+  describe("Readable async iterator destroyOnReturn: false", () => {
+    it("should not destroy the stream when breaking from iterator with destroyOnReturn: false", async () => {
+      const readable = new Readable({
+        objectMode: true,
+        read() {
+          this.push("a");
+          this.push("b");
+          this.push("c");
+          this.push(null);
+        }
+      });
+
+      const chunks: string[] = [];
+      const iter = readable.iterator({ destroyOnReturn: false });
+      for await (const chunk of iter) {
+        chunks.push(String(chunk));
+        if (chunks.length >= 1) {
+          break;
+        }
+      }
+
+      // With destroyOnReturn: false, the stream should NOT be destroyed
+      expect(readable.destroyed).toBe(false);
+      expect(chunks).toEqual(["a"]);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #9: Duplex.from() supports string, Blob, ArrayBuffer, Promise sources
+  // ===========================================================================
+  describe("Duplex.from() additional source types", () => {
+    it("should create a Duplex from a string source", async () => {
+      const duplex = Duplex.from("hello world" as any);
+      const chunks: any[] = [];
+      duplex.on("data", chunk => chunks.push(chunk));
+
+      await new Promise<void>(resolve => {
+        duplex.on("end", resolve);
+      });
+
+      const result = chunks.map(c => String(c)).join("");
+      expect(result).toBe("hello world");
+    });
+
+    it("should create a Duplex from a Promise<string> source", async () => {
+      const duplex = Duplex.from(Promise.resolve("async-hello") as any);
+      const chunks: any[] = [];
+      duplex.on("data", chunk => chunks.push(chunk));
+
+      await new Promise<void>(resolve => {
+        duplex.on("end", resolve);
+      });
+
+      const result = chunks.map(c => String(c)).join("");
+      expect(result).toBe("async-hello");
+    });
+
+    it("should create a Duplex from an ArrayBuffer source (treated as iterable)", async () => {
+      // Node.js Duplex.from does NOT support raw ArrayBuffer.
+      // This test verifies the browser matches by throwing.
+      const buf = new TextEncoder().encode("buffer-data").buffer;
+      let threw = false;
+      try {
+        Duplex.from(buf as any);
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(true);
+    });
+
+    it("should create a Duplex from a Blob source", async () => {
+      // Blob is available in both Node.js 18+ and browsers
+      if (typeof Blob === "undefined") {
+        return; // Skip if Blob is not available
+      }
+      const blob = new Blob(["blob-data"]);
+      const duplex = Duplex.from(blob as any);
+      const chunks: any[] = [];
+      duplex.on("data", chunk => chunks.push(chunk));
+
+      await new Promise<void>(resolve => {
+        duplex.on("end", resolve);
+      });
+
+      expect(chunks.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #10: Transform end and finish both fire
+  // ===========================================================================
+  describe("Transform end/finish ordering", () => {
+    it("should emit both end and finish on a transform stream", async () => {
+      const events: string[] = [];
+
+      const t = createTransform<string, string>(s => s, { objectMode: true });
+
+      t.on("end", () => events.push("end"));
+      t.on("finish", () => events.push("finish"));
+
+      t.write("data");
+      t.end();
+
+      // Consume readable side to trigger end
+      t.resume();
+
+      await new Promise(r => setTimeout(r, 200));
+
+      // Both events must fire; ordering is timing-dependent in Node.js
+      // (depends on whether resume() is called before or after end()).
+      expect(events).toContain("end");
+      expect(events).toContain("finish");
+    });
+  });
+
+  // ===========================================================================
+  // Fix #11: _read sync throw should be caught and emitted as error
+  // ===========================================================================
+  describe("Readable _read sync throw handling", () => {
+    it("should catch sync throw in _read and emit error + destroy", async () => {
+      const events: string[] = [];
+      const r = new Readable({
+        read() {
+          throw new Error("sync-boom");
+        }
+      });
+
+      r.on("error", (err: Error) => events.push(`error:${err.message}`));
+      r.on("close", () => events.push("close"));
+
+      // Trigger _read by resuming
+      r.resume();
+
+      await new Promise(r => setTimeout(r, 200));
+
+      expect(events).toContain("error:sync-boom");
+      expect(events).toContain("close");
+      expect(r.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #12: on('readable') while flowing should pause the stream
+  // ===========================================================================
+  describe("Readable on('readable') while flowing pauses stream", () => {
+    it("should set readableFlowing to false when readable listener added while flowing", async () => {
+      const r = new Readable({
+        read() {
+          // no-op
+        }
+      });
+
+      // Start flowing via data listener
+      r.on("data", () => {});
+      expect(r.readableFlowing).toBe(true);
+
+      // Adding 'readable' while flowing should pause the stream
+      r.on("readable", () => {});
+      expect(r.readableFlowing).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #13: read(n) should pass highWaterMark to _read, not n
+  // ===========================================================================
+  describe("Readable read(n) passes HWM to _read", () => {
+    it("should call _read with highWaterMark regardless of read(n) argument", async () => {
+      const readSizes: number[] = [];
+      const r = new Readable({
+        highWaterMark: 128,
+        read(size: number) {
+          readSizes.push(size);
+        }
+      });
+
+      r.read(100);
+
+      await new Promise(r => setTimeout(r, 100));
+
+      // Node.js always passes highWaterMark to _read, not the requested size
+      expect(readSizes.length).toBeGreaterThan(0);
+      expect(readSizes[readSizes.length - 1]).toBe(128);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #14: HWM=0 should still trigger _read
+  // ===========================================================================
+  describe("Readable HWM=0 still triggers _read", () => {
+    it("should call _read even when highWaterMark is 0", async () => {
+      let readCalls = 0;
+      const r = new Readable({
+        highWaterMark: 0,
+        read() {
+          readCalls++;
+          // Push some data then end
+          if (readCalls === 1) {
+            this.push("data");
+            this.push(null);
+          }
+        }
+      });
+
+      const chunks: any[] = [];
+      r.on("data", chunk => chunks.push(chunk));
+
+      await new Promise(resolve => r.on("end", resolve));
+
+      expect(readCalls).toBeGreaterThan(0);
+      expect(chunks.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #15: write(null) should throw synchronously
+  // ===========================================================================
+  describe("Writable write(null) throws synchronously", () => {
+    it("should throw ERR_STREAM_NULL_VALUES synchronously", () => {
+      const w = new Writable({
+        write(_chunk: any, _encoding: string, callback: (error?: Error | null) => void) {
+          callback();
+        }
+      });
+
+      let threw = false;
+      try {
+        w.write(null as any);
+      } catch (err: any) {
+        threw = true;
+        expect(err.code).toBe("ERR_STREAM_NULL_VALUES");
+      }
+
+      expect(threw).toBe(true);
+    });
+
+    it("should not emit error event for write(null)", async () => {
+      const w = new Writable({
+        write(_chunk: any, _encoding: string, callback: (error?: Error | null) => void) {
+          callback();
+        }
+      });
+
+      let errorEmitted = false;
+      w.on("error", () => {
+        errorEmitted = true;
+      });
+
+      try {
+        w.write(null as any);
+      } catch {
+        // expected
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+      expect(errorEmitted).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #16: prefinish event should fire before finish
+  // ===========================================================================
+  describe("Writable prefinish event", () => {
+    it("should emit prefinish before finish", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_chunk: any, _encoding: string, callback: (error?: Error | null) => void) {
+          callback();
+        }
+      });
+
+      w.on("prefinish", () => events.push("prefinish"));
+      w.on("finish", () => events.push("finish"));
+      w.on("close", () => events.push("close"));
+
+      w.end();
+
+      await new Promise(r => setTimeout(r, 200));
+
+      expect(events).toContain("prefinish");
+      expect(events).toContain("finish");
+      expect(events.indexOf("prefinish")).toBeLessThan(events.indexOf("finish"));
+    });
+  });
+
+  // ===========================================================================
+  // Fix #17: destroy() should invoke end callback even with pending writes
+  // ===========================================================================
+  describe("Writable destroy invokes end callback", () => {
+    it("should call end callback when destroyed while write is in-flight", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_chunk: any, _encoding: string, callback: (error?: Error | null) => void) {
+          // Slow write — complete after a delay
+          setTimeout(callback, 50);
+        }
+      });
+
+      w.write("data");
+
+      // end() while write is in-flight — callback stored as pendingEnd
+      w.end(() => {
+        events.push("end-cb");
+      });
+
+      w.on("error", () => {});
+
+      // Destroy with error before write completes
+      w.destroy(new Error("boom"));
+
+      await new Promise(r => setTimeout(r, 300));
+
+      // The end callback must be invoked (Node.js fires it after close)
+      expect(events).toContain("end-cb");
+    });
+  });
+
+  // ===========================================================================
+  // Fix #18: isReadable/isWritable should be state checks
+  // ===========================================================================
+  describe("isReadable/isWritable state checks", () => {
+    it("isReadable should return false for destroyed readable", async () => {
+      const r = new Readable({ read() {} });
+      r.destroy();
+
+      await new Promise(r => setTimeout(r, 100));
+
+      expect(isReadable(r)).toBe(false);
+    });
+
+    it("isWritable should return false for destroyed writable", async () => {
+      const w = new Writable({
+        write(_chunk: any, _encoding: string, cb: (error?: Error | null) => void) {
+          cb();
+        }
+      });
+      w.destroy();
+
+      await new Promise(r => setTimeout(r, 100));
+
+      expect(isWritable(w)).toBe(false);
+    });
+
+    it("isReadable should return false for ended readable", async () => {
+      const r = new Readable({
+        read() {
+          this.push(null);
+        }
+      });
+      r.resume();
+
+      await new Promise(resolve => r.on("end", resolve));
+      // Wait for close
+      await new Promise(r => setTimeout(r, 100));
+
+      expect(isReadable(r)).toBe(false);
+    });
+
+    it("isWritable should return false for finished writable", async () => {
+      const w = new Writable({
+        write(_chunk: any, _encoding: string, cb: (error?: Error | null) => void) {
+          cb();
+        }
+      });
+      w.end();
+
+      await new Promise(resolve => w.on("finish", resolve));
+      // Wait for close
+      await new Promise(r => setTimeout(r, 100));
+
+      expect(isWritable(w)).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #19: Transform backpressure from readable side
+  // ===========================================================================
+  describe("Transform readable-side backpressure", () => {
+    it("should defer _transform callback when readable buffer is full", async () => {
+      let transformCalls = 0;
+      const t = new Transform({
+        readableHighWaterMark: 2,
+        writableHighWaterMark: 100,
+        readableObjectMode: true,
+        writableObjectMode: true,
+        transform(
+          chunk: any,
+          _encoding: string,
+          callback: (error?: Error | null, data?: any) => void
+        ) {
+          transformCalls++;
+          callback(null, chunk);
+        }
+      });
+
+      // Write 5 chunks without reading
+      for (let i = 0; i < 5; i++) {
+        t.write(`chunk-${i}`);
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+
+      // With readableHWM=2, Node.js would limit to ~3 _transform calls
+      // (2 in buffer + 1 being processed) before backpressure kicks in.
+      // The key assertion: NOT all 5 should be processed immediately.
+      const callsBeforeRead = transformCalls;
+      expect(callsBeforeRead).toBeLessThan(5);
+
+      // Now drain the readable side
+      while (t.read() !== null) {
+        // consume
+      }
+
+      await new Promise(r => setTimeout(r, 200));
+
+      // After reading, remaining transforms should complete
+      expect(transformCalls).toBe(5);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #20: duplexPair should NOT cross-destroy
+  // ===========================================================================
+  describe("duplexPair no cross-destroy", () => {
+    it("should not destroy peer when one side is destroyed", async () => {
+      const [s1, s2] = duplexPair({ objectMode: true });
+
+      s1.destroy();
+
+      await new Promise(r => setTimeout(r, 200));
+
+      expect(s1.destroyed).toBe(true);
+      expect(s2.destroyed).toBe(false);
+
+      // Clean up
+      s2.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Fix #21: Writable writableNeedDrain not set for corked writes
+  // ===========================================================================
+  describe("writableNeedDrain for corked writes", () => {
+    it("should set writableNeedDrain when corked write exceeds HWM", async () => {
+      const w = createWritable<Uint8Array>({
+        highWaterMark: 10,
+        write(_chunk, _enc, cb) {
+          setTimeout(cb, 50);
+        }
+      });
+
+      w.cork();
+      const ret1 = w.write(new Uint8Array(5));
+      expect(ret1).toBe(true);
+      expect(w.writableNeedDrain).toBe(false);
+
+      const ret2 = w.write(new Uint8Array(6));
+      expect(ret2).toBe(false);
+      expect(w.writableNeedDrain).toBe(true);
+
+      w.uncork();
+
+      // Wait for drain
+      await new Promise<void>(resolve => {
+        w.on("drain", () => {
+          expect(w.writableNeedDrain).toBe(false);
+          resolve();
+        });
+      });
+
+      w.end();
+      await new Promise(r => setTimeout(r, 200));
+    });
+  });
+
+  // ===========================================================================
+  // Fix #22: Writable autoDestroy not triggered on write errors (direct-write)
+  // ===========================================================================
+  describe("autoDestroy on write error", () => {
+    it("should auto-destroy when _write callback has error", async () => {
+      const writeError = new Error("write failed");
+      const w = createWritable<string>({
+        objectMode: true,
+        autoDestroy: true,
+        write(_chunk, _enc, cb) {
+          cb(writeError);
+        }
+      });
+
+      let errorSeen: Error | null = null;
+      w.on("error", err => {
+        errorSeen = err;
+      });
+
+      w.write("data");
+
+      await new Promise(r => setTimeout(r, 200));
+
+      expect(errorSeen).toBe(writeError);
+      expect(w.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #23: Readable push(string) without encoding defaults to utf8
+  // ===========================================================================
+  describe("Readable push string without encoding", () => {
+    it("should convert string to bytes in binary mode when no encoding given", async () => {
+      const r = _createReadable<Uint8Array>({
+        read() {
+          this.push("hello" as any);
+          this.push(null);
+        }
+      });
+
+      const chunks: Uint8Array[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk));
+
+      await new Promise(r => setTimeout(r, 200));
+
+      // In Node.js, push("hello") in binary mode converts to Buffer with utf8 encoding.
+      // The result should be a Uint8Array, not a string.
+      expect(chunks.length).toBe(1);
+      expect(chunks[0] instanceof Uint8Array).toBe(true);
+      expect(chunks[0]!.length).toBe(5); // "hello" is 5 bytes in utf8
+    });
+  });
+
+  // ===========================================================================
+  // Fix #24: Readable.from(Uint8Array) — removed, Node.js also iterates bytes
+  // ===========================================================================
+
+  // ===========================================================================
+  // Fix #25: Writable double error emission in Web WritableStream path
+  // ===========================================================================
+  describe("Writable no double error emission", () => {
+    it("should emit error only once when write fails with autoDestroy", async () => {
+      const writeError = new Error("write failed");
+      let errorCount = 0;
+
+      const w = createWritable<string>({
+        objectMode: true,
+        autoDestroy: true,
+        write(_chunk, _enc, cb) {
+          cb(writeError);
+        }
+      });
+
+      w.on("error", () => {
+        errorCount++;
+      });
+
+      w.write("data");
+
+      await new Promise(r => setTimeout(r, 300));
+
+      expect(errorCount).toBe(1);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #26: Writable _construct gates writes in Web WritableStream path
+  // ===========================================================================
+  describe("Writable _construct gates writes (subclass path)", () => {
+    it("should delay writes until _construct completes", async () => {
+      const events: string[] = [];
+
+      class MyWritable extends Writable {
+        _construct(cb: (error?: Error | null) => void) {
+          events.push("construct-start");
+          setTimeout(() => {
+            events.push("construct-done");
+            cb();
+          }, 50);
+        }
+        _write(chunk: any, _enc: string, cb: (error?: Error | null) => void) {
+          events.push("write:" + chunk.toString());
+          cb();
+        }
+      }
+
+      const w = new MyWritable();
+      w.write("a" as any);
+      w.write("b" as any);
+      w.end(() => {
+        events.push("end-cb");
+      });
+
+      await new Promise(r => setTimeout(r, 500));
+
+      // Writes should happen AFTER construct completes
+      expect(events.indexOf("construct-done")).toBeLessThan(events.indexOf("write:a"));
+      expect(events.indexOf("write:a")).toBeLessThan(events.indexOf("write:b"));
+    });
+  });
+
+  // ===========================================================================
+  // Fix #27: Writable end chunk write error propagated to end callback
+  // ===========================================================================
+  describe("Writable end chunk write error reaches end callback", () => {
+    it("should propagate write error from end chunk to end callback", async () => {
+      const writeError = new Error("write failed");
+      const w = createWritable<string>({
+        objectMode: true,
+        write(_chunk, _enc, cb) {
+          cb(writeError);
+        }
+      });
+
+      w.on("error", () => {
+        // Suppress unhandled error
+      });
+
+      const endErr = await new Promise<Error | null>(resolve => {
+        w.end("final-chunk", (err: any) => {
+          resolve(err ?? null);
+        });
+      });
+
+      // The error from writing the end chunk should reach the end callback
+      expect(endErr).toBeTruthy();
+    });
+  });
+
+  // ===========================================================================
+  // Fix #28: Readable.map() — destroying result should destroy source
+  // ===========================================================================
+  describe("Readable map destroy propagates to source", () => {
+    it("should destroy source when mapped stream is destroyed", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      source.push("a");
+      source.push("b");
+      source.push("c");
+
+      const mapped = source.map((chunk: any) => (chunk as string).toUpperCase());
+
+      const events: string[] = [];
+      mapped.on("close", () => events.push("mapped-close"));
+      source.on("close", () => events.push("source-close"));
+
+      // Consume one chunk then destroy mapped
+      const gotChunk = new Promise<void>(resolve => {
+        mapped.on("data", () => {
+          mapped.destroy();
+          resolve();
+        });
+      });
+
+      await gotChunk;
+
+      // Wait for close events to propagate
+      await new Promise(r => setTimeout(r, 500));
+
+      expect(events).toContain("mapped-close");
+      expect(mapped.destroyed).toBe(true);
+      expect(source.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #28b: Readable.filter() — destroying result should destroy source
+  // ===========================================================================
+  describe("Readable filter destroy propagates to source", () => {
+    it("should destroy source when filtered stream is destroyed", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      source.push("a");
+      source.push("b");
+      source.push("c");
+
+      const filtered = source.filter(() => true);
+
+      const gotChunk = new Promise<void>(resolve => {
+        filtered.on("data", () => {
+          filtered.destroy();
+          resolve();
+        });
+      });
+
+      await gotChunk;
+      await new Promise(r => setTimeout(r, 500));
+
+      expect(filtered.destroyed).toBe(true);
+      expect(source.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #28c: Readable.flatMap() — destroying result should destroy source
+  // ===========================================================================
+  describe("Readable flatMap destroy propagates to source", () => {
+    it("should destroy source when flatMapped stream is destroyed", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      source.push("a");
+      source.push("b");
+      source.push("c");
+
+      const flatMapped = source.flatMap((chunk: any) => [chunk, chunk]);
+
+      const gotChunk = new Promise<void>(resolve => {
+        flatMapped.on("data", () => {
+          flatMapped.destroy();
+          resolve();
+        });
+      });
+
+      await gotChunk;
+      await new Promise(r => setTimeout(r, 500));
+
+      expect(flatMapped.destroyed).toBe(true);
+      expect(source.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #28d: Readable.drop() — destroying result should destroy source
+  // ===========================================================================
+  describe("Readable drop destroy propagates to source", () => {
+    it("should destroy source when dropped stream is destroyed", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      source.push("a");
+      source.push("b");
+      source.push("c");
+
+      const dropped = source.drop(0);
+
+      const gotChunk = new Promise<void>(resolve => {
+        dropped.on("data", () => {
+          dropped.destroy();
+          resolve();
+        });
+      });
+
+      await gotChunk;
+      await new Promise(r => setTimeout(r, 500));
+
+      expect(dropped.destroyed).toBe(true);
+      expect(source.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Fix #28e: Readable.take() — destroying result should destroy source
+  // ===========================================================================
+  describe("Readable take destroy propagates to source", () => {
+    it("should destroy source when taken stream is destroyed", async () => {
+      const source = new Readable({
+        objectMode: true,
+        read() {}
+      });
+
+      source.push("a");
+      source.push("b");
+      source.push("c");
+
+      const taken = source.take(10);
+
+      const gotChunk = new Promise<void>(resolve => {
+        taken.on("data", () => {
+          taken.destroy();
+          resolve();
+        });
+      });
+
+      await gotChunk;
+      await new Promise(r => setTimeout(r, 500));
+
+      expect(taken.destroyed).toBe(true);
+      expect(source.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // allowHalfOpen: false should NOT end readable when writable closes
+  // ===========================================================================
+  describe("allowHalfOpen: false does not end readable when writable closes", () => {
+    it("should still deliver buffered readable data after writable side finishes", async () => {
+      const chunks: string[] = [];
+      const d = createDuplex({
+        objectMode: true,
+        allowHalfOpen: false,
+        read() {},
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+
+      // Buffer data on the readable side
+      d.push("a");
+      d.push("b");
+      d.push("c");
+
+      // Collect all readable data
+      d.on("data", (chunk: string) => {
+        chunks.push(chunk);
+      });
+
+      d.on("finish", () => {
+        // After writable finishes, readable should still have its data
+        // The readable side should NOT have been destroyed/ended by the writable close.
+        expect(chunks).toEqual(["a", "b", "c"]);
+      });
+
+      // End the writable side
+      d.end();
+
+      await new Promise<void>(resolve => {
+        d.on("finish", resolve);
+      });
+
+      expect(chunks).toEqual(["a", "b", "c"]);
+
+      // Clean up: end the readable side manually
+      d.push(null);
+      await new Promise<void>(resolve => d.on("close", resolve));
+    });
+  });
+
+  // ===========================================================================
+  // Duplex.from({ readable, writable }) — destroy propagation to source streams
+  // ===========================================================================
+  describe("Duplex.from({ readable, writable }) destroy propagation", () => {
+    it("should destroy source readable and writable when duplex is destroyed", async () => {
+      const sourceReadable = new Readable({
+        objectMode: true,
+        read() {}
+      });
+      const sourceWritable = new Writable({
+        objectMode: true,
+        write(_chunk: any, _enc: any, cb: () => void) {
+          cb();
+        }
+      });
+
+      const duplex = Duplex.from({ readable: sourceReadable, writable: sourceWritable });
+      // Suppress any internal errors from the wrapping duplex (Node.js emits ABORT_ERR)
+      duplex.on("error", () => {});
+
+      // Destroy the wrapping duplex
+      duplex.destroy();
+
+      await new Promise(r => setTimeout(r, 100));
+
+      expect(duplex.destroyed).toBe(true);
+      expect(sourceReadable.destroyed).toBe(true);
+      expect(sourceWritable.destroyed).toBe(true);
+    });
+
+    it("should propagate error to source streams on destroy(err)", async () => {
+      const errors: { readable?: Error; writable?: Error } = {};
+      const sourceReadable = new Readable({
+        objectMode: true,
+        read() {}
+      });
+      const sourceWritable = new Writable({
+        objectMode: true,
+        write(_chunk: any, _enc: any, cb: () => void) {
+          cb();
+        }
+      });
+
+      sourceReadable.on("error", (err: Error) => {
+        errors.readable = err;
+      });
+      sourceWritable.on("error", (err: Error) => {
+        errors.writable = err;
+      });
+
+      const duplex = Duplex.from({ readable: sourceReadable, writable: sourceWritable });
+      duplex.on("error", () => {}); // Suppress unhandled error
+
+      const destroyError = new Error("test-destroy-error");
+      duplex.destroy(destroyError);
+
+      await new Promise(r => setTimeout(r, 100));
+
+      expect(duplex.destroyed).toBe(true);
+      expect(sourceReadable.destroyed).toBe(true);
+      expect(sourceWritable.destroyed).toBe(true);
+      expect(errors.readable?.message).toBe("test-destroy-error");
+      expect(errors.writable?.message).toBe("test-destroy-error");
+    });
+  });
+
+  // =========================================================================
+  // Fix #31: pipeline() should reject when source is already destroyed
+  // =========================================================================
+  describe("pipeline with already-destroyed streams", () => {
+    it("should reject when source is already destroyed", async () => {
+      const r = new Readable({ objectMode: true, read() {} });
+      r.destroy();
+      // Wait for close to fire
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(r.destroyed).toBe(true);
+
+      const chunks: unknown[] = [];
+      const w = new Writable({
+        objectMode: true,
+        write(chunk: unknown, _enc: string, cb: (err?: Error | null) => void) {
+          chunks.push(chunk);
+          cb();
+        }
+      });
+
+      await expect(pipeline(r, w)).rejects.toMatchObject({
+        code: "ERR_STREAM_PREMATURE_CLOSE"
+      });
+    });
+
+    it("should reject when destination is already destroyed", async () => {
+      const r = new Readable({
+        objectMode: true,
+        read() {
+          this.push("x");
+          this.push(null);
+        }
+      });
+      const w = new Writable({
+        objectMode: true,
+        write(_chunk: unknown, _enc: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+      w.destroy();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(w.destroyed).toBe(true);
+
+      // Node.js may report ERR_STREAM_PREMATURE_CLOSE or ERR_STREAM_UNABLE_TO_PIPE
+      await expect(pipeline(r, w)).rejects.toThrow();
+    });
+  });
+
+  // =========================================================================
+  // Fix #33: finished() with error:false should still report error
+  // =========================================================================
+  describe("finished() with error:false", () => {
+    it("should still report error when stream is destroyed with error", async () => {
+      const r = new Readable({ objectMode: true, read() {} });
+      r.on("error", () => {}); // prevent unhandled
+
+      r.destroy(new Error("boom"));
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Node.js: error:false means "don't listen to error event", but
+      // close handler still checks stream.errored and passes it through
+      await expect(finished(r, { error: false })).rejects.toThrow("boom");
+    });
+  });
+
+  // =========================================================================
+  // Fix #34: unshift() after push(null) on empty buffer — data before end
+  // =========================================================================
+  describe("Readable unshift after push(null)", () => {
+    it("should deliver unshifted data before end event", async () => {
+      const events: string[] = [];
+      const r = new Readable({
+        objectMode: true,
+        read() {
+          this.push(null);
+        }
+      });
+
+      r.on("data", (d: unknown) => events.push("data:" + d));
+      r.on("end", () => events.push("end"));
+
+      // Trigger _read which calls push(null)
+      r.read(0);
+
+      // Synchronously unshift data after push(null)
+      r.unshift("after-eof");
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Node.js: data is delivered before end
+      expect(events).toContain("data:after-eof");
+      const dataIdx = events.indexOf("data:after-eof");
+      const endIdx = events.indexOf("end");
+      expect(dataIdx).toBeLessThan(endIdx);
+    });
+  });
+
+  // =========================================================================
+  // Fix #35: read(0) should not trigger _read when buffer equals HWM
+  // =========================================================================
+  describe("Readable read(0) HWM boundary", () => {
+    it("should not trigger _read when buffer equals non-zero HWM", () => {
+      let readCount = 0;
+      const r = new Readable({
+        objectMode: true,
+        highWaterMark: 5,
+        read() {
+          readCount++;
+          if (readCount === 1) {
+            for (let i = 0; i < 5; i++) {
+              this.push(i);
+            }
+          }
+        }
+      });
+
+      // First read(0): triggers _read which fills buffer to 5 (== HWM)
+      r.read(0);
+      expect(readCount).toBe(1);
+      expect(r.readableLength).toBe(5);
+
+      // Second read(0): buffer == HWM, should NOT trigger _read
+      readCount = 0;
+      r.read(0);
+      expect(readCount).toBe(0);
+    });
+
+    it("should trigger _read when HWM is 0 and buffer is empty", () => {
+      let readCount = 0;
+      const r = new Readable({
+        objectMode: true,
+        highWaterMark: 0,
+        read() {
+          readCount++;
+        }
+      });
+
+      r.read(0);
+      expect(readCount).toBe(1);
+    });
+  });
+
+  // =========================================================================
+  // Fix #36: _final error — end callback should fire after close
+  // =========================================================================
+  describe("Writable _final error end-cb timing", () => {
+    it("should fire end callback after close when _final fails", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_chunk: unknown, _encoding: string, cb: (err?: Error | null) => void) {
+          cb();
+        },
+        final(cb: (err?: Error | null) => void) {
+          cb(new Error("final-error"));
+        }
+      });
+      w.on("error", () => events.push("error"));
+      w.on("finish", () => events.push("finish"));
+      w.on("close", () => events.push("close"));
+      w.on("prefinish", () => events.push("prefinish"));
+      w.end(() => {
+        events.push("end-cb");
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Node.js: error → close → end-cb (no prefinish/finish on _final error)
+      expect(events).toContain("error");
+      expect(events).toContain("close");
+      expect(events).toContain("end-cb");
+      expect(events).not.toContain("finish");
+      expect(events).not.toContain("prefinish");
+
+      const closeIdx = events.indexOf("close");
+      const endCbIdx = events.indexOf("end-cb");
+      expect(endCbIdx).toBeGreaterThan(closeIdx);
+    });
+  });
+
+  // =========================================================================
+  // Fix #37: objectMode encoding should be undefined
+  // =========================================================================
+  describe("objectMode encoding", () => {
+    it("should pass undefined as encoding to _write in objectMode", async () => {
+      let receivedEncoding: unknown = "NOT_SET";
+      const w = new Writable({
+        objectMode: true,
+        write(_chunk: unknown, encoding: string, cb: (err?: Error | null) => void) {
+          receivedEncoding = encoding;
+          cb();
+        }
+      });
+
+      w.write({ foo: 1 });
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Node.js: encoding is undefined in objectMode
+      expect(receivedEncoding).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // Fix #38: end() should auto-uncork — cork() → write() → end() pattern
+  // =========================================================================
+  describe("Writable end() auto-uncork", () => {
+    it("should flush corked writes when end() is called without uncork()", async () => {
+      const chunks: string[] = [];
+      const w = new Writable({
+        objectMode: true,
+        write(chunk: unknown, _encoding: string, cb: (err?: Error | null) => void) {
+          chunks.push(String(chunk));
+          cb();
+        }
+      });
+
+      w.cork();
+      w.write("a");
+      w.write("b");
+      // end() without uncork() — Node.js auto-uncorks
+      w.end(() => {
+        // All corked data should have been flushed
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      expect(chunks).toContain("a");
+      expect(chunks).toContain("b");
+      expect(w.writableFinished).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // Fix #39: destroy() should NOT clear readable buffer synchronously
+  // =========================================================================
+  describe("Readable destroy() buffer preservation", () => {
+    it("should preserve readableLength synchronously after destroy()", () => {
+      const r = new Readable({
+        objectMode: true,
+        read() {
+          this.push("a");
+          this.push("b");
+          this.push(null);
+        }
+      });
+
+      // Trigger _read to fill buffer
+      r.read(0);
+      expect(r.readableLength).toBe(2);
+
+      r.destroy();
+      // Node.js: readableLength preserved synchronously after destroy
+      expect(r.readableLength).toBe(2);
+    });
+  });
+
+  // =========================================================================
+  // Fix #40: write-after-destroy should NOT emit 'error' event
+  // =========================================================================
+  describe("Writable write-after-destroy error event", () => {
+    it("should NOT emit error event when writing after destroy()", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        write(_chunk: unknown, _encoding: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+      w.on("error", e => events.push("error:" + (e as Error & { code: string }).code));
+      w.destroy();
+      w.write("x", (err: Error | null | undefined) =>
+        events.push("cb:" + ((err as Error & { code: string })?.code || "ok"))
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(events).toContain("cb:ERR_STREAM_DESTROYED");
+      // Node.js: no error event for write-after-destroy
+      expect(events.filter(e => e.startsWith("error:"))).toHaveLength(0);
+    });
+
+    it("should emit error event when writing after end() (not yet destroyed)", async () => {
+      const events: string[] = [];
+      const w = new Writable({
+        autoDestroy: false,
+        write(_chunk: unknown, _encoding: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+      w.on("error", e => events.push("error:" + (e as Error & { code: string }).code));
+      w.on("finish", () => events.push("finish"));
+      w.end();
+
+      // Wait for finish but not close (autoDestroy is false)
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(events).toContain("finish");
+
+      w.write("x", (err: Error | null | undefined) =>
+        events.push("cb:" + ((err as Error & { code: string })?.code || "ok"))
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Node.js: error event for write-after-end when not destroyed
+      expect(events).toContain("cb:ERR_STREAM_WRITE_AFTER_END");
+      expect(events).toContain("error:ERR_STREAM_WRITE_AFTER_END");
+    });
+  });
+
+  // ===========================================================================
+  // Cross-Platform Parity: Additional Tests (Round 4)
+  // ===========================================================================
+
+  describe("_destroy sync throw handling", () => {
+    it("should catch sync throw from Readable._destroy and emit error", async () => {
+      const errors: Error[] = [];
+      const r = _createReadable({
+        read() {},
+        destroy(_err: Error | null, _cb: (err?: Error | null) => void) {
+          throw new Error("sync destroy throw");
+        }
+      });
+      r.on("error", (err: Error) => errors.push(err));
+      r.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(errors.length).toBe(1);
+      expect(errors[0]!.message).toBe("sync destroy throw");
+      expect(r.destroyed).toBe(true);
+    });
+
+    it("should catch sync throw from Writable._destroy and emit error", async () => {
+      const errors: Error[] = [];
+      const w = createWritable({
+        write(_chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          cb();
+        },
+        destroy(_err: Error | null, _cb: (err?: Error | null) => void) {
+          throw new Error("sync writable destroy throw");
+        }
+      });
+      w.on("error", (err: Error) => errors.push(err));
+      w.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(errors.length).toBe(1);
+      expect(errors[0]!.message).toBe("sync writable destroy throw");
+      expect(w.destroyed).toBe(true);
+    });
+
+    it("should catch sync throw from Transform._destroy and emit error", async () => {
+      const errors: Error[] = [];
+      const t = new Transform({
+        transform(chunk: any, _enc: string, cb: any) {
+          cb(null, chunk);
+        },
+        destroy(_err: Error | null, _cb: (err?: Error | null) => void) {
+          throw new Error("sync transform destroy throw");
+        }
+      });
+      t.on("error", (err: Error) => errors.push(err));
+      t.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(errors.length).toBe(1);
+      expect(errors[0]!.message).toBe("sync transform destroy throw");
+      expect(t.destroyed).toBe(true);
+    });
+
+    it("should catch sync throw from Duplex._destroy and emit error", async () => {
+      const errors: Error[] = [];
+      const d = createDuplex({
+        read() {},
+        write(_chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          cb();
+        },
+        destroy(_err: Error | null, _cb: (err?: Error | null) => void) {
+          throw new Error("sync duplex destroy throw");
+        }
+      });
+      d.on("error", (err: Error) => errors.push(err));
+      d.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(errors.length).toBe(1);
+      expect(errors[0]!.message).toBe("sync duplex destroy throw");
+      expect(d.destroyed).toBe(true);
+    });
+  });
+
+  describe("readableFlowing has both getter and setter", () => {
+    it("readableFlowing should have both get and set (matches Node.js)", () => {
+      const r = _createReadable({ read() {} });
+      const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(r), "readableFlowing");
+      // Node.js: readableFlowing has both a getter and a setter
+      if (desc) {
+        expect(typeof desc.get).toBe("function");
+        expect(typeof desc.set).toBe("function");
+      }
+    });
+  });
+
+  describe("Readable.from() accepts iterables (Uint8Array is iterable)", () => {
+    it("should create a Readable from a Uint8Array (via Symbol.iterator)", async () => {
+      // Uint8Array is iterable, so Readable.from() should accept it (objectMode).
+      // Node.js: Readable.from(Uint8Array) yields individual bytes in objectMode.
+      const data = new Uint8Array([10, 20, 30]);
+      const r = Readable.from(data as any);
+      const chunks: any[] = [];
+      for await (const chunk of r) {
+        chunks.push(chunk);
+      }
+      // Each byte is yielded individually in object mode
+      expect(chunks.length).toBe(3);
+      expect(chunks[0]).toBe(10);
+      expect(chunks[1]).toBe(20);
+      expect(chunks[2]).toBe(30);
+    });
+  });
+
+  describe("Readable.isReadable() static method", () => {
+    it("should return true for a fresh readable", () => {
+      const r = _createReadable({ read() {} });
+      const ReadableClass = Readable as any;
+      if (typeof ReadableClass.isReadable === "function") {
+        expect(ReadableClass.isReadable(r)).toBe(true);
+      }
+    });
+
+    it("should return false for a destroyed readable", () => {
+      const r = _createReadable({ read() {} });
+      r.destroy();
+      const ReadableClass = Readable as any;
+      if (typeof ReadableClass.isReadable === "function") {
+        expect(ReadableClass.isReadable(r)).toBe(false);
+      }
+    });
+
+    it("should return false/null for null/undefined", () => {
+      const ReadableClass = Readable as any;
+      if (typeof ReadableClass.isReadable === "function") {
+        // Node.js returns null for null/undefined, browser returns false.
+        // Both are falsy, which is what matters.
+        expect(ReadableClass.isReadable(null)).toBeFalsy();
+        expect(ReadableClass.isReadable(undefined)).toBeFalsy();
+      }
+    });
+  });
+
+  describe("Readable.asIndexedPairs()", () => {
+    it("should yield [index, chunk] pairs", async () => {
+      const r = createReadableFromArray(["a", "b", "c"], { objectMode: true });
+      if (typeof r.asIndexedPairs !== "function") {
+        return; // Skip if not available (Node.js may not have it)
+      }
+      const pairs: any[] = [];
+      for await (const pair of r.asIndexedPairs()) {
+        pairs.push(pair);
+      }
+      expect(pairs).toEqual([
+        [0, "a"],
+        [1, "b"],
+        [2, "c"]
+      ]);
+    });
+  });
+
+  describe("pipe() accepts duck-typed writable", () => {
+    it("should pipe to an object with write/end/on/emit/off methods", async () => {
+      const chunks: any[] = [];
+      // Create a minimal duck-typed writable (not an actual Writable class instance)
+      const fakeWritable = {
+        write(chunk: any): boolean {
+          chunks.push(chunk);
+          return true;
+        },
+        end(): void {
+          // no-op
+        },
+        on(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        once(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        off(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        emit(): boolean {
+          return false;
+        },
+        removeListener(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        removeAllListeners(_event?: string): any {
+          return fakeWritable;
+        }
+      };
+
+      const source = createReadableFromArray(["x", "y", "z"], { objectMode: true });
+      source.pipe(fakeWritable as any);
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(chunks).toEqual(["x", "y", "z"]);
+    });
+  });
+
+  // ===========================================================================
+  // Cross-Platform Parity: Additional Tests (Round 5)
+  // ===========================================================================
+
+  describe("Transform.pipe() accepts duck-typed writable", () => {
+    it("should pipe Transform to an object with write/end/on/emit/off methods", async () => {
+      const chunks: any[] = [];
+      const fakeWritable = {
+        write(chunk: any): boolean {
+          chunks.push(chunk);
+          return true;
+        },
+        end(): void {},
+        on(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        once(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        off(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        emit(): boolean {
+          return false;
+        },
+        removeListener(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        removeAllListeners(_event?: string): any {
+          return fakeWritable;
+        }
+      };
+
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _enc: string, cb: any) {
+          cb(null, chunk);
+        }
+      });
+      t.pipe(fakeWritable as any);
+      t.write("a");
+      t.write("b");
+      t.end();
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(chunks).toEqual(["a", "b"]);
+    });
+  });
+
+  describe("Duplex.pipe() accepts duck-typed writable", () => {
+    it("should pipe Duplex to an object with write/end/on/emit/off methods", async () => {
+      const chunks: any[] = [];
+      const fakeWritable = {
+        write(chunk: any): boolean {
+          chunks.push(chunk);
+          return true;
+        },
+        end(): void {},
+        on(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        once(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        off(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        emit(): boolean {
+          return false;
+        },
+        removeListener(_event: string, _listener: (...args: any[]) => void): any {
+          return fakeWritable;
+        },
+        removeAllListeners(_event?: string): any {
+          return fakeWritable;
+        }
+      };
+
+      const d = createDuplex({
+        objectMode: true,
+        read() {},
+        write(_chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+      d.pipe(fakeWritable as any);
+      d.push("x");
+      d.push("y");
+      d.push(null);
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(chunks).toEqual(["x", "y"]);
+    });
+
+    it("should pipe Duplex to another Duplex", async () => {
+      const chunks: any[] = [];
+      const d1 = createDuplex({
+        objectMode: true,
+        read() {},
+        write(_chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+      const d2 = createDuplex({
+        objectMode: true,
+        read() {},
+        write(chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          chunks.push(chunk);
+          cb();
+        }
+      });
+
+      d1.pipe(d2);
+      d1.push("hello");
+      d1.push("world");
+      d1.push(null);
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(chunks).toEqual(["hello", "world"]);
+    });
+  });
+
+  describe("Duplex.from() accepts Web ReadableStream", () => {
+    it("should create a Duplex from a ReadableStream", async () => {
+      // ReadableStream is available in both Node.js 18+ and browsers
+      if (typeof ReadableStream === "undefined") {
+        return;
+      }
+      const rs = new ReadableStream({
+        start(controller) {
+          controller.enqueue("a");
+          controller.enqueue("b");
+          controller.close();
+        }
+      });
+
+      const d = Duplex.from(rs as any);
+      const chunks: any[] = [];
+      for await (const chunk of d) {
+        chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      }
+      expect(chunks.length).toBe(2);
+    });
+  });
+
+  // ===========================================================================
+  // Parity Fix Tests: Cross-Platform Alignment
+  // ===========================================================================
+
+  describe("Transform: _transform return value is ignored (matching Node.js)", () => {
+    it("should NOT auto-push the return value of options.transform", async () => {
+      // In Node.js, returning a value from _transform is ignored — only callback matters.
+      const received: number[] = [];
+      const t = new Transform({
+        objectMode: true,
+        transform(
+          chunk: number,
+          _encoding: string,
+          callback: (error?: Error | null, data?: number) => void
+        ) {
+          // Return a value but use callback with different data
+          callback(null, chunk * 10);
+          return chunk * 100; // This should be IGNORED
+        }
+      });
+      t.on("data", (d: number) => received.push(d));
+      t.write(1);
+      t.write(2);
+      t.end();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      // Should only see callback data (10, 20), NOT return values (100, 200)
+      expect(received).toEqual([10, 20]);
+    });
+  });
+
+  describe("Transform: subclass _transform vs options.transform priority", () => {
+    it("options.transform should win when both are provided (matching Node.js)", async () => {
+      const calls: string[] = [];
+      class MyTransform extends Transform {
+        constructor() {
+          super({
+            objectMode: true,
+            transform(_chunk: number, _enc: string, cb: (e?: Error | null, d?: number) => void) {
+              calls.push("options");
+              cb(null, _chunk);
+            }
+          });
+        }
+        _transform(
+          chunk: number,
+          _encoding: string,
+          callback: (error?: Error | null, data?: number) => void
+        ): void {
+          calls.push("subclass");
+          callback(null, chunk * 2);
+        }
+      }
+
+      const t = new MyTransform();
+      const received: number[] = [];
+      t.on("data", (d: number) => received.push(d));
+      t.write(5);
+      (t as any).end();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      // options.transform should win (matching Node.js)
+      expect(calls).toEqual(["options"]);
+      expect(received).toEqual([5]);
+    });
+  });
+
+  describe("PassThrough: subclass can override _transform", () => {
+    it("should call subclass _transform on PassThrough subclass", async () => {
+      class UpperPassThrough extends PassThrough {
+        _transform(
+          chunk: any,
+          _encoding: string,
+          callback: (error?: Error | null, data?: any) => void
+        ): void {
+          const str =
+            typeof chunk === "string"
+              ? chunk
+              : chunk instanceof Uint8Array
+                ? new TextDecoder().decode(chunk)
+                : String(chunk);
+          callback(null, str.toUpperCase());
+        }
+      }
+
+      const t = new UpperPassThrough({ objectMode: true });
+      const received: any[] = [];
+      t.on("data", (d: any) => received.push(d));
+      t.write("hello");
+      t.end();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(received).toEqual(["HELLO"]);
+    });
+  });
+
+  describe("isDisturbed: aligned with Node.js native behavior", () => {
+    it("should return false for a fresh, unread stream", () => {
+      const r = _createReadable({ objectMode: true, read() {} });
+      expect(isDisturbed(r)).toBe(false);
+    });
+
+    it("should return true after data has been read", async () => {
+      const r = createReadableFromArray([1, 2, 3]);
+      // Read one chunk to disturb it
+      for await (const _chunk of r) {
+        break;
+      }
+      expect(isDisturbed(r)).toBe(true);
+    });
+
+    it("should return true for a destroyed (aborted) stream that never ended", async () => {
+      const r = _createReadable({
+        objectMode: true,
+        read() {}
+      });
+      r.destroy();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Destroyed before end → readableAborted should be true → disturbed
+      expect(isDisturbed(r)).toBe(true);
+    });
+  });
+
+  describe("prefinish event on Transform and Duplex", () => {
+    it("Transform should emit prefinish before finish", async () => {
+      const events: string[] = [];
+      const t = createTransform<number, number>(n => n, { objectMode: true });
+      t.on("prefinish", () => events.push("prefinish"));
+      t.on("finish", () => events.push("finish"));
+      t.end();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(events).toContain("prefinish");
+      expect(events).toContain("finish");
+      expect(events.indexOf("prefinish")).toBeLessThan(events.indexOf("finish"));
+    });
+
+    it("Duplex should emit prefinish before finish", async () => {
+      const events: string[] = [];
+      const d = createDuplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: () => void) {
+          cb();
+        }
+      });
+      d.on("prefinish", () => events.push("prefinish"));
+      d.on("finish", () => events.push("finish"));
+      d.end();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(events).toContain("prefinish");
+      expect(events).toContain("finish");
+      expect(events.indexOf("prefinish")).toBeLessThan(events.indexOf("finish"));
+    });
+  });
+
+  describe("Prototype methods: _write on Writable, _read on Readable", () => {
+    it("Writable.prototype should have _write", () => {
+      expect("_write" in Writable.prototype).toBe(true);
+      expect(typeof (Writable.prototype as any)._write).toBe("function");
+    });
+
+    it("Readable.prototype should have _read", () => {
+      expect("_read" in Readable.prototype).toBe(true);
+      expect(typeof (Readable.prototype as any)._read).toBe("function");
+    });
+  });
+
+  describe("Higher-order methods: concurrency support", () => {
+    it("map() should execute concurrently with concurrency > 1", async () => {
+      const r = createReadableFromArray([1, 2, 3, 4]);
+      let maxConcurrent = 0;
+      let current = 0;
+
+      const mapped = r.map(
+        async (n: number) => {
+          current++;
+          if (current > maxConcurrent) {
+            maxConcurrent = current;
+          }
+          // Wait to allow concurrent executions to overlap
+          await new Promise(resolve => setTimeout(resolve, 50));
+          current--;
+          return n * 2;
+        },
+        { concurrency: 3 }
+      );
+
+      const result: number[] = [];
+      for await (const item of mapped) {
+        result.push(item);
+      }
+
+      // Results should be in original order
+      expect(result).toEqual([2, 4, 6, 8]);
+      // Should have had concurrent execution (at least 2 in-flight)
+      expect(maxConcurrent).toBeGreaterThanOrEqual(2);
+    });
+
+    it("filter() should evaluate predicates concurrently with concurrency > 1", async () => {
+      const r = createReadableFromArray([1, 2, 3, 4, 5, 6]);
+      let maxConcurrent = 0;
+      let current = 0;
+
+      const filtered = r.filter(
+        async (n: number) => {
+          current++;
+          if (current > maxConcurrent) {
+            maxConcurrent = current;
+          }
+          await new Promise(resolve => setTimeout(resolve, 50));
+          current--;
+          return n % 2 === 0;
+        },
+        { concurrency: 3 }
+      );
+
+      const result: number[] = [];
+      for await (const item of filtered) {
+        result.push(item);
+      }
+
+      // Results should be filtered and in original order
+      expect(result).toEqual([2, 4, 6]);
+      // Should have had concurrent evaluation
+      expect(maxConcurrent).toBeGreaterThanOrEqual(2);
+    });
+
+    it("flatMap() should execute concurrently with concurrency > 1", async () => {
+      const r = createReadableFromArray([1, 2, 3]);
+      let maxConcurrent = 0;
+      let current = 0;
+
+      const flatMapped = r.flatMap(
+        async (n: number) => {
+          current++;
+          if (current > maxConcurrent) {
+            maxConcurrent = current;
+          }
+          await new Promise(resolve => setTimeout(resolve, 50));
+          current--;
+          return [n, n * 10];
+        },
+        { concurrency: 2 }
+      );
+
+      const result: number[] = [];
+      for await (const item of flatMapped) {
+        result.push(item);
+      }
+
+      expect(result).toEqual([1, 10, 2, 20, 3, 30]);
+      expect(maxConcurrent).toBeGreaterThanOrEqual(2);
+    });
+
+    it("forEach() should execute concurrently with concurrency > 1", async () => {
+      const r = createReadableFromArray([1, 2, 3, 4]);
+      let maxConcurrent = 0;
+      let current = 0;
+      const visited: number[] = [];
+
+      await r.forEach(
+        async (n: number) => {
+          current++;
+          if (current > maxConcurrent) {
+            maxConcurrent = current;
+          }
+          await new Promise(resolve => setTimeout(resolve, 50));
+          visited.push(n);
+          current--;
+        },
+        { concurrency: 3 }
+      );
+
+      // All items visited (order may vary due to concurrency)
+      expect(visited.sort()).toEqual([1, 2, 3, 4]);
+      expect(maxConcurrent).toBeGreaterThanOrEqual(2);
+    });
+
+    it("map() with concurrency 1 should be serial", async () => {
+      const r = createReadableFromArray([1, 2, 3]);
+      let maxConcurrent = 0;
+      let current = 0;
+
+      const mapped = r.map(
+        async (n: number) => {
+          current++;
+          if (current > maxConcurrent) {
+            maxConcurrent = current;
+          }
+          await new Promise(resolve => setTimeout(resolve, 10));
+          current--;
+          return n * 2;
+        },
+        { concurrency: 1 }
+      );
+
+      const result: number[] = [];
+      for await (const item of mapped) {
+        result.push(item);
+      }
+
+      expect(result).toEqual([2, 4, 6]);
+      expect(maxConcurrent).toBe(1);
+    });
+
+    it("map() should preserve order with concurrency", async () => {
+      const r = createReadableFromArray([1, 2, 3, 4, 5]);
+
+      const mapped = r.map(
+        async (n: number) => {
+          // Different delays to test ordering
+          await new Promise(resolve => setTimeout(resolve, (6 - n) * 20));
+          return n;
+        },
+        { concurrency: 5 }
+      );
+
+      const result: number[] = [];
+      for await (const item of mapped) {
+        result.push(item);
+      }
+
+      // Even though item 5 finishes first (shortest delay), order must be preserved
+      expect(result).toEqual([1, 2, 3, 4, 5]);
+    });
+  });
+
+  // ===========================================================================
+  // Round 2 Parity Fixes
+  // ===========================================================================
+
+  describe("setEncoding: independent decoder per stream", () => {
+    it("two streams with setEncoding should not corrupt each other", async () => {
+      // Create two readables that split a 3-byte UTF-8 character (e.g., "€" = 0xE2 0x82 0xAC)
+      // across chunk boundaries. If the decoders are shared, the second stream
+      // would consume the first stream's incomplete byte sequence.
+      const euro = new Uint8Array([0xe2, 0x82, 0xac]); // "€"
+
+      const r1 = _createReadable<Uint8Array>({
+        read() {}
+      });
+      const r2 = _createReadable<Uint8Array>({
+        read() {}
+      });
+
+      r1.setEncoding("utf-8");
+      r2.setEncoding("utf-8");
+
+      const chunks1: string[] = [];
+      const chunks2: string[] = [];
+
+      r1.on("data", (d: any) => chunks1.push(d));
+      r2.on("data", (d: any) => chunks2.push(d));
+
+      // Push first 2 bytes of "€" to stream 1 (incomplete)
+      r1.push(euro.subarray(0, 2));
+      // Push a complete "€" to stream 2 — should NOT be corrupted by stream 1's state
+      r2.push(euro);
+      // Push remaining byte to stream 1
+      r1.push(euro.subarray(2, 3));
+
+      r1.push(null);
+      r2.push(null);
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Both streams should produce "€"
+      expect(chunks1.join("")).toBe("€");
+      expect(chunks2.join("")).toBe("€");
+    });
+  });
+
+  describe("Readable.compose: close back-propagation to source", () => {
+    it("should destroy source when composed result is destroyed", async () => {
+      const r = createReadableFromArray([1, 2, 3, 4, 5]);
+
+      const composed = r.compose(async function* (source: AsyncIterable<number>) {
+        for await (const chunk of source) {
+          yield chunk * 10;
+        }
+      });
+
+      // Suppress unhandled error events from the composed stream/source
+      (composed as any).on("error", () => {});
+      r.on("error", () => {});
+
+      // Destroy the composed result
+      (composed as any).destroy();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Source should also be destroyed
+      expect(r.destroyed).toBe(true);
+    });
+  });
+
+  describe("map() with undefined values and concurrency", () => {
+    it("should correctly handle map returning undefined with concurrency > 1", async () => {
+      const r = createReadableFromArray([1, 2, 3]);
+      let count = 0;
+
+      // forEach uses _mapWithConcurrency with void return
+      await r.forEach(
+        async () => {
+          count++;
+          await new Promise(resolve => setTimeout(resolve, 10));
+        },
+        { concurrency: 2 }
+      );
+
+      expect(count).toBe(3);
     });
   });
 }

@@ -13,7 +13,6 @@ import type {
   IWritable,
   ITransform,
   IDuplex,
-  ICollector,
   IPassThrough
 } from "@stream/types";
 
@@ -22,7 +21,7 @@ import { Writable } from "./writable";
 import { Transform } from "./transform";
 import { Duplex } from "./duplex";
 import { PassThrough } from "./passthrough";
-import { Collector } from "./collector";
+import { createCollector } from "./collector";
 
 import { PullStream } from "@stream/pull-stream";
 import { BufferedStream, StringChunk, ByteChunk } from "@stream/buffered-stream";
@@ -114,7 +113,11 @@ export function createWritable<T = Uint8Array>(
 }
 
 /**
- * Create a transform stream from a transform function
+ * Create a transform stream from a transform function.
+ *
+ * The shorthand `transformFn` (1-2 params, returns value) is wrapped into
+ * a proper Node.js-style callback-based transform so that the return value
+ * is delivered via `callback(null, data)` — matching the Node.js factory.
  */
 export function createTransform<TInput = Uint8Array, TOutput = Uint8Array>(
   transformFn: (chunk: TInput, encoding?: string) => TOutput | Promise<TOutput>,
@@ -124,17 +127,67 @@ export function createTransform<TInput = Uint8Array, TOutput = Uint8Array>(
 ): ITransform<TInput, TOutput> {
   return new Transform<TInput, TOutput>({
     ...options,
-    transform: transformFn,
+    transform(
+      this: Transform<TInput, TOutput>,
+      chunk: TInput,
+      encoding: string,
+      callback: (error?: Error | null, data?: TOutput) => void
+    ) {
+      try {
+        const result = transformFn(chunk, encoding);
+        if (result instanceof Promise) {
+          result
+            .then(data => {
+              if (data !== undefined) {
+                callback(null, data);
+              } else {
+                callback();
+              }
+            })
+            .catch(err => callback(err as Error));
+        } else {
+          if (result !== undefined) {
+            callback(null, result);
+          } else {
+            callback();
+          }
+        }
+      } catch (err) {
+        callback(err as Error);
+      }
+    },
     flush: options?.flush
+      ? function (
+          this: Transform<TInput, TOutput>,
+          callback: (error?: Error | null, data?: TOutput) => void
+        ) {
+          try {
+            const result = options.flush!();
+            if (result instanceof Promise) {
+              result
+                .then(data => {
+                  if (data !== undefined) {
+                    callback(null, data);
+                  } else {
+                    callback();
+                  }
+                })
+                .catch(err => callback(err as Error));
+            } else if (result !== undefined) {
+              callback(null, result as TOutput);
+            } else {
+              callback();
+            }
+          } catch (err) {
+            callback(err as Error);
+          }
+        }
+      : undefined
   });
 }
 
-/**
- * Create a collector stream
- */
-export function createCollector<T = Uint8Array>(options?: WritableStreamOptions): ICollector<T> {
-  return new Collector<T>(options);
-}
+// createCollector is now defined in collector.ts and re-exported here for convenience.
+export { createCollector };
 
 /**
  * Create a passthrough stream

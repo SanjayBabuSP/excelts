@@ -181,33 +181,44 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._directWrite = true;
         this._stream = null;
       } else {
-        this._directWrite = false;
-        this._stream = new WritableStream<T>({
-          write: async chunk => {
-            // Subclass _write path (no user-provided _writeFunc)
-            if ((this as any)._write) {
-              await new Promise<void>((resolve, reject) => {
-                (this as any)._write(chunk, "utf8", (err?: Error | null) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    resolve();
-                  }
+        // Check if this is a subclass with _construct — if so, we need direct-write
+        // mode to properly gate writes until construction completes. Detect subclass
+        // _write on the prototype and wrap it as _writeFunc.
+        const hasConstruct = options?.construct || this._hasSubclassConstruct();
+        const subclassWrite = this._getSubclassWrite();
+        if (hasConstruct && subclassWrite) {
+          this._writeFunc = subclassWrite;
+          this._directWrite = true;
+          this._stream = null;
+        } else {
+          this._directWrite = false;
+          this._stream = new WritableStream<T>({
+            write: async chunk => {
+              // Subclass _write path (no user-provided _writeFunc)
+              if ((this as any)._write) {
+                await new Promise<void>((resolve, reject) => {
+                  (this as any)._write(chunk, "utf8", (err?: Error | null) => {
+                    if (err) {
+                      reject(err);
+                    } else {
+                      resolve();
+                    }
+                  });
                 });
-              });
+              }
+            },
+            close: async () => {
+              this._finished = true;
+              this.emit("finish");
+              if (this._autoDestroy) {
+                this.destroy();
+              }
+            },
+            abort: reason => {
+              this.emit("error", reason);
             }
-          },
-          close: async () => {
-            this._finished = true;
-            this.emit("finish");
-            if (this._emitClose) {
-              this.emit("close");
-            }
-          },
-          abort: reason => {
-            this.emit("error", reason);
-          }
-        });
+          });
+        }
       }
     }
 
@@ -266,6 +277,23 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       proto = Object.getPrototypeOf(proto);
     }
     return false;
+  }
+
+  /**
+   * Detect subclass _write on the prototype and return a bound function.
+   * Returns null if no subclass _write is found.
+   */
+  private _getSubclassWrite():
+    | ((chunk: T, encoding: string, callback: (error?: Error | null) => void) => void)
+    | null {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Writable.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, "_write")) {
+        return (proto._write as Function).bind(this);
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return null;
   }
 
   /**
@@ -445,13 +473,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     callback?: (error?: Error | null) => void
   ): boolean {
     // Node.js: writing null is always an error (even in object mode).
+    // Node.js throws this synchronously and does NOT emit an error event.
     if (chunk === null) {
       const err = new Error("May not write null values to stream") as Error & { code: string };
       err.code = "ERR_STREAM_NULL_VALUES";
-      const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-      queueMicrotask(() => this.emit("error", err));
-      cb?.(err);
-      return false;
+      throw err;
     }
 
     if (this._destroyed || this._ended) {
@@ -463,7 +489,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       ) as Error & { code: string };
       err.code = isDestroyed ? "ERR_STREAM_DESTROYED" : "ERR_STREAM_WRITE_AFTER_END";
       const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-      queueMicrotask(() => this.emit("error", err));
+      // Node.js: only emit 'error' for write-after-end when NOT destroyed.
+      // write-after-destroy silently calls the callback without emitting 'error'.
+      if (!this._destroyed) {
+        queueMicrotask(() => this.emit("error", err));
+      }
       cb?.(err);
       return false;
     }
@@ -482,7 +512,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       });
       const chunkSize = this._getChunkSize(normalized.chunk, normalized.encoding);
       this._writableLength += chunkSize;
-      return this._writableLength < this._highWaterMark;
+      const ok = this._writableLength < this._highWaterMark;
+      if (!ok) {
+        this._needDrain = true;
+      }
+      return ok;
     }
 
     const normalized = this._normalizeWriteChunk(chunk, encoding);
@@ -526,7 +560,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           this._writableLength -= chunkSize;
           if (!this._destroyed) {
             this._errored = err;
+            this._errorEmitted = true;
             this.emit("error", err);
+            if (this._autoDestroy) {
+              this.destroy(err);
+            }
           }
           callback?.(err);
         });
@@ -548,19 +586,31 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     callback?: (error?: Error | null) => void
   ): void {
     try {
-      this._writeFunc!(chunk, encoding, err => {
+      // Node.js passes undefined as encoding in objectMode
+      const enc = this._objectMode ? (undefined as unknown as string) : encoding;
+      this._writeFunc!(chunk, enc, err => {
         if (err) {
           this._writableLength -= chunkSize;
           if (!this._destroyed) {
             this._errored = err;
             this._errorEmitted = true;
             this.emit("error", err);
+            if (this._autoDestroy) {
+              this.destroy(err);
+            }
           }
           callback?.(err);
           // On error, drain remaining queued writes with the error and
           // don't process pending end.
           this._writing = false;
           this._flushWriteQueueOnError(err);
+          // If end() was called and destroy() didn't already claim _pendingEnd
+          // (e.g. autoDestroy is false), notify the end() callback of the error.
+          if (this._pendingEnd) {
+            const { cb: endCb } = this._pendingEnd;
+            this._pendingEnd = null;
+            (endCb as (err?: Error) => void)?.(err);
+          }
           return;
         }
 
@@ -580,19 +630,26 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       if (!this._destroyed) {
         this._errored = error;
         this.emit("error", error);
+        if (this._autoDestroy) {
+          this.destroy(error);
+        }
       }
       callback?.(error);
       this._writing = false;
       this._flushWriteQueueOnError(error);
+      // If end() was called and destroy() didn't already claim _pendingEnd,
+      // notify the end() callback of the error.
+      if (this._pendingEnd) {
+        const { cb: endCb } = this._pendingEnd;
+        this._pendingEnd = null;
+        (endCb as (err?: Error) => void)?.(error);
+      }
     }
   }
 
   /** Process the next queued write, or run pending end(). */
   private _drainWriteQueue(): void {
-    const next = this._writeQueue.shift();
-    if (next) {
-      this._callWriteFunc(next.chunk, next.chunkSize, next.encoding, next.callback);
-    } else {
+    if (this._writeQueue.length === 0) {
       this._writing = false;
       // If end() was called while writes were in-flight, finalize now.
       if (this._pendingEnd) {
@@ -600,6 +657,63 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._pendingEnd = null;
         this._doFinish(cb);
       }
+      return;
+    }
+
+    // If _writev is available and there are multiple queued chunks, batch them.
+    // This matches Node.js behavior where _writev is used for naturally-queued
+    // writes, not just on uncork.
+    const writevFn = this._writevFunc ?? this._getWritevHook();
+    if (writevFn && this._writeQueue.length > 1) {
+      const chunks = this._writeQueue.splice(0);
+      const batchChunks = chunks.map(({ chunk, encoding }) => ({ chunk, encoding }));
+      const totalSize = chunks.reduce((sum, entry) => sum + entry.chunkSize, 0);
+
+      try {
+        writevFn(batchChunks, err => {
+          if (err) {
+            this._writableLength -= totalSize;
+            if (!this._destroyed) {
+              this._errored = err;
+              this._errorEmitted = true;
+              this.emit("error", err);
+            }
+            for (const entry of chunks) {
+              entry.callback?.(err);
+            }
+            this._writing = false;
+            this._flushWriteQueueOnError(err);
+            return;
+          }
+
+          this._writableLength -= totalSize;
+          if (this._needDrain && this._writableLength < this._highWaterMark) {
+            this._needDrain = false;
+            queueMicrotask(() => this.emit("drain"));
+          }
+          for (const entry of chunks) {
+            entry.callback?.(null);
+          }
+
+          // Continue draining (more writes may have arrived during _writev)
+          this._drainWriteQueue();
+        });
+      } catch (err) {
+        this._writableLength -= totalSize;
+        this._writing = false;
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (!this._destroyed) {
+          this._errored = error;
+          this.emit("error", error);
+        }
+        for (const entry of chunks) {
+          entry.callback?.(error);
+        }
+      }
+    } else {
+      // Single queued write — use _write
+      const next = this._writeQueue.shift()!;
+      this._callWriteFunc(next.chunk, next.chunkSize, next.encoding, next.callback);
     }
   }
 
@@ -625,12 +739,14 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           this._errorEmitted = true;
           this.emit("error", err);
           // Match Node.js: auto-destroy and emit close after _final error.
-          // Pass the error to destroy() so it can be stored and propagated.
+          // Store cb in _pendingEnd so destroy() fires it after close
+          // (Node.js ordering: error → close → end-cb).
+          if (cb) {
+            this._pendingEnd = { cb };
+          }
           if (this._autoDestroy && !this._destroyed) {
             this.destroy(err);
           }
-          // Node.js always invokes the end() callback, even on _final error.
-          cb?.();
           return;
         }
         queueMicrotask(() => {
@@ -642,13 +758,14 @@ export class Writable<T = Uint8Array> extends EventEmitter {
             return;
           }
           this._finished = true;
-          this.emit("finish");
-          // Node.js fires the end() callback synchronously with 'finish'
-          // (it's registered as a once('finish') listener), BEFORE 'close'.
+          // Node.js ordering: prefinish → end-cb → finish → autoDestroy
+          this.emit("prefinish");
           cb?.();
-          this._closed = true;
-          if (this._emitClose) {
-            this.emit("close");
+          this.emit("finish");
+          // Node.js: autoDestroy calls destroy() after finish, which emits
+          // close.  Without autoDestroy, close only fires on explicit destroy().
+          if (this._autoDestroy) {
+            this.destroy();
           }
         });
       });
@@ -661,12 +778,14 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           return;
         }
         this._finished = true;
-        this.emit("finish");
-        // Fire end() callback with 'finish', before 'close' (matches Node.js).
+        // Node.js ordering: prefinish → end-cb → finish → autoDestroy
+        this.emit("prefinish");
         cb?.();
-        this._closed = true;
-        if (this._emitClose) {
-          this.emit("close");
+        this.emit("finish");
+        // Node.js: autoDestroy calls destroy() after finish, which emits
+        // close.  Without autoDestroy, close only fires on explicit destroy().
+        if (this._autoDestroy) {
+          this.destroy();
         }
       });
     }
@@ -750,6 +869,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
     const { chunk, encoding, cb } = parseEndArgs<T>(chunkOrCallback, encodingOrCallback, callback);
 
+    // Node.js: end() auto-uncorks. If the stream is corked, flush all buffered
+    // writes before finalizing so that cork() → write() → end() doesn't lose data.
+    if (this._corked > 0) {
+      this._corked = 1;
+      this.uncork();
+    }
+
     if (this._directWrite) {
       // Direct-write path: enqueue final chunk (if any), then wait for the
       // write queue to drain before running _finalFunc + emitting finish.
@@ -757,6 +883,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         // Normalize the end chunk (decodeStrings etc.) just like write()
         const normalized = this._normalizeWriteChunk(chunk, encoding ?? this._defaultEncoding);
         this._doWrite(normalized.chunk, normalized.encoding);
+      }
+
+      // If the write errored synchronously (e.g. _writeFunc called back with
+      // an error before returning), the stream may already be destroyed/errored.
+      // Node.js propagates the write error to the end() callback.
+      if (this._errored) {
+        const endErr = this._errored;
+        queueMicrotask(() => (cb as (err?: Error) => void)?.(endErr));
+        return this;
       }
 
       // If writes are still in-flight or queued, defer finalization.
@@ -791,8 +926,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         if (!this._ownsStream) {
           this._finished = true;
           this.emit("finish");
-          if (this._emitClose) {
-            this.emit("close");
+          if (this._autoDestroy) {
+            this.destroy();
           }
         }
         if (cb) {
@@ -831,6 +966,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         error ?? new Error("Cannot call write after a stream was destroyed")
       );
     }
+    // Node.js invokes the end() callback even when destroy() is called
+    // while writes are pending.  Fire it asynchronously (after error/close).
+    const pendingEndCb = this._pendingEnd?.cb;
     this._pendingEnd = null;
     this._writing = false;
 
@@ -865,11 +1003,18 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         if (this._emitClose) {
           this.emit("close");
         }
+        // Node.js fires the end() callback after close, even on destroy.
+        // Pass the error so the end() caller is notified of the failure.
+        (pendingEndCb as (err?: Error | null) => void)?.(err);
       });
     };
 
     if (this._hasDestroyHook()) {
-      this._destroy(error ?? null, afterDestroy);
+      try {
+        this._destroy(error ?? null, afterDestroy);
+      } catch (err) {
+        afterDestroy(err instanceof Error ? err : new Error(String(err)));
+      }
     } else {
       afterDestroy(error);
     }
@@ -900,6 +1045,16 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       Object.prototype.hasOwnProperty.call(this, "_destroy") ||
       Object.getPrototypeOf(this)._destroy !== Writable.prototype._destroy
     );
+  }
+
+  /**
+   * Synchronous dispose — destroys the stream.
+   * Matches Node.js Symbol.dispose support (v20+, experimental).
+   */
+  [Symbol.dispose](): void {
+    if (!this._destroyed) {
+      this.destroy();
+    }
   }
 
   /**
@@ -941,7 +1096,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       this._stream = new WritableStream<T>({
         write: chunk =>
           new Promise<void>((resolve, reject) => {
-            this._writeFunc!(chunk, this._defaultEncoding, err => {
+            const enc = this._objectMode ? (undefined as unknown as string) : this._defaultEncoding;
+            this._writeFunc!(chunk, enc, err => {
               if (err) {
                 reject(err);
               } else {
@@ -1106,6 +1262,19 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
 // Node.js: Writable.prototype._writev === null (not undefined).
 (Writable.prototype as any)._writev = null;
+
+// Node.js: Writable.prototype._write throws ERR_METHOD_NOT_IMPLEMENTED.
+// This must exist on the prototype so that subclasses can call super._write()
+// and so that `_getSubclassWrite()` can detect overrides correctly.
+(Writable.prototype as any)._write = function _write(
+  _chunk: any,
+  _encoding: string,
+  callback: (error?: Error | null) => void
+): void {
+  const err = new Error("_write() is not implemented") as Error & { code: string };
+  err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+  callback(err);
+};
 
 // =============================================================================
 // Late-binding injection for isDisturbed (avoids circular import with Readable)

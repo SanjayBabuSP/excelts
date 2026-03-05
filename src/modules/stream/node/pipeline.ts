@@ -122,9 +122,10 @@ export function finished(
   const promise = new Promise<void>((resolve, reject) => {
     const normalizedStream = toNodePipelineStream(stream);
     (nodeFinished as any)(normalizedStream, options, (err: Error | null) => {
-      // Node.js semantics: options.error defaults to true (report errors).
-      // If options.error === false, ignore errors and resolve.
-      if (err && options?.error !== false) {
+      // Node.js native finished() already handles options.error internally.
+      // With error:false it still passes the error through the close handler
+      // (via stream.errored check), so we must NOT filter it here.
+      if (err) {
         reject(err);
         return;
       }

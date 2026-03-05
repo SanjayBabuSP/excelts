@@ -2,15 +2,12 @@
  * Browser Stream - Readable
  */
 
-import type { ReadableStreamOptions, WritableLike } from "@stream/types";
+import type { IDuplex, ReadableStreamOptions, WritableLike } from "@stream/types";
 import { EventEmitter } from "@utils/event-emitter";
-import { getTextDecoder } from "@utils/binary";
+import { createTextDecoder, getTextDecoder } from "@utils/binary";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 
-import type { Writable } from "./writable";
-import type { Transform } from "./transform";
-import type { Duplex } from "./duplex";
 import { ChunkBuffer } from "./chunk-buffer";
 import { PipeManager } from "./pipe-manager";
 
@@ -161,7 +158,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         this._constructed = true;
         // If _read was requested while not yet constructed, call it now
         if (this._read && this._flowing && !this._ended && !this._destroyed) {
-          this._read(this._highWaterMark);
+          this._callRead(this._highWaterMark);
         }
       });
     });
@@ -264,10 +261,35 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Check if a stream has been disturbed (read from)
+   * Check if a stream has been disturbed (read from).
+   * Matches Node.js native: readableDidRead || readableAborted.
+   * readableAborted = (destroyed || errored) && !endEmitted.
    */
   static isDisturbed(stream: Readable<any>): boolean {
-    return stream._didRead || stream._ended || stream._destroyed;
+    return (
+      stream._didRead || ((stream._destroyed || stream._errored !== null) && !stream._endEmitted)
+    );
+  }
+
+  /**
+   * Check if a stream is still readable (not destroyed, not ended).
+   * Matches Node.js Readable.isReadable() (available since v21).
+   */
+  static isReadable(stream: unknown): boolean {
+    if (stream == null || typeof stream !== "object") {
+      return false;
+    }
+    const s = stream as any;
+    // If destroyed or errored, not readable
+    if (s.destroyed || s._destroyed) {
+      return false;
+    }
+    // If ended, not readable
+    if (s.readableEnded || s._endEmitted) {
+      return false;
+    }
+    // Must have a read method and readable property
+    return typeof s.read === "function" && s.readable !== false;
   }
 
   /**
@@ -313,8 +335,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this._pushMode = true;
 
     // Handle string encoding (Node.js compatibility)
-    if (chunk !== null && typeof chunk === "string" && encoding && !this._objectMode) {
-      chunk = stringToEncodedBytes(chunk, encoding) as any;
+    // Node.js always converts strings to Buffer in binary mode, defaulting to utf8.
+    // We override toString() so it behaves like Node.js Buffer.toString().
+    if (chunk !== null && typeof chunk === "string" && !this._objectMode) {
+      const encoded = stringToEncodedBytes(chunk as string, encoding || "utf8");
+      (encoded as any).toString = (enc?: string): string => {
+        return getTextDecoder(enc ?? "utf-8").decode(encoded);
+      };
+      chunk = encoded as any;
     }
 
     // Reject push() after EOF (matches Node.js ERR_STREAM_PUSH_AFTER_EOF)
@@ -368,7 +396,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (this._read && !this._ended) {
         queueMicrotask(() => {
           if (this._flowing && !this._ended && !this._destroyed) {
-            this._read!(this._highWaterMark);
+            this._callRead(this._highWaterMark);
           }
         });
       }
@@ -395,6 +423,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   private _emitEndOnce(): void {
     if (this._endEmitted || this._destroyed) {
+      return;
+    }
+    // Guard: if data was unshifted after push(null) scheduled us,
+    // the buffer is non-empty — defer 'end' until data is consumed.
+    if (this._buf.length > 0) {
       return;
     }
     this._endEmitted = true;
@@ -434,15 +467,51 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       return;
     }
     // Handle string encoding (Node.js compatibility)
-    if (typeof chunk === "string" && encoding && !this._objectMode) {
-      chunk = stringToEncodedBytes(chunk, encoding) as any;
+    // Node.js always converts strings to Buffer in binary mode, defaulting to utf8.
+    if (typeof chunk === "string" && !this._objectMode) {
+      const encoded = stringToEncodedBytes(chunk as string, encoding || "utf8");
+      (encoded as any).toString = (enc?: string): string => {
+        return getTextDecoder(enc ?? "utf-8").decode(encoded);
+      };
+      chunk = encoded as any;
     }
     const wasEmpty = this._buf.length === 0;
     this._buf.unshift(chunk);
-    // Node.js emits 'readable' when data is unshifted into an empty buffer
-    // while in paused mode, so that consumers know data is available.
-    if (wasEmpty && !this._flowing) {
+    if (this._flowing) {
+      // In flowing mode, schedule a drain microtask to deliver the unshifted data.
+      // This is needed when unshift() is called after push(null) — the original
+      // drain loop has already finished, so we must schedule a new one to emit
+      // the data before 'end'.
+      queueMicrotask(() => {
+        while (this._buf.length > 0 && this._flowing) {
+          const c = this._buf.shift();
+          this._didRead = true;
+          this.emit("data", this._applyEncoding(c));
+        }
+        if (this._ended && this._buf.length === 0) {
+          this._emitEndOnce();
+        }
+      });
+    } else if (wasEmpty) {
+      // Node.js emits 'readable' when data is unshifted into an empty buffer
+      // while in paused mode, so that consumers know data is available.
       queueMicrotask(() => this.emit("readable"));
+    }
+  }
+
+  /**
+   * Safely invoke _read(), catching synchronous exceptions.
+   * Node.js catches sync throws in _read and emits an error event, then
+   * destroys the stream.  We mirror that behaviour here.
+   */
+  private _callRead(size: number): void {
+    try {
+      this._read!(size);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      queueMicrotask(() => {
+        this.destroy(error);
+      });
     }
   }
 
@@ -463,14 +532,22 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (size === 0) {
       if (this._read && !this._ended && !this._destroyed && this._constructed) {
         const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
-        if (bufSize < this._highWaterMark) {
-          this._read(this._highWaterMark);
+        // Node.js condition: needReadable = length < HWM || length === 0
+        // This correctly handles HWM=0 (buffer empty triggers _read) while
+        // not triggering _read when buffer exactly equals a non-zero HWM.
+        if (bufSize < this._highWaterMark || bufSize === 0) {
+          this._callRead(this._highWaterMark);
         }
       }
       return null;
     }
 
     if (this._buf.length === 0) {
+      // Buffer is empty — trigger _read() to fill it (matches Node.js behavior
+      // where read() on an empty buffer requests more data from the source).
+      if (this._read && !this._ended && !this._destroyed && this._constructed) {
+        this._callRead(this._highWaterMark);
+      }
       return null;
     }
 
@@ -485,7 +562,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         if (this._buf.length < this._highWaterMark) {
           queueMicrotask(() => {
             if (!this._ended && !this._destroyed) {
-              this._read!(this._highWaterMark);
+              this._callRead(this._highWaterMark);
             }
           });
         }
@@ -508,8 +585,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           result = this._applyEncoding(this._buf.consumeAll());
         } else {
           // Trigger internal read to fill buffer
+          // Node.js passes highWaterMark to _read, not the requested size
           if (this._read && this._constructed) {
-            this._read(size);
+            this._callRead(this._highWaterMark);
           }
           return null;
         }
@@ -524,7 +602,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (bufSize < this._highWaterMark) {
         queueMicrotask(() => {
           if (!this._ended && !this._destroyed) {
-            this._read!(this._highWaterMark);
+            this._callRead(this._highWaterMark);
           }
         });
       }
@@ -544,24 +622,24 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Set encoding for string output
+   * Set encoding for string output.
+   * Creates a private TextDecoder instance for streaming decode to avoid
+   * sharing mutable state across concurrent streams.
    */
   setEncoding(encoding: string): this {
     this._encoding = encoding;
-    // Fast path: reuse cached utf-8 decoder; otherwise lazy-create on first decode.
-    if (encoding === "utf-8" || encoding === "utf8") {
-      this._decoder = getTextDecoder("utf-8");
-    } else {
-      this._decoder = null;
-    }
+    // Always create a fresh decoder for this stream — the { stream: true }
+    // option in _applyEncoding makes the decoder stateful (it retains
+    // incomplete multi-byte sequences between calls).  Sharing a cached
+    // singleton across streams would corrupt multi-byte boundaries.
+    this._decoder = createTextDecoder(encoding);
     return this;
   }
 
   private _applyEncoding(chunk: T): T {
     if (this._encoding && chunk instanceof Uint8Array) {
-      // Use cached decoder instances (module-level for utf-8, cached per encoding otherwise).
       if (!this._decoder) {
-        this._decoder = getTextDecoder(this._encoding);
+        this._decoder = createTextDecoder(this._encoding);
       }
       // Pass {stream: true} to handle multi-byte characters that may span
       // chunk boundaries (matches Node.js StringDecoder behavior).
@@ -574,14 +652,26 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Wrap an old-style stream
    */
   wrap(stream: any): this {
+    let paused = false;
     stream.on("data", (chunk: T) => {
       if (!this.push(chunk)) {
         stream.pause();
+        paused = true;
       }
     });
     stream.on("end", () => this.push(null));
     stream.on("error", (err: Error) => this.destroy(err));
     stream.on("close", () => this.destroy());
+
+    // When the Readable's buffer drains, _read is called — resume the source.
+    // This matches Node.js wrap() behavior where _read triggers source.resume().
+    this._read = () => {
+      if (paused) {
+        paused = false;
+        stream.resume();
+      }
+    };
+
     return this;
   }
 
@@ -650,6 +740,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         ) {
           this._startReading();
         }
+
+        // After draining buffered data, call _read() so the source can refill.
+        // This is needed for wrap() where _read resumes the wrapped stream.
+        if (this._read && this._flowing && !this._ended && !this._destroyed && this._constructed) {
+          const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
+          if (bufSize < this._highWaterMark || bufSize === 0) {
+            this._callRead(this._highWaterMark);
+          }
+        }
       });
     } else if (this._ended && this._buf.length === 0) {
       queueMicrotask(() => this._emitEndOnce());
@@ -661,7 +760,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // This allows multiple pipe() calls to register before data flows
       queueMicrotask(() => {
         if (this._flowing && !this._ended && !this._destroyed && this._constructed) {
-          this._read!(this._highWaterMark);
+          this._callRead(this._highWaterMark);
         }
       });
     }
@@ -681,13 +780,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (event === "data") {
       this.resume();
     } else if (event === "readable") {
-      // Node.js: adding a 'readable' listener on a fresh (not yet flowing) stream
-      // sets readableFlowing to false. But if the stream is ALREADY flowing
-      // (e.g., via on('data')), Node.js does NOT pause it — it stays flowing.
-      if (!this._flowing) {
-        this._hasFlowed = true;
-        this._flowing = false;
-      }
+      // Node.js: adding a 'readable' listener always sets readableFlowing to
+      // false, even if the stream is currently flowing. This pauses the stream
+      // so consumers can use the pull-based readable interface.
+      this._hasFlowed = true;
+      this._flowing = false;
       if (this._buf.length > 0 || this._ended) {
         queueMicrotask(() => this.emit("readable"));
       }
@@ -704,12 +801,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Pipe to a writable stream, transform stream, or duplex stream
+   * Pipe to a writable stream, transform stream, or duplex stream.
+   * Accepts any writable-like object (duck-typed, matching Node.js behavior).
    */
-  pipe<W extends Writable<T> | Transform<T, any> | Duplex<any, T>>(
-    destination: W,
-    options?: { end?: boolean }
-  ): W {
+  pipe<W extends WritableLike>(destination: W, options?: { end?: boolean }): W {
     return this._pipes.pipe(destination, options) as W;
   }
 
@@ -731,9 +826,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     this._destroyed = true;
 
-    // Node.js clears the readable buffer on destroy so that
-    // readableLength returns 0 and no stale data is accessible.
-    this._buf.clear();
+    // Note: Node.js does NOT clear the readable buffer synchronously on destroy.
+    // readableLength retains its value even after destroy() returns.
 
     // Ensure we detach from destinations to avoid leaking listeners.
     this.unpipe();
@@ -772,7 +866,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     };
 
     if (this._hasDestroyHook()) {
-      this._destroy(error ?? null, afterDestroy);
+      try {
+        this._destroy(error ?? null, afterDestroy);
+      } catch (err) {
+        afterDestroy(err instanceof Error ? err : new Error(String(err)));
+      }
     } else {
       afterDestroy(error);
     }
@@ -918,6 +1016,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._flowing = false;
       this._hasFlowed = false;
     }
+  }
+
+  /**
+   * Internal method to set readableFlowing state.
+   * Used by Transform/Duplex to control the internal Readable's flow state.
+   * @internal
+   */
+  _setReadableFlowing(value: boolean | null): void {
+    this.readableFlowing = value;
   }
 
   /** Whether the stream was aborted (destroyed before 'end' was emitted) */
@@ -1168,7 +1275,17 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Async dispose support (using await).
+   * Synchronous dispose — destroys the stream.
+   * Matches Node.js Symbol.dispose support (v20+, experimental).
+   */
+  [Symbol.dispose](): void {
+    if (!this._destroyed) {
+      this.destroy();
+    }
+  }
+
+  /**
+   * Async dispose hook for `await using`.
    * Destroys the stream and resolves after the 'close' event.
    */
   async [Symbol.asyncDispose](): Promise<void> {
@@ -1197,25 +1314,117 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   iterator(options?: { destroyOnReturn?: boolean }): AsyncIterableIterator<T> {
     const destroyOnReturn = options?.destroyOnReturn ?? true;
-    const iterator = this[Symbol.asyncIterator]();
 
-    if (!destroyOnReturn) {
-      return iterator;
+    if (destroyOnReturn) {
+      return this[Symbol.asyncIterator]();
     }
 
-    // Wrap to handle early return
-    return {
+    // Build a standalone async iterator that does NOT destroy the stream
+    // when the consumer breaks/returns early.
+    //
+    // Key difference from the default [Symbol.asyncIterator]():
+    //   - We do NOT call resume() / flowing mode. Instead we use
+    //     'readable' events and explicit read() calls (pull-mode).
+    //     This ensures the stream keeps buffered data when the consumer
+    //     breaks early, so 'end' (and therefore autoDestroy) never fires
+    //     prematurely — matching Node.js behavior.
+    //   - On return() we just clean up listeners without destroying.
+    // oxlint-disable-next-line no-this-alias -- needed for closures in iterator object
+    const stream = this;
+    let resolveNext: ((value: IteratorResult<T>) => void) | null = null;
+    let rejectNext: ((err: Error) => void) | null = null;
+    let done = false;
+    let streamError: Error | null = null;
+
+    const tryRead = (): void => {
+      if (!resolveNext) {
+        return;
+      }
+      const chunk = stream.read() as T | null;
+      if (chunk !== null) {
+        const r = resolveNext;
+        resolveNext = null;
+        rejectNext = null;
+        r({ done: false, value: chunk });
+      }
+    };
+
+    const readableHandler = (): void => {
+      tryRead();
+    };
+
+    const endHandler = (): void => {
+      done = true;
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        rejectNext = null;
+        r({ done: true, value: undefined as any });
+      }
+    };
+
+    const errorHandler = (err: Error): void => {
+      done = true;
+      streamError = err;
+      if (rejectNext) {
+        const r = rejectNext;
+        resolveNext = null;
+        rejectNext = null;
+        r(err);
+      }
+    };
+
+    stream.on("readable", readableHandler);
+    stream.on("end", endHandler);
+    stream.on("error", errorHandler);
+
+    const cleanup = (): void => {
+      stream.off("readable", readableHandler);
+      stream.off("end", endHandler);
+      stream.off("error", errorHandler);
+    };
+
+    const iter: AsyncIterableIterator<T> = {
       next: async () => {
-        return iterator.next();
+        if (streamError) {
+          throw streamError;
+        }
+
+        // Try synchronous read first
+        const chunk = stream.read() as T | null;
+        if (chunk !== null) {
+          return { done: false, value: chunk };
+        }
+        if (done) {
+          cleanup();
+          return { done: true, value: undefined as any };
+        }
+
+        // Wait for 'readable' or 'end'
+        return new Promise<IteratorResult<T>>((resolve, reject) => {
+          resolveNext = resolve;
+          rejectNext = reject;
+          // One more try in case data arrived between our read() and listener setup
+          tryRead();
+        });
       },
       return: async (value?: any) => {
-        this.destroy();
-        return { done: true, value };
+        // Do NOT destroy the stream — just clean up listeners
+        cleanup();
+        return { done: true as const, value };
+      },
+      throw: async (err?: any) => {
+        // On throw, we DO destroy (matching Node.js behavior)
+        cleanup();
+        stream.destroy(err);
+        return { done: true as const, value: undefined as any };
       },
       [Symbol.asyncIterator]() {
         return this;
       }
     };
+
+    return iter;
   }
 
   // =============================================================================
@@ -1224,6 +1433,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Map each chunk through a function, returning a new Readable.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   map<U>(
     fn: (data: T, options: { signal: AbortSignal }) => U | Promise<U>,
@@ -1231,6 +1441,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Readable<U> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
@@ -1238,18 +1449,25 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* (source: Readable<T>) {
+      (async function* (src: Readable<T>) {
         try {
-          for await (const chunk of source) {
-            _throwIfAborted(signal);
-            const mapped = await fn(chunk, { signal: innerSignal });
-            yield mapped;
-          }
+          yield* _mapWithConcurrency<T, U>(
+            src,
+            chunk => fn(chunk, { signal: innerSignal }),
+            concurrency,
+            signal
+          );
         } finally {
           ac.abort();
         }
       })(this)
     );
+
+    result.once("close", () => {
+      if (!this.destroyed) {
+        this.destroy();
+      }
+    });
 
     if (signal) {
       const onAbort = () => {
@@ -1263,6 +1481,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Filter chunks by a predicate, returning a new Readable.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   filter(
     fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
@@ -1270,20 +1489,38 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Readable<T> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
     const result = new Readable<T>({ objectMode: true });
+    const SKIP = Symbol("skip");
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* (source: Readable<T>) {
+      (async function* (src: Readable<T>) {
         try {
-          for await (const chunk of source) {
-            _throwIfAborted(signal);
-            const keep = await fn(chunk, { signal: innerSignal });
-            if (keep) {
-              yield chunk;
+          if (concurrency <= 1) {
+            for await (const chunk of src) {
+              _throwIfAborted(signal);
+              const keep = await fn(chunk, { signal: innerSignal });
+              if (keep) {
+                yield chunk;
+              }
+            }
+          } else {
+            for await (const item of _mapWithConcurrency<T, T | symbol>(
+              src,
+              async chunk => {
+                const keep = await fn(chunk, { signal: innerSignal });
+                return keep ? chunk : SKIP;
+              },
+              concurrency,
+              signal
+            )) {
+              if (item !== SKIP) {
+                yield item as T;
+              }
             }
           }
         } finally {
@@ -1291,6 +1528,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       })(this)
     );
+
+    result.once("close", () => {
+      if (!this.destroyed) {
+        this.destroy();
+      }
+    });
 
     if (signal) {
       const onAbort = () => {
@@ -1304,6 +1547,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Iterate all chunks. Returns a promise that resolves when the stream ends.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   async forEach(
     fn: (data: T, options: { signal: AbortSignal }) => void | Promise<void>,
@@ -1311,13 +1555,28 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Promise<undefined> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
     try {
-      for await (const chunk of this) {
-        _throwIfAborted(signal);
-        await fn(chunk, { signal: innerSignal });
+      if (concurrency <= 1) {
+        for await (const chunk of this) {
+          _throwIfAborted(signal);
+          await fn(chunk, { signal: innerSignal });
+        }
+      } else {
+        // Consume all mapped results (side effects only) to drive concurrency
+        for await (const _item of _mapWithConcurrency<T, void>(
+          this,
+          async chunk => {
+            await fn(chunk, { signal: innerSignal });
+          },
+          concurrency,
+          signal
+        )) {
+          // discard results; forEach is side-effect only
+        }
       }
     } finally {
       ac.abort();
@@ -1342,6 +1601,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Returns true if any chunk passes the predicate. Short-circuits on first match.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   async some(
     fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
@@ -1349,16 +1609,31 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Promise<boolean> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
     try {
-      for await (const chunk of this) {
-        _throwIfAborted(signal);
-        const result = await fn(chunk, { signal: innerSignal });
-        if (result) {
-          this.destroy();
-          return true;
+      if (concurrency <= 1) {
+        for await (const chunk of this) {
+          _throwIfAborted(signal);
+          const result = await fn(chunk, { signal: innerSignal });
+          if (result) {
+            this.destroy();
+            return true;
+          }
+        }
+      } else {
+        for await (const result of _mapWithConcurrency<T, boolean>(
+          this,
+          chunk => fn(chunk, { signal: innerSignal }),
+          concurrency,
+          signal
+        )) {
+          if (result) {
+            this.destroy();
+            return true;
+          }
         }
       }
       return false;
@@ -1369,6 +1644,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Find the first chunk matching the predicate. Short-circuits on match.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   async find(
     fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
@@ -1376,16 +1652,31 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Promise<T | undefined> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
     try {
-      for await (const chunk of this) {
-        _throwIfAborted(signal);
-        const result = await fn(chunk, { signal: innerSignal });
-        if (result) {
-          this.destroy();
-          return chunk;
+      if (concurrency <= 1) {
+        for await (const chunk of this) {
+          _throwIfAborted(signal);
+          const result = await fn(chunk, { signal: innerSignal });
+          if (result) {
+            this.destroy();
+            return chunk;
+          }
+        }
+      } else {
+        for await (const item of _mapWithConcurrency<T, { chunk: T; match: boolean }>(
+          this,
+          async chunk => ({ chunk, match: await fn(chunk, { signal: innerSignal }) }),
+          concurrency,
+          signal
+        )) {
+          if (item.match) {
+            this.destroy();
+            return item.chunk;
+          }
         }
       }
       return undefined;
@@ -1396,6 +1687,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Returns true if all chunks pass the predicate. Short-circuits on first failure.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   async every(
     fn: (data: T, options: { signal: AbortSignal }) => boolean | Promise<boolean>,
@@ -1403,16 +1695,31 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Promise<boolean> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
     try {
-      for await (const chunk of this) {
-        _throwIfAborted(signal);
-        const result = await fn(chunk, { signal: innerSignal });
-        if (!result) {
-          this.destroy();
-          return false;
+      if (concurrency <= 1) {
+        for await (const chunk of this) {
+          _throwIfAborted(signal);
+          const result = await fn(chunk, { signal: innerSignal });
+          if (!result) {
+            this.destroy();
+            return false;
+          }
+        }
+      } else {
+        for await (const result of _mapWithConcurrency<T, boolean>(
+          this,
+          chunk => fn(chunk, { signal: innerSignal }),
+          concurrency,
+          signal
+        )) {
+          if (!result) {
+            this.destroy();
+            return false;
+          }
         }
       }
       return true;
@@ -1423,6 +1730,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Map each chunk to multiple outputs (flattening), returning a new Readable.
+   * Supports concurrent execution via `options.concurrency` (matching Node.js).
    */
   flatMap<U>(
     fn: (
@@ -1433,6 +1741,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   ): Readable<U> {
     const signal = options?.signal;
     _validateAbortSignal(signal);
+    const concurrency = options?.concurrency ?? 1;
     const ac = new AbortController();
     const innerSignal = ac.signal;
 
@@ -1440,19 +1749,46 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* (source: Readable<T>) {
+      (async function* (src: Readable<T>) {
         try {
-          for await (const chunk of source) {
-            _throwIfAborted(signal);
-            const mapped = await fn(chunk, { signal: innerSignal });
+          if (concurrency <= 1) {
+            for await (const chunk of src) {
+              _throwIfAborted(signal);
+              const mapped = await fn(chunk, { signal: innerSignal });
 
-            // If it's a Readable, consume via async iterator
-            if (mapped && typeof (mapped as any)[Symbol.asyncIterator] === "function") {
-              for await (const item of mapped as AsyncIterable<U>) {
-                yield item;
+              if (mapped && typeof (mapped as any)[Symbol.asyncIterator] === "function") {
+                for await (const item of mapped as AsyncIterable<U>) {
+                  yield item;
+                }
+              } else if (mapped && typeof (mapped as any)[Symbol.iterator] === "function") {
+                for (const item of mapped as Iterable<U>) {
+                  yield item;
+                }
               }
-            } else if (mapped && typeof (mapped as any)[Symbol.iterator] === "function") {
-              for (const item of mapped as Iterable<U>) {
+            }
+          } else {
+            // With concurrency, map chunks to their flattened arrays in order,
+            // then yield each item from each array in sequence.
+            for await (const items of _mapWithConcurrency<T, U[]>(
+              src,
+              async chunk => {
+                const mapped = await fn(chunk, { signal: innerSignal });
+                const collected: U[] = [];
+                if (mapped && typeof (mapped as any)[Symbol.asyncIterator] === "function") {
+                  for await (const item of mapped as AsyncIterable<U>) {
+                    collected.push(item);
+                  }
+                } else if (mapped && typeof (mapped as any)[Symbol.iterator] === "function") {
+                  for (const item of mapped as Iterable<U>) {
+                    collected.push(item);
+                  }
+                }
+                return collected;
+              },
+              concurrency,
+              signal
+            )) {
+              for (const item of items) {
                 yield item;
               }
             }
@@ -1462,6 +1798,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       })(this)
     );
+
+    result.once("close", () => {
+      if (!this.destroyed) {
+        this.destroy();
+      }
+    });
 
     if (signal) {
       const onAbort = () => {
@@ -1485,9 +1827,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* (source: Readable<T>) {
+      (async function* (src: Readable<T>) {
         let count = 0;
-        for await (const chunk of source) {
+        for await (const chunk of src) {
           _throwIfAborted(signal);
           if (count >= limit) {
             yield chunk;
@@ -1496,6 +1838,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       })(this)
     );
+
+    // Propagate destruction from result back to source (matches Node.js)
+    result.once("close", () => {
+      if (!this.destroyed) {
+        this.destroy();
+      }
+    });
 
     if (signal) {
       const onAbort = () => {
@@ -1519,9 +1868,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     pumpAsyncIterableToReadable(
       result,
-      (async function* (source: Readable<T>) {
+      (async function* (src: Readable<T>) {
         let count = 0;
-        for await (const chunk of source) {
+        for await (const chunk of src) {
           _throwIfAborted(signal);
           if (count >= limit) {
             break;
@@ -1531,6 +1880,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       })(this)
     );
+
+    // Propagate destruction from result back to source (matches Node.js)
+    result.once("close", () => {
+      if (!this.destroyed) {
+        this.destroy();
+      }
+    });
 
     if (signal) {
       const onAbort = () => {
@@ -1587,21 +1943,39 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
+   * Returns a new readable containing [index, chunk] pairs.
+   * Matches Node.js Readable.prototype.asIndexedPairs() (experimental).
+   */
+  asIndexedPairs(options?: { signal?: AbortSignal }): Readable<[number, T]> {
+    let index = 0;
+    return this.map(data => [index++, data] as [number, T], options);
+  }
+
+  /**
    * Compose this readable with a stream/transform, returning a Duplex.
    * Matches Node.js behavior where compose() returns a Duplex.
    */
   compose<U>(
     stream: WritableLike | ((source: AsyncIterable<T>) => AsyncIterable<U>),
     _options?: { signal?: AbortSignal }
-  ): Readable<U> {
+  ): IDuplex<U, T> {
     // If it's an async generator function, pipe through it
     if (typeof stream === "function") {
       const result = new Readable<U>({ objectMode: true });
       pumpAsyncIterableToReadable(result, stream(this) as AsyncIterable<U>);
+
+      // Propagate destruction from result back to source (matching map/filter/flatMap)
+      result.once("close", () => {
+        if (!this.destroyed) {
+          this.destroy();
+        }
+      });
+
       if (_DuplexFromFactory) {
-        return _DuplexFromFactory(result);
+        return _DuplexFromFactory(result) as IDuplex<U, T>;
       }
-      return result;
+      // Fallback when DuplexFromFactory is not injected (should not happen at runtime)
+      return result as unknown as IDuplex<U, T>;
     }
 
     // If it's a transform/duplex with pipe support, pipe this into it and
@@ -1610,25 +1984,33 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this.pipe(target);
     // If the target is already a Duplex-like, return it directly.
     if (target._readable && target._writable) {
-      return target;
+      return target as IDuplex<U, T>;
     }
     // If the target has a _readable (Transform/Duplex), wrap it.
     if (target._readable) {
       if (_DuplexFromFactory) {
-        return _DuplexFromFactory(target._readable);
+        return _DuplexFromFactory(target._readable) as IDuplex<U, T>;
       }
-      return target._readable as Readable<U>;
+      return target._readable as unknown as IDuplex<U, T>;
     }
     if (_DuplexFromFactory) {
-      return _DuplexFromFactory(target);
+      return _DuplexFromFactory(target) as IDuplex<U, T>;
     }
-    return target as Readable<U>;
+    return target as IDuplex<U, T>;
   }
 }
 
 // Node.js: `Readable.prototype.addListener === Readable.prototype.on` (same function).
 // Readable overrides `on` from EventEmitter, so we must re-alias `addListener`.
 Readable.prototype.addListener = Readable.prototype.on;
+
+// Node.js: `Readable.prototype._read` exists as a no-op (it throws ERR_METHOD_NOT_IMPLEMENTED
+// in Node.js 18+ when actually called). We define it as a no-op here for API surface parity.
+// Factory-created readables (e.g., from async iterables) rely on the internal `_read` check
+// being falsy, so the instance field `_read?: ...` shadows this prototype method when set.
+(Readable.prototype as any)._read = function _read(_size?: number): void {
+  // No-op: subclasses should override this method.
+};
 
 // =============================================================================
 // Internal helpers – Functional method utilities
@@ -1668,6 +2050,92 @@ function _validateNonNegativeInteger(value: number, name: string): void {
 }
 
 // =============================================================================
+// Internal helpers – Concurrency support for higher-order methods
+// =============================================================================
+
+/**
+ * Run an async mapper over an async iterable with bounded concurrency,
+ * yielding results in input order (matching Node.js Readable.prototype.map).
+ *
+ * When concurrency === 1, falls back to a simple serial loop for efficiency.
+ */
+const _EOF = Symbol("EOF");
+
+async function* _mapWithConcurrency<T, U>(
+  source: AsyncIterable<T>,
+  fn: (data: T) => U | Promise<U>,
+  concurrency: number,
+  signal: AbortSignal | undefined
+): AsyncGenerator<U> {
+  if (concurrency <= 1) {
+    for await (const chunk of source) {
+      _throwIfAborted(signal);
+      yield await fn(chunk);
+    }
+    return;
+  }
+
+  // Ordered concurrent execution using a sliding window of promises.
+  // Each slot holds a promise that resolves to the mapped value or _EOF sentinel.
+  const queue: Promise<U | typeof _EOF>[] = [];
+  let error: Error | null = null;
+  let sourceDone = false;
+  const iterator = source[Symbol.asyncIterator]();
+
+  // Pull one chunk from the source and start processing it.
+  async function pullOne(): Promise<U | typeof _EOF> {
+    const next = await iterator.next();
+    if (next.done) {
+      sourceDone = true;
+      return _EOF;
+    }
+    _throwIfAborted(signal);
+    return fn(next.value);
+  }
+
+  function enqueue(): void {
+    queue.push(
+      pullOne().catch(err => {
+        error = err;
+        throw err;
+      })
+    );
+  }
+
+  try {
+    // Fill the initial window
+    while (queue.length < concurrency && !sourceDone && !error) {
+      _throwIfAborted(signal);
+      enqueue();
+    }
+
+    while (queue.length > 0) {
+      _throwIfAborted(signal);
+      const result = await queue.shift()!;
+      if (error) {
+        throw error;
+      }
+      if (result === _EOF) {
+        // Source exhausted — drain any remaining real results
+        continue;
+      }
+      // Yield the result in order
+      yield result;
+
+      // Refill the window with one more
+      if (!sourceDone && !error) {
+        enqueue();
+      }
+    }
+  } finally {
+    // Clean up: return the iterator if not done
+    if (!sourceDone) {
+      await iterator.return?.();
+    }
+  }
+}
+
+// =============================================================================
 // Internal helpers
 // =============================================================================
 
@@ -1688,11 +2156,12 @@ export function pumpAsyncIterableToReadable<T>(
 ): void {
   const iterator = iterable[Symbol.asyncIterator]();
   let reading = false;
+  let iteratorDone = false;
 
   // Pull-based: advance the iterator one chunk per _read() call,
   // matching Node.js Readable.from() behavior.
   (readable as any)._read = function () {
-    if (reading) {
+    if (reading || iteratorDone) {
       return;
     }
     reading = true;
@@ -1700,10 +2169,18 @@ export function pumpAsyncIterableToReadable<T>(
     (async () => {
       try {
         if (readable.destroyed) {
+          if (!iteratorDone) {
+            iteratorDone = true;
+            const p = iterator.return?.();
+            if (p && typeof p.then === "function") {
+              p.catch(() => {});
+            }
+          }
           return;
         }
         const { value, done } = await iterator.next();
         if (done) {
+          iteratorDone = true;
           readable.push(null);
           return;
         }
