@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.10](https://github.com/cjnoname/excelts/compare/v5.1.9...v5.1.10) (2026-03-05)
+
+
+### Bug Fixes
+
+* empty style object shadowing in _mergeStyle and shared style references in row/cell operations ([7df419d](https://github.com/cjnoname/excelts/commit/7df419daeac85c743c4ae50c885025c7b69bcee6))
+
 ## [5.1.9](https://github.com/cjnoname/excelts/compare/v5.1.8...v5.1.9) (2026-03-02)
 
 
