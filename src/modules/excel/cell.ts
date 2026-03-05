@@ -225,6 +225,10 @@ class Cell {
     this.style.protection = value;
   }
 
+  private _isNonEmpty(v: any) {
+    return v && (typeof v !== "object" || Object.keys(v).length);
+  }
+
   private _mergeStyle(
     rowStyle: Partial<Style>,
     colStyle: Partial<Style>,
@@ -235,27 +239,37 @@ class Cell {
       style.numFmt = numFmt;
     }
 
-    const font = (rowStyle && rowStyle.font) || (colStyle && colStyle.font);
+    const font =
+      (rowStyle && this._isNonEmpty(rowStyle.font) && rowStyle.font) ||
+      (colStyle && this._isNonEmpty(colStyle.font) && colStyle.font);
     if (font) {
       style.font = font;
     }
 
-    const alignment = (rowStyle && rowStyle.alignment) || (colStyle && colStyle.alignment);
+    const alignment =
+      (rowStyle && this._isNonEmpty(rowStyle.alignment) && rowStyle.alignment) ||
+      (colStyle && this._isNonEmpty(colStyle.alignment) && colStyle.alignment);
     if (alignment) {
       style.alignment = alignment;
     }
 
-    const border = (rowStyle && rowStyle.border) || (colStyle && colStyle.border);
+    const border =
+      (rowStyle && this._isNonEmpty(rowStyle.border) && rowStyle.border) ||
+      (colStyle && this._isNonEmpty(colStyle.border) && colStyle.border);
     if (border) {
       style.border = border;
     }
 
-    const fill = (rowStyle && rowStyle.fill) || (colStyle && colStyle.fill);
+    const fill =
+      (rowStyle && this._isNonEmpty(rowStyle.fill) && rowStyle.fill) ||
+      (colStyle && this._isNonEmpty(colStyle.fill) && colStyle.fill);
     if (fill) {
       style.fill = fill;
     }
 
-    const protection = (rowStyle && rowStyle.protection) || (colStyle && colStyle.protection);
+    const protection =
+      (rowStyle && this._isNonEmpty(rowStyle.protection) && rowStyle.protection) ||
+      (colStyle && this._isNonEmpty(colStyle.protection) && colStyle.protection);
     if (protection) {
       style.protection = protection;
     }
@@ -316,6 +330,19 @@ class Cell {
     this._value = Value.create(Cell.Types.Merge, this, master);
     if (!ignoreStyle) {
       this.style = master.style;
+    } else if (master?.style?.border) {
+      const hasBorder = this?.style?.border && Object.keys(this.style.border).length;
+      if (!hasBorder) {
+        const mb = master.style.border;
+        const borderCopy: any = {};
+        if (mb.top) borderCopy.top = { ...mb.top };
+        if (mb.bottom) borderCopy.bottom = { ...mb.bottom };
+        if (mb.left) borderCopy.left = { ...mb.left };
+        if (mb.right) borderCopy.right = { ...mb.right };
+        if (mb.diagonal) borderCopy.diagonal = { ...mb.diagonal };
+        if ((mb as any).color) borderCopy.color = { ...(mb as any).color };
+        this.style = { ...this.style, border: borderCopy };
+      }
     }
   }
 
