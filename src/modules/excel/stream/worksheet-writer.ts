@@ -9,6 +9,7 @@ import { Column } from "@excel/column";
 import { SheetRelsWriter } from "@excel/stream/sheet-rels-writer";
 import { SheetCommentsWriter } from "@excel/stream/sheet-comments-writer";
 import { DataValidations } from "@excel/data-validations";
+import { applyMergeBorders, collectMergeBorders } from "@excel/utils/merge-borders";
 import type { StreamBuf } from "@excel/utils/stream-buf";
 import { mediaRelTargetFromRels, worksheetPath } from "@excel/utils/ooxml-paths";
 
@@ -557,14 +558,24 @@ class WorksheetWriter {
       }
     });
 
-    // apply merge
-    const master = this.getCell(dimensions.top, dimensions.left);
-    for (let i = dimensions.top; i <= dimensions.bottom; i++) {
-      for (let j = dimensions.left; j <= dimensions.right; j++) {
-        if (i > dimensions.top || j > dimensions.left) {
+    const { top, left, bottom, right } = dimensions;
+
+    // Collect perimeter borders BEFORE merge overwrites slave styles
+    const collected = collectMergeBorders(top, left, bottom, right, (r, c) => this.findCell(r, c));
+
+    // Apply merge
+    const master = this.getCell(top, left);
+    for (let i = top; i <= bottom; i++) {
+      for (let j = left; j <= right; j++) {
+        if (i > top || j > left) {
           this.getCell(i, j).merge(master);
         }
       }
+    }
+
+    // Reconstruct position-aware borders (like Excel)
+    if (collected) {
+      applyMergeBorders(top, left, bottom, right, collected, (r, c) => this.getCell(r, c));
     }
 
     // index merge
