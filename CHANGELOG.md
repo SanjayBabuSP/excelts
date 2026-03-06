@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.11](https://github.com/cjnoname/excelts/compare/v5.1.10...v5.1.11) (2026-03-06)
+
+
+### Bug Fixes
+
+* resolve TypeError when loading workbook with table column child elements ([f4bcbe6](https://github.com/cjnoname/excelts/commit/f4bcbe63921060984762fb48f2aa07f5446962a7)), closes [#76](https://github.com/cjnoname/excelts/issues/76)
+
 ## [5.1.10](https://github.com/cjnoname/excelts/compare/v5.1.9...v5.1.10) (2026-03-05)
 
 
