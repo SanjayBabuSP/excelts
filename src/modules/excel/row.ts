@@ -2,6 +2,7 @@ import { Enums } from "@excel/enums";
 import { colCache } from "@excel/utils/col-cache";
 import { Cell, type CellModel, type CellAddress } from "@excel/cell";
 import { ExcelError } from "@excel/errors";
+import { copyStyle } from "@excel/utils/copy-style";
 import type { Worksheet } from "@excel/worksheet";
 import type { Column } from "@excel/column";
 import type {
@@ -150,7 +151,7 @@ class Row {
         if (cSrc) {
           cDst = this.getCell(i);
           cDst.value = cSrc.value;
-          cDst.style = cSrc.style;
+          cDst.style = copyStyle(cSrc.style) ?? {};
           cDst.comment = cSrc.comment;
         } else if (cDst) {
           cDst.value = null;
@@ -165,7 +166,7 @@ class Row {
         if (cSrc) {
           cDst = this.getCell(i + nExpand);
           cDst.value = cSrc.value;
-          cDst.style = cSrc.style;
+          cDst.style = copyStyle(cSrc.style) ?? {};
           cDst.comment = cSrc.comment;
         } else {
           this._cells[i + nExpand - 1] = undefined;

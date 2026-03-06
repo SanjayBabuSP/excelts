@@ -759,10 +759,10 @@ class Worksheet {
     // now copy styles...
     for (let i = 0; i < count; i++) {
       const rDst = this._rows[rowNum + i];
-      rDst.style = rSrc.style;
+      rDst.style = copyStyle(rSrc.style) ?? {};
       rDst.height = rSrc.height;
       rSrc.eachCell({ includeEmpty: true }, (cell: Cell, colNumber: number) => {
-        rDst.getCell(colNumber).style = cell.style;
+        rDst.getCell(colNumber).style = copyStyle(cell.style) ?? {};
       });
     }
 
@@ -858,10 +858,10 @@ class Worksheet {
         if (rSrc) {
           const rDst = this.getRow(i + nExpand);
           rDst.values = rSrc.values;
-          rDst.style = rSrc.style;
+          rDst.style = copyStyle(rSrc.style) ?? {};
           rDst.height = rSrc.height;
           rSrc.eachCell({ includeEmpty: true }, (cell: Cell, colNumber: number) => {
-            rDst.getCell(colNumber).style = cell.style;
+            rDst.getCell(colNumber).style = copyStyle(cell.style) ?? {};
           });
           this._rows[i - 1] = undefined;
         } else {
@@ -875,10 +875,10 @@ class Worksheet {
         if (rSrc) {
           const rDst = this.getRow(i + nExpand);
           rDst.values = rSrc.values;
-          rDst.style = rSrc.style;
+          rDst.style = copyStyle(rSrc.style) ?? {};
           rDst.height = rSrc.height;
           rSrc.eachCell({ includeEmpty: true }, (cell: Cell, colNumber: number) => {
-            rDst.getCell(colNumber).style = cell.style;
+            rDst.getCell(colNumber).style = copyStyle(cell.style) ?? {};
           });
         } else {
           this._rows[i + nExpand - 1] = undefined;
