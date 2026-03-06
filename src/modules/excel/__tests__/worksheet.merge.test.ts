@@ -149,29 +149,25 @@ describe("Worksheet", () => {
       // expecting styles to be copied (see worksheet spec)
       ws.mergeCells("B2:C3");
 
-      expect(ws.getCell("B2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-      expect(ws.getCell("B2").border).toEqual(testUtils.styles.borders.doubleRed);
-      expect(ws.getCell("B2").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-      expect(ws.getCell("B2").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
-      expect(ws.getCell("B2").numFmt).toEqual(testUtils.styles.numFmts.numFmt1);
+      const dblRed = testUtils.styles.borders.doubleRed;
 
-      expect(ws.getCell("B3").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-      expect(ws.getCell("B3").border).toEqual(testUtils.styles.borders.doubleRed);
-      expect(ws.getCell("B3").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-      expect(ws.getCell("B3").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
-      expect(ws.getCell("B3").numFmt).toEqual(testUtils.styles.numFmts.numFmt1);
+      // Non-border styles are copied identically to all cells
+      for (const addr of ["B2", "B3", "C2", "C3"]) {
+        expect(ws.getCell(addr).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+        expect(ws.getCell(addr).fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
+        expect(ws.getCell(addr).alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
+        expect(ws.getCell(addr).numFmt).toEqual(testUtils.styles.numFmts.numFmt1);
+      }
 
-      expect(ws.getCell("C2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-      expect(ws.getCell("C2").border).toEqual(testUtils.styles.borders.doubleRed);
-      expect(ws.getCell("C2").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-      expect(ws.getCell("C2").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
-      expect(ws.getCell("C2").numFmt).toEqual(testUtils.styles.numFmts.numFmt1);
-
-      expect(ws.getCell("C3").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-      expect(ws.getCell("C3").border).toEqual(testUtils.styles.borders.doubleRed);
-      expect(ws.getCell("C3").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-      expect(ws.getCell("C3").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
-      expect(ws.getCell("C3").numFmt).toEqual(testUtils.styles.numFmts.numFmt1);
+      // Borders are position-aware: only perimeter edges survive (like Excel)
+      // B2 = top-left corner
+      expect(ws.getCell("B2").border).toEqual({ left: dblRed.left, top: dblRed.top });
+      // C2 = top-right corner
+      expect(ws.getCell("C2").border).toEqual({ right: dblRed.right, top: dblRed.top });
+      // B3 = bottom-left corner
+      expect(ws.getCell("B3").border).toEqual({ left: dblRed.left, bottom: dblRed.bottom });
+      // C3 = bottom-right corner
+      expect(ws.getCell("C3").border).toEqual({ right: dblRed.right, bottom: dblRed.bottom });
     });
 
     it("preserves merges after row inserts", function () {
@@ -704,6 +700,388 @@ describe("Worksheet", () => {
       expect(model.merges).toContain("A1:C1");
       expect(model.merges).toContain("A2:C2");
       expect(model.merges).not.toContain("A2:B3");
+    });
+
+    describe("position-aware border handling", () => {
+      const thinBorder = {
+        top: { style: "thin" as const },
+        left: { style: "thin" as const },
+        bottom: { style: "thin" as const },
+        right: { style: "thin" as const }
+      };
+
+      it("horizontal merge: preserves outer left/right, top/bottom on all, clears inner left/right", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // Set all four cells with full borders
+        for (const addr of ["A1", "B1", "C1", "D1"]) {
+          ws.getCell(addr).border = { ...thinBorder };
+        }
+
+        ws.mergeCells("A1:D1");
+
+        // A1 = leftmost: left + top + bottom
+        expect(ws.getCell("A1").border).toEqual({
+          left: thinBorder.left,
+          top: thinBorder.top,
+          bottom: thinBorder.bottom
+        });
+        // B1 = interior: top + bottom only
+        expect(ws.getCell("B1").border).toEqual({
+          top: thinBorder.top,
+          bottom: thinBorder.bottom
+        });
+        // C1 = interior: top + bottom only
+        expect(ws.getCell("C1").border).toEqual({
+          top: thinBorder.top,
+          bottom: thinBorder.bottom
+        });
+        // D1 = rightmost: right + top + bottom
+        expect(ws.getCell("D1").border).toEqual({
+          right: thinBorder.right,
+          top: thinBorder.top,
+          bottom: thinBorder.bottom
+        });
+      });
+
+      it("vertical merge: preserves outer top/bottom, left/right on all, clears inner top/bottom", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        for (const addr of ["A1", "A2", "A3", "A4"]) {
+          ws.getCell(addr).border = { ...thinBorder };
+        }
+
+        ws.mergeCells("A1:A4");
+
+        // A1 = topmost: left + right + top
+        expect(ws.getCell("A1").border).toEqual({
+          left: thinBorder.left,
+          right: thinBorder.right,
+          top: thinBorder.top
+        });
+        // A2, A3 = interior: left + right only
+        expect(ws.getCell("A2").border).toEqual({
+          left: thinBorder.left,
+          right: thinBorder.right
+        });
+        expect(ws.getCell("A3").border).toEqual({
+          left: thinBorder.left,
+          right: thinBorder.right
+        });
+        // A4 = bottommost: left + right + bottom
+        expect(ws.getCell("A4").border).toEqual({
+          left: thinBorder.left,
+          right: thinBorder.right,
+          bottom: thinBorder.bottom
+        });
+      });
+
+      it("rectangular merge: each cell gets only its perimeter edges", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // 3x3 merge B2:D4
+        for (let r = 2; r <= 4; r++) {
+          for (let c = 2; c <= 4; c++) {
+            ws.getCell(r, c).border = { ...thinBorder };
+          }
+        }
+
+        ws.mergeCells("B2:D4");
+
+        // Corners
+        expect(ws.getCell("B2").border).toEqual({ left: thinBorder.left, top: thinBorder.top });
+        expect(ws.getCell("D2").border).toEqual({ right: thinBorder.right, top: thinBorder.top });
+        expect(ws.getCell("B4").border).toEqual({
+          left: thinBorder.left,
+          bottom: thinBorder.bottom
+        });
+        expect(ws.getCell("D4").border).toEqual({
+          right: thinBorder.right,
+          bottom: thinBorder.bottom
+        });
+
+        // Edges (non-corner)
+        expect(ws.getCell("C2").border).toEqual({ top: thinBorder.top }); // top edge
+        expect(ws.getCell("C4").border).toEqual({ bottom: thinBorder.bottom }); // bottom edge
+        expect(ws.getCell("B3").border).toEqual({ left: thinBorder.left }); // left edge
+        expect(ws.getCell("D3").border).toEqual({ right: thinBorder.right }); // right edge
+
+        // Interior cell has no border
+        expect(ws.getCell("C3").border).toBeUndefined();
+      });
+
+      it("no borders: merge cells without borders produces no borders", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        ws.getCell("A1").value = "hello";
+        ws.mergeCells("A1:B2");
+
+        expect(ws.getCell("A1").border).toBeUndefined();
+        expect(ws.getCell("B1").border).toBeUndefined();
+        expect(ws.getCell("A2").border).toBeUndefined();
+        expect(ws.getCell("B2").border).toBeUndefined();
+      });
+
+      it("slave border preserved: slave's outer border survives even if master lacks it", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // Master has left border only, slave (B1) has right border only
+        ws.getCell("A1").border = { left: { style: "thin" } };
+        ws.getCell("B1").border = { right: { style: "thick" } };
+
+        ws.mergeCells("A1:B1");
+
+        // A1 keeps its left border (it's on the left perimeter)
+        expect(ws.getCell("A1").border).toEqual({ left: { style: "thin" } });
+        // B1 keeps its own right border (it's on the right perimeter)
+        expect(ws.getCell("B1").border).toEqual({ right: { style: "thick" } });
+      });
+
+      it("mergeCellsWithoutStyle does not alter borders", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        const fullBorder = { ...thinBorder };
+        ws.getCell("A1").border = { ...fullBorder };
+        ws.getCell("B1").border = { ...fullBorder };
+
+        ws.mergeCellsWithoutStyle("A1:B1");
+
+        // Both cells retain their original full borders untouched
+        expect(ws.getCell("A1").border).toEqual(fullBorder);
+        expect(ws.getCell("B1").border).toEqual(fullBorder);
+      });
+
+      it("each cell has an independent style object after merge", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        ws.getCell("A1").border = { ...thinBorder };
+        ws.getCell("B1").border = { ...thinBorder };
+
+        ws.mergeCells("A1:B1");
+
+        // Mutating A1's border should not affect B1
+        ws.getCell("A1").style.border = { top: { style: "double" } };
+        expect(ws.getCell("B1").border).toEqual({
+          right: thinBorder.right,
+          top: thinBorder.top,
+          bottom: thinBorder.bottom
+        });
+      });
+
+      it("diagonal border from master is propagated to all cells", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        ws.getCell("A1").border = {
+          ...thinBorder,
+          diagonal: { style: "thin", up: true, down: false }
+        };
+        ws.getCell("B1").border = { ...thinBorder };
+
+        ws.mergeCells("A1:B1");
+
+        // Both cells get the diagonal from master
+        expect(ws.getCell("A1").border).toEqual({
+          left: thinBorder.left,
+          top: thinBorder.top,
+          bottom: thinBorder.bottom,
+          diagonal: { style: "thin", up: true, down: false }
+        });
+        expect(ws.getCell("B1").border).toEqual({
+          right: thinBorder.right,
+          top: thinBorder.top,
+          bottom: thinBorder.bottom,
+          diagonal: { style: "thin", up: true, down: false }
+        });
+      });
+
+      it("single cell merge: all four borders are preserved", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        ws.getCell("A1").border = { ...thinBorder };
+        ws.mergeCells("A1:A1");
+
+        // Single-cell merge: all four sides are perimeter
+        expect(ws.getCell("A1").border).toEqual(thinBorder);
+      });
+
+      it("top-level border color from master is propagated", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // The top-level `color` is a convenience property used by border-xform
+        // at render time; it's not in the Borders type, so we cast here.
+        ws.getCell("A1").border = {
+          color: { argb: "FFFF0000" },
+          top: { style: "double" },
+          left: { style: "double" },
+          bottom: { style: "double" },
+          right: { style: "double" }
+        } as any;
+        ws.mergeCells("A1:B2");
+
+        // All cells should carry the top-level color
+        for (const addr of ["A1", "B1", "A2", "B2"]) {
+          expect(ws.getCell(addr).border).toHaveProperty("color", { argb: "FFFF0000" });
+        }
+        // And each cell only has its positional edges
+        expect(ws.getCell("A1").border).toMatchObject({
+          left: { style: "double" },
+          top: { style: "double" }
+        });
+        expect(ws.getCell("B1").border).toMatchObject({
+          right: { style: "double" },
+          top: { style: "double" }
+        });
+        expect(ws.getCell("A2").border).toMatchObject({
+          left: { style: "double" },
+          bottom: { style: "double" }
+        });
+        expect(ws.getCell("B2").border).toMatchObject({
+          right: { style: "double" },
+          bottom: { style: "double" }
+        });
+      });
+
+      it("border edges with color objects are preserved", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        const coloredBorder = {
+          top: { style: "double" as const, color: { argb: "FFFF00FF" } },
+          left: { style: "double" as const, color: { argb: "FF00FFFF" } },
+          bottom: { style: "double" as const, color: { argb: "FF00FF00" } },
+          right: { style: "double" as const, color: { argb: "FF0000FF" } }
+        };
+        ws.getCell("A1").border = { ...coloredBorder };
+        ws.getCell("B1").border = { ...coloredBorder };
+
+        ws.mergeCells("A1:B1");
+
+        // A1 keeps left (cyan) + top (magenta) + bottom (green)
+        expect(ws.getCell("A1").border).toEqual({
+          left: coloredBorder.left,
+          top: coloredBorder.top,
+          bottom: coloredBorder.bottom
+        });
+        // B1 keeps right (blue) + top (from master fallback = magenta) + bottom (from master fallback = green)
+        expect(ws.getCell("B1").border).toEqual({
+          right: coloredBorder.right,
+          top: coloredBorder.top,
+          bottom: coloredBorder.bottom
+        });
+      });
+
+      it("mixed border styles on different perimeter edges", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // Master: thin top, thick left
+        ws.getCell("A1").border = { top: { style: "thin" }, left: { style: "thick" } };
+        // Slave: dashed bottom, double right
+        ws.getCell("B2").border = { bottom: { style: "dashed" }, right: { style: "double" } };
+
+        ws.mergeCells("A1:B2");
+
+        // A1 = top-left: left (thick from A1) + top (thin from A1)
+        expect(ws.getCell("A1").border).toEqual({
+          left: { style: "thick" },
+          top: { style: "thin" }
+        });
+        // B1 = top-right: right (fallback master=undefined, B1 has none) → no right; top (fallback master=thin)
+        // But B1 itself has no border, so right = master.right = undefined
+        expect(ws.getCell("B1").border).toEqual({
+          top: { style: "thin" }
+        });
+        // A2 = bottom-left: left (fallback master=thick), bottom (A2 has no border, master has no bottom) → just left
+        expect(ws.getCell("A2").border).toEqual({
+          left: { style: "thick" }
+        });
+        // B2 = bottom-right: right (double from B2) + bottom (dashed from B2)
+        expect(ws.getCell("B2").border).toEqual({
+          right: { style: "double" },
+          bottom: { style: "dashed" }
+        });
+      });
+
+      it("non-border styles preserved without phantom borders", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // Master has font and fill but no border
+        ws.getCell("A1").font = { bold: true };
+        ws.getCell("A1").fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFF0000" }
+        };
+        ws.getCell("A1").value = "styled";
+
+        ws.mergeCells("A1:B2");
+
+        // All cells inherit font and fill
+        for (const addr of ["A1", "B1", "A2", "B2"]) {
+          expect(ws.getCell(addr).font).toEqual({ bold: true });
+          expect(ws.getCell(addr).fill).toEqual({
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFFF0000" }
+          });
+          // No phantom border should appear
+          expect(ws.getCell(addr).border).toBeUndefined();
+        }
+      });
+
+      it("discussion #78 scenario: template merge preserves rightmost border", () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("sheet");
+
+        // Simulate reading a template where each cell has its own border
+        // C21 has left border, L21 has right border, all have top+bottom
+        for (let col = 3; col <= 12; col++) {
+          const border: Record<string, any> = {
+            top: { style: "thin" },
+            bottom: { style: "thin" }
+          };
+          if (col === 3) {
+            border.left = { style: "thin" };
+          }
+          if (col === 12) {
+            border.right = { style: "thin" };
+          }
+          ws.getCell(21, col).border = border;
+        }
+
+        ws.mergeCells("C21:L21");
+
+        // L21 (col 12) must retain its right border
+        expect(ws.getCell("L21").border).toEqual({
+          right: { style: "thin" },
+          top: { style: "thin" },
+          bottom: { style: "thin" }
+        });
+        // C21 (col 3) must retain its left border
+        expect(ws.getCell("C21").border).toEqual({
+          left: { style: "thin" },
+          top: { style: "thin" },
+          bottom: { style: "thin" }
+        });
+        // Interior cells (D21-K21) should only have top+bottom
+        for (let col = 4; col <= 11; col++) {
+          expect(ws.getCell(21, col).border).toEqual({
+            top: { style: "thin" },
+            bottom: { style: "thin" }
+          });
+        }
+      });
     });
   });
 });

@@ -18,6 +18,7 @@ import { Encryptor } from "@excel/utils/encryptor";
 import { uint8ArrayToBase64 } from "@utils/utils";
 import { makePivotTable, type PivotTable, type PivotTableModel } from "@excel/pivot-table";
 import { copyStyle } from "@excel/utils/copy-style";
+import { applyMergeBorders, collectMergeBorders } from "@excel/utils/merge-borders";
 import type { Workbook } from "@excel/workbook";
 import type {
   AddImageRange,
@@ -1013,15 +1014,27 @@ class Worksheet {
       }
     });
 
-    // apply merge
+    const { top, left, bottom, right } = dimensions;
+
+    // Collect perimeter borders BEFORE merge overwrites slave styles
+    const collected = ignoreStyle
+      ? undefined
+      : collectMergeBorders(top, left, bottom, right, (r, c) => this.findCell(r, c) as any);
+
+    // Apply merge — slave cells inherit the master's full style
     const master = this.getCell(dimensions.top, dimensions.left);
-    for (let i = dimensions.top; i <= dimensions.bottom; i++) {
-      for (let j = dimensions.left; j <= dimensions.right; j++) {
-        // merge all but the master cell
-        if (i > dimensions.top || j > dimensions.left) {
+    for (let i = top; i <= bottom; i++) {
+      for (let j = left; j <= right; j++) {
+        if (i > top || j > left) {
           this.getCell(i, j).merge(master, ignoreStyle);
         }
       }
+    }
+
+    // Reconstruct position-aware borders (like Excel):
+    // outer borders survive, inner borders are cleared.
+    if (collected) {
+      applyMergeBorders(top, left, bottom, right, collected, (r, c) => this.getCell(r, c) as any);
     }
 
     // index merge

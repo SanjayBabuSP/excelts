@@ -1217,6 +1217,8 @@ describe("Workbook", () => {
         // expecting styles to be copied (see worksheet spec)
         ws.mergeCells("B2:C3");
 
+        const dblRed = testUtils.styles.borders.doubleRed;
+
         return wb.xlsx
           .writeFile(TEST_XLSX_FILE_NAME)
           .then(() => {
@@ -1226,37 +1228,33 @@ describe("Workbook", () => {
           .then((wb2: any) => {
             const ws2 = wb2.getWorksheet("blort");
 
-            expect(ws2.getCell("B2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-            expect(ws2.getCell("B2").border).toEqual(testUtils.styles.borders.doubleRed);
-            expect(ws2.getCell("B2").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-            expect(ws2.getCell("B2").alignment).toEqual(
-              testUtils.styles.namedAlignments.middleCentre
-            );
-            expect(ws2.getCell("B2").numFmt).toBe(testUtils.styles.numFmts.numFmt1);
+            // Non-border styles are identical on all cells
+            for (const addr of ["B2", "B3", "C2", "C3"]) {
+              expect(ws2.getCell(addr).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+              expect(ws2.getCell(addr).fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
+              expect(ws2.getCell(addr).alignment).toEqual(
+                testUtils.styles.namedAlignments.middleCentre
+              );
+              expect(ws2.getCell(addr).numFmt).toBe(testUtils.styles.numFmts.numFmt1);
+            }
 
-            expect(ws2.getCell("B3").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-            expect(ws2.getCell("B3").border).toEqual(testUtils.styles.borders.doubleRed);
-            expect(ws2.getCell("B3").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-            expect(ws2.getCell("B3").alignment).toEqual(
-              testUtils.styles.namedAlignments.middleCentre
-            );
-            expect(ws2.getCell("B3").numFmt).toBe(testUtils.styles.numFmts.numFmt1);
-
-            expect(ws2.getCell("C2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-            expect(ws2.getCell("C2").border).toEqual(testUtils.styles.borders.doubleRed);
-            expect(ws2.getCell("C2").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-            expect(ws2.getCell("C2").alignment).toEqual(
-              testUtils.styles.namedAlignments.middleCentre
-            );
-            expect(ws2.getCell("C2").numFmt).toBe(testUtils.styles.numFmts.numFmt1);
-
-            expect(ws2.getCell("C3").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-            expect(ws2.getCell("C3").border).toEqual(testUtils.styles.borders.doubleRed);
-            expect(ws2.getCell("C3").fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-            expect(ws2.getCell("C3").alignment).toEqual(
-              testUtils.styles.namedAlignments.middleCentre
-            );
-            expect(ws2.getCell("C3").numFmt).toBe(testUtils.styles.numFmts.numFmt1);
+            // Borders are position-aware after round-trip
+            expect(ws2.getCell("B2").border).toEqual({
+              left: dblRed.left,
+              top: dblRed.top
+            });
+            expect(ws2.getCell("C2").border).toEqual({
+              right: dblRed.right,
+              top: dblRed.top
+            });
+            expect(ws2.getCell("B3").border).toEqual({
+              left: dblRed.left,
+              bottom: dblRed.bottom
+            });
+            expect(ws2.getCell("C3").border).toEqual({
+              right: dblRed.right,
+              bottom: dblRed.bottom
+            });
           });
       });
     });

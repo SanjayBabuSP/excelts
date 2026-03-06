@@ -13,6 +13,7 @@ export {
   xmlEncode,
   validInt,
   isDateFmt,
+  splitFormatSections,
   parseBoolean,
   range,
   toSortedArray,

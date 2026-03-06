@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.12](https://github.com/cjnoname/excelts/compare/v5.1.11...v5.1.12) (2026-03-06)
+
+
+### Bug Fixes
+
+* isDateFmt now correctly recognizes date formats with text fallback sections ([#79](https://github.com/cjnoname/excelts/issues/79)) ([2d5f238](https://github.com/cjnoname/excelts/commit/2d5f2389a8d7d145b34a92dc6c7ef7231be7beab))
+* mergeCells now preserves perimeter borders like Excel ([d9d28d6](https://github.com/cjnoname/excelts/commit/d9d28d66500b05665fab2399277ba2536b2a7d65))
+
 ## [5.1.11](https://github.com/cjnoname/excelts/compare/v5.1.10...v5.1.11) (2026-03-06)
 
 

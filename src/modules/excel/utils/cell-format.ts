@@ -6,7 +6,7 @@
  * scientific notation, fractions, elapsed time, and more
  */
 
-import { excelToDate } from "@utils/utils";
+import { excelToDate, splitFormatSections } from "@utils/utils";
 
 // =============================================================================
 // Built-in Format Table (Excel numFmtId to format string mapping)
@@ -725,7 +725,7 @@ function checkCondition(val: number, condition: string): boolean {
 function chooseFormat(fmt: string, val: number | string | boolean): string {
   if (typeof val === "string") {
     // For text, use the 4th section if available, or just return as-is
-    const sections = splitFormat(fmt);
+    const sections = splitFormatSections(fmt);
     if (sections.length >= 4 && sections[3]) {
       // Process quoted text and replace @ with the value
       const textFmt = processQuotedText(sections[3]);
@@ -738,7 +738,7 @@ function chooseFormat(fmt: string, val: number | string | boolean): string {
     return val ? "TRUE" : "FALSE";
   }
 
-  const sections = splitFormat(fmt);
+  const sections = splitFormatSections(fmt);
 
   // Check for conditional format in sections
   const condRegex = /\[(=|>|<|>=|<=|<>)-?\d+(?:\.\d*)?\]/;
@@ -780,41 +780,8 @@ function chooseFormat(fmt: string, val: number | string | boolean): string {
  * Check if format section is for negative values (2nd section in multi-section format)
  */
 function isNegativeSection(fmt: string, selectedFmt: string): boolean {
-  const sections = splitFormat(fmt);
+  const sections = splitFormatSections(fmt);
   return sections.length >= 2 && sections[1] === selectedFmt;
-}
-
-/**
- * Split format string by semicolons, respecting quoted strings and brackets
- */
-function splitFormat(fmt: string): string[] {
-  const sections: string[] = [];
-  let current = "";
-  let inQuote = false;
-  let inBracket = false;
-
-  for (let i = 0; i < fmt.length; i++) {
-    const char = fmt[i];
-
-    if (char === '"' && !inBracket) {
-      inQuote = !inQuote;
-      current += char;
-    } else if (char === "[" && !inQuote) {
-      inBracket = true;
-      current += char;
-    } else if (char === "]" && !inQuote) {
-      inBracket = false;
-      current += char;
-    } else if (char === ";" && !inQuote && !inBracket) {
-      sections.push(current);
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  sections.push(current);
-  return sections;
 }
 
 /**
