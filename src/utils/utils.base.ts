@@ -157,19 +157,67 @@ export function validInt(value: string | number): number {
   return Number.isNaN(i) ? 0 : i;
 }
 
+/**
+ * Split an Excel numFmt string by semicolons, respecting quoted strings and brackets.
+ *
+ * Excel numFmt can have up to 4 sections: `positive ; negative ; zero ; text`.
+ * Semicolons inside `"..."` (literal text) or `[...]` (locale/color tags) must NOT
+ * be treated as section separators.
+ */
+export function splitFormatSections(fmt: string): string[] {
+  const sections: string[] = [];
+  let current = "";
+  let inQuote = false;
+  let inBracket = false;
+
+  for (let i = 0; i < fmt.length; i++) {
+    const char = fmt[i];
+
+    if (char === '"' && !inBracket) {
+      inQuote = !inQuote;
+      current += char;
+    } else if (char === "[" && !inQuote) {
+      inBracket = true;
+      current += char;
+    } else if (char === "]" && !inQuote) {
+      inBracket = false;
+      current += char;
+    } else if (char === ";" && !inQuote && !inBracket) {
+      sections.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  sections.push(current);
+  return sections;
+}
+
+/** Reusable regex — no capture groups, so safe for `test()`. */
+const DATE_FMT_RE = /[ymdhMsb]/;
+
+/** Strips bracket expressions `[...]` and quoted literals `"..."` from a format string. */
+const STRIP_BRACKETS_QUOTES_RE = /\[[^\]]*\]|"[^"]*"/g;
+
 export function isDateFmt(fmt: string | null | undefined): boolean {
   if (!fmt) {
     return false;
   }
-  // must not be a string fmt
-  if (fmt.indexOf("@") > -1) {
+  // Only the first section (used for positive numbers / dates) determines
+  // whether the format represents a date.  The "@" text placeholder may
+  // legitimately appear in later sections as a text fallback (e.g. "mm/dd/yyyy;@").
+  const firstSection = splitFormatSections(fmt)[0];
+
+  // Strip bracket expressions [...] (locale/color tags) and quoted literals "..."
+  // before any further checks so that characters inside them are ignored.
+  const clean = firstSection.replace(STRIP_BRACKETS_QUOTES_RE, "");
+
+  // "@" in the cleaned section means it's a text format, not a date format.
+  if (clean.indexOf("@") > -1) {
     return false;
   }
-  // must remove all chars inside quotes and []
-  let cleanFmt = fmt.replace(/\[[^\]]*\]/g, "");
-  cleanFmt = cleanFmt.replace(/"[^"]*"/g, "");
-  // then check for date formatting chars
-  return cleanFmt.match(/[ymdhMsb]+/) !== null;
+  return DATE_FMT_RE.test(clean);
 }
 
 export function parseBoolean(value: unknown): boolean {
