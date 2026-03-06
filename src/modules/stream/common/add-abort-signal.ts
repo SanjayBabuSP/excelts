@@ -7,6 +7,7 @@
  */
 
 import type { ReadableLike, WritableLike } from "@stream/types";
+import { createAbortError } from "@utils/errors";
 
 // =============================================================================
 // Types
@@ -29,7 +30,7 @@ export function createAddAbortSignal(ops: ListenerOps) {
     T extends (ReadableLike | WritableLike) & { destroy(error?: Error): any }
   >(signal: AbortSignal, stream: T): T {
     if (signal.aborted) {
-      stream.destroy(new Error("Aborted"));
+      stream.destroy(createAbortError((signal as any).reason));
       return stream;
     }
 
@@ -43,7 +44,7 @@ export function createAddAbortSignal(ops: ListenerOps) {
 
     const onAbort = (): void => {
       cleanup();
-      stream.destroy(new Error("Aborted"));
+      stream.destroy(createAbortError((signal as any).reason));
     };
 
     const onDone = (): void => {

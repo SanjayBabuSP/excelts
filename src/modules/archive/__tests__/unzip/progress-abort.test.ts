@@ -69,7 +69,11 @@ describe("unzip progress + abort", () => {
     op.abort(reason);
 
     await expect(consume).rejects.toSatisfy((e: unknown) => {
-      return isAbortError(e) && (e as any).reason === reason && (e as any).message === "stop";
+      return (
+        isAbortError(e) &&
+        (e as any).cause === reason &&
+        (e as any).message === "The operation was aborted"
+      );
     });
     expect(op.signal.aborted).toBe(true);
     expect((op.signal as any).reason).toBe(reason);

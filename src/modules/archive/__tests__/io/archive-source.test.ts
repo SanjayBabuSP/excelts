@@ -30,7 +30,7 @@ describe("archive-source", () => {
     const itor = iter[Symbol.asyncIterator]();
 
     await expect(itor.next()).rejects.toSatisfy((e: unknown) => {
-      return isAbortError(e) && (e as any).reason === "stop";
+      return isAbortError(e) && (e as any).cause === "stop";
     });
   });
 
@@ -64,7 +64,7 @@ describe("archive-source", () => {
     expect(cancelCalled).toBe(1);
 
     await expect(itor.next()).rejects.toSatisfy((e: unknown) => {
-      return isAbortError(e) && (e as any).reason === "stop";
+      return isAbortError(e) && (e as any).cause === "stop";
     });
   });
 
@@ -111,7 +111,7 @@ describe("archive-source", () => {
     const itor = iter[Symbol.asyncIterator]();
 
     await expect(itor.next()).rejects.toSatisfy((e: unknown) => {
-      return isAbortError(e) && (e as any).reason === "stop";
+      return isAbortError(e) && (e as any).cause === "stop";
     });
   });
 
@@ -145,7 +145,7 @@ describe("archive-source", () => {
     ac.abort("stop");
 
     await expect(itor.next()).rejects.toSatisfy((e: unknown) => {
-      return isAbortError(e) && (e as any).reason === "stop";
+      return isAbortError(e) && (e as any).cause === "stop";
     });
 
     expect(returns).toBe(1);

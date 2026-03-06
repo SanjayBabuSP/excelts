@@ -5,6 +5,7 @@
 import type { IDuplex, ReadableStreamOptions, WritableLike } from "@stream/types";
 import { EventEmitter } from "@utils/event-emitter";
 import { createTextDecoder, getTextDecoder } from "@utils/binary";
+import { createAbortError } from "@utils/errors";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 
@@ -185,13 +186,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   private _setupAbortSignal(signal: AbortSignal): void {
     if (signal.aborted) {
-      this.destroy(new Error("The operation was aborted"));
+      this.destroy(createAbortError((signal as any).reason));
       return;
     }
 
     const onAbort = (): void => {
       cleanup();
-      this.destroy(new Error("The operation was aborted"));
+      this.destroy(createAbortError((signal as any).reason));
     };
 
     const onDone = (): void => {
@@ -1041,9 +1042,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     this.readableFlowing = value;
   }
 
-  /** Whether the stream was aborted (destroyed before 'end' was emitted) */
+  /** Whether the stream was aborted (destroyed or errored before 'end' was emitted) */
   get readableAborted(): boolean {
-    return this._destroyed && !this._endEmitted;
+    // Node.js: readable !== false && (destroyed || errored) && !endEmitted
+    // The 'readable !== false' check is for when user explicitly sets stream.readable = false.
+    // We check _readableOverride (not the computed getter which returns false after destroy).
+    if (this._readableOverride === false) {
+      return false;
+    }
+    return (this._destroyed || !!this._errored) && !this._endEmitted;
   }
 
   /** Whether read() has ever been called */
@@ -1485,7 +1492,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     if (signal) {
       const onAbort = () => {
-        result.destroy(new _AbortError());
+        result.destroy(createAbortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -1551,7 +1558,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     if (signal) {
       const onAbort = () => {
-        result.destroy(new _AbortError());
+        result.destroy(createAbortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -1821,7 +1828,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     if (signal) {
       const onAbort = () => {
-        result.destroy(new _AbortError());
+        result.destroy(createAbortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -1862,7 +1869,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     if (signal) {
       const onAbort = () => {
-        result.destroy(new _AbortError());
+        result.destroy(createAbortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -1904,7 +1911,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     if (signal) {
       const onAbort = () => {
-        result.destroy(new _AbortError());
+        result.destroy(createAbortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -2030,14 +2037,6 @@ Readable.prototype.addListener = Readable.prototype.on;
 // Internal helpers – Functional method utilities
 // =============================================================================
 
-class _AbortError extends Error {
-  override name = "AbortError";
-  code = "ABORT_ERR";
-  constructor() {
-    super("The operation was aborted");
-  }
-}
-
 function _validateAbortSignal(signal: AbortSignal | undefined): void {
   if (signal !== undefined && !(signal instanceof AbortSignal)) {
     throw new TypeError("options.signal must be an AbortSignal");
@@ -2046,7 +2045,7 @@ function _validateAbortSignal(signal: AbortSignal | undefined): void {
 
 function _throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
-    throw new _AbortError();
+    throw createAbortError((signal as any).reason);
   }
 }
 

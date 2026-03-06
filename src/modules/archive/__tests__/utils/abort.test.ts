@@ -9,21 +9,21 @@ import {
 } from "@archive/shared/errors";
 
 describe("abort utils", () => {
-  it("createAbortError should preserve reason and message", () => {
+  it("createAbortError should preserve reason as cause with fixed message", () => {
     const e0 = createAbortError();
     expect(e0).toBeInstanceOf(AbortError);
     expect(e0.name).toBe("AbortError");
-    expect(e0.message).toBe("Aborted");
-    expect((e0 as any).reason).toBeUndefined();
+    expect(e0.message).toBe("The operation was aborted");
+    expect(e0.cause).toBeUndefined();
 
     const e1 = createAbortError("stop");
-    expect(e1.message).toBe("stop");
-    expect((e1 as any).reason).toBe("stop");
+    expect(e1.message).toBe("The operation was aborted");
+    expect(e1.cause).toBe("stop");
 
     const reason = new Error("oops");
     const e2 = createAbortError(reason);
-    expect(e2.message).toBe("oops");
-    expect((e2 as any).reason).toBe(reason);
+    expect(e2.message).toBe("The operation was aborted");
+    expect(e2.cause).toBe(reason);
 
     // Idempotent
     const e3 = createAbortError(e2);
@@ -38,7 +38,7 @@ describe("abort utils", () => {
     expect(isAbortError(undefined)).toBe(false);
   });
 
-  it("throwIfAborted should throw with signal.reason and allow overriding reason", () => {
+  it("throwIfAborted should throw with signal.reason as cause and allow overriding reason", () => {
     const notAborted = new AbortController();
     expect(() => throwIfAborted(notAborted.signal)).not.toThrow();
 
@@ -50,7 +50,7 @@ describe("abort utils", () => {
       expect.unreachable();
     } catch (e) {
       expect(isAbortError(e)).toBe(true);
-      expect((e as any).reason).toBe("stop");
+      expect((e as any).cause).toBe("stop");
     }
 
     try {
@@ -58,7 +58,7 @@ describe("abort utils", () => {
       expect.unreachable();
     } catch (e) {
       expect(isAbortError(e)).toBe(true);
-      expect((e as any).reason).toBe("override");
+      expect((e as any).cause).toBe("override");
     }
   });
 

@@ -33,22 +33,23 @@ describe("errors", () => {
   describe("AbortError", () => {
     it("should create with no reason", () => {
       const error = new AbortError();
-      expect(error.message).toBe("Aborted");
+      expect(error.message).toBe("The operation was aborted");
       expect(error.name).toBe("AbortError");
-      expect(error.reason).toBeUndefined();
+      expect(error.code).toBe("ABORT_ERR");
+      expect(error.cause).toBeUndefined();
     });
 
     it("should create with string reason", () => {
       const error = new AbortError("user cancelled");
-      expect(error.message).toBe("user cancelled");
-      expect(error.reason).toBe("user cancelled");
+      expect(error.message).toBe("The operation was aborted");
+      expect(error.cause).toBe("user cancelled");
     });
 
     it("should create with Error reason", () => {
       const cause = new Error("timeout");
       const error = new AbortError(cause);
-      expect(error.message).toBe("timeout");
-      expect(error.reason).toBe(cause);
+      expect(error.message).toBe("The operation was aborted");
+      expect(error.cause).toBe(cause);
     });
   });
 

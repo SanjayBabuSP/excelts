@@ -8,6 +8,7 @@ import { parseEndArgs } from "@stream/common/end-args";
 import { StreamStateError } from "@stream/errors";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
 import { createTextDecoder } from "@utils/binary";
+import { createAbortError } from "@utils/errors";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 
 import type { Writable as NodeWritable } from "stream";
@@ -328,13 +329,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    */
   private _setupAbortSignal(signal: AbortSignal): void {
     if (signal.aborted) {
-      this.destroy(new Error("The operation was aborted"));
+      this.destroy(createAbortError((signal as any).reason));
       return;
     }
 
     const onAbort = (): void => {
       cleanup();
-      this.destroy(new Error("The operation was aborted"));
+      this.destroy(createAbortError((signal as any).reason));
     };
 
     const onDone = (): void => {
@@ -1182,11 +1183,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     return this._corked;
   }
 
-  /** Whether the stream was destroyed before finishing */
+  /** Whether the stream was destroyed or errored before finishing */
   get writableAborted(): boolean {
-    // Node.js: writableAborted is true when the stream was destroyed
-    // before 'finish' was emitted, regardless of whether end() was called.
-    return this._destroyed && !this._finished;
+    // Node.js: writable !== false && (destroyed || errored) && !finished
+    // The 'writable !== false' check is for when user explicitly sets stream.writable = false.
+    // We check _writableOverride (not the computed getter which returns false after destroy).
+    if (this._writableOverride === false) {
+      return false;
+    }
+    return (this._destroyed || !!this._errored) && !this._finished;
   }
 
   /** Whether the stream is in object mode */

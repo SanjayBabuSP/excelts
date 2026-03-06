@@ -77,12 +77,10 @@ export class BaseError extends Error {
  */
 export class AbortError extends BaseError {
   override name = "AbortError";
-  readonly reason: unknown;
+  readonly code = "ABORT_ERR";
 
-  constructor(reason?: unknown, options?: BaseErrorOptions) {
-    const msg = reason instanceof Error ? reason.message : reason ? String(reason) : "Aborted";
-    super(msg, options);
-    this.reason = reason;
+  constructor(reason?: unknown) {
+    super("The operation was aborted", reason !== undefined ? { cause: reason } : undefined);
   }
 }
 
@@ -97,9 +95,7 @@ export function createAbortError(reason?: unknown): AbortError {
   if (reason instanceof AbortError) {
     return reason;
   }
-  // If reason is an Error, preserve it as cause
-  const cause = reason instanceof Error ? reason : undefined;
-  return new AbortError(reason, cause ? { cause } : undefined);
+  return new AbortError(reason);
 }
 
 /**

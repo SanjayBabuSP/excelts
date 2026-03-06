@@ -1960,7 +1960,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
         controller.abort();
 
         const error = await errorPromise;
-        expect(error.message).toBe("Aborted");
+        expect(error.message).toBe("The operation was aborted");
+        expect((error as any).name).toBe("AbortError");
+        expect((error as any).code).toBe("ABORT_ERR");
         expect(isDestroyed(readable)).toBe(true);
       });
 
@@ -1976,7 +1978,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
         addAbortSignal(controller.signal, readable);
 
-        await errorPromise;
+        const error = await errorPromise;
+        expect((error as any).name).toBe("AbortError");
         expect(isDestroyed(readable)).toBe(true);
       });
     });
@@ -4922,6 +4925,45 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
     });
 
+    describe("AbortError properties", () => {
+      it("Readable signal abort should produce AbortError with correct name and code", async () => {
+        const ac = new AbortController();
+        const readable = new Readable({ signal: ac.signal, read() {} });
+        const errorPromise = new Promise<Error>(resolve => readable.once("error", resolve));
+        ac.abort();
+        const err = await errorPromise;
+        expect(err.name).toBe("AbortError");
+        expect((err as any).code).toBe("ABORT_ERR");
+        expect(err.message).toBe("The operation was aborted");
+      });
+
+      it("Writable signal abort should produce AbortError with correct name and code", async () => {
+        const ac = new AbortController();
+        const writable = new Writable({
+          signal: ac.signal,
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        const errorPromise = new Promise<Error>(resolve => writable.once("error", resolve));
+        ac.abort();
+        const err = await errorPromise;
+        expect(err.name).toBe("AbortError");
+        expect((err as any).code).toBe("ABORT_ERR");
+        expect(err.message).toBe("The operation was aborted");
+      });
+
+      it("Readable already-aborted signal should produce AbortError with correct properties", async () => {
+        const ac = new AbortController();
+        ac.abort();
+        const readable = new Readable({ signal: ac.signal, read() {} });
+        const errorPromise = new Promise<Error>(resolve => readable.once("error", resolve));
+        const err = await errorPromise;
+        expect(err.name).toBe("AbortError");
+        expect((err as any).code).toBe("ABORT_ERR");
+      });
+    });
+
     describe("readableFlowing", () => {
       it("should be null initially", () => {
         const readable = new Readable({
@@ -7457,6 +7499,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const err = await errorPromise;
       await closePromise;
       expect(err.message).toBe("The operation was aborted");
+      expect(err.name).toBe("AbortError");
+      expect((err as any).code).toBe("ABORT_ERR");
       expect(d.destroyed).toBe(true);
     });
 
@@ -7474,6 +7518,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const err = await errorPromise;
       await closePromise;
       expect(err.message).toBe("The operation was aborted");
+      expect(err.name).toBe("AbortError");
+      expect((err as any).code).toBe("ABORT_ERR");
       expect(t.destroyed).toBe(true);
     });
 
@@ -7492,6 +7538,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const err = await errorPromise;
       await closePromise;
       expect(err.message).toBe("The operation was aborted");
+      expect(err.name).toBe("AbortError");
+      expect((err as any).code).toBe("ABORT_ERR");
       expect(d.destroyed).toBe(true);
     });
 

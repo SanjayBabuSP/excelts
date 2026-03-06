@@ -5,6 +5,7 @@
 import type { DuplexStreamOptions, IDuplex, WritableLike } from "@stream/types";
 import { StreamStateError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
+import { createAbortError } from "@utils/errors";
 import { parseEndArgs } from "@stream/common/end-args";
 
 import { Readable } from "./readable";
@@ -345,12 +346,12 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   private _setupAbortSignal(signal: AbortSignal): void {
     if (signal.aborted) {
-      this.destroy(new Error("The operation was aborted"));
+      this.destroy(createAbortError((signal as any).reason));
       return;
     }
 
     const onAbort = (): void => {
-      this.destroy(new Error("The operation was aborted"));
+      this.destroy(createAbortError((signal as any).reason));
     };
 
     const cleanup = (): void => {

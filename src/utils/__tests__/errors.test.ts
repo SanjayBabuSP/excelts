@@ -65,42 +65,45 @@ describe("BaseError", () => {
 describe("AbortError", () => {
   it("should create with no reason", () => {
     const error = new AbortError();
-    expect(error.message).toBe("Aborted");
+    expect(error.message).toBe("The operation was aborted");
     expect(error.name).toBe("AbortError");
-    expect(error.reason).toBeUndefined();
+    expect(error.code).toBe("ABORT_ERR");
+    expect(error.cause).toBeUndefined();
   });
 
-  it("should create with string reason", () => {
+  it("should create with string reason as cause", () => {
     const error = new AbortError("user cancelled");
-    expect(error.message).toBe("user cancelled");
-    expect(error.reason).toBe("user cancelled");
+    expect(error.message).toBe("The operation was aborted");
+    expect(error.cause).toBe("user cancelled");
   });
 
-  it("should create with Error reason", () => {
+  it("should create with Error reason as cause", () => {
     const cause = new Error("timeout");
     const error = new AbortError(cause);
-    expect(error.message).toBe("timeout");
-    expect(error.reason).toBe(cause);
+    expect(error.message).toBe("The operation was aborted");
+    expect(error.cause).toBe(cause);
   });
 });
 
 describe("createAbortError", () => {
   it("should return same instance if already AbortError", () => {
-    const original = new AbortError("test");
+    const original = new AbortError();
     const result = createAbortError(original);
     expect(result).toBe(original);
   });
 
-  it("should wrap string reason", () => {
+  it("should wrap string reason as cause", () => {
     const error = createAbortError("cancelled");
     expect(error).toBeInstanceOf(AbortError);
-    expect(error.message).toBe("cancelled");
+    expect(error.message).toBe("The operation was aborted");
+    expect(error.cause).toBe("cancelled");
   });
 
   it("should preserve Error as cause", () => {
     const original = new Error("original");
     const error = createAbortError(original);
     expect(error).toBeInstanceOf(AbortError);
+    expect(error.message).toBe("The operation was aborted");
     expect(error.cause).toBe(original);
   });
 });
@@ -153,7 +156,7 @@ describe("throwIfAborted", () => {
       expect.fail("should have thrown");
     } catch (e) {
       expect(e).toBeInstanceOf(AbortError);
-      expect((e as AbortError).reason).toBe("custom reason");
+      expect((e as AbortError).cause).toBe("custom reason");
     }
   });
 });
