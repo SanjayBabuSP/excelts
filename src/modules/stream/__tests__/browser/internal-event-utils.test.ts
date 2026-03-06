@@ -1,0 +1,12 @@
+/**
+ * Internal Event Utils Browser Tests
+ *
+ * Runs the shared internal event utils test suite against the Browser implementation.
+ */
+
+import { describe } from "vitest";
+import { runInternalEventUtilsTests } from "@stream/__tests__/internal-event-utils.shared";
+
+describe("internal/event-utils (Browser)", () => {
+  runInternalEventUtilsTests();
+});

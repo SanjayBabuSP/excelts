@@ -372,6 +372,19 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       return false;
     }
 
+    // Node.js: In binary mode, pushing a zero-length chunk (empty Buffer/Uint8Array
+    // or string that encodes to empty) is a no-op — it is silently ignored.
+    // In object mode, all values (including empty buffers) are valid chunks.
+    if (!this._objectMode) {
+      const len =
+        typeof chunk === "string"
+          ? (chunk as string).length
+          : ((chunk as any)?.byteLength ?? (chunk as any)?.length ?? 0);
+      if (len === 0) {
+        return true;
+      }
+    }
+
     if (this._flowing) {
       // IMPORTANT: If there is still buffered data waiting to be drained (from a
       // resume() microtask that hasn't fired yet), we must NOT emit this chunk
@@ -446,8 +459,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._destroyed) {
       return;
     }
-    // Node.js: unshift(null) signals EOF, just like push(null)
-    if (chunk === null || chunk === undefined) {
+    // Node.js: unshift(null) signals EOF, just like push(null).
+    // Note: unshift(undefined) does NOT signal EOF in Node.js — only null does.
+    if (chunk === null) {
       if (!this._ended) {
         this._ended = true;
         if (this._buf.length === 0) {

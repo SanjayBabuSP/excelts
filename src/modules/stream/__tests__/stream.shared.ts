@@ -9017,6 +9017,20 @@ export function runStreamTests(imports: StreamModuleImports): void {
         expect(errors.length).toBe(1);
         expect(errors[0].code).toBe("ERR_STREAM_UNSHIFT_AFTER_END_EVENT");
       });
+
+      it("unshift(undefined) should NOT signal EOF (only null does)", async () => {
+        const r = new Readable({ read() {} });
+        r.unshift(undefined as any);
+
+        let ended = false;
+        r.on("end", () => {
+          ended = true;
+        });
+        r.resume();
+
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(ended).toBe(false);
+      });
     });
 
     // ---- Writable end() + synchronous destroy() (Fix A) ----

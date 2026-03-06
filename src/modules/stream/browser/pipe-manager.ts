@@ -27,6 +27,8 @@ interface PipeListeners<T> {
   data: (chunk: T) => void;
   end?: () => void;
   drain?: () => void;
+  destClose?: () => void;
+  destFinish?: () => void;
   eventTarget: any;
 }
 
@@ -100,9 +102,23 @@ export class PipeManager<T> {
         }
       : undefined;
 
+    // Auto-unpipe when destination closes or finishes (Node.js compatibility).
+    // Node.js internally listens for 'finish' and 'close' on the destination
+    // and calls unpipe() so the source stops pushing data.
+    const onDestCleanup = (): void => {
+      this.unpipe(dest);
+    };
+
+    // Use once() if available, otherwise fall back to on() + manual removal
+    const onceFn = typeof eventTarget.once === "function" ? "once" : "on";
+    eventTarget[onceFn]("close", onDestCleanup);
+    eventTarget[onceFn]("finish", onDestCleanup);
+
     this._listeners.set(dest, {
       data: dataListener,
       end: endListener,
+      destClose: onDestCleanup,
+      destFinish: onDestCleanup,
       eventTarget
     });
 
@@ -160,6 +176,14 @@ export class PipeManager<T> {
 
     if (listeners.drain) {
       removeEmitterListener(listeners.eventTarget, "drain", listeners.drain);
+    }
+
+    // Remove destination close/finish listeners
+    if (listeners.destClose) {
+      removeEmitterListener(listeners.eventTarget, "close", listeners.destClose);
+    }
+    if (listeners.destFinish) {
+      removeEmitterListener(listeners.eventTarget, "finish", listeners.destFinish);
     }
 
     // Emit 'unpipe' event on destination (Node.js compatibility)
