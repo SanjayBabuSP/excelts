@@ -725,6 +725,11 @@ export interface TableColumnProperties {
     | "custom";
   totalsRowFormula?: string;
   totalsRowResult?: CellFormulaValue["result"];
+  /**
+   * Formula applied to every data row in this column.
+   * Corresponds to the OOXML `<calculatedColumnFormula>` element.
+   */
+  calculatedColumnFormula?: string;
   style?: Partial<Style>;
 }
 

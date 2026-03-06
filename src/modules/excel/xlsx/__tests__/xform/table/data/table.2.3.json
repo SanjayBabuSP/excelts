@@ -1,0 +1,30 @@
+{
+  "name": "CalcTable",
+  "displayName": "CalcTable",
+  "tableRef": "A1:C5",
+  "autoFilterRef": "A1:C5",
+  "totalsRow": false,
+  "headerRow": true,
+  "columns": [
+    {
+      "filterButton": false,
+      "name": "Value"
+    },
+    {
+      "filterButton": false,
+      "name": "Double",
+      "calculatedColumnFormula": "[Value]*2"
+    },
+    {
+      "filterButton": false,
+      "name": "Label"
+    }
+  ],
+  "style": {
+    "theme": "TableStyleMedium2",
+    "showFirstColumn": false,
+    "showLastColumn": false,
+    "showRowStripes": true,
+    "showColumnStripes": false
+  }
+}

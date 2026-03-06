@@ -265,5 +265,76 @@ describe("Worksheet", () => {
       expect(formula).toBe("CONCAT([@A])");
       expect(formula.startsWith("@")).toBe(false);
     });
+
+    it("loads a table with calculatedColumnFormula without crashing (issue #76)", async () => {
+      // Create a workbook with a 3-column table
+      const wb1 = new Workbook();
+      const ws1: any = wb1.addWorksheet("Data");
+
+      ws1.addTable({
+        name: "CalcTable",
+        ref: "A1",
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { name: "Value", filterButton: true },
+          { name: "Double", filterButton: true },
+          { name: "Label", filterButton: true }
+        ],
+        rows: [
+          [10, 20, "a"],
+          [30, 60, "b"]
+        ]
+      });
+
+      const buffer = await wb1.xlsx.writeBuffer();
+
+      // Manually inject a <calculatedColumnFormula> child element into the table XML
+      // to simulate what Excel produces for calculated columns.
+      const zipData = await extractAll(new Uint8Array(buffer));
+      const tablePath = [...zipData.keys()].find(k => k.startsWith("xl/tables/"));
+      expect(tablePath).toBeDefined();
+
+      const tableXml = new TextDecoder().decode(zipData.get(tablePath!)!.data);
+      // Replace the self-closing <tableColumn> for "Double" with one that has a child element
+      const modifiedXml = tableXml.replace(
+        /(<tableColumn id="2" name="Double"[^/]*)\/>/,
+        "$1><calculatedColumnFormula>[Value]*2</calculatedColumnFormula></tableColumn>"
+      );
+      expect(modifiedXml).toContain("<calculatedColumnFormula>");
+
+      zipData.get(tablePath!)!.data = new TextEncoder().encode(modifiedXml);
+
+      // Re-pack into a ZIP buffer
+      const { createZip } = await import("@archive/zip/zip-bytes");
+      const entries = [...zipData.entries()].map(([name, file]) => ({
+        name,
+        data: file.data
+      }));
+      const modifiedBuffer = await createZip(entries);
+
+      // This should NOT throw: "Cannot read properties of undefined (reading 'style')"
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(modifiedBuffer);
+
+      const ws2: any = wb2.getWorksheet("Data");
+      expect(ws2).toBeDefined();
+
+      const table2 = ws2.getTable("CalcTable");
+      expect(table2).toBeDefined();
+      expect(table2.table.columns).toHaveLength(3);
+      expect(table2.table.columns[0].name).toBe("Value");
+      expect(table2.table.columns[1].name).toBe("Double");
+      expect(table2.table.columns[1].calculatedColumnFormula).toBe("[Value]*2");
+      expect(table2.table.columns[2].name).toBe("Label");
+
+      // Round-trip: write and reload — calculatedColumnFormula should survive
+      const buffer2 = await wb2.xlsx.writeBuffer();
+      const wb3 = new Workbook();
+      await wb3.xlsx.load(buffer2);
+      const ws3: any = wb3.getWorksheet("Data");
+      const table3 = ws3.getTable("CalcTable");
+      expect(table3.table.columns[1].calculatedColumnFormula).toBe("[Value]*2");
+    });
   });
 });

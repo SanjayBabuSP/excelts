@@ -280,7 +280,7 @@ class Table {
           cell.value = value;
         }
 
-        assignStyle(cell, table.columns[j].style);
+        assignStyle(cell, table.columns[j]?.style);
       });
     });
 
