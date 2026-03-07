@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.14](https://github.com/cjnoname/excelts/compare/v5.1.13...v5.1.14) (2026-03-07)
+
+
+### Bug Fixes
+
+* row height=0 ignored due to falsy-zero checks, add customHeight support ([9c91fdc](https://github.com/cjnoname/excelts/commit/9c91fdc8e3d2ac4a8dc44ea654a8c8cd2767e0e8)), closes [#82](https://github.com/cjnoname/excelts/issues/82)
+
 ## [5.1.13](https://github.com/cjnoname/excelts/compare/v5.1.12...v5.1.13) (2026-03-07)
 
 
