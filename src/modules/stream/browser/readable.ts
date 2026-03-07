@@ -220,13 +220,20 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Create a Readable from an iterable (static factory method)
    */
   static from<T>(
-    iterable: Iterable<T> | AsyncIterable<T> | ReadableStream<T>,
+    iterable: Iterable<T> | AsyncIterable<T> | ReadableStream<T> | Blob,
     options?: ReadableStreamOptions
   ): Readable<T> {
     // Node.js also supports creating from a Web ReadableStream.
     // Detect it explicitly (do not rely on Symbol.asyncIterator presence).
     if (iterable && typeof (iterable as any).getReader === "function") {
       return Readable.fromWeb(iterable as ReadableStream<T>, options);
+    }
+
+    // Node.js: Blob → stream via its ReadableStream.
+    // Must be checked before the generic Iterable path because Blob is not
+    // iterable but has a .stream() method that returns a ReadableStream.
+    if (typeof Blob !== "undefined" && iterable instanceof Blob) {
+      return Readable.fromWeb((iterable as Blob).stream() as ReadableStream<T>, options);
     }
 
     // Validate argument type early (Node.js throws ERR_INVALID_ARG_TYPE).
@@ -1224,7 +1231,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     const highWaterMark = this._highWaterMark;
-    const lowWaterMark = Math.max(0, Math.floor(highWaterMark / 2));
 
     const chunkSizeForBackpressure = (chunk: any): number => {
       if (this._objectMode) {
@@ -1308,7 +1314,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
             dataQueueIndex = 0;
           }
 
-          if (pausedByIterator && queuedSize <= lowWaterMark && !done && !this._destroyed) {
+          if (pausedByIterator && queuedSize < highWaterMark && !done && !this._destroyed) {
             pausedByIterator = false;
             this.resume();
           }
@@ -1328,7 +1334,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
         if (chunk !== null) {
           queuedSize -= chunkSizeForBackpressure(chunk);
-          if (pausedByIterator && queuedSize <= lowWaterMark && !done && !this._destroyed) {
+          if (pausedByIterator && queuedSize < highWaterMark && !done && !this._destroyed) {
             pausedByIterator = false;
             this.resume();
           }

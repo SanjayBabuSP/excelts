@@ -437,8 +437,15 @@ export function finished(
     //   state.autoDestroy && state.emitClose && state.closed === false
     // This means: if autoDestroy is false, close won't fire automatically after
     // finish, so finished() must NOT wait for it — otherwise it deadlocks.
+    //
+    // Guard: only consult _emitClose / _autoDestroy when the stream actually
+    // exposes them (i.e. our own Readable/Writable/Transform/Duplex instances).
+    // Third-party or duck-typed streams may lack these internals — for those we
+    // default to NOT waiting for 'close', which avoids a deadlock.
     const s2 = normalizedStream as any;
-    const willEmitClose = s2._emitClose !== false && s2._autoDestroy !== false && !s2._closed;
+    const hasInternals = "_emitClose" in s2 && "_autoDestroy" in s2;
+    const willEmitClose =
+      hasInternals && s2._emitClose !== false && s2._autoDestroy !== false && !s2._closed;
 
     const maybeDone = (): void => {
       if (readableDone && writableDone) {

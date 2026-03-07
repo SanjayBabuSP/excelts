@@ -6,14 +6,16 @@
  * - Backpressure: pauses `last` when composed buffer is full
  * - Flush: waits for `last` to emit "end" before signalling completion
  * - Error: destroys composed stream on any child error (not just emit)
+ *
+ * Uses Transform constructor options (write, final, destroy) instead of
+ * post-construction method overrides, keeping all internal Writable state
+ * (buffering, serialization, _writableLength, drain) properly tracked.
  */
 
 import type { ITransform } from "@stream/types";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
 
-import type { Writable } from "./writable";
 import { Transform } from "./transform";
-import type { Duplex } from "./duplex";
 import { createListenerRegistry } from "./helpers";
 
 // =============================================================================
@@ -56,44 +58,105 @@ export function compose<T = any, R = any>(
   // Track whether flush is handling the end sequence.
   let flushing = false;
 
-  // A lightweight Transform wrapper that delegates:
-  // - writable side to `first`
-  // - readable side to `last`
-  //
   // Use per-side objectMode matching Node.js compose behavior.
   // When the property is missing, default to false (same as Node.js Transform).
   const readableObjMode = (last as any).readableObjectMode ?? false;
   const writableObjMode = (first as any).writableObjectMode ?? false;
+
+  const registry = createListenerRegistry();
 
   const composed = new Transform<T, R>({
     // Use objectMode when both sides agree; otherwise use per-side modes.
     ...(readableObjMode === writableObjMode
       ? { objectMode: readableObjMode }
       : { readableObjectMode: readableObjMode, writableObjectMode: writableObjMode }),
-    transform: chunk => chunk
+
+    // Write path: forward writes into the head of the chain.
+    // Using the `write` constructor option ensures all writes go through the
+    // Transform's internal Writable state machine (_writableLength tracking,
+    // write serialization via _writeQueue, cork buffering, drain signals).
+    write(chunk: T, encoding: string, callback: (error?: Error | null) => void) {
+      try {
+        (first as any).write(chunk, encoding, callback);
+      } catch (err) {
+        callback(err as Error);
+      }
+    },
+
+    // Flush path: end the head of the chain, then wait for `last` to emit
+    // "end" (readable exhaustion) before completing the composed stream.
+    // This is the `final` handler — called after all pending writes complete,
+    // before "finish" is emitted. The Transform constructor wrapper will
+    // automatically push(null) on the readable side after our callback.
+    final(callback: (error?: Error | null) => void) {
+      flushing = true;
+
+      // If `last` already ended independently (e.g. a "take N" transform that
+      // pushed null on its own), complete immediately — the "end" event has
+      // already fired and a new once("end") listener would never trigger.
+      if ((last as any).readableEnded) {
+        callback();
+        return;
+      }
+
+      const onEnd = (): void => {
+        cleanupFlush();
+        callback();
+      };
+      const onError = (err: Error): void => {
+        cleanupFlush();
+        callback(err);
+      };
+      const cleanupFlush = (): void => {
+        (last as any).off?.("end", onEnd);
+        (last as any).off?.("error", onError);
+      };
+
+      (last as any).once?.("end", onEnd);
+      (last as any).once?.("error", onError);
+      (first as any).end();
+    },
+
+    // Destroy path: clean up all listeners and destroy all child transforms.
+    destroy(_error: Error | null, callback: (error?: Error | null) => void) {
+      try {
+        registry.cleanup();
+        for (const t of transforms) {
+          t.destroy(_error ?? undefined);
+        }
+      } finally {
+        callback(_error);
+      }
+    }
   });
 
   // Hook into the internal _readable's _read method so that when the
   // PipeManager (or any consumer) pulls data, we resume `last` if it was
   // paused due to backpressure. This is the browser equivalent of Node.js
   // compose's `read()` option which is called by the native pipe mechanism.
+  //
+  // Compose the new behavior with the Transform's existing _read patch
+  // (which releases _afterTransformCallback). Although _afterTransformCallback
+  // is not used when the `write` option is provided, preserving it is a
+  // defensive measure against future changes.
   const composedReadable = (composed as any)._readable;
+  const origRead = composedReadable._read;
   composedReadable._read = () => {
+    origRead?.call(composedReadable);
     if (lastPaused) {
       lastPaused = false;
       (last as any).resume?.();
     }
   };
 
-  const registry = createListenerRegistry();
-
   // Forward errors from all transforms — destroy composed on error (matches Node.js).
   for (const t of transforms) {
     registry.add(t as any, "error", (err: Error) => composed.destroy(err));
   }
 
-  // Forward writable-side backpressure from `first`.
-  registry.add(first as any, "drain", () => composed.emit("drain"));
+  // Drain is handled by the internal Writable's own drain → Transform's
+  // _setupSideForwarding → composed.emit("drain"). No need to forward from
+  // `first` — that would cause double-drain when both buffers cross below HWM.
 
   // Track whether both sides have completed so we can auto-destroy the composed
   // stream (emitting 'close'), matching Node.js compose behavior.
@@ -105,10 +168,12 @@ export function compose<T = any, R = any>(
     }
   };
 
-  // Forward finish from `last` — the composed stream is only "finished" once
-  // data has fully flushed through the entire chain (matching Node.js compose).
-  registry.once(last as any, "finish", () => {
-    composed.emit("finish");
+  // Finish is handled by the internal Writable's own lifecycle: when the
+  // `final` handler calls callback(), the internal Writable emits "finish",
+  // which _setupSideForwarding propagates to composed.emit("finish").
+  // Forwarding finish from `last` would cause double-finish.
+  // Track the composed stream's own finish for auto-destroy.
+  composed.once("finish", () => {
     composedFinishFired = true;
     maybeAutoDestroy();
   });
@@ -124,8 +189,9 @@ export function compose<T = any, R = any>(
   });
 
   registry.once(last as any, "end", () => {
-    // When flushing, the flush/end logic in end() handles stream termination.
-    // Otherwise (e.g. last ended independently), we must push(null) ourselves.
+    // When flushing, the final handler + Transform wrapper handles stream
+    // termination (push(null)). Otherwise (e.g. last ended independently),
+    // we must push(null) ourselves.
     if (!flushing) {
       (composed as any).push(null);
     }
@@ -137,146 +203,32 @@ export function compose<T = any, R = any>(
     maybeAutoDestroy();
   });
 
-  // Delegate core stream methods
-  const firstAny = first as any;
-  const lastAny = last as any;
-
-  (composed as any).write = (
-    chunk: T,
-    encodingOrCallback?: string | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean => {
-    try {
-      if (typeof encodingOrCallback === "function") {
-        return firstAny.write(chunk, encodingOrCallback);
-      }
-      return firstAny.write(chunk, encodingOrCallback, callback);
-    } catch (err) {
-      composed.destroy(err as Error);
-      return false;
-    }
-  };
-
-  // end() with flush semantics: end the head of the chain, then wait for `last`
-  // to emit "end" (readable exhaustion) before completing the composed stream.
-  // This ensures all data flows through intermediate transforms before completion.
-  (composed as any).end = (
-    chunkOrCallback?: T | (() => void),
-    encodingOrCallback?: string | (() => void),
-    callback?: () => void
-  ): any => {
-    // Guard against double-end: if already flushing, delegate to first's end()
-    // which will handle ERR_STREAM_ALREADY_FINISHED natively, matching Node.js.
-    if (flushing) {
-      if (typeof chunkOrCallback === "function") {
-        firstAny.end(chunkOrCallback);
-      } else if (typeof encodingOrCallback === "function") {
-        firstAny.end(chunkOrCallback, encodingOrCallback);
-      } else {
-        firstAny.end(chunkOrCallback, encodingOrCallback, callback);
-      }
-      return composed;
-    }
-
-    flushing = true;
-
-    const onFlushEnd = (): void => {
-      cleanupFlush();
-      (composed as any).push(null);
-      if (typeof chunkOrCallback === "function") {
-        (chunkOrCallback as () => void)();
-      } else if (typeof encodingOrCallback === "function") {
-        (encodingOrCallback as () => void)();
-      } else if (callback) {
-        callback();
-      }
-    };
-    const onFlushError = (err: Error): void => {
-      cleanupFlush();
-      // Invoke the user's end callback before destroying — matching Node.js
-      // where flush(callback) calls callback(err) which propagates both the
-      // error AND fires the user's end callback.
-      if (typeof chunkOrCallback === "function") {
-        (chunkOrCallback as () => void)();
-      } else if (typeof encodingOrCallback === "function") {
-        (encodingOrCallback as () => void)();
-      } else if (callback) {
-        callback();
-      }
-      composed.destroy(err);
-    };
-    const cleanupFlush = (): void => {
-      lastAny.off?.("end", onFlushEnd);
-      lastAny.off?.("error", onFlushError);
-    };
-
-    lastAny.once?.("end", onFlushEnd);
-    lastAny.once?.("error", onFlushError);
-
-    // Write the end-chunk (if any) and end the head.
-    if (typeof chunkOrCallback === "function") {
-      firstAny.end();
-    } else if (typeof encodingOrCallback === "function") {
-      firstAny.end(chunkOrCallback);
-    } else {
-      firstAny.end(chunkOrCallback, encodingOrCallback);
-    }
-    return composed;
-  };
-
-  (composed as any).pipe = <W extends Writable<R> | Transform<R, any> | Duplex<any, R>>(
-    destination: W
-  ): W => {
-    return Transform.prototype.pipe.call(composed, destination) as W;
-  };
-
-  (composed as any).read = (size?: number): R | null => {
-    // Resume last if it was paused due to backpressure.
-    if (lastPaused) {
-      lastPaused = false;
-      lastAny.resume?.();
-    }
-    return Transform.prototype.read.call(composed, size) as R | null;
-  };
-
+  // Delegate pause/resume to also control `last`, ensuring backpressure
+  // propagates correctly through the composed pipeline.
   const originalPause = composed.pause.bind(composed);
   const originalResume = composed.resume.bind(composed);
 
   (composed as any).pause = (): any => {
-    lastAny.pause?.();
+    (last as any).pause?.();
     return originalPause();
   };
 
   (composed as any).resume = (): any => {
     const resumed = originalResume();
-    lastAny.resume?.();
+    (last as any).resume?.();
     return resumed;
   };
 
   // Delegate cork/uncork to the head of the chain.
   (composed as any).cork = (): void => {
-    firstAny.cork?.();
+    (first as any).cork?.();
   };
   (composed as any).uncork = (): void => {
-    firstAny.uncork?.();
+    (first as any).uncork?.();
   };
 
-  (composed as any)[Symbol.asyncIterator] = async function* (): AsyncIterableIterator<R> {
-    yield* Transform.prototype[Symbol.asyncIterator].call(composed);
-  };
-
-  const originalDestroy = composed.destroy.bind(composed);
-  composed.destroy = ((error?: Error) => {
-    try {
-      registry.cleanup();
-      for (const t of transforms) {
-        t.destroy(error);
-      }
-    } finally {
-      originalDestroy(error);
-    }
-  }) as any;
-
+  // Safety net: ensure listener cleanup even if close fires through an
+  // unexpected path (destroy option already calls registry.cleanup).
   composed.once("close", () => {
     registry.cleanup();
   });

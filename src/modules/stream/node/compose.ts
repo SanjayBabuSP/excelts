@@ -66,6 +66,15 @@ export function compose<T = any, R = any>(
       // data.  We must wait for `last`'s "end" (readable exhaustion) — not
       // `first`'s "finish" (writable flush) — because data may still be
       // flowing through intermediate transforms after `first` finishes.
+
+      // If `last` already ended independently (e.g. a "take N" transform that
+      // pushed null on its own), complete immediately — the "end" event has
+      // already fired and a new once("end") listener would never trigger.
+      if ((last as any).readableEnded) {
+        callback();
+        return;
+      }
+
       const onEnd = (): void => {
         cleanupFlush();
         callback();
@@ -133,26 +142,20 @@ export function compose<T = any, R = any>(
     (last as any).off?.("data", onLastData);
     (last as any).off?.("end", onLastEnd);
     (last as any).off?.("error", onAnyError);
-    (first as any).off?.("drain", onFirstDrain);
-    (last as any).off?.("finish", onLastFinish);
     for (const { t, fn } of transformErrorListeners) {
       t.off?.("error", fn);
     }
     transformErrorListeners.length = 0;
   };
 
-  // Forward drain from `first` to composed (matches browser compose).
-  const onFirstDrain = (): void => {
-    composed.emit("drain");
-  };
-  (first as any).on?.("drain", onFirstDrain);
+  // Drain is handled by composed's own Writable state machine: when the
+  // transform callback fires (after first.write's callback), the Writable
+  // checks _writableLength < _highWaterMark and emits drain if needed.
+  // Forwarding drain from `first` would cause double-drain.
 
-  // Forward finish from `last` — the composed stream is only "finished" once
-  // data has fully flushed through the entire chain (matching browser compose).
-  const onLastFinish = (): void => {
-    composed.emit("finish");
-  };
-  (last as any).once?.("finish", onLastFinish);
+  // Finish is handled by composed's own Writable state machine: when the
+  // flush callback fires, the internal Writable emits "finish" natively.
+  // Forwarding finish from `last` would cause double-finish.
 
   // Eagerly attach data/end forwarding from `last` to composed.
   // This ensures data flows into composed's buffer immediately.

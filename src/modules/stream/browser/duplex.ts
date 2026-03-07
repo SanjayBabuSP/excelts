@@ -949,6 +949,11 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
 
   set destroyed(val: boolean) {
     this._destroyed = val;
+    // Propagate to internal streams so their state stays consistent with
+    // the Duplex — matches Node.js where Duplex/Readable/Writable share
+    // a single destroyed flag via the prototype chain.
+    this._readable.destroyed = val;
+    this._writable.destroyed = val;
   }
 
   get writableCorked(): number {

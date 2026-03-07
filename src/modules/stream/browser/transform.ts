@@ -566,17 +566,56 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
 
     if (this._hasSubclassTransform()) {
+      // Use the same sync-detection pattern as _transformImpl below so that
+      // subclasses whose _transform calls the callback synchronously (e.g.
+      // PassThrough) stay on the synchronous fast path instead of always
+      // paying a microtask-delay through Promise.
+      let sync = true;
+      let syncDone = false;
+      let syncErr: Error | null = null;
+      let syncData: TOutput | undefined;
+      let callbackFired = false;
+
+      let resolveAsync: (() => void) | null = null;
+      let rejectAsync: ((err: any) => void) | null = null;
+
+      this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
+        if (callbackFired) {
+          return; // Guard against buggy subclasses calling the callback twice
+        }
+        callbackFired = true;
+        if (sync) {
+          syncDone = true;
+          syncErr = err ?? null;
+          syncData = data;
+          return;
+        }
+        if (err) {
+          rejectAsync?.(err);
+          return;
+        }
+        if (data !== undefined) {
+          this.push(data);
+        }
+        resolveAsync?.();
+      });
+
+      sync = false;
+
+      if (syncDone) {
+        if (syncErr) {
+          throw syncErr;
+        }
+        if (syncData !== undefined) {
+          this.push(syncData);
+        }
+        return undefined; // sync completion — no microtask
+      }
+
+      // Callback was not called synchronously — wait for async callback.
       return new Promise<void>((resolve, reject) => {
-        this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          if (data !== undefined) {
-            this.push(data);
-          }
-          resolve();
-        });
+        resolveAsync = resolve;
+        rejectAsync = reject;
       });
     }
 
@@ -1225,6 +1264,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   set destroyed(val: boolean) {
     this._destroyed = val;
+    // Propagate to internal streams so their state stays consistent with
+    // the Transform — matches Node.js where destroy state is shared, and
+    // mirrors the same propagation in Duplex.destroyed setter.
+    this._readable.destroyed = val;
+    this._writable.destroyed = val;
   }
 
   // =========================================================================

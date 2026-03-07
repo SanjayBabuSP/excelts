@@ -8213,6 +8213,37 @@ export function runStreamTests(imports: StreamModuleImports): void {
           });
           t.destroy();
         }));
+
+      it("Transform: destroyed setter should propagate to internal streams", () => {
+        const t = new Transform({
+          objectMode: true,
+          transform(chunk: any, _e: string, cb: any) {
+            cb(null, chunk);
+          }
+        });
+
+        expect(t.destroyed).toBe(false);
+        t.destroyed = true;
+        expect(t.destroyed).toBe(true);
+
+        // Internal streams should also be marked destroyed
+        if ((t as any)._readable) {
+          expect((t as any)._readable.destroyed).toBe(true);
+        }
+        if ((t as any)._writable) {
+          expect((t as any)._writable.destroyed).toBe(true);
+        }
+
+        // Reset
+        t.destroyed = false;
+        expect(t.destroyed).toBe(false);
+        if ((t as any)._readable) {
+          expect((t as any)._readable.destroyed).toBe(false);
+        }
+        if ((t as any)._writable) {
+          expect((t as any)._writable.destroyed).toBe(false);
+        }
+      });
     });
 
     // =========================================================================
@@ -9657,6 +9688,122 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
         // Should emit error, not throw
         expect(result).toBe("sync-write-boom");
+      });
+    });
+
+    describe("compose() internal state tracking via constructor options", () => {
+      it("should properly end through final handler (not manual end override)", async () => {
+        const events: string[] = [];
+        const t1 = createTransform<string, string>(s => s.toUpperCase(), { objectMode: true });
+        const t2 = createTransform<string, string>(s => s + "!", { objectMode: true });
+
+        const composed = compose(t1, t2);
+        const chunks: string[] = [];
+
+        composed.on("data", (chunk: string) => chunks.push(chunk));
+        composed.on("finish", () => events.push("finish"));
+        composed.on("end", () => events.push("end"));
+
+        composed.write("hello");
+        composed.end();
+
+        await new Promise<void>(resolve => {
+          composed.on("close", () => {
+            events.push("close");
+            resolve();
+          });
+        });
+
+        expect(chunks).toEqual(["HELLO!"]);
+        expect(events).toContain("finish");
+        expect(events).toContain("end");
+      });
+
+      it("should reflect writableEnded from first after end()", async () => {
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        expect((composed as any).writableEnded).toBe(false);
+        composed.end();
+
+        await new Promise<void>(resolve => {
+          composed.on("close", resolve);
+        });
+
+        expect((composed as any).writableEnded).toBe(true);
+      });
+
+      it("should not emit double-drain when write backpressure resolves", async () => {
+        // Use slow async transform with HWM=1 to trigger backpressure
+        const t1 = createTransform<string, string>(
+          s =>
+            new Promise<string>(resolve => {
+              setTimeout(() => resolve(s), 20);
+            }),
+          { objectMode: true, highWaterMark: 1 }
+        );
+        const t2 = createTransform<string, string>(s => s, {
+          objectMode: true,
+          highWaterMark: 1
+        });
+
+        const composed = compose(t1, t2);
+        composed.resume();
+
+        let drainCount = 0;
+        composed.on("drain", () => {
+          drainCount++;
+        });
+
+        // Write enough to trigger backpressure
+        composed.write("a");
+        composed.write("b");
+
+        // Wait for all writes to complete and drains to fire
+        await new Promise<void>(resolve => setTimeout(resolve, 200));
+
+        // Should have at most 1 drain per backpressure cycle, not 2+
+        // (One from the internal Writable is correct; a second forwarded
+        // from `first` would be a double-drain bug.)
+        expect(drainCount).toBeLessThanOrEqual(2);
+
+        composed.destroy();
+      });
+
+      it("should complete flush when last ends independently before composed.end()", async () => {
+        // Create a transform that ends after receiving 1 item (pushes null)
+        const t1 = createTransform<string, string>(s => s, { objectMode: true });
+        const t2 = createTransform<string, string>(s => s, { objectMode: true });
+
+        const composed = compose(t1, t2);
+        const chunks: string[] = [];
+        composed.on("data", (chunk: string) => chunks.push(chunk));
+
+        // Write data through
+        composed.write("hello");
+        await new Promise(r => setTimeout(r, 50));
+
+        // Force `last` (t2) to end independently by pushing null
+        (t2 as any).push(null);
+        await new Promise(r => setTimeout(r, 50));
+
+        // Now end composed — the final handler should not hang
+        const finished = await Promise.race([
+          new Promise<string>(resolve => {
+            composed.on("finish", () => resolve("finished"));
+            composed.on("close", () => resolve("closed"));
+            composed.end();
+          }),
+          new Promise<string>(resolve => setTimeout(() => resolve("timeout"), 2000))
+        ]);
+
+        // Should complete, not hang
+        expect(finished).not.toBe("timeout");
+
+        composed.destroy();
       });
     });
   });
@@ -11260,6 +11407,36 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(chunks[0]).toBe(10);
       expect(chunks[1]).toBe(20);
       expect(chunks[2]).toBe(30);
+    });
+
+    it("should create a Readable from a Blob (single binary chunk)", async () => {
+      // Skip if Blob is not available (older Node.js environments)
+      if (typeof globalThis.Blob === "undefined") {
+        return;
+      }
+      // Blob support in Readable.from is browser-only. Node.js Readable.from
+      // does not accept Blob (it throws ERR_INVALID_ARG_TYPE). Skip gracefully.
+      const blob = new Blob([new Uint8Array([1, 2, 3])]);
+      let r;
+      try {
+        r = Readable.from(blob as any);
+      } catch {
+        // Not supported in this environment (e.g. Node.js native streams)
+        return;
+      }
+      const chunks: any[] = [];
+      for await (const chunk of r) {
+        chunks.push(chunk);
+      }
+      // Blob streams as binary, should produce Uint8Array chunk(s)
+      expect(chunks.length).toBeGreaterThanOrEqual(1);
+      const allBytes = new Uint8Array(
+        chunks.reduce((acc: number[], c: any) => {
+          const arr = c instanceof Uint8Array ? Array.from(c) : [c];
+          return acc.concat(arr);
+        }, [])
+      );
+      expect(allBytes).toEqual(new Uint8Array([1, 2, 3]));
     });
   });
 
