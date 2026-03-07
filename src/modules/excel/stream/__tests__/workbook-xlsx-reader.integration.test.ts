@@ -456,7 +456,7 @@ describe("WorkbookReader", () => {
         ws.getImages().forEach(image => {
           const row = ws.getRow(image.range.tl.nativeRow + 1);
 
-          if (row.height) {
+          if (row.height != null) {
             expect(image.range.tl.rowHeight).toBe(Math.floor(row.height * 10000));
           } else {
             expect(image.range.tl.rowHeight).toBe(180000);
@@ -495,7 +495,7 @@ describe("WorkbookReader", () => {
         ws.getImages().forEach(image => {
           const row = ws.getRow(image.range.br.nativeRow + 1);
 
-          if (row.height) {
+          if (row.height != null) {
             expect(image.range.br.rowHeight).toBe(Math.floor(row.height * 10000));
           } else {
             expect(image.range.br.rowHeight).toBe(180000);
