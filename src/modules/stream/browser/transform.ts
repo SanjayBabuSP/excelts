@@ -11,6 +11,7 @@ import { parseEndArgs } from "@stream/common/end-args";
 import { Readable } from "./readable";
 import { Writable } from "./writable";
 import { createListenerRegistry } from "./helpers";
+import { deferTask, inDeferredContext } from "./microtask-context";
 
 import type { Duplex } from "./duplex";
 
@@ -63,6 +64,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   private _dataForwardingSetup: boolean = false;
   private _emitClose: boolean;
   private _autoDestroy: boolean;
+  /** @internal Set by _scheduleEnd to let _finalHandler complete synchronously */
+  private _syncFinal: boolean = false;
+  /** @internal Track whether end() was called from sync user code */
+  private _endCalledFromSync: boolean = false;
 
   private _endGeneration: number = 0;
   private _endCallback: (() => void) | null = null;
@@ -156,6 +161,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
   ) {
     super();
+    (this as any).__excelts_stream = true;
 
     // ObjectMode: per-side overrides general (matching Node)
     const objectMode = options?.objectMode ?? false;
@@ -297,13 +303,33 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
               // _final already handles push(null) via the prototype method
               callback(null);
             });
-          } else {
+          } else if (this._hasSubclassFlush() || this._flushImpl) {
+            // Has a flush function — must run it (potentially async)
             this._runFlush()
               .then(() => {
                 this._readable.push(null);
                 callback(null);
               })
               .catch(err => callback(err));
+          } else if (this._syncFinal) {
+            // _scheduleEnd determined it's safe to complete synchronously
+            // (no flush, no _final override, no pipe destinations on readable).
+            // Execute push(null) + callback(null) inline to keep end/finish/close
+            // ahead of user Promises, matching Node.js process.nextTick nesting.
+            this._readable.push(null);
+            // push(null) schedules _emitEndOnce via deferTask. Call it
+            // synchronously so 'end' fires before 'finish' (Node.js order).
+            (this._readable as any)._emitEndOnce();
+            callback(null);
+          } else {
+            // No flush, no _final override, but the readable side has pipe
+            // destinations (e.g. PassThrough used in archive pipe chains).
+            // Must defer to avoid deadlocking chained pipe scenarios that
+            // need a microtask window for drain events to clear buffers.
+            deferTask(() => {
+              this._readable.push(null);
+              callback(null);
+            });
           }
         };
 
@@ -343,7 +369,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     // R7-3: _construct hook — if provided, delay reads/writes until constructed
     if (hasConstruct) {
       this._constructed = false;
-      queueMicrotask(() => {
+      deferTask(() => {
         const fn = this._constructFunc ?? (this as any)._construct.bind(this);
         fn((err?: Error | null) => {
           if (err) {
@@ -446,16 +472,37 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     // Defer to the next microtask so that synchronous code following the
     // readable push(null) can still register listeners or write data.
-    // Node.js uses process.nextTick here; queueMicrotask is the closest
+    // Node.js uses process.nextTick here; deferTask is the closest
     // browser equivalent.
-    queueMicrotask(() => {
+    deferTask(() => {
       if (gen !== this._endGeneration) {
         return;
       }
       if (this._destroyed || this._errored || this._writable.writableEnded) {
         return;
       }
+      // Signal to _finalHandler that it can complete synchronously when safe
+      // (no pipe destinations on the readable side). Without this, the
+      // _finalHandler's deferTask puts push(null) + callback(null) behind
+      // user Promises, diverging from Node.js process.nextTick nesting.
+      if (
+        this._endCalledFromSync &&
+        !this._hasSubclassFlush() &&
+        !this._flushImpl &&
+        !(
+          typeof (this as any)._final === "function" &&
+          (this as any)._final !== Transform.prototype._final
+        ) &&
+        (this._readable as any)._pipes._destinations.length === 0
+      ) {
+        this._syncFinal = true;
+        this._writable._syncFinish = true;
+      }
       this._writable.end();
+      this._syncFinal = false;
+      // Reset _syncFinish in case _finalFunc took an error path and
+      // didn't consume the flag (the success path resets it itself).
+      this._writable._syncFinish = false;
     });
   }
 
@@ -810,9 +857,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     if (this._ended) {
       const err = new Error("write after end") as Error & { code: string };
       err.code = "ERR_STREAM_WRITE_AFTER_END";
-      queueMicrotask(() => this.emit("error", err));
+      deferTask(() => this.emit("error", err));
       if (cb) {
-        queueMicrotask(() => cb(err));
+        deferTask(() => cb(err));
       }
       return false;
     }
@@ -869,6 +916,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
 
     this._ended = true;
+    // Track whether end() was called from synchronous user code (not from
+    // inside a deferred callback like a pipe end-listener). This determines
+    // whether _scheduleEnd can safely synchronize the final sequence.
+    this._endCalledFromSync = !inDeferredContext();
     this._scheduleEnd();
     return this;
   }
@@ -948,7 +999,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       const endCb = this._endCallback;
       this._endCallback = null;
       this._closed = true;
-      queueMicrotask(() => {
+      const doEmit = (): void => {
         if (endCb) {
           endCb();
         }
@@ -958,7 +1009,17 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         if (this._emitClose) {
           this.emit("close");
         }
-      });
+      };
+      if (
+        inDeferredContext() &&
+        !this._hasDestroyHook() &&
+        this.readableEnded &&
+        this.writableFinished
+      ) {
+        doEmit();
+      } else {
+        deferTask(doEmit);
+      }
     };
 
     if (this._hasDestroyHook()) {

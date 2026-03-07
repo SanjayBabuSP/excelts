@@ -11281,13 +11281,12 @@ export function runStreamTests(imports: StreamModuleImports): void {
       }
     });
 
-    it("should return false/null for null/undefined", () => {
+    it("should return null for null/undefined", () => {
       const ReadableClass = Readable as any;
       if (typeof ReadableClass.isReadable === "function") {
-        // Node.js returns null for null/undefined, browser returns false.
-        // Both are falsy, which is what matters.
-        expect(ReadableClass.isReadable(null)).toBeFalsy();
-        expect(ReadableClass.isReadable(undefined)).toBeFalsy();
+        // Node.js returns null for non-stream inputs. Browser now matches.
+        expect(ReadableClass.isReadable(null)).toBe(null);
+        expect(ReadableClass.isReadable(undefined)).toBe(null);
       }
     });
   });

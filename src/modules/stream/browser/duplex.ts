@@ -11,6 +11,7 @@ import { parseEndArgs } from "@stream/common/end-args";
 import { Readable } from "./readable";
 import { Writable } from "./writable";
 import { addEmitterListener, createListenerRegistry } from "./helpers";
+import { deferTask, inDeferredContext } from "./microtask-context";
 
 // =============================================================================
 // Duplex Stream
@@ -375,6 +376,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     }
   ) {
     super();
+    (this as any).__excelts_stream = true;
 
     this.allowHalfOpen = options?.allowHalfOpen ?? true;
     this._emitClose = options?.emitClose ?? true;
@@ -481,7 +483,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     // R5-1: _construct hook — if provided, delay reads/writes until constructed
     if (hasConstruct) {
       this._constructed = false;
-      queueMicrotask(() => {
+      deferTask(() => {
         const fn = this._constructFunc ?? (this as any)._construct.bind(this);
         fn(err => {
           if (err) {
@@ -783,14 +785,24 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       // Duplex itself is the authority for those events.
       this._readable.destroy();
       this._writable.destroy();
-      queueMicrotask(() => {
+      const doEmit = (): void => {
         if (err) {
           this.emit("error", err);
         }
         if (this._emitClose) {
           this.emit("close");
         }
-      });
+      };
+      if (
+        inDeferredContext() &&
+        !this._hasDestroyHook() &&
+        this.readableEnded &&
+        this.writableFinished
+      ) {
+        doEmit();
+      } else {
+        deferTask(doEmit);
+      }
     };
 
     if (this._hasDestroyHook()) {

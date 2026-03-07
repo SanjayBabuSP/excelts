@@ -18,7 +18,7 @@ import { Writable } from "./writable";
 /**
  * A writable stream that collects all chunks
  */
-export class Collector<T = Uint8Array> extends Writable {
+export class Collector<T = Uint8Array> extends Writable<T> {
   public chunks: T[] = [];
 
   constructor(options?: WritableStreamOptions) {

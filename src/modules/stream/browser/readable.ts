@@ -11,6 +11,7 @@ import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 
 import { ChunkBuffer } from "./chunk-buffer";
 import { PipeManager } from "./pipe-manager";
+import { deferTask, inDeferredContext } from "./microtask-context";
 
 // =============================================================================
 // Readable Stream Wrapper
@@ -51,6 +52,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _ended: boolean = false;
   private _endEmitted: boolean = false;
   private _destroyed: boolean = false;
+  /** @internal Set by _callRead catch to signal afterDestroy to emit synchronously */
+  private _internalDestroy: boolean = false;
   private _errored: Error | null = null;
   private _closed: boolean = false;
   private _paused: boolean = false;
@@ -92,6 +95,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
   ) {
     super();
+    (this as any).__excelts_stream = true;
     this._objectMode = options?.objectMode ?? false;
     this._highWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this._objectMode);
     this._buf = new ChunkBuffer<T>(this._objectMode);
@@ -149,7 +153,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
     this._constructed = false;
     // Call _construct on next microtask (matches Node.js which uses process.nextTick)
-    queueMicrotask(() => {
+    deferTask(() => {
       const fn = this._constructFunc ?? (this as any)._construct.bind(this);
       fn(err => {
         if (err) {
@@ -275,12 +279,17 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   /**
    * Check if a stream is still readable (not destroyed, not ended).
    * Matches Node.js Readable.isReadable() (available since v21).
+   * Returns null for non-stream inputs (matching Node.js behavior).
    */
-  static isReadable(stream: unknown): boolean {
+  static isReadable(stream: unknown): boolean | null {
     if (stream == null || typeof stream !== "object") {
-      return false;
+      return null;
     }
     const s = stream as any;
+    // Not a stream-like object — return null (matches Node.js)
+    if (typeof s.read !== "function") {
+      return null;
+    }
     // If destroyed or errored, not readable
     if (s.destroyed || s._destroyed) {
       return false;
@@ -289,8 +298,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (s.readableEnded || s._endEmitted) {
       return false;
     }
-    // Must have a read method and readable property
-    return typeof s.read === "function" && s.readable !== false;
+    // Must have readable property
+    return s.readable !== false;
   }
 
   /**
@@ -350,7 +359,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._ended && chunk !== null) {
       const err = new Error("stream.push() after EOF") as Error & { code: string };
       err.code = "ERR_STREAM_PUSH_AFTER_EOF";
-      queueMicrotask(() => this.emit("error", err));
+      deferTask(() => this.emit("error", err));
       return false;
     }
 
@@ -363,10 +372,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
       // Emit 'end' only after buffered data is fully drained.
       // This avoids premature 'end' when producers push null while paused.
-      // Defer via queueMicrotask to match Node.js process.nextTick behavior —
+      // Defer via deferTask to match Node.js process.nextTick behavior —
       // synchronous code after push(null) should not see 'end' yet.
       if (this._buf.length === 0) {
-        queueMicrotask(() => this._emitEndOnce());
+        deferTask(() => this._emitEndOnce());
       }
       // Note: Don't call destroy() here, let the stream be consumed naturally
       // The reader will return done:true when it finishes reading
@@ -408,9 +417,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       }
       // After emitting data, call _read again if available (Node.js behavior)
       if (this._read && !this._ended) {
-        queueMicrotask(() => {
+        deferTask(() => {
           if (this._flowing && !this._ended && !this._destroyed) {
             this._callRead(this._highWaterMark);
+            // Sync end check after _callRead — see resume() for rationale.
+            if (this._ended && this._buf.length === 0) {
+              this._emitEndOnce();
+            }
           }
         });
       }
@@ -423,7 +436,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
       // Emit readable event when buffer goes from empty to having data
       if (wasEmpty) {
-        queueMicrotask(() => this.emit("readable"));
+        deferTask(() => this.emit("readable"));
       }
       // Return false if buffer exceeds high water mark (backpressure signal)
       // Fast path for object mode - just count items
@@ -466,7 +479,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       if (!this._ended) {
         this._ended = true;
         if (this._buf.length === 0) {
-          queueMicrotask(() => this._emitEndOnce());
+          deferTask(() => this._emitEndOnce());
         }
       }
       return;
@@ -478,7 +491,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._endEmitted) {
       const err = new Error("stream.unshift() after end event") as Error & { code: string };
       err.code = "ERR_STREAM_UNSHIFT_AFTER_END_EVENT";
-      queueMicrotask(() => this.emit("error", err));
+      deferTask(() => this.emit("error", err));
       return;
     }
     // Handle string encoding (Node.js compatibility)
@@ -497,7 +510,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // This is needed when unshift() is called after push(null) — the original
       // drain loop has already finished, so we must schedule a new one to emit
       // the data before 'end'.
-      queueMicrotask(() => {
+      deferTask(() => {
         while (this._buf.length > 0 && this._flowing) {
           const c = this._buf.shift();
           this._didRead = true;
@@ -510,7 +523,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     } else if (wasEmpty) {
       // Node.js emits 'readable' when data is unshifted into an empty buffer
       // while in paused mode, so that consumers know data is available.
-      queueMicrotask(() => this.emit("readable"));
+      deferTask(() => this.emit("readable"));
     }
   }
 
@@ -524,9 +537,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._read!(size);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      queueMicrotask(() => {
-        this.destroy(error);
-      });
+      // _callRead is always invoked from within a deferTask callback, so
+      // we can destroy synchronously instead of scheduling another deferTask.
+      // This ensures error/close fire before interleaved Promise.then
+      // callbacks, matching Node.js process.nextTick nesting behavior.
+      // Set _internalDestroy to signal afterDestroy to emit synchronously.
+      this._internalDestroy = true;
+      this.destroy(error);
     }
   }
 
@@ -577,12 +594,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._objectMode) {
       const chunk = this._buf.shift();
       if (this._ended && this._buf.length === 0) {
-        queueMicrotask(() => this._emitEndOnce());
+        deferTask(() => this._emitEndOnce());
       }
       // Node.js triggers _read() to refill buffer after consuming an object
       if (this._read && !this._ended && !this._destroyed && this._constructed) {
         if (this._buf.length < this._highWaterMark) {
-          queueMicrotask(() => {
+          deferTask(() => {
             if (!this._ended && !this._destroyed) {
               this._callRead(this._highWaterMark);
             }
@@ -622,7 +639,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._read && !this._ended && !this._destroyed) {
       const bufSize = this._buf.byteSize;
       if (bufSize < this._highWaterMark) {
-        queueMicrotask(() => {
+        deferTask(() => {
           if (!this._ended && !this._destroyed) {
             this._callRead(this._highWaterMark);
           }
@@ -631,13 +648,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     if (this._ended && this._buf.length === 0) {
-      queueMicrotask(() => this._emitEndOnce());
+      deferTask(() => this._emitEndOnce());
     }
 
     // Node.js re-emits 'readable' when there is still data in the buffer
     // after a read(), so consumers know more data is available.
     if (!this._flowing && this._buf.length > 0) {
-      queueMicrotask(() => this.emit("readable"));
+      deferTask(() => this.emit("readable"));
     }
 
     return result;
@@ -728,7 +745,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       // resume() is called multiple times synchronously (e.g. on("data") + resume())
       if (!this._resumeScheduled) {
         this._resumeScheduled = true;
-        queueMicrotask(() => {
+        deferTask(() => {
           this._resumeScheduled = false;
           this.emit("resume");
         });
@@ -739,7 +756,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // Node.js does NOT drain synchronously on resume() — it defers to nextTick
     // so that multiple resume()/pipe() calls can register before data flows.
     if (this._buf.length > 0) {
-      queueMicrotask(() => {
+      deferTask(() => {
         while (this._buf.length > 0 && this._flowing) {
           const chunk = this._buf.shift();
           this._didRead = true;
@@ -773,16 +790,24 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       });
     } else if (this._ended && this._buf.length === 0) {
-      queueMicrotask(() => this._emitEndOnce());
+      deferTask(() => this._emitEndOnce());
     } else if (this._webStreamMode && !this._pushMode) {
       // Start reading from underlying Web Stream when resuming.
       this._startReading();
     } else if (this._read) {
       // Call user-provided read function asynchronously
       // This allows multiple pipe() calls to register before data flows
-      queueMicrotask(() => {
+      deferTask(() => {
         if (this._flowing && !this._ended && !this._destroyed && this._constructed) {
           this._callRead(this._highWaterMark);
+          // After _callRead, check if push(null) was called synchronously.
+          // If so, emit 'end' here rather than letting push(null)'s own
+          // deferTask schedule it — otherwise a user Promise.then
+          // queued before this microtask could observe readableEnded=false,
+          // diverging from Node.js where process.nextTick drains greedily.
+          if (this._ended && this._buf.length === 0) {
+            this._emitEndOnce();
+          }
         }
       });
     }
@@ -808,7 +833,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._hasFlowed = true;
       this._flowing = false;
       if (this._buf.length > 0 || this._ended) {
-        queueMicrotask(() => this.emit("readable"));
+        deferTask(() => this.emit("readable"));
       }
     }
 
@@ -882,14 +907,29 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         this._errored = err;
       }
       this._closed = true;
-      queueMicrotask(() => {
+      const doEmit = (): void => {
         if (err) {
           this.emit("error", err);
         }
         if (this._emitClose) {
           this.emit("close");
         }
-      });
+      };
+      // When already inside a deferTask callback (e.g. autoDestroy after
+      // 'end') and there is no async _destroy hook, emit synchronously.
+      // This matches Node.js where nested process.nextTick runs before
+      // interleaved Promise.then callbacks.
+      // Only apply when the stream ended naturally (autoDestroy path) or
+      // was destroyed internally (e.g. _callRead error) — user-initiated
+      // destroy() from within a listener must still defer so that async
+      // cleanup (e.g. iterator.return()) can complete.
+      const isInternalPath = this._endEmitted || this._internalDestroy;
+      this._internalDestroy = false;
+      if (inDeferredContext() && !this._hasDestroyHook() && isInternalPath) {
+        doEmit();
+      } else {
+        deferTask(doEmit);
+      }
     };
 
     if (this._hasDestroyHook()) {
@@ -1132,7 +1172,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           this._ended = true;
           if (this._buf.length === 0) {
             // Defer end to match Node.js nextTick-ish timing.
-            queueMicrotask(() => this._emitEndOnce());
+            deferTask(() => this._emitEndOnce());
           }
           this._releaseReader();
           break;
@@ -1144,7 +1184,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           const wasEmpty = this._buf.length === 0;
           this._buf.push(value);
           if (wasEmpty) {
-            queueMicrotask(() => this.emit("readable"));
+            deferTask(() => this.emit("readable"));
           }
 
           while (this._buf.length > 0 && this._flowing) {

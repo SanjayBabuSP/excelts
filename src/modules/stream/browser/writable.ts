@@ -10,6 +10,7 @@ import { getDefaultHighWaterMark } from "@stream/common/utils";
 import { createTextDecoder } from "@utils/binary";
 import { createAbortError } from "@utils/errors";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
+import { deferTask, inDeferredContext } from "./microtask-context";
 
 import type { Writable as NodeWritable } from "stream";
 
@@ -79,6 +80,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   private _writer: WritableStreamDefaultWriter<T> | null = null;
   private _ended: boolean = false;
   private _finished: boolean = false;
+  /** @internal Set by Transform._scheduleEnd to allow _doFinish to emit synchronously */
+  _syncFinish: boolean = false;
   private _destroyed: boolean = false;
   private _errored: Error | null = null;
   private _errorEmitted: boolean = false;
@@ -134,6 +137,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
   constructor(options?: WritableOptions<T>) {
     super();
+    (this as any).__excelts_stream = true;
     this._objectMode = options?.objectMode ?? false;
     this._highWaterMark = options?.highWaterMark ?? getDefaultHighWaterMark(this._objectMode);
     this._autoDestroy = options?.autoDestroy ?? true;
@@ -242,7 +246,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       return;
     }
     this._constructed = false;
-    queueMicrotask(() => {
+    deferTask(() => {
       const fn = this._constructFunc ?? (this as any)._construct.bind(this);
       fn(err => {
         if (err) {
@@ -428,7 +432,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
             if (this._needDrain && this._writableLength < this._highWaterMark) {
               this._needDrain = false;
-              queueMicrotask(() => this.emit("drain"));
+              deferTask(() => this.emit("drain"));
             }
 
             // Call individual callbacks with success
@@ -501,7 +505,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       // should only ever emit one 'error' event (including from later destroy()).
       if (!this._destroyed && !this._errorEmitted) {
         this._errorEmitted = true;
-        queueMicrotask(() => this.emit("error", err));
+        deferTask(() => this.emit("error", err));
       }
       cb?.(err);
       return false;
@@ -561,7 +565,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           this._writableLength -= chunkSize;
           if (this._needDrain && this._writableLength < this._highWaterMark) {
             this._needDrain = false;
-            queueMicrotask(() => this.emit("drain"));
+            deferTask(() => this.emit("drain"));
           }
           callback?.(null);
         })
@@ -626,7 +630,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._writableLength -= chunkSize;
         if (this._needDrain && this._writableLength < this._highWaterMark) {
           this._needDrain = false;
-          queueMicrotask(() => this.emit("drain"));
+          deferTask(() => this.emit("drain"));
         }
         callback?.(null);
 
@@ -698,7 +702,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           this._writableLength -= totalSize;
           if (this._needDrain && this._writableLength < this._highWaterMark) {
             this._needDrain = false;
-            queueMicrotask(() => this.emit("drain"));
+            deferTask(() => this.emit("drain"));
           }
           for (const entry of chunks) {
             entry.callback?.(null);
@@ -738,7 +742,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 
   /**
    * Run _finalFunc and emit finish/close.
-   * Events are deferred via queueMicrotask to match Node.js process.nextTick
+   * Events are deferred via deferTask to match Node.js process.nextTick
    * behavior, so listeners registered after end() can still receive them.
    */
   private _doFinish(cb?: () => void): void {
@@ -758,7 +762,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           }
           return;
         }
-        queueMicrotask(() => {
+        const doFinish = (): void => {
           // If destroyed between end() and this microtask, suppress finish
           // and let destroy() handle close emission. Fire the end-cb so the
           // caller is notified (Node.js fires it via the 'close' listener).
@@ -776,10 +780,19 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           if (this._autoDestroy) {
             this.destroy();
           }
-        });
+        };
+        // When Transform signals _syncFinish (via _scheduleEnd for simple
+        // Transforms with no pipe destinations), emit finish synchronously
+        // to keep it ahead of user Promises. Otherwise defer as usual.
+        if (this._syncFinish) {
+          this._syncFinish = false;
+          doFinish();
+        } else {
+          deferTask(doFinish);
+        }
       });
     } else {
-      queueMicrotask(() => {
+      const doFinish = (): void => {
         // If destroyed between end() and this microtask, suppress finish
         // and let destroy() handle close emission.
         if (this._destroyed) {
@@ -796,7 +809,20 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         if (this._autoDestroy) {
           this.destroy();
         }
-      });
+      };
+      // When already in a deferred context (e.g. end() called from a
+      // pipe end-listener or Transform's _scheduleEnd), execute finish
+      // synchronously to keep it ahead of user Promises — matching
+      // Node.js process.nextTick nesting behavior.
+      //
+      // This only affects plain Writables without _finalFunc. Transform's
+      // internal writable always has _finalFunc, so it takes the branch
+      // above (with _syncFinish gating) instead of this one.
+      if (inDeferredContext()) {
+        doFinish();
+      } else {
+        deferTask(doFinish);
+      }
     }
   }
 
@@ -867,11 +893,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           code: string;
         };
         err.code = "ERR_STREAM_ALREADY_FINISHED";
-        queueMicrotask(() => (endCb as any)(err));
+        deferTask(() => (endCb as any)(err));
       } else {
         // Otherwise, a redundant end() is a no-op; if a callback was provided,
         // Node.js calls it with no error.
-        queueMicrotask(() => (endCb as any)?.(null));
+        deferTask(() => (endCb as any)?.(null));
       }
       return this;
     }
@@ -904,7 +930,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       // Node.js propagates the write error to the end() callback.
       if (this._errored) {
         const endErr = this._errored;
-        queueMicrotask(() => (cb as (err?: Error) => void)?.(endErr));
+        deferTask(() => (cb as (err?: Error) => void)?.(endErr));
         return this;
       }
 
@@ -968,7 +994,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // Node.js: destroy() resets writable override so getter reflects true state
     this._writableOverride = undefined;
 
-    // Set state synchronously (matches Node.js), defer event emission via queueMicrotask
+    // Set state synchronously (matches Node.js), defer event emission via deferTask
     // to match Node.js process.nextTick behavior
     if (error && !this._errored) {
       this._errored = error;
@@ -1015,7 +1041,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._errored = err;
       }
       this._closed = true;
-      queueMicrotask(() => {
+      const doEmit = (): void => {
         if (err && !this._errorEmitted) {
           this._errorEmitted = true;
           this.emit("error", err);
@@ -1026,7 +1052,19 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         // Node.js fires the end() callback after close, even on destroy.
         // Pass the error so the end() caller is notified of the failure.
         (pendingEndCb as (err?: Error | null) => void)?.(err);
-      });
+      };
+      // When already inside a deferTask callback (e.g. autoDestroy after
+      // 'finish') and there is no async _destroy hook, emit synchronously.
+      // This matches Node.js where nested process.nextTick runs before
+      // interleaved Promise.then callbacks.
+      // Only apply when the stream finished naturally (autoDestroy path) —
+      // user-initiated destroy() from within a listener must still defer
+      // so that async cleanup can complete.
+      if (inDeferredContext() && !this._hasDestroyHook() && this._finished) {
+        doEmit();
+      } else {
+        deferTask(doEmit);
+      }
     };
 
     if (this._hasDestroyHook()) {
@@ -1241,8 +1279,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     const err = new StreamStateError("pipe", "not readable") as StreamStateError & { code: string };
     err.code = "ERR_STREAM_CANNOT_PIPE";
     // Node.js emits the error asynchronously (via process.nextTick).
-    // In the browser we use queueMicrotask for the same deferred semantics.
-    queueMicrotask(() => this.emit("error", err));
+    // In the browser we use deferTask for the same deferred semantics.
+    deferTask(() => this.emit("error", err));
     return undefined;
   }
 
