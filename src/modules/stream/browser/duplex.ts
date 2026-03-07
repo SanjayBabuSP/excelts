@@ -573,6 +573,15 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       maybeAutoDestroy();
     });
     registry.add(this._writable, "drain", () => this.emit("drain"));
+    // Node.js: when allowHalfOpen is false and the writable side closes,
+    // the readable side should also be destroyed.
+    if (!this.allowHalfOpen) {
+      registry.once(this._writable, "close", () => {
+        if (!this._readable.destroyed) {
+          this._readable.destroy();
+        }
+      });
+    }
 
     this._sideForwardingCleanup = () => {
       registry.cleanup();

@@ -543,18 +543,25 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   read(size?: number): T | null {
     this._didRead = true;
 
-    // size === 0: return null but may trigger internal _read
-    if (size === 0) {
-      if (this._read && !this._ended && !this._destroyed && this._constructed) {
-        const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
-        // Node.js condition: needReadable = length < HWM || length === 0
-        // This correctly handles HWM=0 (buffer empty triggers _read) while
-        // not triggering _read when buffer exactly equals a non-zero HWM.
-        if (bufSize < this._highWaterMark || bufSize === 0) {
-          this._callRead(this._highWaterMark);
+    // Node.js normalization: parseInt then isNaN check.
+    // NaN/null/undefined/Infinity/-Infinity/false/"" all become NaN after parseInt,
+    // which means "read all available data" (same as read() with no args).
+    // Negative integers return null. Zero returns null but may trigger _read.
+    let n: number | undefined;
+    if (size != null) {
+      n = parseInt(size as any, 10);
+      if (isNaN(n)) {
+        n = undefined; // treat as read() — read all
+      } else if (n <= 0) {
+        // size === 0: return null but may trigger internal _read
+        if (n === 0 && this._read && !this._ended && !this._destroyed && this._constructed) {
+          const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
+          if (bufSize < this._highWaterMark || bufSize === 0) {
+            this._callRead(this._highWaterMark);
+          }
         }
+        return null;
       }
-      return null;
     }
 
     if (this._buf.length === 0) {
@@ -588,12 +595,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // Binary mode
     let result: T;
 
-    if (size == null) {
+    if (n == null) {
       // read() with no size: return ALL buffered data as one chunk
       result = this._applyEncoding(this._buf.consumeAll());
     } else {
       // read(n): return exactly n bytes, or null if not enough
-      if (this._buf.byteSize < size) {
+      if (this._buf.byteSize < n) {
         // Not enough data buffered
         if (this._ended) {
           // Stream ended — return whatever is available
@@ -607,7 +614,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           return null;
         }
       } else {
-        result = this._applyEncoding(this._buf.consumeBytes(size));
+        result = this._applyEncoding(this._buf.consumeBytes(n));
       }
     }
 
@@ -812,7 +819,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Check if paused
    */
   isPaused(): boolean {
-    return this._paused;
+    // Node.js: isPaused() returns true only when readableFlowing is strictly false.
+    // When readableFlowing is null (initial state), isPaused() returns false.
+    return this.readableFlowing === false;
   }
 
   /**
@@ -840,6 +849,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     this._destroyed = true;
+    // Node.js: destroy() resets readable override so getter reflects true state
+    this._readableOverride = undefined;
 
     // Note: Node.js does NOT clear the readable buffer synchronously on destroy.
     // readableLength retains its value even after destroy() returns.
@@ -865,7 +876,8 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // If subclass overrides _destroy, call it and wait for callback before
     // emitting error/close (matches Node.js behavior).
     const afterDestroy = (finalError?: Error | null): void => {
-      const err = finalError ?? error;
+      // Node.js: cb(null) suppresses error event, cb(err) replaces, cb() preserves original
+      const err = finalError === undefined ? error : finalError;
       if (err) {
         this._errored = err;
       }

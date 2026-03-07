@@ -476,7 +476,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // Node.js: writing null is always an error (even in object mode).
     // Node.js throws this synchronously and does NOT emit an error event.
     if (chunk === null) {
-      const err = new Error("May not write null values to stream") as Error & { code: string };
+      const err = new TypeError("May not write null values to stream") as TypeError & {
+        code: string;
+      };
       err.code = "ERR_STREAM_NULL_VALUES";
       throw err;
     }
@@ -490,9 +492,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       ) as Error & { code: string };
       err.code = isDestroyed ? "ERR_STREAM_DESTROYED" : "ERR_STREAM_WRITE_AFTER_END";
       const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-      // Node.js: only emit 'error' for write-after-end when NOT destroyed.
-      // write-after-destroy silently calls the callback without emitting 'error'.
-      if (!this._destroyed) {
+      // Node.js: set errored synchronously on write-after-end
+      if (!this._errored) {
+        this._errored = err;
+      }
+      // Node.js: only emit 'error' for write-after-end when NOT destroyed,
+      // and only emit once. Setting _errorEmitted here is intentional — a stream
+      // should only ever emit one 'error' event (including from later destroy()).
+      if (!this._destroyed && !this._errorEmitted) {
+        this._errorEmitted = true;
         queueMicrotask(() => this.emit("error", err));
       }
       cb?.(err);
@@ -855,7 +863,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       // If we've already finished, Node.js calls the callback with
       // ERR_STREAM_ALREADY_FINISHED (but does not emit an error event).
       if (this._finished && endCb) {
-        const err = new Error("write after end") as Error & { code: string };
+        const err = new Error("Cannot call end after a stream was finished") as Error & {
+          code: string;
+        };
         err.code = "ERR_STREAM_ALREADY_FINISHED";
         queueMicrotask(() => (endCb as any)(err));
       } else {
@@ -867,6 +877,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
 
     this._ended = true;
+    // Node.js: end() resets writable state. Any prior setter override is cleared
+    // so the getter reflects the true ended state.
+    this._writableOverride = undefined;
 
     const { chunk, encoding, cb } = parseEndArgs<T>(chunkOrCallback, encodingOrCallback, callback);
 
@@ -952,6 +965,8 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     }
 
     this._destroyed = true;
+    // Node.js: destroy() resets writable override so getter reflects true state
+    this._writableOverride = undefined;
 
     // Set state synchronously (matches Node.js), defer event emission via queueMicrotask
     // to match Node.js process.nextTick behavior
@@ -991,7 +1006,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // If subclass overrides _destroy, call it and wait for callback before
     // emitting error/close (matches Node.js behavior).
     const afterDestroy = (finalError?: Error | null): void => {
-      const err = finalError ?? error;
+      // Node.js: if _destroy calls cb(null), the original error is suppressed
+      // (no error event emitted). If cb(err), that replacement error is used.
+      // If cb() with no args, the original error is preserved.
+      // We distinguish cb(null) from cb() by checking if the argument is explicitly null.
+      const err = finalError === undefined ? error : finalError;
       if (err) {
         this._errored = err;
       }

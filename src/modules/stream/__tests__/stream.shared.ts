@@ -9409,7 +9409,6 @@ export function runStreamTests(imports: StreamModuleImports): void {
           composed.end("data", () => {
             resolve(true);
           });
-          setTimeout(() => resolve(false), 500);
         });
 
         expect(callbackCalled).toBe(true);
@@ -9507,14 +9506,19 @@ export function runStreamTests(imports: StreamModuleImports): void {
         t2.on("error", () => {});
 
         // First end — should succeed
-        composed.end("first-data", () => {
-          endCallbackResults.push("first-callback");
+        const firstEndDone = new Promise<void>(resolve => {
+          composed.end("first-data", () => {
+            endCallbackResults.push("first-callback");
+            resolve();
+          });
         });
 
-        // Wait for first end to propagate before calling second end
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait for first end to fully propagate
+        await firstEndDone;
 
         // Second end — should be handled gracefully, not crash.
+        // The second callback may or may not be called depending on implementation,
+        // so we race it against the close event (which is guaranteed after end).
         try {
           composed.end(() => {
             endCallbackResults.push("second-callback");
@@ -9524,7 +9528,14 @@ export function runStreamTests(imports: StreamModuleImports): void {
           endCallbackResults.push("threw");
         }
 
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for the composed stream to fully close
+        await new Promise<void>(resolve => {
+          if ((composed as any).closed || (composed as any).destroyed) {
+            resolve();
+          } else {
+            composed.on("close", resolve);
+          }
+        });
 
         // The first callback must always be called
         expect(endCallbackResults).toContain("first-callback");
@@ -9563,10 +9574,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         // The callback MUST be called (possibly with an error) — it must NOT
         // be silently lost.
         const callbackResult = await new Promise<string>(resolve => {
-          const timeout = setTimeout(() => resolve("timeout-callback-lost"), 1000);
-
           composed.end(() => {
-            clearTimeout(timeout);
             resolve("callback-invoked");
           });
         });
@@ -9635,10 +9643,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         t2.on("error", () => {});
 
         const result = await new Promise<string>(resolve => {
-          const timeout = setTimeout(() => resolve("no-error-emitted"), 500);
-
           composed.on("error", (err: Error) => {
-            clearTimeout(timeout);
             resolve(err.message);
           });
 
@@ -9646,7 +9651,6 @@ export function runStreamTests(imports: StreamModuleImports): void {
           try {
             composed.write("data");
           } catch (e: any) {
-            clearTimeout(timeout);
             resolve("threw:" + e.message);
           }
         });
@@ -9746,8 +9750,6 @@ export function runStreamTests(imports: StreamModuleImports): void {
             resolve();
           }
         });
-        // If the source stays paused forever, we'll time out
-        setTimeout(() => resolve(), 500);
       });
 
       // We should have received all 4 chunks, meaning the source was resumed
@@ -10048,7 +10050,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       // Consume readable side to trigger end
       t.resume();
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise<void>(r => t.on("close", r));
 
       // Both events must fire; ordering is timing-dependent in Node.js
       // (depends on whether resume() is called before or after end()).
@@ -10075,7 +10077,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       // Trigger _read by resuming
       r.resume();
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise<void>(resolve => r.on("close", resolve));
 
       expect(events).toContain("error:sync-boom");
       expect(events).toContain("close");
@@ -10218,7 +10220,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       w.end();
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise<void>(r => w.on("close", r));
 
       expect(events).toContain("prefinish");
       expect(events).toContain("finish");
@@ -10242,8 +10244,11 @@ export function runStreamTests(imports: StreamModuleImports): void {
       w.write("data");
 
       // end() while write is in-flight — callback stored as pendingEnd
-      w.end(() => {
-        events.push("end-cb");
+      const endCbDone = new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("end-cb");
+          resolve();
+        });
       });
 
       w.on("error", () => {});
@@ -10251,7 +10256,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       // Destroy with error before write completes
       w.destroy(new Error("boom"));
 
-      await new Promise(r => setTimeout(r, 300));
+      await endCbDone;
 
       // The end callback must be invoked (Node.js fires it after close)
       expect(events).toContain("end-cb");
@@ -10354,7 +10359,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
         // consume
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      // End the transform and wait for all writes to be processed
+      t.end();
+      await new Promise<void>(r => t.on("finish", r));
 
       // After reading, remaining transforms should complete
       expect(transformCalls).toBe(5);
@@ -10370,7 +10377,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       s1.destroy();
 
-      await new Promise(r => setTimeout(r, 200));
+      // Wait for s1 to fully close, then verify s2 is NOT destroyed
+      await new Promise<void>(r => s1.on("close", r));
 
       expect(s1.destroyed).toBe(true);
       expect(s2.destroyed).toBe(false);
@@ -10412,7 +10420,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
 
       w.end();
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise<void>(r => w.on("close", r));
     });
   });
 
@@ -10437,7 +10445,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       w.write("data");
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise<void>(r => w.on("close", r));
 
       expect(errorSeen).toBe(writeError);
       expect(w.destroyed).toBe(true);
@@ -10459,7 +10467,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const chunks: Uint8Array[] = [];
       r.on("data", (chunk: any) => chunks.push(chunk));
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise<void>(resolve => r.on("end", resolve));
 
       // In Node.js, push("hello") in binary mode converts to Buffer with utf8 encoding.
       // The result should be a Uint8Array, not a string.
@@ -10495,8 +10503,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       w.write("data");
 
-      await new Promise(r => setTimeout(r, 300));
-
+      // Wait for auto-destroy cycle to complete, then verify only 1 error
+      await new Promise<void>(r => w.on("close", r));
       expect(errorCount).toBe(1);
     });
   });
@@ -10525,11 +10533,13 @@ export function runStreamTests(imports: StreamModuleImports): void {
       const w = new MyWritable();
       w.write("a" as any);
       w.write("b" as any);
-      w.end(() => {
-        events.push("end-cb");
-      });
 
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise<void>(resolve => {
+        w.end(() => {
+          events.push("end-cb");
+          resolve();
+        });
+      });
 
       // Writes should happen AFTER construct completes
       expect(events.indexOf("construct-done")).toBeLessThan(events.indexOf("write:a"));
@@ -10595,8 +10605,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
 
       await gotChunk;
 
-      // Wait for close events to propagate
-      await new Promise(r => setTimeout(r, 500));
+      // Wait for destroy to propagate from mapped → source
+      await new Promise<void>(resolve => source.on("close", resolve));
 
       expect(events).toContain("mapped-close");
       expect(mapped.destroyed).toBe(true);
@@ -10628,7 +10638,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
 
       await gotChunk;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise<void>(r => source.on("close", r));
 
       expect(filtered.destroyed).toBe(true);
       expect(source.destroyed).toBe(true);
@@ -10659,7 +10669,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
 
       await gotChunk;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise<void>(r => source.on("close", r));
 
       expect(flatMapped.destroyed).toBe(true);
       expect(source.destroyed).toBe(true);
@@ -10690,7 +10700,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
 
       await gotChunk;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise<void>(r => source.on("close", r));
 
       expect(dropped.destroyed).toBe(true);
       expect(source.destroyed).toBe(true);
@@ -10721,7 +10731,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       });
 
       await gotChunk;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise<void>(r => source.on("close", r));
 
       expect(taken.destroyed).toBe(true);
       expect(source.destroyed).toBe(true);
@@ -10927,7 +10937,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       // Synchronously unshift data after push(null)
       r.unshift("after-eof");
 
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise<void>(resolve => r.on("close", resolve));
 
       // Node.js: data is delivered before end
       expect(events).toContain("data:after-eof");
@@ -11004,7 +11014,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
         events.push("end-cb");
       });
 
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise<void>(resolve => w.on("close", resolve));
 
       // Node.js: error → close → end-cb (no prefinish/finish on _final error)
       expect(events).toContain("error");
@@ -11060,11 +11070,9 @@ export function runStreamTests(imports: StreamModuleImports): void {
       w.write("a");
       w.write("b");
       // end() without uncork() — Node.js auto-uncorks
-      w.end(() => {
-        // All corked data should have been flushed
+      await new Promise<void>(resolve => {
+        w.end(resolve);
       });
-
-      await new Promise(resolve => setTimeout(resolve, 200));
 
       expect(chunks).toContain("a");
       expect(chunks).toContain("b");
@@ -11132,8 +11140,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
       w.on("finish", () => events.push("finish"));
       w.end();
 
-      // Wait for finish but not close (autoDestroy is false)
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Wait for finish (autoDestroy is false so no close)
+      await new Promise<void>(resolve => w.on("finish", resolve));
       expect(events).toContain("finish");
 
       w.write("x", (err: Error | null | undefined) =>
@@ -11894,6 +11902,232 @@ export function runStreamTests(imports: StreamModuleImports): void {
       );
 
       expect(count).toBe(3);
+    });
+  });
+
+  // ===========================================================================
+  // Node.js behavioral parity fixes
+  // ===========================================================================
+  describe("Node.js behavioral parity", () => {
+    describe("Readable.read() edge cases", () => {
+      it("read(-1) should return null", () => {
+        const r = new Readable({ read() {} });
+        r.push("hello");
+        expect(r.read(-1)).toBeNull();
+      });
+
+      it("read(NaN) should return all buffered data (like read())", () => {
+        const r = new Readable({ objectMode: true, read() {} });
+        r.push("a");
+        r.push("b");
+        // NaN is treated as undefined → reads all
+        const result = r.read(NaN);
+        expect(result).toBe("a");
+      });
+
+      it("read(-Infinity) should return all buffered data", () => {
+        const r = new Readable({ objectMode: true, read() {} });
+        r.push("hello");
+        // -Infinity → parseInt → NaN → read all
+        const result = r.read(-Infinity);
+        expect(result).toBe("hello");
+      });
+
+      it("read(0) should return null", () => {
+        const r = new Readable({ read() {} });
+        r.push("hello");
+        expect(r.read(0)).toBeNull();
+      });
+    });
+
+    describe("Readable.isPaused()", () => {
+      it("should return false initially (readableFlowing is null)", () => {
+        const r = new Readable({ read() {} });
+        expect(r.isPaused()).toBe(false);
+      });
+
+      it("should return true after pause()", () => {
+        const r = new Readable({ read() {} });
+        r.pause();
+        expect(r.isPaused()).toBe(true);
+      });
+
+      it("should return false after resume()", () => {
+        const r = new Readable({ read() {} });
+        r.pause();
+        r.resume();
+        expect(r.isPaused()).toBe(false);
+      });
+    });
+
+    describe("Writable.write(null) error type", () => {
+      it("should throw TypeError (not Error) with code ERR_STREAM_NULL_VALUES", () => {
+        const w = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        try {
+          (w as any).write(null);
+          expect.unreachable("should have thrown");
+        } catch (e: any) {
+          expect(e).toBeInstanceOf(TypeError);
+          expect(e.code).toBe("ERR_STREAM_NULL_VALUES");
+        }
+      });
+    });
+
+    describe("Writable write-after-end", () => {
+      it("should emit only 1 error event for multiple writes after end", async () => {
+        const w = new Writable({
+          autoDestroy: false,
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        let errorCount = 0;
+        w.on("error", () => {
+          errorCount++;
+        });
+        w.end();
+        await new Promise<void>(resolve => w.on("finish", resolve));
+        w.write("a");
+        w.write("b");
+        w.write("c");
+        // Error is emitted via queueMicrotask; wait for it, then verify count is exactly 1.
+        await new Promise<void>(resolve => w.once("error", () => resolve()));
+        // One more microtask to ensure no additional error events are queued
+        await new Promise<void>(resolve => queueMicrotask(resolve));
+        expect(errorCount).toBe(1);
+      });
+
+      it("should set errored synchronously after write-after-end", async () => {
+        const w = new Writable({
+          autoDestroy: false,
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        w.on("error", () => {});
+        w.end();
+        await new Promise<void>(resolve => w.on("finish", resolve));
+        w.write("x");
+        expect(w.errored).not.toBeNull();
+      });
+    });
+
+    describe("Writable._destroy cb(null) suppresses error", () => {
+      it("should not emit error when _destroy calls cb(null)", async () => {
+        const w = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          },
+          destroy(_err, cb) {
+            cb(null);
+          }
+        });
+        let errorEmitted = false;
+        w.on("error", () => {
+          errorEmitted = true;
+        });
+        w.destroy(new Error("test"));
+        await new Promise<void>(resolve => w.on("close", resolve));
+        expect(errorEmitted).toBe(false);
+      });
+
+      it("should emit replacement error when _destroy calls cb(replacementErr)", async () => {
+        const w = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          },
+          destroy(_err, cb) {
+            cb(new Error("replacement"));
+          }
+        });
+        const errors: string[] = [];
+        w.on("error", e => {
+          errors.push(e.message);
+        });
+        w.destroy(new Error("original"));
+        await new Promise<void>(resolve => w.on("close", resolve));
+        expect(errors).toEqual(["replacement"]);
+      });
+    });
+
+    describe("Writable.writable after end/destroy", () => {
+      it("should return false after end() even if previously set to true", async () => {
+        const w = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        w.writable = true;
+        w.end();
+        await new Promise<void>(resolve => w.on("finish", resolve));
+        expect(w.writable).toBe(false);
+      });
+
+      it("should return false after destroy() even if previously set to true", async () => {
+        const w = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        w.on("error", () => {});
+        w.writable = true;
+        w.destroy();
+        await new Promise<void>(resolve => w.on("close", resolve));
+        expect(w.writable).toBe(false);
+      });
+    });
+
+    describe("ERR_STREAM_ALREADY_FINISHED message", () => {
+      it("should have correct message text", async () => {
+        const w = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          }
+        });
+        w.end();
+        await new Promise<void>(resolve => w.on("finish", resolve));
+        const err = await new Promise<Error>(resolve => {
+          w.end((e: any) => {
+            if (e) {
+              resolve(e);
+            }
+          });
+        });
+        expect(err.message).toBe("Cannot call end after a stream was finished");
+        expect((err as any).code).toBe("ERR_STREAM_ALREADY_FINISHED");
+      });
+    });
+
+    describe("Transform._final subclass override", () => {
+      it("should call _final on subclass", async () => {
+        let finalCalled = false;
+
+        class MyTransform extends Transform {
+          _final(callback: (error?: Error | null) => void): void {
+            finalCalled = true;
+            this.push(null);
+            callback();
+          }
+          _transform(
+            chunk: any,
+            _encoding: string,
+            callback: (error?: Error | null, data?: any) => void
+          ): void {
+            callback(null, chunk);
+          }
+        }
+
+        const t = new MyTransform({ objectMode: true });
+        t.write("test");
+        t.end();
+        t.resume();
+        await new Promise<void>(resolve => t.on("finish", resolve));
+        expect(finalCalled).toBe(true);
+      });
     });
   });
 }

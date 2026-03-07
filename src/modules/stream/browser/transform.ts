@@ -282,12 +282,29 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           });
         }
       : (callback: (error?: Error | null) => void) => {
-          this._runFlush()
-            .then(() => {
-              this._readable.push(null);
+          // Check if a subclass overrides _final on the prototype chain.
+          // This handles all inheritance depths: A extends Transform, B extends A, etc.
+          const hasFinalOverride =
+            typeof (this as any)._final === "function" &&
+            (this as any)._final !== Transform.prototype._final;
+
+          if (hasFinalOverride) {
+            (this as any)._final.call(this, (err?: Error | null) => {
+              if (err) {
+                callback(err);
+                return;
+              }
+              // _final already handles push(null) via the prototype method
               callback(null);
-            })
-            .catch(err => callback(err));
+            });
+          } else {
+            this._runFlush()
+              .then(() => {
+                this._readable.push(null);
+                callback(null);
+              })
+              .catch(err => callback(err));
+          }
         };
 
     this._writable = new Writable<TInput>({
