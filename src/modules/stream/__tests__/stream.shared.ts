@@ -13060,29 +13060,70 @@ export function runStreamTests(imports: StreamModuleImports): void {
   // ===========================================================================
 
   describe("_write callback double-invocation guard", () => {
-    it("should not corrupt state on second callback invocation", async () => {
+    it("should emit ERR_MULTIPLE_CALLBACK on second callback invocation", async () => {
       const errors: any[] = [];
       const w = new Writable({
         write(_chunk: any, _enc: string, cb: (error?: Error | null) => void) {
           cb(); // first call
-          // Second call — browser ignores, Node.js throws ERR_MULTIPLE_CALLBACK
-          try {
-            cb();
-          } catch {
-            // Node.js throws here, that's expected
-          }
+          cb(); // second call — should trigger ERR_MULTIPLE_CALLBACK
         }
       });
       w.on("error", (e: any) => errors.push(e));
       w.write("test");
-      w.end();
       await new Promise<void>(resolve => {
-        w.on("finish", resolve);
         w.on("close", resolve);
         setTimeout(resolve, 200);
       });
-      // Stream should still be in a valid state (finished or errored, not corrupted)
-      expect(w.writableFinished || w.destroyed).toBe(true);
+      // Both Node.js and browser should emit ERR_MULTIPLE_CALLBACK and destroy
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].code).toBe("ERR_MULTIPLE_CALLBACK");
+      expect(w.destroyed).toBe(true);
+    });
+
+    it("should emit ERR_MULTIPLE_CALLBACK on Transform double callback", async () => {
+      const errors: any[] = [];
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _enc: string, cb: (err?: Error | null, data?: any) => void) {
+          cb(null, chunk);
+          cb(null, chunk); // second call — should trigger ERR_MULTIPLE_CALLBACK
+        }
+      });
+      t.on("error", (e: any) => errors.push(e));
+      t.on("data", () => {}); // consume data
+      t.write("test");
+      await new Promise<void>(resolve => {
+        t.on("close", resolve);
+        setTimeout(resolve, 200);
+      });
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].code).toBe("ERR_MULTIPLE_CALLBACK");
+      expect(t.destroyed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Write to destroyed Transform — should not throw (Node.js parity)
+  // ===========================================================================
+
+  describe("write to destroyed Transform", () => {
+    it("should return false and not throw when writing to a destroyed Transform", async () => {
+      const events: string[] = [];
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _enc: string, cb: (err?: Error | null, data?: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      t.on("error", (e: any) => events.push("error:" + e.message));
+      t.on("data", () => {});
+      t.destroy();
+      // This must not throw — Node.js silently returns false
+      const ret = t.write("after-destroy");
+      expect(ret).toBe(false);
+      await new Promise<void>(resolve => setTimeout(resolve, 50));
+      // _transform should NOT have been called; no data or transform-related error
+      expect(events.filter(e => e.startsWith("error:transform"))).toEqual([]);
     });
   });
 }

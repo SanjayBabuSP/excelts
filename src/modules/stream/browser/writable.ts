@@ -624,6 +624,10 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       let cbCalled = false;
       this._writeFunc!(chunk, enc, err => {
         if (cbCalled) {
+          // Node.js throws ERR_MULTIPLE_CALLBACK on double invocation.
+          const multiErr = new Error("Callback called multiple times") as Error & { code: string };
+          multiErr.code = "ERR_MULTIPLE_CALLBACK";
+          this.destroy(multiErr);
           return;
         }
         cbCalled = true;

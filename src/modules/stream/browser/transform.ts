@@ -3,7 +3,6 @@
  */
 
 import type { DuplexStreamOptions, IDuplex, WritableLike } from "@stream/types";
-import { StreamStateError } from "@stream/errors";
 import { EventEmitter } from "@utils/event-emitter";
 import { createAbortError } from "@utils/errors";
 import { parseEndArgs } from "@stream/common/end-args";
@@ -556,8 +555,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
    * ahead of writes added during 'data' callbacks.
    */
   private _runTransformSync(chunk: TInput, encoding: string): Promise<void> | undefined {
+    // Node.js silently drops writes on destroyed/errored streams (the internal
+    // Writable state machine intercepts them before _transform is called).
+    // Match that behavior by returning immediately.
     if (this._destroyed || this._errored) {
-      throw new StreamStateError("write", this._errored ? "stream errored" : "stream destroyed");
+      return undefined;
     }
 
     if (this._hasSubclassTransform()) {
@@ -576,7 +578,13 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
       this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
         if (callbackFired) {
-          return; // Guard against buggy subclasses calling the callback twice
+          // Node.js throws ERR_MULTIPLE_CALLBACK on double invocation.
+          const multiErr = new Error("Callback called multiple times") as Error & {
+            code: string;
+          };
+          multiErr.code = "ERR_MULTIPLE_CALLBACK";
+          this.destroy(multiErr);
+          return;
         }
         callbackFired = true;
         if (sync) {
@@ -666,12 +674,11 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     // Node.js always invokes the user transform as (chunk, encoding, callback),
     // regardless of declared parameter count. Users may access the callback via
     // `arguments[2]` even when the function signature omits it.
-    // We also support a convenience shorthand where the return value (or promise)
-    // is used, but ONLY if the callback was not called.
     let sync = true;
     let syncDone = false;
     let syncErr: Error | null = null;
     let syncData: TOutput | undefined;
+    let callbackFired = false;
 
     let resolveAsync: (() => void) | null = null;
     let rejectAsync: ((err: any) => void) | null = null;
@@ -680,7 +687,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       rejectAsync = reject;
     });
 
-    const out = (
+    (
       userTransform as (
         this: Transform<TInput, TOutput>,
         chunk: TInput,
@@ -688,6 +695,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         callback: (error?: Error | null, data?: TOutput) => void
       ) => any
     ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
+      if (callbackFired) {
+        // Node.js throws ERR_MULTIPLE_CALLBACK on double invocation.
+        const multiErr = new Error("Callback called multiple times") as Error & {
+          code: string;
+        };
+        multiErr.code = "ERR_MULTIPLE_CALLBACK";
+        this.destroy(multiErr);
+        return;
+      }
+      callbackFired = true;
       if (sync) {
         syncDone = true;
         syncErr = err ?? null;
@@ -719,19 +736,8 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     }
 
     // Callback was NOT called synchronously.
-    // Node.js ignores the return value of _transform — it always waits for the callback.
-    // However, if the function declares fewer than 3 parameters (shorthand),
-    // it doesn't know about the callback, so treat as synchronous completion.
-    if ((userTransform as any).length < 3) {
-      // Shorthand: function doesn't expect a callback.
-      // If it returned a promise, wait for it (but don't push the resolved value).
-      if (out && typeof (out as any).then === "function") {
-        return (out as Promise<any>).then(() => {});
-      }
-      return undefined;
-    }
-
-    // Callback not yet called, standard transform — wait for async callback.
+    // Node.js ignores the return value of _transform — it always waits for the
+    // callback. Match that behavior: wait for the async callback promise.
     return promise;
   }
 
@@ -763,20 +769,14 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     // Node.js always invokes flush as (callback), regardless of declared
     // parameter count. Node.js ignores the return value of _flush —
-    // it always waits for the callback. If the function declares fewer than
-    // 1 parameter (shorthand), and the callback is not called, we wait for
-    // the async callback promise (matching Node.js which would hang).
-    // However, if the function returns a Promise and doesn't call the
-    // callback, we await the promise but don't push its result.
-    let callbackCalled = false;
+    // it always waits for the callback. Match that behavior.
     await new Promise<void>((resolve, reject) => {
-      const out = (
+      (
         userFlush as (
           this: Transform<TInput, TOutput>,
           callback: (error?: Error | null, data?: TOutput) => void
         ) => any
       ).call(this, (err?: Error | null, data?: TOutput) => {
-        callbackCalled = true;
         if (err) {
           reject(err);
           return;
@@ -786,31 +786,8 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         }
         resolve();
       });
-
-      // If callback was not called synchronously, check for shorthand functions.
-      // Node.js ignores the return value of _flush — only the callback matters.
-      if (!callbackCalled) {
-        if ((userFlush as any).length < 1) {
-          // Shorthand flush (zero declared params) — doesn't know about the callback.
-          // If it returned a promise, wait for it (but don't push the resolved value).
-          if (out && typeof (out as any).then === "function") {
-            (out as Promise<any>)
-              .then(() => {
-                if (!callbackCalled) {
-                  resolve();
-                }
-              })
-              .catch(err => {
-                if (!callbackCalled) {
-                  reject(err);
-                }
-              });
-          } else {
-            resolve();
-          }
-        }
-        // Standard flush (>= 1 param): wait for the callback to be called.
-      }
+      // If callback is not called synchronously, the promise remains pending
+      // until the user code calls it — matching Node.js behavior.
     });
   }
 
