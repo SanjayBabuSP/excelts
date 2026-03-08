@@ -221,7 +221,7 @@ const expectations = [
     get preparedModel() {
       return this.initialModel;
     },
-    xml: '<row r="1" spans="1:1"><c r="A1"><v>5</v></c></row>',
+    xml: '<row r="1" ht="1" spans="1:1"><c r="A1"><v>5</v></c></row>',
     parsedModel: {
       number: 1,
       min: 1,
