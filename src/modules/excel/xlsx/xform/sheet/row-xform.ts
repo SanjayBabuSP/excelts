@@ -71,6 +71,10 @@ class RowXform extends BaseXform<RowModel> {
       if (model.customHeight !== false) {
         xmlStream.addAttribute("customHeight", "1");
       }
+    } else if (model.height === 0) {
+      // height=0 signals auto-height: write a minimal ht hint without
+      // customHeight so Excel recalculates the row height on open.
+      xmlStream.addAttribute("ht", 1);
     }
     if (model.hidden) {
       xmlStream.addAttribute("hidden", "1");
