@@ -167,6 +167,121 @@ const expectations = [
       styles: fakeStyles,
       hyperlinkMap: fakeHyperlinkMap
     }
+  },
+  {
+    title: "Custom Height",
+    create: () => new RowXform(),
+    initialModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      style: {},
+      height: 30,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }]
+    },
+    get preparedModel() {
+      return this.initialModel;
+    },
+    xml: '<row r="1" ht="30" customHeight="1" spans="1:1"><c r="A1"><v>5</v></c></row>',
+    parsedModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      height: 30,
+      customHeight: true,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }]
+    },
+    reconciledModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      height: 30,
+      customHeight: true,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }],
+      style: {}
+    },
+    tests: ["prepare", "render", "renderIn", "parse", "reconcile"],
+    options: {
+      sharedStrings: new SharedStringsXform(),
+      styles: fakeStyles,
+      hyperlinkMap: fakeHyperlinkMap
+    }
+  },
+  {
+    title: "Height zero (auto-height)",
+    create: () => new RowXform(),
+    initialModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      style: {},
+      height: 0,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }]
+    },
+    get preparedModel() {
+      return this.initialModel;
+    },
+    xml: '<row r="1" spans="1:1"><c r="A1"><v>5</v></c></row>',
+    parsedModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }]
+    },
+    reconciledModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }],
+      style: {}
+    },
+    tests: ["render", "renderIn"],
+    options: {
+      sharedStrings: new SharedStringsXform(),
+      styles: fakeStyles,
+      hyperlinkMap: fakeHyperlinkMap
+    }
+  },
+  {
+    title: "Height with customHeight=false (ht without customHeight attribute)",
+    create: () => new RowXform(),
+    initialModel: {
+      number: 1,
+      min: 1,
+      max: 1,
+      style: {},
+      height: 20,
+      customHeight: false,
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }]
+    },
+    get preparedModel() {
+      return this.initialModel;
+    },
+    xml: '<row r="1" ht="20" spans="1:1"><c r="A1"><v>5</v></c></row>',
+    tests: ["render", "renderIn"],
+    options: {
+      sharedStrings: new SharedStringsXform(),
+      styles: fakeStyles,
+      hyperlinkMap: fakeHyperlinkMap
+    }
+  },
+  {
+    title: "Parse height without customHeight",
+    create: () => new RowXform(),
+    xml: '<row r="3" ht="25" spans="1:1"><c r="A3"><v>10</v></c></row>',
+    parsedModel: {
+      number: 3,
+      min: 1,
+      max: 1,
+      height: 25,
+      cells: [{ address: "A3", type: Enums.ValueType.Number, value: 10 }]
+    },
+    tests: ["parse"],
+    options: {
+      sharedStrings: new SharedStringsXform(),
+      styles: fakeStyles,
+      hyperlinkMap: fakeHyperlinkMap
+    }
   }
 ];
 

@@ -9,13 +9,12 @@
 ExcelTS 是现代化的 TypeScript Excel 工作簿管理器，具有以下特性:
 
 - 🚀 **零运行时依赖** - 纯 TypeScript 实现，无任何外部包依赖
+- ✅ **广泛运行时支持** - 支持 LTS Node.js、Bun 及主流最新浏览器（Chrome、Firefox、Safari、Edge）
 - ✅ **完整的 TypeScript 支持** - 完整的类型定义和现代 TypeScript 模式
 - ✅ **现代构建系统** - 使用 Rolldown 进行更快的构建
 - ✅ **增强的测试** - 迁移到 Vitest 并支持浏览器测试
 - ✅ **ESM 优先** - 原生 ES Module 支持，兼容 CommonJS
-- ✅ **Node 20+** - 针对现代 Node.js 版本优化
 - ✅ **命名导出** - 所有导出都是命名导出，更好的 tree-shaking
-- ✅ **广泛浏览器支持** - 支持 Chrome 89+、Firefox 102+、Safari 14.1+（对缺失 `CompressionStream` 有内置 fallback）
 
 ## 翻译
 

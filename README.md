@@ -9,13 +9,12 @@ Modern TypeScript Excel Workbook Manager - Read, manipulate and write spreadshee
 ExcelTS is a modern TypeScript Excel workbook manager with:
 
 - 🚀 **Zero Runtime Dependencies** - Pure TypeScript implementation with no external packages
+- ✅ **Broad Runtime Support** - LTS Node.js, Bun, and modern browsers (Chrome, Firefox, Safari, Edge)
 - ✅ **Full TypeScript Support** - Complete type definitions and modern TypeScript patterns
 - ✅ **Modern Build System** - Using Rolldown for faster builds
 - ✅ **Enhanced Testing** - Migrated to Vitest with browser testing support
 - ✅ **ESM First** - Native ES Module support with CommonJS compatibility
-- ✅ **Node 20+** - Optimized for modern Node.js versions
 - ✅ **Named Exports** - All exports are named for better tree-shaking
-- ✅ **Broad Browser Support** - Works in Chrome 89+, Firefox 102+, Safari 14.1+ (with built-in fallbacks for missing `CompressionStream`)
 
 ## Translations
 

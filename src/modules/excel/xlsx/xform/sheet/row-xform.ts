@@ -17,6 +17,7 @@ interface RowModel {
   hidden?: boolean;
   bestFit?: boolean;
   height?: number;
+  customHeight?: boolean;
   outlineLevel?: number;
   collapsed?: boolean;
   style?: any;
@@ -66,9 +67,11 @@ class RowXform extends BaseXform<RowModel> {
     }
     xmlStream.openNode("row");
     xmlStream.addAttribute("r", model.number);
-    if (model.height) {
+    if (model.height != null && model.height > 0) {
       xmlStream.addAttribute("ht", model.height);
-      xmlStream.addAttribute("customHeight", "1");
+      if (model.customHeight !== false) {
+        xmlStream.addAttribute("customHeight", "1");
+      }
     }
     if (model.hidden) {
       xmlStream.addAttribute("hidden", "1");
@@ -130,6 +133,9 @@ class RowXform extends BaseXform<RowModel> {
       }
       if (node.attributes.ht) {
         model.height = parseFloat(node.attributes.ht);
+      }
+      if (parseBoolean(node.attributes.customHeight)) {
+        model.customHeight = true;
       }
       if (node.attributes.outlineLevel) {
         model.outlineLevel = parseInt(node.attributes.outlineLevel, 10);

@@ -270,6 +270,9 @@ class WorksheetReader extends EventEmitter {
                   if (node.attributes.ht) {
                     row.height = parseFloat(node.attributes.ht);
                   }
+                  if (node.attributes.customHeight === "1") {
+                    row.customHeight = true;
+                  }
                   if (node.attributes.s !== undefined) {
                     const styleId = parseInt(node.attributes.s, 10);
                     const style = styles.getStyleModel(styleId);

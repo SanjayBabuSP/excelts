@@ -735,7 +735,7 @@ class WorksheetWriter {
       this.startedData = true;
     }
 
-    if (row.hasValues || row.height) {
+    if (row.hasValues || row.height != null) {
       const { model } = row;
       const options = {
         styles: this._workbook.styles,

@@ -31,6 +31,7 @@ export interface RowModel {
   min: number;
   max: number;
   height?: number;
+  customHeight?: boolean;
   style: Partial<Style>;
   hidden: boolean;
   outlineLevel: number;
@@ -47,6 +48,7 @@ class Row {
   declare private _hidden?: boolean;
   declare private _outlineLevel?: number;
   declare public height?: number;
+  declare public customHeight?: boolean;
   declare public dyDescent?: number;
 
   constructor(worksheet: Worksheet, number: number) {
@@ -475,13 +477,14 @@ class Row {
       }
     });
 
-    return this.height || cells.length
+    return this.height != null || cells.length
       ? {
           cells,
           number: this.number,
           min,
           max,
           height: this.height,
+          customHeight: this.customHeight,
           style: this.style,
           hidden: this.hidden,
           outlineLevel: this.outlineLevel,
@@ -526,10 +529,16 @@ class Row {
       }
     });
 
-    if (value.height) {
+    if (value.height != null) {
       this.height = value.height;
     } else {
       delete this.height;
+    }
+
+    if (value.customHeight != null) {
+      this.customHeight = value.customHeight;
+    } else {
+      delete this.customHeight;
     }
 
     this.hidden = value.hidden;

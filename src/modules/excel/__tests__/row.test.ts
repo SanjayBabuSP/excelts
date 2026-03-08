@@ -292,6 +292,7 @@ describe("Row", () => {
       min: 1,
       max: 5,
       height: 50,
+      customHeight: undefined,
       hidden: false,
       style: {},
       outlineLevel: 0,
@@ -310,11 +311,88 @@ describe("Row", () => {
       min: 1,
       max: 1,
       height: undefined,
+      customHeight: undefined,
       hidden: false,
       style: {},
       outlineLevel: 1,
       collapsed: true
     });
+  });
+
+  it("builds model with height=0 (auto-height)", () => {
+    const sheet = testUtils.createSheetMock();
+    const row1 = sheet.getRow(1);
+    row1.getCell(1).value = "Hello";
+    row1.height = 0;
+
+    const model = row1.model;
+    expect(model).not.toBeNull();
+    expect(model!.height).toBe(0);
+    expect(model!.customHeight).toBeUndefined();
+  });
+
+  it("preserves height=0 through model setter", () => {
+    const sheet = testUtils.createSheetMock();
+    const row1 = sheet.getRow(1);
+    row1.model = {
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }],
+      number: 1,
+      min: 1,
+      max: 1,
+      height: 0
+    };
+
+    expect(row1.height).toBe(0);
+  });
+
+  it("preserves customHeight through model round-trip", () => {
+    const sheet = testUtils.createSheetMock();
+    const row1 = sheet.getRow(1);
+    row1.model = {
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }],
+      number: 1,
+      min: 1,
+      max: 1,
+      height: 30,
+      customHeight: true
+    };
+
+    expect(row1.height).toBe(30);
+    expect(row1.customHeight).toBe(true);
+
+    const model = row1.model;
+    expect(model!.height).toBe(30);
+    expect(model!.customHeight).toBe(true);
+  });
+
+  it("returns model for height=0 row without cells", () => {
+    const sheet = testUtils.createSheetMock();
+    const row1 = sheet.getRow(1);
+    row1.height = 0;
+
+    const model = row1.model;
+    expect(model).not.toBeNull();
+    expect(model!.height).toBe(0);
+    expect(model!.cells).toEqual([]);
+  });
+
+  it("clears customHeight when model has no customHeight", () => {
+    const sheet = testUtils.createSheetMock();
+    const row1 = sheet.getRow(1);
+    row1.customHeight = true;
+    row1.height = 30;
+
+    // Set model without customHeight — should clear it
+    row1.model = {
+      cells: [{ address: "A1", type: Enums.ValueType.Number, value: 5 }],
+      number: 1,
+      min: 1,
+      max: 1,
+      height: 20
+    };
+
+    expect(row1.height).toBe(20);
+    expect(row1.customHeight).toBeUndefined();
   });
 
   it("builds from model", () => {
