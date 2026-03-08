@@ -54,7 +54,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   private readonly _readable: Readable<TOutput>;
   /** @internal */
   private readonly _writable: Writable<TInput>;
-  private _objectMode: boolean;
   allowHalfOpen: boolean;
 
   private _destroyed: boolean = false;
@@ -77,7 +76,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   private _sideForwardingCleanup: (() => void) | null = null;
   // User-provided construct function (Node.js compatibility)
   private _constructFunc?: (callback: (error?: Error | null) => void) => void;
-  private _constructed: boolean = true;
 
   /** Cached result of _hasSubclassTransform (called per-chunk, so worth caching) */
   private _isSubclassTransform: boolean | undefined;
@@ -167,7 +165,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     const objectMode = options?.objectMode ?? false;
     const readableObjMode = options?.readableObjectMode ?? objectMode;
     const writableObjMode = options?.writableObjectMode ?? objectMode;
-    this._objectMode = objectMode;
     this.allowHalfOpen = options?.allowHalfOpen ?? true;
     this._emitClose = options?.emitClose ?? true;
     this._autoDestroy = options?.autoDestroy ?? true;
@@ -368,7 +365,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     // R7-3: _construct hook — if provided, delay reads/writes until constructed
     if (hasConstruct) {
-      this._constructed = false;
       deferTask(() => {
         const fn = this._constructFunc ?? (this as any)._construct.bind(this);
         fn((err?: Error | null) => {
@@ -378,7 +374,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
             this.destroy(err);
             return;
           }
-          this._constructed = true;
           // Unblock child streams by firing their construct callbacks
           readableConstructCb?.();
           writableConstructCb?.();
@@ -621,8 +616,51 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     const userTransform = this._transformImpl;
     if (!userTransform) {
-      this.push(chunk as any as TOutput);
-      return undefined; // sync
+      // No user transform AND no subclass override: call the prototype
+      // _transform which throws ERR_METHOD_NOT_IMPLEMENTED (matching Node.js).
+      // This is NOT the passthrough behavior — that requires explicitly setting
+      // a transform function (as PassThrough does).
+      let sync = true;
+      let syncDone = false;
+      let syncErr: Error | null = null;
+      let syncData: TOutput | undefined;
+
+      let resolveAsync: (() => void) | null = null;
+      let rejectAsync: ((err: any) => void) | null = null;
+
+      this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
+        if (sync) {
+          syncDone = true;
+          syncErr = err ?? null;
+          syncData = data;
+          return;
+        }
+        if (err) {
+          rejectAsync?.(err);
+          return;
+        }
+        if (data !== undefined) {
+          this.push(data);
+        }
+        resolveAsync?.();
+      });
+
+      sync = false;
+
+      if (syncDone) {
+        if (syncErr) {
+          throw syncErr;
+        }
+        if (syncData !== undefined) {
+          this.push(syncData);
+        }
+        return undefined;
+      }
+
+      return new Promise<void>((resolve, reject) => {
+        resolveAsync = resolve;
+        rejectAsync = reject;
+      });
     }
 
     // Node.js always invokes the user transform as (chunk, encoding, callback),
@@ -695,87 +733,6 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
     // Callback not yet called, standard transform — wait for async callback.
     return promise;
-  }
-
-  private async _runTransform(chunk: TInput, encoding: string): Promise<void> {
-    if (this._destroyed || this._errored) {
-      throw new StreamStateError("write", this._errored ? "stream errored" : "stream destroyed");
-    }
-
-    if (this._hasSubclassTransform()) {
-      await new Promise<void>((resolve, reject) => {
-        this._transform(chunk, encoding, (err?: Error | null, data?: TOutput) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          if (data !== undefined) {
-            this.push(data);
-          }
-          resolve();
-        });
-      });
-      return;
-    }
-
-    const userTransform = this._transformImpl;
-    if (!userTransform) {
-      this.push(chunk as any as TOutput);
-      return;
-    }
-
-    // Node.js always invokes the user transform as (chunk, encoding, callback),
-    // regardless of declared parameter count. If the callback is called, its
-    // result takes priority; otherwise we fall back to the return value.
-    let callbackCalled = false;
-    const cbPromise = new Promise<void>((resolve, reject) => {
-      const out = (
-        userTransform as (
-          this: Transform<TInput, TOutput>,
-          chunk: TInput,
-          encoding: string,
-          callback: (error?: Error | null, data?: TOutput) => void
-        ) => any
-      ).call(this, chunk, encoding, (err?: Error | null, data?: TOutput) => {
-        callbackCalled = true;
-        if (err) {
-          reject(err);
-          return;
-        }
-        if (data !== undefined) {
-          this.push(data);
-        }
-        resolve();
-      });
-
-      // If callback was not called synchronously, check for shorthand functions.
-      // Node.js ignores the return value of _transform — only the callback matters.
-      if (!callbackCalled) {
-        if ((userTransform as any).length < 3) {
-          // Shorthand transform (fewer than 3 declared params) — doesn't know
-          // about the callback. If it returned a promise, wait for it (but don't
-          // push the resolved value).
-          if (out && typeof (out as any).then === "function") {
-            (out as Promise<any>)
-              .then(() => {
-                if (!callbackCalled) {
-                  resolve();
-                }
-              })
-              .catch(err => {
-                if (!callbackCalled) {
-                  reject(err);
-                }
-              });
-          } else {
-            resolve();
-          }
-        }
-        // Standard transform (>= 3 params): wait for the callback to be called.
-      }
-    });
-
-    await cbPromise;
   }
 
   private async _runFlush(): Promise<void> {
@@ -1023,13 +980,24 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     // Invalidate any pending _scheduleEnd
     this._endGeneration++;
 
+    // Release any pending write callback held for backpressure.
+    // Node.js invokes pending write callbacks with the destroy error.
+    if (this._afterTransformCallback) {
+      const cb = this._afterTransformCallback;
+      this._afterTransformCallback = null;
+      cb(error ?? null);
+    }
+
     if (this._sideForwardingCleanup) {
       this._sideForwardingCleanup();
       this._sideForwardingCleanup = null;
     }
 
     const afterDestroy = (finalError?: Error | null): void => {
-      const err = finalError ?? error;
+      // Node.js: _destroy's callback determines whether an error is emitted.
+      // cb(null)/cb()/cb(undefined) all suppress the original error.
+      // Only cb(new Error(...)) replaces and emits the error.
+      const err = finalError || null;
       this._readable.destroy();
       this._writable.destroy();
       // Fire the pending end() callback before discarding it.
@@ -1227,6 +1195,9 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
   }
 
   get writableEnded(): boolean {
+    // Node.js: writableEnded becomes true immediately when Transform.end() is
+    // called, even though the internal Writable's end() is deferred via
+    // _scheduleEnd. We use _ended (set synchronously in end()) to match this.
     return this._ended || this._writable.writableEnded;
   }
 
@@ -1541,17 +1512,17 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
 
   /**
    * Base transform method - can be overridden by subclasses.
-   * Default behavior: call callback with ERR_METHOD_NOT_IMPLEMENTED (matches Node.js).
-   * Node.js calls callback(err) rather than throwing synchronously.
+   * Default behavior: throw ERR_METHOD_NOT_IMPLEMENTED (matches Node.js).
+   * Node.js throws synchronously rather than calling callback(err).
    */
   _transform(
     _chunk: TInput,
     _encoding: string,
-    callback: (error?: Error | null, data?: TOutput) => void
+    _callback: (error?: Error | null, data?: TOutput) => void
   ): void {
-    const err = new Error("_transform() is not implemented") as Error & { code: string };
+    const err = new Error("The _transform() method is not implemented") as Error & { code: string };
     err.code = "ERR_METHOD_NOT_IMPLEMENTED";
-    callback(err);
+    throw err;
   }
 
   /**

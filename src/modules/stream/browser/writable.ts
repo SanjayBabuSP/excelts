@@ -7,10 +7,18 @@ import { EventEmitter } from "@utils/event-emitter";
 import { parseEndArgs } from "@stream/common/end-args";
 import { StreamStateError } from "@stream/errors";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
-import { createTextDecoder } from "@utils/binary";
+import { getTextDecoder } from "@utils/binary";
 import { createAbortError } from "@utils/errors";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 import { deferTask, inDeferredContext } from "./microtask-context";
+
+/**
+ * Shared toString implementation for Uint8Array chunks converted from strings.
+ * Uses `this`-binding to avoid per-chunk closure allocation.
+ */
+function encodedBytesToString(this: Uint8Array, enc?: string): string {
+  return getTextDecoder(enc ?? "utf-8").decode(this);
+}
 
 import type { Writable as NodeWritable } from "stream";
 
@@ -133,6 +141,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     chunks: Array<{ chunk: T; encoding: string }>,
     callback: (error?: Error | null) => void
   ) => void;
+  /** Resolved writev function (from options, subclass, or null). Cached at construction. */
+  private _resolvedWritev:
+    | ((
+        chunks: Array<{ chunk: T; encoding: string }>,
+        callback: (error?: Error | null) => void
+      ) => void)
+    | null = null;
   private _decodeStrings: boolean;
 
   constructor(options?: WritableOptions<T>) {
@@ -231,6 +246,9 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     if (options?.signal) {
       this._setupAbortSignal(options.signal);
     }
+
+    // Cache resolved writev at construction time to avoid prototype walk per drain
+    this._resolvedWritev = this._writevFunc ?? this._getWritevHook();
 
     // L2: _construct hook — if provided, delay writes until constructed
     this._maybeConstruct();
@@ -400,7 +418,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       }
 
       // L3: If _writev is available and there are multiple chunks, batch them
-      const writevFn = this._writevFunc ?? this._getWritevHook();
+      const writevFn = this._resolvedWritev;
       if (writevFn && chunks.length > 1) {
         const batchChunks = chunks.map(({ chunk, encoding }) => ({ chunk, encoding }));
         const totalSize = batchChunks.reduce(
@@ -601,7 +619,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     try {
       // Node.js passes undefined as encoding in objectMode
       const enc = this._objectMode ? (undefined as unknown as string) : encoding;
+      // Guard against user code calling the callback more than once.
+      // Node.js has a similar guard in `onwrite()` (lib/internal/streams/writable.js).
+      let cbCalled = false;
       this._writeFunc!(chunk, enc, err => {
+        if (cbCalled) {
+          return;
+        }
+        cbCalled = true;
+
         if (err) {
           this._writableLength -= chunkSize;
           if (!this._destroyed) {
@@ -676,11 +702,18 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // If _writev is available and there are multiple queued chunks, batch them.
     // This matches Node.js behavior where _writev is used for naturally-queued
     // writes, not just on uncork.
-    const writevFn = this._writevFunc ?? this._getWritevHook();
+    const writevFn = this._resolvedWritev;
     if (writevFn && this._writeQueue.length > 1) {
-      const chunks = this._writeQueue.splice(0);
-      const batchChunks = chunks.map(({ chunk, encoding }) => ({ chunk, encoding }));
-      const totalSize = chunks.reduce((sum, entry) => sum + entry.chunkSize, 0);
+      // Swap array instead of splice(0) to avoid O(n) copy
+      const chunks = this._writeQueue;
+      this._writeQueue = [];
+      let totalSize = 0;
+      const batchChunks = new Array<{ chunk: T; encoding: string }>(chunks.length);
+      for (let i = 0; i < chunks.length; i++) {
+        const entry = chunks[i]!;
+        batchChunks[i] = { chunk: entry.chunk, encoding: entry.encoding };
+        totalSize += entry.chunkSize;
+      }
 
       try {
         writevFn(batchChunks, err => {
@@ -854,9 +887,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // We also override toString() so that it behaves like Node.js Buffer.toString(),
     // which returns a UTF-8 decoded string by default (not comma-separated byte values).
     const encoded = stringToEncodedBytes(chunk, encoding);
-    (encoded as any).toString = (enc?: string): string => {
-      return createTextDecoder(enc).decode(encoded);
-    };
+    (encoded as any).toString = encodedBytesToString;
     return { chunk: encoded as unknown as T, encoding: "buffer" };
   }
 
@@ -1008,6 +1039,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         error ?? new Error("Cannot call write after a stream was destroyed")
       );
     }
+    // Also flush corked chunks — if the stream is destroyed while corked,
+    // pending corked-chunk callbacks must be notified.
+    if (this._corkedChunks.length > 0) {
+      const destroyErr = error ?? new Error("Cannot call write after a stream was destroyed");
+      for (const entry of this._corkedChunks) {
+        entry.callback?.(destroyErr);
+      }
+      this._corkedChunks = [];
+    }
     // Node.js invokes the end() callback even when destroy() is called
     // while writes are pending.  Fire it asynchronously (after error/close).
     const pendingEndCb = this._pendingEnd?.cb;
@@ -1032,11 +1072,12 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     // If subclass overrides _destroy, call it and wait for callback before
     // emitting error/close (matches Node.js behavior).
     const afterDestroy = (finalError?: Error | null): void => {
-      // Node.js: if _destroy calls cb(null), the original error is suppressed
-      // (no error event emitted). If cb(err), that replacement error is used.
-      // If cb() with no args, the original error is preserved.
-      // We distinguish cb(null) from cb() by checking if the argument is explicitly null.
-      const err = finalError === undefined ? error : finalError;
+      // Node.js: _destroy's callback determines whether an error is emitted.
+      // - cb(null) or cb() or cb(undefined): suppress the original error
+      // - cb(new Error(...)): replace with the new error, emit it
+      // Node.js checks `if (err)` on the callback argument, so null/undefined/no-arg
+      // all suppress the error. Only a truthy error value triggers the error event.
+      const err = finalError || null;
       if (err) {
         this._errored = err;
       }
@@ -1095,6 +1136,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     this._destroyed = false;
     this._closed = false;
     this._errored = null;
+    this._errorEmitted = false;
   }
 
   /** Check if _destroy has been overridden by a subclass or constructor option. */
@@ -1328,14 +1370,15 @@ export class Writable<T = Uint8Array> extends EventEmitter {
 // Node.js: Writable.prototype._write throws ERR_METHOD_NOT_IMPLEMENTED.
 // This must exist on the prototype so that subclasses can call super._write()
 // and so that `_getSubclassWrite()` can detect overrides correctly.
+// Node.js throws synchronously (does NOT call the callback).
 (Writable.prototype as any)._write = function _write(
   _chunk: any,
   _encoding: string,
-  callback: (error?: Error | null) => void
+  _callback: (error?: Error | null) => void
 ): void {
-  const err = new Error("_write() is not implemented") as Error & { code: string };
+  const err = new Error("The _write() method is not implemented") as Error & { code: string };
   err.code = "ERR_METHOD_NOT_IMPLEMENTED";
-  callback(err);
+  throw err;
 };
 
 // =============================================================================
@@ -1381,5 +1424,29 @@ function getStringByteLength(value: string, encoding?: string): number {
   if (normalized === "utf16le" || normalized === "utf-16le" || normalized === "ucs2") {
     return value.length * 2;
   }
-  return new TextEncoder().encode(value).byteLength;
+  // Compute UTF-8 byte length without allocating TextEncoder or encoded buffer
+  return utf8ByteLength(value);
+}
+
+/**
+ * Compute the UTF-8 byte length of a string without allocating a TextEncoder
+ * or an intermediate Uint8Array. Handles surrogate pairs correctly.
+ */
+function utf8ByteLength(str: string): number {
+  let bytes = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code <= 0x7f) {
+      bytes += 1;
+    } else if (code <= 0x7ff) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      // Surrogate pair — 4 bytes for the full codepoint
+      bytes += 4;
+      i++; // skip low surrogate
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }

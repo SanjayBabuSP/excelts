@@ -194,27 +194,47 @@ export class ChunkBuffer<T> {
   /**
    * Consume all buffered data and return as a single concatenated Uint8Array.
    * Only valid in binary (non-object) mode.
+   * Optimised: iterates directly over internal arrays instead of per-element
+   * shift() to avoid redundant _byteSize arithmetic and compaction checks.
    */
   consumeAll(): T {
-    if (this.length === 0) {
+    const frontLen = this._front.length;
+    const ringLen = this._items.length - this._index;
+    const totalLen = frontLen + ringLen;
+
+    if (totalLen === 0) {
       return new Uint8Array(0) as T;
     }
 
     // Fast path: single chunk
-    if (this.length === 1) {
+    if (totalLen === 1) {
       return this.shift();
     }
 
     const totalSize = this._byteSize;
     const result = new Uint8Array(totalSize);
     let offset = 0;
-    while (this.length > 0) {
-      const chunk = this.shift();
+
+    // Drain front stack (LIFO order — last pushed is first out)
+    for (let i = frontLen - 1; i >= 0; i--) {
+      const chunk = this._front[i];
       if (chunk instanceof Uint8Array) {
         result.set(chunk, offset);
         offset += chunk.byteLength;
       }
     }
+
+    // Drain main ring
+    for (let i = this._index; i < this._items.length; i++) {
+      const chunk = this._items[i];
+      if (chunk instanceof Uint8Array) {
+        result.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    }
+
+    // Reset all state in one shot
+    this.clear();
     return result as T;
   }
 

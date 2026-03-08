@@ -776,7 +776,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     }
 
     const afterDestroy = (finalError?: Error | null): void => {
-      const err = finalError ?? error;
+      // Node.js: _destroy's callback determines whether an error is emitted.
+      // cb(null)/cb()/cb(undefined) all suppress the original error.
+      // Only cb(new Error(...)) replaces and emits the error.
+      const err = finalError || null;
       if (err) {
         this._errored = err;
       }

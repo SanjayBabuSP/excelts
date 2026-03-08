@@ -13,6 +13,14 @@ import { ChunkBuffer } from "./chunk-buffer";
 import { PipeManager } from "./pipe-manager";
 import { deferTask, inDeferredContext } from "./microtask-context";
 
+/**
+ * Shared toString implementation for Uint8Array chunks converted from strings.
+ * Uses `this`-binding to avoid per-chunk closure allocation.
+ */
+function encodedBytesToString(this: Uint8Array, enc?: string): string {
+  return getTextDecoder(enc ?? "utf-8").decode(this);
+}
+
 // =============================================================================
 // Readable Stream Wrapper
 // =============================================================================
@@ -56,7 +64,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _internalDestroy: boolean = false;
   private _errored: Error | null = null;
   private _closed: boolean = false;
-  private _paused: boolean = false;
   private _flowing: boolean = false;
   private _resumeScheduled: boolean = false;
   private _hasFlowed: boolean = false;
@@ -356,9 +363,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // We override toString() so it behaves like Node.js Buffer.toString().
     if (chunk !== null && typeof chunk === "string" && !this._objectMode) {
       const encoded = stringToEncodedBytes(chunk as string, encoding || "utf8");
-      (encoded as any).toString = (enc?: string): string => {
-        return getTextDecoder(enc ?? "utf-8").decode(encoded);
-      };
+      (encoded as any).toString = encodedBytesToString;
       chunk = encoded as any;
     }
 
@@ -505,9 +510,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // Node.js always converts strings to Buffer in binary mode, defaulting to utf8.
     if (typeof chunk === "string" && !this._objectMode) {
       const encoded = stringToEncodedBytes(chunk as string, encoding || "utf8");
-      (encoded as any).toString = (enc?: string): string => {
-        return getTextDecoder(enc ?? "utf-8").decode(encoded);
-      };
+      (encoded as any).toString = encodedBytesToString;
       chunk = encoded as any;
     }
     const wasEmpty = this._buf.length === 0;
@@ -726,13 +729,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   pause(): this {
     if (this._flowing) {
-      this._paused = true;
       this._flowing = false;
       this.emit("pause");
     } else {
       // Node.js: pause() on a fresh stream transitions readableFlowing
       // from null to false and sets isPaused() to true.
-      this._paused = true;
       this._hasFlowed = true;
     }
     return this;
@@ -743,7 +744,6 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    */
   resume(): this {
     if (!this._flowing) {
-      this._paused = false;
       this._flowing = true;
       this._hasFlowed = true;
 
@@ -908,8 +908,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // If subclass overrides _destroy, call it and wait for callback before
     // emitting error/close (matches Node.js behavior).
     const afterDestroy = (finalError?: Error | null): void => {
-      // Node.js: cb(null) suppresses error event, cb(err) replaces, cb() preserves original
-      const err = finalError === undefined ? error : finalError;
+      // Node.js: _destroy's callback determines whether an error is emitted.
+      // - cb(null) or cb() or cb(undefined): suppress the original error
+      // - cb(new Error(...)): replace with the new error, emit it
+      // Node.js checks `if (err)` on the callback argument, so null/undefined/no-arg
+      // all suppress the error. Only a truthy error value triggers the error event.
+      const err = finalError || null;
       if (err) {
         this._errored = err;
       }

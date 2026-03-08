@@ -203,22 +203,6 @@ export function compose<T = any, R = any>(
     maybeAutoDestroy();
   });
 
-  // Delegate pause/resume to also control `last`, ensuring backpressure
-  // propagates correctly through the composed pipeline.
-  const originalPause = composed.pause.bind(composed);
-  const originalResume = composed.resume.bind(composed);
-
-  (composed as any).pause = (): any => {
-    (last as any).pause?.();
-    return originalPause();
-  };
-
-  (composed as any).resume = (): any => {
-    const resumed = originalResume();
-    (last as any).resume?.();
-    return resumed;
-  };
-
   // Delegate cork/uncork to the head of the chain.
   (composed as any).cork = (): void => {
     (first as any).cork?.();
