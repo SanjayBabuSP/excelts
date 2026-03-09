@@ -987,7 +987,13 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       try {
         const writer = this._getWriter();
         if (chunk !== undefined) {
-          await writer.write(chunk);
+          // Normalize the end chunk (decodeStrings etc.) just like write() — matches
+          // the direct-write path above and Node.js behavior.
+          const { chunk: normalized } = this._normalizeWriteChunk(
+            chunk,
+            encoding ?? this._defaultEncoding
+          );
+          await writer.write(normalized);
         }
         await writer.close();
 

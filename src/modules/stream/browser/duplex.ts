@@ -846,6 +846,7 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     this._destroyed = false;
     this._closed = false;
     this._errored = null;
+    this._setupSideForwarding();
   }
 
   /** Check if _destroy has been overridden by a subclass or constructor option. */

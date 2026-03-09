@@ -1291,6 +1291,22 @@ export function runStreamTests(imports: StreamModuleImports): void {
       await expect(done).rejects.toMatchObject({ code: "ERR_STREAM_PREMATURE_CLOSE" });
     });
 
+    it("finished(stream, undefined, callback) should invoke callback", async () => {
+      const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
+      readable.resume();
+
+      await new Promise<void>((resolve, reject) => {
+        (finished as any)(readable, undefined, (err?: Error | null) => {
+          try {
+            expect(err).toBeUndefined();
+            resolve();
+          } catch (assertionError) {
+            reject(assertionError);
+          }
+        });
+      });
+    });
+
     it("pipeline should reject with AbortError when aborted mid-flight", async () => {
       const controller = new AbortController();
       const seen: number[] = [];
@@ -8213,6 +8229,31 @@ export function runStreamTests(imports: StreamModuleImports): void {
           });
           t.destroy();
         }));
+
+      it("Duplex: should forward events after _undestroy", async () => {
+        const chunks: number[] = [];
+        const d = new Duplex({
+          objectMode: true,
+          read() {},
+          write(_c: any, _e: string, cb: any) {
+            cb();
+          }
+        });
+
+        // Destroy first, then undestroy
+        d.destroy();
+        await new Promise<void>(resolve => d.once("close", resolve));
+        (d as any)._undestroy();
+
+        // After undestroy, events should still work
+        d.on("data", (chunk: number) => chunks.push(chunk));
+        d.push(1);
+        d.push(2);
+        d.push(null);
+
+        await new Promise<void>(resolve => d.once("end", resolve));
+        expect(chunks).toEqual([1, 2]);
+      });
 
       it("Transform: destroyed setter should propagate to internal streams", () => {
         const t = new Transform({

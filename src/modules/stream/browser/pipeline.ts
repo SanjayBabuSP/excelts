@@ -393,8 +393,8 @@ export function finished(
 
   if (typeof optionsOrCallback === "function") {
     cb = optionsOrCallback;
-  } else if (optionsOrCallback) {
-    options = optionsOrCallback;
+  } else {
+    options = optionsOrCallback ?? {};
     cb = callback;
   }
 
