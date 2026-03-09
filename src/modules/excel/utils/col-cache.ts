@@ -163,6 +163,9 @@ const colCache: ColCache = {
 
   // convert address string into structure
   decodeAddress(value: string): CachedAddress {
+    if (!value || typeof value !== "string") {
+      throw new Error(`Invalid Address: ${value}`);
+    }
     const addr = value.length < 5 && this._hash[value];
     if (addr) {
       return addr;
@@ -234,6 +237,9 @@ const colCache: ColCache = {
 
   // convert [address], [tl:br] into address structures
   decode(value: string) {
+    if (!value || typeof value !== "string") {
+      throw new Error(`Invalid Address: ${value}`);
+    }
     const parts = value.split(":");
     if (parts.length === 2) {
       const tl = this.decodeAddress(parts[0]);
@@ -258,6 +264,9 @@ const colCache: ColCache = {
 
   // convert [sheetName!][$]col[$]row[[$]col[$]row] into address or range structures
   decodeEx(value: string): DecodeExResult {
+    if (!value || typeof value !== "string") {
+      throw new Error(`Invalid Address: ${value}`);
+    }
     // Use possessive quantifiers to prevent catastrophic backtracking (ReDoS)
     const groups = value.match(/^(?:(?:(?:'((?:[^']|'')+?)')|([^'^ !]+?))!)?(.*)$/);
 
