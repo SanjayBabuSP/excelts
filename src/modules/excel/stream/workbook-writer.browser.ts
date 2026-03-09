@@ -25,7 +25,8 @@ import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xfo
 import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property-bag-xform";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import type { Writable } from "@stream";
-import { toWritable, stringToUint8Array } from "@stream";
+import { toWritable } from "@stream";
+import { stringToUint8Array } from "@utils/binary";
 import {
   mediaPath,
   OOXML_PATHS,

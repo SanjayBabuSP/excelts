@@ -18,22 +18,25 @@ import { concatUint8Arrays } from "@utils/binary";
 // ============================================================================
 
 // Fixed Huffman code lengths for literals/lengths (RFC 1951)
-const FIXED_LITERAL_LENGTHS = new Uint8Array(288);
-for (let i = 0; i <= 143; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 8;
-}
-for (let i = 144; i <= 255; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 9;
-}
-for (let i = 256; i <= 279; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 7;
-}
-for (let i = 280; i <= 287; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 8;
-}
+const FIXED_LITERAL_LENGTHS = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(288);
+  for (let i = 0; i <= 143; i++) {
+    t[i] = 8;
+  }
+  for (let i = 144; i <= 255; i++) {
+    t[i] = 9;
+  }
+  for (let i = 256; i <= 279; i++) {
+    t[i] = 7;
+  }
+  for (let i = 280; i <= 287; i++) {
+    t[i] = 8;
+  }
+  return t;
+})();
 
 // Fixed Huffman code lengths for distances
-const FIXED_DISTANCE_LENGTHS = new Uint8Array(32).fill(5);
+const FIXED_DISTANCE_LENGTHS = /* @__PURE__ */ (() => new Uint8Array(32).fill(5))();
 
 // Length base values and extra bits (codes 257-285)
 const LENGTH_BASE = [
@@ -525,35 +528,37 @@ class BitWriter {
 }
 
 // Fixed Huffman code tables
-const LITERAL_CODES: Array<[number, number]> = [];
-const LITERAL_LENGTHS_TABLE: number[] = [];
+const LITERAL_CODES = /* @__PURE__ */ (() => {
+  const codes: Array<[number, number]> = [];
 
-// Build fixed literal/length Huffman codes
-for (let i = 0; i <= 287; i++) {
-  let code: number;
-  let len: number;
+  // Build fixed literal/length Huffman codes
+  for (let i = 0; i <= 287; i++) {
+    let code: number;
+    let len: number;
 
-  if (i <= 143) {
-    // 00110000 - 10111111 (8 bits)
-    code = 0x30 + i;
-    len = 8;
-  } else if (i <= 255) {
-    // 110010000 - 111111111 (9 bits)
-    code = 0x190 + (i - 144);
-    len = 9;
-  } else if (i <= 279) {
-    // 0000000 - 0010111 (7 bits)
-    code = i - 256;
-    len = 7;
-  } else {
-    // 11000000 - 11000111 (8 bits)
-    code = 0xc0 + (i - 280);
-    len = 8;
+    if (i <= 143) {
+      // 00110000 - 10111111 (8 bits)
+      code = 0x30 + i;
+      len = 8;
+    } else if (i <= 255) {
+      // 110010000 - 111111111 (9 bits)
+      code = 0x190 + (i - 144);
+      len = 9;
+    } else if (i <= 279) {
+      // 0000000 - 0010111 (7 bits)
+      code = i - 256;
+      len = 7;
+    } else {
+      // 11000000 - 11000111 (8 bits)
+      code = 0xc0 + (i - 280);
+      len = 8;
+    }
+
+    codes[i] = [code, len];
   }
 
-  LITERAL_CODES[i] = [code, len];
-  LITERAL_LENGTHS_TABLE[i] = len;
-}
+  return codes;
+})();
 
 /**
  * Write a literal or end-of-block symbol using fixed Huffman codes

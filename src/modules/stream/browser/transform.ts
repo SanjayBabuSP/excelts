@@ -12,7 +12,7 @@ import { Writable } from "./writable";
 import { createListenerRegistry } from "./helpers";
 import { deferTask, inDeferredContext } from "./microtask-context";
 
-import type { Duplex } from "./duplex";
+import { Duplex } from "./duplex";
 
 // =============================================================================
 // Transform Stream Wrapper
@@ -1484,10 +1484,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
           writable?: Writable<TOut>;
         }
   ): Duplex<TIn, TOut> {
-    if (!_DuplexFromFactory) {
-      throw new Error("Transform.from() requires Duplex injection. Import from @stream.");
-    }
-    return _DuplexFromFactory(source);
+    return Duplex.from(source);
   }
 
   /**
@@ -1580,14 +1577,3 @@ Transform.prototype.addListener = Transform.prototype.on;
 // Node.js: Transform.prototype._writev === null (inherited from Duplex/Writable chain).
 // Browser Transform doesn't extend Duplex, so we set it explicitly.
 (Transform.prototype as any)._writev = null;
-
-// =============================================================================
-// Late-binding injection for Duplex (avoids circular import)
-// =============================================================================
-
-let _DuplexFromFactory: ((source: any) => any) | null = null;
-
-/** @internal — called from index.browser.ts to break circular dependency */
-export function _injectDuplexFrom(factory: (source: any) => any): void {
-  _DuplexFromFactory = factory;
-}

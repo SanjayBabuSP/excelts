@@ -8,7 +8,6 @@
 
 import { describe } from "vitest";
 import {
-  EventEmitter,
   Readable,
   Writable,
   Transform,
@@ -20,11 +19,6 @@ import {
   ChunkedBuilder,
   TransactionalChunkedBuilder,
   PullStream,
-  stringToUint8Array,
-  uint8ArrayToString,
-  uint8ArrayEquals,
-  uint8ArrayIndexOf,
-  concatUint8Arrays,
   createCollector,
   createDuplex,
   createEmptyReadable,
@@ -61,6 +55,14 @@ import {
   promises,
   promisify
 } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
+import {
+  stringToUint8Array,
+  uint8ArrayToString,
+  uint8ArrayEquals,
+  uint8ArrayIndexOf,
+  concatUint8Arrays
+} from "@utils/binary";
 import { runStreamTests, type StreamModuleImports } from "@stream/__tests__/stream.shared";
 
 // =============================================================================

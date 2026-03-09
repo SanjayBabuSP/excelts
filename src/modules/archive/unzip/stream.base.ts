@@ -1,15 +1,7 @@
-import {
-  Duplex,
-  PassThrough,
-  Transform,
-  concatUint8Arrays,
-  pipeline,
-  finished,
-  type Readable
-} from "@stream";
+import { Duplex, PassThrough, Transform, pipeline, finished, type Readable } from "@stream";
+import { concatUint8Arrays, textEncoder as utf8Encoder } from "@utils/binary";
 import { ByteQueue } from "@archive/shared/byte-queue";
 import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
-import { textEncoder as utf8Encoder } from "@utils/binary";
 import { decodeZipPath, resolveZipStringCodec } from "@archive/shared/text";
 import { PatternScanner } from "@archive/unzip/pattern-scanner";
 

@@ -43,22 +43,8 @@ export {
 } from "@stream/common/utils";
 export type { PipelineOptions, FinishedOptions } from "@stream/common/options";
 
-export { EventEmitter } from "@utils/event-emitter";
-
 export { ChunkedBuilder, TransactionalChunkedBuilder } from "@stream/chunked-builder";
 export type { ChunkedBuilderOptions, BuilderSnapshot } from "@stream/chunked-builder";
-
-export {
-  textEncoder,
-  textDecoder,
-  stringToUint8Array,
-  uint8ArrayToString,
-  uint8ArrayEquals,
-  uint8ArrayIndexOf,
-  toUint8Array,
-  anyToString,
-  concatUint8Arrays
-} from "@utils/binary";
 
 export {
   collect,

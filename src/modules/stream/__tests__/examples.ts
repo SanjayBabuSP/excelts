@@ -10,10 +10,9 @@ import {
   ChunkedBuilder,
   TransactionalChunkedBuilder,
   PullStream,
-  createTransform,
-  stringToUint8Array,
-  uint8ArrayToString
+  createTransform
 } from "@stream";
+import { stringToUint8Array, uint8ArrayToString } from "@utils/binary";
 
 /**
  * Example 1: Using createTransform for custom transformation

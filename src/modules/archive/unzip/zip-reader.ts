@@ -22,7 +22,8 @@ import {
 import { ProgressEmitter } from "@archive/shared/progress";
 import type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progress";
 import { getTextDecoder } from "@utils/binary";
-import { eventedReadableToAsyncIterableNoDestroy, isWritableStream } from "@stream";
+import { eventedReadableToAsyncIterableNoDestroy } from "@stream/internal/evented-readable-to-async-iterable";
+import { isWritableStream } from "@stream/internal/type-guards";
 import type { ArchiveFormat } from "@archive/formats/types";
 import type { ZipStringEncoding } from "@archive/shared/text";
 

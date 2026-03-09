@@ -23,7 +23,7 @@ import { CsvParserStream, CsvFormatterStream } from "@csv/stream";
 import { parseNumberFromCsv, type DecimalSeparator } from "@csv/utils/number";
 import { ExcelDownloadError, ExcelNotSupportedError } from "@excel/errors";
 import { pipeline } from "@stream";
-import { readableStreamToAsyncIterable } from "@stream/utils";
+import { readableStreamToAsyncIterable } from "@stream/utils.base";
 import type { Readable } from "@stream";
 import type { IReadable, IWritable } from "@stream/types";
 import type { PivotTable } from "@excel/pivot-table";

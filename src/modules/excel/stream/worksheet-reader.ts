@@ -4,7 +4,7 @@
  * Works in both Node.js and Browser.
  */
 
-import { EventEmitter } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
 import { parseSax } from "@excel/utils/parse-sax";
 import { ExcelStreamStateError } from "@excel/errors";
 import { xmlDecode, isDateFmt, excelToDate } from "@utils/utils";

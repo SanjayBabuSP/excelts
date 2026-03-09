@@ -11,6 +11,7 @@ import { decodeBytesToString } from "@utils/binary";
 import { createAbortError } from "@utils/errors";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 import { deferTask, inDeferredContext } from "./microtask-context";
+import { Readable } from "./readable";
 
 /**
  * Shared toString implementation for Uint8Array chunks converted from strings.
@@ -1359,9 +1360,10 @@ export class Writable<T = Uint8Array> extends EventEmitter {
    * Delegates to Readable.isDisturbed, checking internal _readable for Duplex/Transform.
    */
   static isDisturbed(stream: any): boolean {
-    // Late-bound to avoid circular import — Readable is imported at the top as type only.
-    // At runtime, _isDisturbedImpl is injected from index.browser.ts.
-    return _isDisturbedImpl(stream);
+    if (stream && stream._readable instanceof Readable) {
+      return Readable.isDisturbed(stream._readable);
+    }
+    return Readable.isDisturbed(stream);
   }
 
   /**
@@ -1395,17 +1397,6 @@ export class Writable<T = Uint8Array> extends EventEmitter {
   err.code = "ERR_METHOD_NOT_IMPLEMENTED";
   throw err;
 };
-
-// =============================================================================
-// Late-binding injection for isDisturbed (avoids circular import with Readable)
-// =============================================================================
-
-let _isDisturbedImpl: (stream: any) => boolean = () => false;
-
-/** @internal — called from index.browser.ts to inject Readable.isDisturbed */
-export function _injectIsDisturbed(fn: (stream: any) => boolean): void {
-  _isDisturbedImpl = fn;
-}
 
 // =============================================================================
 // Cross-environment stream normalization

@@ -1,5 +1,5 @@
 import { stringToUint8Array as encodeUtf8, concatUint8Arrays } from "@utils/binary";
-import { isAsyncIterable, isReadableStream } from "@stream";
+import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards";
 import { createAbortError } from "@archive/shared/errors";
 import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 

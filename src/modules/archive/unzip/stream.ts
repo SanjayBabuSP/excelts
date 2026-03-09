@@ -204,7 +204,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
   };
 }
 
-const BaseParse = createParseClass(createInflateRaw);
+const BaseParse = /* @__PURE__ */ createParseClass(createInflateRaw);
 
 export class Parse extends BaseParse {}
 

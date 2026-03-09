@@ -9,7 +9,8 @@
  * with filesystem-specific features (filename input + temp-file buffering).
  */
 
-import { EventEmitter, Readable } from "@stream";
+import { Readable } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
 import { createParse } from "@archive/unzip/stream";
 import { ExcelFileError } from "@excel/errors";
 import { iterateStream } from "@excel/utils/iterate-stream";

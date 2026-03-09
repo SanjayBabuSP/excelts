@@ -10,7 +10,7 @@
  * API compatible with Node.js version - supports .on("data"), .on("end"), .write(callback), .end()
  */
 
-import { EventEmitter } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
 import { deflateRawCompressed, inflateRaw } from "@archive/compression/deflate-fallback";
 import {
   hasDeflateRawWebStreams,

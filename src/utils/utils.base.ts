@@ -284,12 +284,18 @@ function sortTypeRank(v: unknown): number {
 const textDecoder = new TextDecoder("utf-8");
 
 let latin1Decoder: TextDecoder | undefined;
-try {
-  // Faster base64 encoding path in browsers: decode bytes into a binary string once.
-  // Some environments may not support this encoding.
-  latin1Decoder = new TextDecoder("latin1");
-} catch {
-  latin1Decoder = undefined;
+let _latin1DecoderResolved = false;
+
+function getLatin1Decoder(): TextDecoder | undefined {
+  if (!_latin1DecoderResolved) {
+    _latin1DecoderResolved = true;
+    try {
+      latin1Decoder = new TextDecoder("latin1");
+    } catch {
+      latin1Decoder = undefined;
+    }
+  }
+  return latin1Decoder;
 }
 
 /**
@@ -315,9 +321,9 @@ export function uint8ArrayToBase64(bytes: Uint8Array): string {
   // Browser: fastest path when latin1 TextDecoder exists.
   // Some environments can still throw on `btoa(...)` (e.g. if decoding yields non-Latin1 chars),
   // so fall back to a guaranteed-binary string conversion.
-  if (latin1Decoder) {
+  if (getLatin1Decoder()) {
     try {
-      return btoa(latin1Decoder.decode(bytes));
+      return btoa(latin1Decoder!.decode(bytes));
     } catch {
       // fall through
     }

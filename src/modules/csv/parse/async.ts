@@ -29,7 +29,7 @@ import { parseCsv } from "./sync";
 import { CsvParserStream } from "../stream/parser";
 import { getUtf8ByteLength } from "../constants";
 import { CsvError } from "../errors";
-import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils";
+import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils.base";
 
 type ReadableStreamLike = { getReader: () => any };
 type AsyncInput = AsyncIterable<string | Uint8Array>;

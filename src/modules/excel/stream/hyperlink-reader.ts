@@ -4,7 +4,7 @@
  * Cross-platform implementation.
  */
 
-import { EventEmitter } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
 import { parseSax } from "@excel/utils/parse-sax";
 import { Enums } from "@excel/enums";
 import { RelType } from "@excel/xlsx/rel-type";

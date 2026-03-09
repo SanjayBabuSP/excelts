@@ -11,22 +11,21 @@
 export const DEFAULT_LINEBREAK_REGEX = /\r\n|\r|\n/;
 
 /**
- * Shared TextEncoder instance for byte length calculations.
- * Avoids creating new instances in hot paths.
+ * Lazily initialized TextEncoder + buffers for byte length calculations.
+ * Avoids eager allocation at module load time.
  */
-const sharedTextEncoder = new TextEncoder();
+let sharedTextEncoder: TextEncoder | null = null;
+let singleCharBuffer: Uint8Array | null = null;
+let encodeBuffer: Uint8Array | null = null;
 
-/**
- * Reusable buffer for encodeInto() to avoid allocations.
- * Size 4 is enough for any single UTF-8 character (max 4 bytes).
- */
-const singleCharBuffer = new Uint8Array(4);
-
-/**
- * Reusable buffer for encodeInto() on multi-character non-ASCII strings.
- * Grows as needed; avoids per-call Uint8Array allocation from encode().
- */
-let encodeBuffer = new Uint8Array(4096);
+function getEncoder(): TextEncoder {
+  if (!sharedTextEncoder) {
+    sharedTextEncoder = new TextEncoder();
+    singleCharBuffer = new Uint8Array(4);
+    encodeBuffer = new Uint8Array(4096);
+  }
+  return sharedTextEncoder;
+}
 
 /**
  * Get UTF-8 byte length of a string efficiently.
@@ -48,7 +47,8 @@ export function getUtf8ByteLength(text: string): number {
       return 1;
     } // ASCII
     // Use encodeInto with reusable buffer to avoid allocation
-    return sharedTextEncoder.encodeInto(text, singleCharBuffer).written!;
+    const encoder = getEncoder();
+    return encoder.encodeInto(text, singleCharBuffer!).written!;
   }
 
   // For longer strings, check if all ASCII first (very common for CSV)
@@ -66,8 +66,9 @@ export function getUtf8ByteLength(text: string): number {
 
   // Mixed content: must encode to get accurate byte count
   // Use encodeInto with a reusable buffer to avoid per-call allocation
-  if (len * 3 > encodeBuffer.length) {
+  const encoder = getEncoder();
+  if (len * 3 > encodeBuffer!.length) {
     encodeBuffer = new Uint8Array(len * 3);
   }
-  return sharedTextEncoder.encodeInto(text, encodeBuffer).written!;
+  return encoder.encodeInto(text, encodeBuffer!).written!;
 }

@@ -4,7 +4,7 @@
  */
 
 import { base64ToUint8Array, uint8ArrayToBase64, stringToUtf16Le } from "@utils/utils.base";
-import { concatUint8Arrays } from "@stream";
+import { concatUint8Arrays } from "@utils/binary";
 
 // Helper to convert number to little-endian Uint8Array
 function uint32ToLe(num: number): Uint8Array {

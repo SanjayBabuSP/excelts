@@ -13,6 +13,7 @@ import { stringToEncodedBytes } from "@stream/common/binary-chunk";
 import { ChunkBuffer } from "./chunk-buffer";
 import { PipeManager } from "./pipe-manager";
 import { deferTask, inDeferredContext } from "./microtask-context";
+import { getDuplexFrom } from "./_lazy";
 
 /**
  * Shared toString implementation for Uint8Array chunks converted from strings.
@@ -2224,10 +2225,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
       });
 
-      if (_DuplexFromFactory) {
-        return _DuplexFromFactory(result) as IDuplex<U, T>;
+      const duplexFrom = getDuplexFrom();
+      if (duplexFrom) {
+        return duplexFrom(result) as IDuplex<U, T>;
       }
-      // Fallback when DuplexFromFactory is not injected (should not happen at runtime)
+      // Fallback when DuplexFrom is not registered (should not happen at runtime)
       return result as unknown as IDuplex<U, T>;
     }
 
@@ -2241,13 +2243,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
     // If the target has a _readable (Transform/Duplex), wrap it.
     if (target._readable) {
-      if (_DuplexFromFactory) {
-        return _DuplexFromFactory(target._readable) as IDuplex<U, T>;
+      const duplexFrom2 = getDuplexFrom();
+      if (duplexFrom2) {
+        return duplexFrom2(target._readable) as IDuplex<U, T>;
       }
       return target._readable as unknown as IDuplex<U, T>;
     }
-    if (_DuplexFromFactory) {
-      return _DuplexFromFactory(target) as IDuplex<U, T>;
+    const duplexFrom3 = getDuplexFrom();
+    if (duplexFrom3) {
+      return duplexFrom3(target) as IDuplex<U, T>;
     }
     return target as IDuplex<U, T>;
   }
@@ -2442,15 +2446,4 @@ export function pumpAsyncIterableToReadable<T>(
     })();
   };
   (readable as any)._pushMode = true;
-}
-
-// =============================================================================
-// Late-binding injection for Duplex (avoids circular import)
-// =============================================================================
-
-let _DuplexFromFactory: ((source: any) => any) | null = null;
-
-/** @internal — called from index.browser.ts to break circular dependency */
-export function _injectDuplexFrom(factory: (source: any) => any): void {
-  _DuplexFromFactory = factory;
 }

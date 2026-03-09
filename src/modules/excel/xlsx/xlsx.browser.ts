@@ -45,7 +45,8 @@ import { StreamBuf } from "@excel/utils/stream-buf";
 import { bufferToString, base64ToUint8Array } from "@utils/utils";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 import { ZipParser } from "@archive/unzip/zip-parser";
-import { PassThrough, concatUint8Arrays, type IEventEmitter } from "@stream";
+import { PassThrough, type IEventEmitter } from "@stream";
+import { concatUint8Arrays } from "@utils/binary";
 import type { Workbook } from "@excel/workbook";
 import {
   commentsPath,

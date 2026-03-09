@@ -10,7 +10,7 @@
  * - As readable stream: feed data into writable part and read from it
  */
 
-import { EventEmitter } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
 import { StringBuf } from "@excel/utils/string-buf";
 import { ExcelNotSupportedError, InvalidValueTypeError } from "@excel/errors";
 import { getTextDecoder, uint8ArrayToNodeBufferView } from "@utils/binary";

@@ -14,7 +14,7 @@ import { applyMergeBorders, collectMergeBorders } from "@excel/utils/merge-borde
 import type { StreamBuf } from "@excel/utils/stream-buf";
 import { mediaRelTargetFromRels, worksheetPath } from "@excel/utils/ooxml-paths";
 
-const xmlBuffer = new StringBuf();
+const xmlBuffer = /* @__PURE__ */ new StringBuf();
 
 // ============================================================================================
 // Xforms

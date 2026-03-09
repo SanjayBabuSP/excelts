@@ -6,7 +6,8 @@
  * Uses the browser Duplex stream implementation for compatibility.
  */
 
-import { Duplex, PassThrough, concatUint8Arrays } from "@stream";
+import { Duplex, PassThrough } from "@stream";
+import { concatUint8Arrays } from "@utils/binary";
 import { toError } from "@archive/shared/errors";
 import {
   runParseLoop,
@@ -1035,7 +1036,7 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
   };
 }
 
-const BaseParse = createParseClass(createInflateRaw);
+const BaseParse = /* @__PURE__ */ createParseClass(createInflateRaw);
 
 export class Parse extends BaseParse {}
 

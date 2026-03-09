@@ -87,10 +87,6 @@ type _NonClass_createCollector = Assert<
 
 // Shared classes exported from the same files should remain identical.
 
-type _Class_EventEmitter = Assert<
-  IsEqual<NodeRuntime["EventEmitter"], BrowserRuntime["EventEmitter"]>
->;
-
 type _Class_ChunkedBuilder = Assert<
   IsEqual<NodeRuntime["ChunkedBuilder"], BrowserRuntime["ChunkedBuilder"]>
 >;
