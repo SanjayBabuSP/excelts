@@ -154,6 +154,11 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._read = options.read.bind(this);
       this._hasReadImpl = true;
       this._pushMode = true; // User will call push()
+    } else if (this._hasSubclassRead()) {
+      // Subclass defines _read on its prototype — bind and mark as available.
+      // This matches Node.js where subclass._read() is the canonical pull API.
+      this._hasReadImpl = true;
+      this._pushMode = true;
     }
 
     // Store user-provided destroy function
@@ -225,6 +230,23 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     let proto = Object.getPrototypeOf(this);
     while (proto && proto !== Readable.prototype && proto !== Object.prototype) {
       if (Object.prototype.hasOwnProperty.call(proto, "_construct")) {
+        return true;
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return false;
+  }
+
+  /**
+   * Check if a subclass defines _read on its own prototype.
+   * The base Readable.prototype._read throws ERR_METHOD_NOT_IMPLEMENTED,
+   * so we must stop before it. Only return true if an intermediate prototype
+   * (the user's subclass) owns _read.
+   */
+  private _hasSubclassRead(): boolean {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Readable.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, "_read")) {
         return true;
       }
       proto = Object.getPrototypeOf(proto);
@@ -509,6 +531,12 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._buf.length > 0) {
       return;
     }
+    // Flush the stream decoder's remainder (e.g. partial base64 group).
+    // This mirrors Node.js StringDecoder.end() which is called before 'end'.
+    const flushed = this._flushDecoder();
+    if (flushed) {
+      this.emit("data", flushed);
+    }
     this._endEmitted = true;
     this.emit("end");
 
@@ -674,9 +702,10 @@ export class Readable<T = Uint8Array> extends EventEmitter {
           result = this._applyEncoding(this._buf.consumeAll());
         } else {
           // Trigger internal read to fill buffer
-          // Node.js passes highWaterMark to _read, not the requested size
+          // Node.js passes Math.max(n, highWaterMark) to _read so that
+          // custom _read implementations know the consumer's requested size.
           if (this._hasReadImpl && this._constructed) {
-            this._callRead(this._highWaterMark);
+            this._callRead(Math.max(n, this._highWaterMark));
           }
           return null;
         }
@@ -708,6 +737,21 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     return result;
+  }
+
+  /**
+   * Flush the stream decoder's internal remainder and clear it.
+   * Returns the flushed string, or null if nothing to flush.
+   * Called when the stream ends, both from the event path (_emitEndOnce)
+   * and the async iterator path (_initAsyncIterState).
+   */
+  private _flushDecoder(): string | null {
+    if (!this._decoder) {
+      return null;
+    }
+    const final = this._decoder.decode(new Uint8Array(0), { stream: false });
+    this._decoder = null;
+    return final || null;
   }
 
   /**
@@ -1444,6 +1488,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     if (this._ended) {
+      // Flush the stream decoder's remainder (e.g. partial base64 group)
+      // before marking the iterator as done. This mirrors the flush that
+      // _emitEndOnce performs for the event-based consumption path.
+      const flushed = this._flushDecoder();
+      if (flushed) {
+        state.dataQueue.push(flushed as any);
+        state.queuedSize += this._chunkSizeForBackpressure(flushed);
+      }
       state.done = true;
     } else {
       this.on("data", state.dataHandler);

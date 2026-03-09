@@ -525,6 +525,10 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       this._sideForwardingCleanup = null;
     }
 
+    // Ensure the pipe source identity is always the outer Duplex,
+    // including after fromWeb() replaces the internal _readable.
+    (this._readable as any)._pipes?.setSource(this);
+
     const registry = createListenerRegistry();
 
     // Deduplicate error forwarding: when destroy(err) tears down both sides,
@@ -575,15 +579,19 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       maybeAutoDestroy();
     });
     registry.add(this._writable, "drain", () => this.emit("drain"));
-    // Node.js: when allowHalfOpen is false and the writable side closes,
-    // the readable side should also be destroyed.
-    if (!this.allowHalfOpen) {
-      registry.once(this._writable, "close", () => {
-        if (!this._readable.destroyed) {
-          this._readable.destroy();
-        }
-      });
-    }
+    // Forward "pipe"/"unpipe" from the internal writable so that
+    // source.pipe(duplex) triggers "pipe" on the Duplex itself.
+    registry.add(this._writable, "pipe", source => this.emit("pipe", source));
+    registry.add(this._writable, "unpipe", source => this.emit("unpipe", source));
+    // Node.js: when allowHalfOpen is false and the writable side finishes,
+    // gracefully end the readable side with push(null) — NOT destroy().
+    // The check is dynamic (inside the handler) so runtime changes to
+    // allowHalfOpen are respected, matching Node.js behaviour.
+    registry.once(this._writable, "finish", () => {
+      if (!this.allowHalfOpen && !this._readable.readableEnded) {
+        this._readable.push(null);
+      }
+    });
 
     this._sideForwardingCleanup = () => {
       registry.cleanup();
@@ -882,22 +890,14 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
    * Destroys the stream and resolves after the 'close' event.
    */
   async [Symbol.asyncDispose](): Promise<void> {
-    const selfInitiated = !this._destroyed;
-    if (selfInitiated) {
+    if (!this._destroyed) {
       this.destroy();
     }
-    return new Promise<void>((resolve, reject) => {
-      const settle = (): void => {
-        if (selfInitiated || this.writableFinished) {
-          resolve();
-        } else {
-          reject(new Error("Premature close"));
-        }
-      };
+    return new Promise<void>(resolve => {
       if (this._closed) {
-        settle();
+        resolve();
       } else {
-        this.once("close", settle);
+        this.once("close", () => resolve());
       }
     });
   }

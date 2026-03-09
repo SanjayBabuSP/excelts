@@ -26,10 +26,14 @@ export const addEmitterListener = (
   listener: (...args: any[]) => void,
   options?: { once?: boolean }
 ): (() => void) => {
-  if (options?.once && typeof emitter.once === "function") {
-    emitter.once(event, listener);
-  } else {
-    emitter.on!(event, listener);
+  if (options?.once) {
+    if (typeof emitter.once === "function") {
+      emitter.once(event, listener);
+    }
+    // If .once() is not available, silently skip — matching Node.js
+    // optional-chaining behavior: (emitter as any).once?.(event, listener)
+  } else if (typeof emitter.on === "function") {
+    emitter.on(event, listener);
   }
   return () => removeEmitterListener(emitter, event, listener);
 };

@@ -162,7 +162,15 @@ export function createTransform<TInput = Uint8Array, TOutput = Uint8Array>(
           try {
             const result = options.flush!();
             if (result instanceof Promise) {
-              result.then(data => callback(null, data)).catch(callback);
+              result
+                .then(data => {
+                  if (data !== undefined) {
+                    callback(null, data);
+                  } else {
+                    callback();
+                  }
+                })
+                .catch(callback);
             } else if (result !== undefined) {
               callback(null, result);
             } else {

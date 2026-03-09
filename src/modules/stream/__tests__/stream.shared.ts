@@ -13289,4 +13289,179 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(chunks).toEqual(["a", "b", "c"]);
     });
   });
+
+  // ===========================================================================
+  // Pipeline with options + callback (combined argument style)
+  // ===========================================================================
+
+  describe("pipeline with options and callback combined", () => {
+    it("should accept pipeline(s1, s2, options, callback)", async () => {
+      const src = new Readable({
+        objectMode: true,
+        read() {
+          this.push("a");
+          this.push(null);
+        }
+      });
+      const dest = new Writable({
+        objectMode: true,
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      const callbackResult = await new Promise<Error | null>(resolve => {
+        pipeline(src, dest, { end: true }, (err?: Error | null) => {
+          resolve(err ?? null);
+        });
+      });
+      expect(callbackResult).toBeNull();
+    });
+
+    it("should respect signal in options when callback is also provided", async () => {
+      const ac = new AbortController();
+      ac.abort();
+
+      const src = new Readable({ read() {} });
+      const dest = new Writable({
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      const callbackResult = await new Promise<Error | null>(resolve => {
+        pipeline(src, dest, { signal: ac.signal }, (err?: Error | null) => {
+          resolve(err ?? null);
+        });
+      });
+      expect(callbackResult).not.toBeNull();
+      expect((callbackResult as any)?.name).toBe("AbortError");
+    });
+  });
+
+  // ===========================================================================
+  // Transform/Duplex pipe source identity
+  // ===========================================================================
+
+  describe("pipe source identity for Transform and Duplex", () => {
+    it("Transform.pipe() should emit pipe event with the Transform as source, not internal readable", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _enc: string, cb: (err: null, data: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      const dest = new Writable({
+        objectMode: true,
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      let pipeSource: any = null;
+      dest.on("pipe", (src: any) => {
+        pipeSource = src;
+      });
+
+      t.pipe(dest);
+      expect(pipeSource).toBe(t);
+
+      t.unpipe(dest);
+      t.destroy();
+      dest.destroy();
+    });
+
+    it("Duplex.pipe() should emit pipe event with the Duplex as source", async () => {
+      const d = createDuplex({
+        objectMode: true,
+        read() {
+          this.push("x");
+          this.push(null);
+        },
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+      const dest = new Writable({
+        objectMode: true,
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      let pipeSource: any = null;
+      dest.on("pipe", (src: any) => {
+        pipeSource = src;
+      });
+
+      d.pipe(dest);
+      expect(pipeSource).toBe(d);
+
+      d.unpipe(dest);
+      d.destroy();
+      dest.destroy();
+    });
+
+    it("Transform.unpipe() should emit unpipe event with the Transform as source", async () => {
+      const t = new Transform({
+        objectMode: true,
+        transform(chunk: any, _enc: string, cb: (err: null, data: any) => void) {
+          cb(null, chunk);
+        }
+      });
+      const dest = new Writable({
+        objectMode: true,
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      let unpipeSource: any = null;
+      dest.on("unpipe", (src: any) => {
+        unpipeSource = src;
+      });
+
+      t.pipe(dest);
+      t.unpipe(dest);
+      expect(unpipeSource).toBe(t);
+
+      t.destroy();
+      dest.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Duplex pipe/unpipe event forwarding from writable side
+  // ===========================================================================
+
+  describe("Duplex pipe/unpipe event forwarding", () => {
+    it("should emit pipe event on Duplex when something pipes into it", async () => {
+      const src = new Readable({
+        objectMode: true,
+        read() {
+          this.push("x");
+          this.push(null);
+        }
+      });
+      const d = createDuplex({
+        objectMode: true,
+        read() {},
+        write(_c: any, _e: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      let pipeSource: any = null;
+      d.on("pipe", (s: any) => {
+        pipeSource = s;
+      });
+
+      src.pipe(d);
+      expect(pipeSource).toBe(src);
+
+      src.unpipe(d);
+      src.destroy();
+      d.destroy();
+    });
+  });
 }

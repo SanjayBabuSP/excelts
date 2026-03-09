@@ -49,6 +49,7 @@ const isStreamCompleted = (stream: any): boolean => {
 const createPrematureCloseError = (): Error & { code: string } => {
   const err = new Error("Premature close") as Error & { code: string };
   err.code = "ERR_STREAM_PREMATURE_CLOSE";
+  err.name = "Error [ERR_STREAM_PREMATURE_CLOSE]";
   return err;
 };
 
@@ -153,11 +154,18 @@ export function pipeline(
   const lastArg = args[args.length - 1];
 
   if (typeof lastArg === "function") {
-    // Callback style: pipeline(s1, s2, s3, callback)
     callback = lastArg as PipelineCallback;
-    streams = args.slice(0, -1) as PipelineStream[];
+    // Check for combined style: pipeline(s1, s2, ..., options, callback)
+    const secondToLast = args[args.length - 2];
+    if (isPipelineOptions(secondToLast)) {
+      options = secondToLast as PipelineOptions;
+      streams = args.slice(0, -2) as PipelineStream[];
+    } else {
+      // Callback only: pipeline(s1, s2, ..., callback)
+      streams = args.slice(0, -1) as PipelineStream[];
+    }
   } else if (isPipelineOptions(lastArg)) {
-    // Options style: pipeline(s1, s2, s3, { signal })
+    // Options only: pipeline(s1, s2, ..., { signal })
     options = lastArg as PipelineOptions;
     streams = args.slice(0, -1) as PipelineStream[];
   } else {
@@ -549,6 +557,7 @@ export function finished(
 
       const err = new Error("Premature close") as Error & { code?: string };
       err.code = "ERR_STREAM_PREMATURE_CLOSE";
+      err.name = "Error [ERR_STREAM_PREMATURE_CLOSE]";
       done(err);
     });
   });

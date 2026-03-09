@@ -39,8 +39,23 @@ interface PipeListeners<T> {
 export class PipeManager<T> {
   private _destinations: WritableLike[] = [];
   private _listeners: Map<WritableLike, PipeListeners<T>> = new Map();
+  private _sourceOverride: PipeSource | null = null;
 
   constructor(private readonly _source: PipeSource) {}
+
+  /**
+   * Override the source identity used when emitting "pipe" and "unpipe" events
+   * on destinations. This allows Transform/Duplex wrappers to present
+   * themselves (rather than their internal Readable) as the pipe source.
+   */
+  setSource(source: PipeSource): void {
+    this._sourceOverride = source;
+  }
+
+  /** The identity to emit in "pipe"/"unpipe" events. */
+  private get _emitSource(): PipeSource {
+    return this._sourceOverride ?? this._source;
+  }
 
   /** Pipe source data to `destination`. Returns `destination` for chaining. */
   pipe<W extends WritableLike>(destination: W, options?: { end?: boolean }): W {
@@ -130,7 +145,7 @@ export class PipeManager<T> {
     // Users must handle errors on each stream independently.
 
     // Emit 'pipe' event on destination (Node.js compatibility)
-    eventTarget.emit?.("pipe", this._source);
+    eventTarget.emit?.("pipe", this._emitSource);
 
     this._source.resume();
     return destination;
@@ -187,7 +202,7 @@ export class PipeManager<T> {
     }
 
     // Emit 'unpipe' event on destination (Node.js compatibility)
-    listeners.eventTarget.emit?.("unpipe", this._source);
+    listeners.eventTarget.emit?.("unpipe", this._emitSource);
 
     this._listeners.delete(destination);
   }

@@ -219,6 +219,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       }
     };
 
+    // Override pipe source identity so destinations see the outer Transform
+    // (not the internal Readable) in "pipe"/"unpipe" events.
+    (this._readable as any)._pipes.setSource(this);
+
     // Determine write/final handlers.
     // If a `write` option is provided, it replaces the transform-based write (matching Node).
     const writeHandler = options?.write
@@ -406,6 +410,10 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       this._sideForwardingCleanup = null;
     }
 
+    // Ensure the pipe source identity is always the outer Transform,
+    // including after fromWeb() replaces the internal _readable.
+    (this._readable as any)._pipes?.setSource(this);
+
     const registry = createListenerRegistry();
 
     // Auto-destroy: when both sides finish, destroy the Transform (matching Node.js).
@@ -443,9 +451,12 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     });
     registry.add(this._writable, "drain", () => this.emit("drain"));
     registry.add(this._writable, "error", err => this._emitErrorOnce(err));
-    registry.once(this._writable, "close", () => {
-      if (!this.allowHalfOpen && !this._readable.destroyed) {
-        this._readable.destroy();
+    // Node.js: when allowHalfOpen is false and the writable side finishes,
+    // gracefully end the readable side with push(null) — NOT destroy().
+    // Listen on "finish" (not "close") to match Node.js timing.
+    registry.once(this._writable, "finish", () => {
+      if (!this.allowHalfOpen && !this._readable.readableEnded) {
+        this._readable.push(null);
       }
     });
 
@@ -882,10 +893,16 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     // accepted — matching Node.js behaviour where writableEnded is false
     // during the transform callback for the end() chunk.
     if (chunk !== undefined) {
+      // Propagate write errors through destroy (matching Node.js)
+      const onWriteError = (err?: Error | null): void => {
+        if (err && !this._destroyed) {
+          this.destroy(err);
+        }
+      };
       if (encoding !== undefined) {
-        this._writable.write(chunk, encoding);
+        this._writable.write(chunk, encoding, onWriteError);
       } else {
-        this._writable.write(chunk);
+        this._writable.write(chunk, onWriteError as any);
       }
     }
 

@@ -71,7 +71,15 @@ export function pipeline(
 
   if (typeof lastArg === "function") {
     callback = lastArg as PipelineCallback;
-    streams = args.slice(0, -1) as PipelineStream[];
+    // Check for combined style: pipeline(s1, s2, ..., options, callback)
+    const secondToLast = args[args.length - 2];
+    if (isPipelineOptions(secondToLast)) {
+      options = secondToLast;
+      streams = args.slice(0, -2) as PipelineStream[];
+    } else {
+      // Callback only: pipeline(s1, s2, ..., callback)
+      streams = args.slice(0, -1) as PipelineStream[];
+    }
   } else if (isPipelineOptions(lastArg)) {
     options = lastArg;
     streams = args.slice(0, -1) as PipelineStream[];
