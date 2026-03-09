@@ -13126,4 +13126,118 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(events.filter(e => e.startsWith("error:transform"))).toEqual([]);
     });
   });
+
+  // ===========================================================================
+  // Node.js parity: _read() throws ERR_METHOD_NOT_IMPLEMENTED
+  // ===========================================================================
+
+  describe("Readable._read() ERR_METHOD_NOT_IMPLEMENTED parity", () => {
+    it("should emit ERR_METHOD_NOT_IMPLEMENTED when subclass forgets _read", async () => {
+      // Subclass without _read override — mirrors Node.js behavior where
+      // calling read() triggers _read() which throws, caught internally
+      // and emitted as an error event.
+      class MyReadable extends Readable {}
+      const r = new MyReadable();
+      const errors: any[] = [];
+      r.on("error", (e: any) => errors.push(e));
+      r.read(0);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].code).toBe("ERR_METHOD_NOT_IMPLEMENTED");
+      expect(r.destroyed).toBe(true);
+    });
+
+    it("should NOT throw when _read is provided via options", async () => {
+      const r = new Readable({ read() {} });
+      r.on("error", () => {});
+      r.read(0);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Stream should not be destroyed — options.read shadows the prototype
+      expect(r.destroyed).toBe(false);
+      r.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Node.js parity: setEncoding hex / base64 / base64url / ascii
+  // ===========================================================================
+
+  describe("setEncoding with hex/base64/base64url/ascii", () => {
+    it("should decode bytes as hex", async () => {
+      const r = new Readable({ read() {} });
+      r.setEncoding("hex");
+      r.push(new Uint8Array([0xde, 0xad]));
+      r.push(new Uint8Array([0xbe, 0xef]));
+      r.push(null);
+      const chunks: string[] = [];
+      for await (const chunk of r) {
+        chunks.push(String(chunk));
+      }
+      expect(chunks.join("")).toBe("deadbeef");
+    });
+
+    it("should decode bytes as base64 with streaming 3-byte grouping", async () => {
+      const r = new Readable({ read() {} });
+      r.setEncoding("base64");
+      // Push 5 bytes — not a multiple of 3
+      r.push(new Uint8Array([1, 2, 3, 4, 5]));
+      // Push 3 more bytes
+      r.push(new Uint8Array([6, 7, 8]));
+      r.push(null);
+      const chunks: string[] = [];
+      for await (const chunk of r) {
+        chunks.push(String(chunk));
+      }
+      // [1,2,3] → "AQID", remainder [4,5]
+      // [4,5] + [6,7,8] → [4,5,6] → "BAUG", remainder [7,8]
+      // flush [7,8] → "Bwg="
+      expect(chunks.join("")).toBe("AQIDBAUGBwg=");
+    });
+
+    it("should decode bytes as base64url without padding", async () => {
+      const r = new Readable({ read() {} });
+      r.setEncoding("base64url");
+      r.push(new Uint8Array([0xff, 0xfe, 0xfd]));
+      r.push(null);
+      const chunks: string[] = [];
+      for await (const chunk of r) {
+        chunks.push(String(chunk));
+      }
+      // Standard base64 would be "//79", base64url replaces +/ with -_
+      expect(chunks.join("")).toBe("__79");
+    });
+
+    it("should decode bytes as ascii with 7-bit masking", async () => {
+      const r = new Readable({ read() {} });
+      r.setEncoding("ascii");
+      // 72=H, 101=e, 108=l, 108=l, 111=o, 200 → 200 & 0x7F = 72 → H
+      r.push(new Uint8Array([72, 101, 108, 108, 111, 200]));
+      r.push(null);
+      const chunks: string[] = [];
+      for await (const chunk of r) {
+        chunks.push(String(chunk));
+      }
+      expect(chunks.join("")).toBe("HelloH");
+    });
+  });
+
+  // ===========================================================================
+  // Node.js parity: async iterator destroys on ANY exit
+  // ===========================================================================
+
+  describe("async iterator destroy-on-exit parity", () => {
+    it("should destroy stream when the single iterator breaks", async () => {
+      const r = new Readable({ read() {} });
+      r.push("a");
+      r.push("b");
+      r.push(null);
+
+      for await (const _chunk of r) {
+        break;
+      }
+      expect(r.destroyed).toBe(true);
+    });
+  });
 }

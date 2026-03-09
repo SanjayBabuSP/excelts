@@ -6,6 +6,7 @@
 
 import { Writable as NodeWritable } from "stream";
 import type { WritableStreamOptions, WritableLike } from "@stream/types";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 // =============================================================================
 // Unified Writable class (compatible with browser API)
@@ -64,7 +65,8 @@ export class Writable<T = Uint8Array> extends NodeWritable {
 
       // Create a pass-through wrapper that proxies to the underlying stream
       super({
-        highWaterMark: options?.highWaterMark,
+        highWaterMark:
+          options?.highWaterMark ?? getDefaultHighWaterMark(options?.objectMode ?? false),
         objectMode: options?.objectMode,
         autoDestroy: options?.autoDestroy,
         emitClose: options?.emitClose,
@@ -99,7 +101,8 @@ export class Writable<T = Uint8Array> extends NodeWritable {
       this.once("finish", cleanup);
     } else {
       super({
-        highWaterMark: options?.highWaterMark,
+        highWaterMark:
+          options?.highWaterMark ?? getDefaultHighWaterMark(options?.objectMode ?? false),
         objectMode: options?.objectMode,
         autoDestroy: options?.autoDestroy,
         emitClose: options?.emitClose,

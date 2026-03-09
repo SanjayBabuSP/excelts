@@ -17,6 +17,7 @@ import { isAsyncIterable, isReadableStream } from "@stream/internal/type-guards"
 import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 import { createTextDecoder, concatUint8Arrays } from "@utils/binary";
 import { toStreamBytes } from "@stream/common/binary-chunk";
 
@@ -230,7 +231,10 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
   const objectMode =
     options?.readableObjectMode ?? options?.writableObjectMode ?? options?.objectMode ?? false;
   const highWaterMark =
-    options?.readableHighWaterMark ?? options?.writableHighWaterMark ?? options?.highWaterMark;
+    options?.readableHighWaterMark ??
+    options?.writableHighWaterMark ??
+    options?.highWaterMark ??
+    getDefaultHighWaterMark(objectMode);
 
   // Holder object allows both streams to reference each other via closure
   // while satisfying the `const` constraint (each variable is assigned once).

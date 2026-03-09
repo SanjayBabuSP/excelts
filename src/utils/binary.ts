@@ -77,6 +77,158 @@ function createTextDecoderOrTypeError(encoding: string, options?: TextDecoderOpt
 }
 
 // =============================================================================
+// StreamDecoder — Unified streaming decoder (Node.js StringDecoder parity)
+// =============================================================================
+
+/**
+ * Minimal streaming decoder interface compatible with a subset of `TextDecoder`.
+ * Used by the browser Readable's `setEncoding()` to support encodings that
+ * `TextDecoder` does not handle (`hex`, `base64`, `base64url`, `ascii`).
+ */
+export interface StreamDecoder {
+  decode(input: Uint8Array, options?: { stream?: boolean }): string;
+}
+
+/**
+ * Create a streaming decoder for the given encoding.
+ *
+ * For encodings natively supported by `TextDecoder` (utf-8, latin1, utf-16le,
+ * etc.) this returns a real `TextDecoder`.  For Node.js-only encodings
+ * (`hex`, `base64`, `base64url`, `ascii`) it returns a custom implementation
+ * that matches `StringDecoder` semantics — including stateful buffering for
+ * `base64` (3-byte grouping) and 7-bit masking for `ascii`.
+ */
+export function createStreamDecoder(encoding?: string): StreamDecoder {
+  const enc = normalizeEncodingLabel(encoding);
+  switch (enc) {
+    case "hex":
+      return new HexStreamDecoder();
+    case "base64":
+      return new Base64StreamDecoder(false);
+    case "base64url":
+      return new Base64StreamDecoder(true);
+    case "ascii":
+      return new AsciiStreamDecoder();
+    default:
+      // All other encodings are handled by TextDecoder.
+      return createTextDecoderOrTypeError(enc, { ignoreBOM: true });
+  }
+}
+
+// -- Hex decoder --------------------------------------------------------------
+
+class HexStreamDecoder implements StreamDecoder {
+  decode(input: Uint8Array): string {
+    let result = "";
+    for (let i = 0; i < input.length; i++) {
+      result += hexTable[input[i]!];
+    }
+    return result;
+  }
+}
+
+/** Pre-computed lookup table for byte→hex (avoids per-byte toString(16)). */
+const hexTable: string[] = /* @__PURE__ */ (() => {
+  const t = new Array<string>(256);
+  for (let i = 0; i < 256; i++) {
+    t[i] = i.toString(16).padStart(2, "0");
+  }
+  return t;
+})();
+
+// -- Base64 / Base64url decoder -----------------------------------------------
+
+const _b64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const _b64UrlChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+class Base64StreamDecoder implements StreamDecoder {
+  private _remainder: Uint8Array | null = null;
+  private _chars: string;
+
+  constructor(urlSafe: boolean) {
+    this._chars = urlSafe ? _b64UrlChars : _b64Chars;
+  }
+
+  decode(input: Uint8Array, options?: { stream?: boolean }): string {
+    let data: Uint8Array;
+    if (this._remainder) {
+      const merged = new Uint8Array(this._remainder.length + input.length);
+      merged.set(this._remainder);
+      merged.set(input, this._remainder.length);
+      data = merged;
+    } else {
+      data = input;
+    }
+
+    const streaming = options?.stream ?? false;
+
+    // Base64 encodes 3 bytes into 4 chars. In streaming mode, hold back
+    // any incomplete group so the next chunk can complete it.
+    if (streaming) {
+      const excess = data.length % 3;
+      const processLen = data.length - excess;
+      this._remainder = excess > 0 ? data.slice(processLen) : null;
+      return processLen > 0 ? this._encodeBytes(data, processLen) : "";
+    }
+
+    // Non-streaming (final flush): encode everything including partial group.
+    this._remainder = null;
+    return data.length > 0 ? this._encodeBytes(data, data.length) : "";
+  }
+
+  private _encodeBytes(data: Uint8Array, len: number): string {
+    const chars = this._chars;
+    const urlSafe = chars === _b64UrlChars;
+    let result = "";
+
+    let i = 0;
+    // Encode complete 3-byte groups.
+    for (; i + 2 < len; i += 3) {
+      const b0 = data[i]!;
+      const b1 = data[i + 1]!;
+      const b2 = data[i + 2]!;
+      result +=
+        chars[b0 >>> 2]! +
+        chars[((b0 & 0x03) << 4) | (b1 >>> 4)]! +
+        chars[((b1 & 0x0f) << 2) | (b2 >>> 6)]! +
+        chars[b2 & 0x3f]!;
+    }
+
+    // Handle remaining 1 or 2 bytes (with padding for standard base64).
+    const remaining = len - i;
+    if (remaining === 1) {
+      const b0 = data[i]!;
+      result += chars[b0 >>> 2]! + chars[(b0 & 0x03) << 4]!;
+      if (!urlSafe) {
+        result += "==";
+      }
+    } else if (remaining === 2) {
+      const b0 = data[i]!;
+      const b1 = data[i + 1]!;
+      result +=
+        chars[b0 >>> 2]! + chars[((b0 & 0x03) << 4) | (b1 >>> 4)]! + chars[(b1 & 0x0f) << 2]!;
+      if (!urlSafe) {
+        result += "=";
+      }
+    }
+
+    return result;
+  }
+}
+
+// -- ASCII decoder (7-bit masking, matches Node.js StringDecoder) -------------
+
+class AsciiStreamDecoder implements StreamDecoder {
+  decode(input: Uint8Array): string {
+    let result = "";
+    for (let i = 0; i < input.length; i++) {
+      result += String.fromCharCode(input[i]! & 0x7f);
+    }
+    return result;
+  }
+}
+
+// =============================================================================
 // Binary Operations
 // =============================================================================
 

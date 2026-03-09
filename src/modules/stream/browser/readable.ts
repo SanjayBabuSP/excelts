@@ -4,7 +4,8 @@
 
 import type { IDuplex, ReadableStreamOptions, WritableLike } from "@stream/types";
 import { EventEmitter } from "@utils/event-emitter";
-import { createTextDecoder, getTextDecoder } from "@utils/binary";
+import { createStreamDecoder, getTextDecoder } from "@utils/binary";
+import type { StreamDecoder } from "@utils/binary";
 import { createAbortError } from "@utils/errors";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
 import { stringToEncodedBytes } from "@stream/common/binary-chunk";
@@ -24,6 +25,35 @@ function encodedBytesToString(this: Uint8Array, enc?: string): string {
 // =============================================================================
 // Readable Stream Wrapper
 // =============================================================================
+
+/**
+ * Shared state for async iteration (Node.js parity).
+ *
+ * In Node.js, multiple `[Symbol.asyncIterator]()` calls return independent
+ * iterators that *compete* for chunks from the same underlying stream — each
+ * chunk is delivered to exactly one waiting iterator (FIFO).  We replicate
+ * this by sharing a single `data` listener and routing incoming chunks to
+ * a queue of per-iterator resolvers.
+ */
+interface _AsyncIterState<T> {
+  /** Chunks that arrived when no iterator was waiting. */
+  dataQueue: any[];
+  dataQueueIndex: number;
+  queuedSize: number;
+  /** Per-iterator resolve/reject callbacks waiting for the next chunk. */
+  resolverQueue: Array<{ resolve: (v: any) => void; reject: (e: Error) => void }>;
+  done: boolean;
+  streamError: Error | null;
+  /** Number of active (not-yet-returned) iterators. */
+  activeCount: number;
+  /** Whether the shared event listeners have been attached. */
+  listenersAttached: boolean;
+  pausedByIterator: boolean;
+  /** Bound handlers for cleanup. */
+  dataHandler: (chunk: T) => void;
+  doneHandler: () => void;
+  errorHandler: (err: Error) => void;
+}
 
 /**
  * A wrapper around Web ReadableStream that provides Node.js-like API
@@ -69,7 +99,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _hasFlowed: boolean = false;
   private _pipes!: PipeManager<T>;
   private _encoding: string | null = null;
-  private _decoder: TextDecoder | null = null;
+  private _decoder: StreamDecoder | null = null;
   private _didRead: boolean = false;
   // Whether this stream uses push() mode (true) or Web Stream mode (false)
   private _pushMode: boolean = false;
@@ -81,9 +111,18 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   private _emitClose: boolean;
   // User-provided read function (Node.js compatibility)
   private _read?: (size?: number) => void;
+  // True when a user-provided _read exists (via options or subclass override).
+  // Used to gate _callRead invocations: the prototype _read throws
+  // ERR_METHOD_NOT_IMPLEMENTED (Node.js parity), so we must not call it
+  // speculatively during the flow loop for push-driven / Web-Stream-backed
+  // streams that never intend to supply a pull-based _read.
+  private _hasReadImpl: boolean = false;
   // User-provided construct function (Node.js compatibility)
   private _constructFunc?: (callback: (error?: Error | null) => void) => void;
   private _constructed: boolean = true;
+
+  // Shared async-iterator state (Node.js parity: multiple iterators compete for chunks)
+  private _asyncIterState: _AsyncIterState<T> | null = null;
 
   constructor(
     options?: ReadableStreamOptions & {
@@ -113,6 +152,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // Store user-provided read function
     if (options?.read) {
       this._read = options.read.bind(this);
+      this._hasReadImpl = true;
       this._pushMode = true; // User will call push()
     }
 
@@ -169,7 +209,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         }
         this._constructed = true;
         // If _read was requested while not yet constructed, call it now
-        if (this._read && this._flowing && !this._ended && !this._destroyed) {
+        if (this._hasReadImpl && this._flowing && !this._ended && !this._destroyed) {
           this._callRead(this._highWaterMark);
         }
       });
@@ -428,7 +468,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         return false;
       }
       // After emitting data, call _read again if available (Node.js behavior)
-      if (this._read && !this._ended) {
+      if (this._hasReadImpl && !this._ended) {
         deferTask(() => {
           if (this._flowing && !this._ended && !this._destroyed) {
             this._callRead(this._highWaterMark);
@@ -581,7 +621,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         n = undefined; // treat as read() — read all
       } else if (n <= 0) {
         // size === 0: return null but may trigger internal _read
-        if (n === 0 && this._read && !this._ended && !this._destroyed && this._constructed) {
+        if (n === 0 && !this._ended && !this._destroyed && this._constructed) {
           const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
           if (bufSize < this._highWaterMark || bufSize === 0) {
             this._callRead(this._highWaterMark);
@@ -594,7 +634,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     if (this._buf.length === 0) {
       // Buffer is empty — trigger _read() to fill it (matches Node.js behavior
       // where read() on an empty buffer requests more data from the source).
-      if (this._read && !this._ended && !this._destroyed && this._constructed) {
+      if (!this._ended && !this._destroyed && this._constructed) {
         this._callRead(this._highWaterMark);
       }
       return null;
@@ -607,7 +647,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         deferTask(() => this._emitEndOnce());
       }
       // Node.js triggers _read() to refill buffer after consuming an object
-      if (this._read && !this._ended && !this._destroyed && this._constructed) {
+      if (this._hasReadImpl && !this._ended && !this._destroyed && this._constructed) {
         if (this._buf.length < this._highWaterMark) {
           deferTask(() => {
             if (!this._ended && !this._destroyed) {
@@ -635,7 +675,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
         } else {
           // Trigger internal read to fill buffer
           // Node.js passes highWaterMark to _read, not the requested size
-          if (this._read && this._constructed) {
+          if (this._hasReadImpl && this._constructed) {
             this._callRead(this._highWaterMark);
           }
           return null;
@@ -646,7 +686,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     }
 
     // Trigger _read to refill buffer if below HWM
-    if (this._read && !this._ended && !this._destroyed) {
+    if (this._hasReadImpl && !this._ended && !this._destroyed) {
       const bufSize = this._buf.byteSize;
       if (bufSize < this._highWaterMark) {
         deferTask(() => {
@@ -681,14 +721,14 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     // option in _applyEncoding makes the decoder stateful (it retains
     // incomplete multi-byte sequences between calls).  Sharing a cached
     // singleton across streams would corrupt multi-byte boundaries.
-    this._decoder = createTextDecoder(encoding);
+    this._decoder = createStreamDecoder(encoding);
     return this;
   }
 
   private _applyEncoding(chunk: T): T {
     if (this._encoding && chunk instanceof Uint8Array) {
       if (!this._decoder) {
-        this._decoder = createTextDecoder(this._encoding);
+        this._decoder = createStreamDecoder(this._encoding);
       }
       // Pass {stream: true} to handle multi-byte characters that may span
       // chunk boundaries (matches Node.js StringDecoder behavior).
@@ -714,6 +754,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
     // When the Readable's buffer drains, _read is called — resume the source.
     // This matches Node.js wrap() behavior where _read triggers source.resume().
+    this._hasReadImpl = true;
     this._read = () => {
       if (paused) {
         paused = false;
@@ -789,7 +830,13 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 
         // After draining buffered data, call _read() so the source can refill.
         // This is needed for wrap() where _read resumes the wrapped stream.
-        if (this._read && this._flowing && !this._ended && !this._destroyed && this._constructed) {
+        if (
+          this._hasReadImpl &&
+          this._flowing &&
+          !this._ended &&
+          !this._destroyed &&
+          this._constructed
+        ) {
           const bufSize = this._objectMode ? this._buf.length : this._buf.byteSize;
           if (bufSize < this._highWaterMark || bufSize === 0) {
             this._callRead(this._highWaterMark);
@@ -801,7 +848,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
     } else if (this._webStreamMode && !this._pushMode) {
       // Start reading from underlying Web Stream when resuming.
       this._startReading();
-    } else if (this._read) {
+    } else if (this._hasReadImpl) {
       // Call user-provided read function asynchronously
       // This allows multiple pipe() calls to register before data flows
       deferTask(() => {
@@ -1220,141 +1267,211 @@ export class Readable<T = Uint8Array> extends EventEmitter {
   }
 
   /**
-   * Async iterator support
-   * Uses a unified event-queue iterator with simple backpressure.
-   * This matches Node's behavior more closely (iterator drives flowing mode).
+   * Async iterator support.
+   *
+   * Node.js parity: multiple calls to `[Symbol.asyncIterator]()` return
+   * independent iterators that *compete* for chunks from the same underlying
+   * stream.  Each chunk is delivered to exactly one waiting iterator (FIFO).
+   * A single shared `data` listener is attached on the first call; subsequent
+   * calls reuse the same shared state.
    */
   async *[Symbol.asyncIterator](): AsyncIterableIterator<T> {
-    // First yield any buffered data
-    while (this._buf.length > 0) {
-      yield this._applyEncoding(this._buf.shift());
+    // Lazily initialise the shared async-iterator state on first call.
+    if (!this._asyncIterState) {
+      this._asyncIterState = this._initAsyncIterState();
     }
-
-    if (this._ended) {
-      return;
-    }
-
-    const highWaterMark = this._highWaterMark;
-
-    const chunkSizeForBackpressure = (chunk: any): number => {
-      if (this._objectMode) {
-        return 1;
-      }
-      if (chunk instanceof Uint8Array) {
-        return chunk.byteLength;
-      }
-      if (typeof chunk === "string") {
-        return chunk.length;
-      }
-      return 1;
-    };
-
-    const dataQueue: any[] = [];
-    let dataQueueIndex = 0;
-    let queuedSize = 0;
-
-    let resolveNext: ((value: any | null) => void) | null = null;
-    let rejectNext: ((error: Error) => void) | null = null;
-    let done = false;
-    let pausedByIterator = false;
-    let streamError: Error | null = null;
-
-    const dataHandler = (chunk: any): void => {
-      // data events are already encoding-aware; do not decode again here.
-      if (resolveNext) {
-        resolveNext(chunk);
-        resolveNext = null;
-        rejectNext = null;
-      } else {
-        dataQueue.push(chunk);
-      }
-
-      queuedSize += chunkSizeForBackpressure(chunk);
-      if (!pausedByIterator && queuedSize >= highWaterMark) {
-        pausedByIterator = true;
-        this.pause();
-      }
-    };
-
-    const doneHandler = (): void => {
-      done = true;
-      if (resolveNext) {
-        resolveNext(null);
-        resolveNext = null;
-        rejectNext = null;
-      }
-    };
-
-    const errorHandler = (err: Error): void => {
-      done = true;
-      streamError = err;
-      if (rejectNext) {
-        rejectNext(err);
-        resolveNext = null;
-        rejectNext = null;
-      }
-    };
-
-    this.on("data", dataHandler);
-    this.on("end", doneHandler);
-    this.on("error", errorHandler);
-    this.on("close", doneHandler);
+    const state = this._asyncIterState;
+    state.activeCount++;
 
     try {
-      // Iterator consumption should drive the stream.
-      this.resume();
-
       while (true) {
-        if (streamError) {
-          throw streamError;
+        if (state.streamError) {
+          throw state.streamError;
         }
 
-        if (dataQueueIndex < dataQueue.length) {
-          const chunk = dataQueue[dataQueueIndex++]!;
-          queuedSize -= chunkSizeForBackpressure(chunk);
+        // Try to consume a chunk from the shared queue (competitive).
+        if (state.dataQueueIndex < state.dataQueue.length) {
+          const chunk = state.dataQueue[state.dataQueueIndex]!;
+          state.dataQueue[state.dataQueueIndex] = undefined; // release ref
+          state.dataQueueIndex++;
+          state.queuedSize -= this._chunkSizeForBackpressure(chunk);
 
-          if (dataQueueIndex >= 1024 && dataQueueIndex * 2 >= dataQueue.length) {
-            dataQueue.splice(0, dataQueueIndex);
-            dataQueueIndex = 0;
+          // Compact the queue periodically.
+          if (state.dataQueueIndex >= 1024 && state.dataQueueIndex * 2 >= state.dataQueue.length) {
+            state.dataQueue.splice(0, state.dataQueueIndex);
+            state.dataQueueIndex = 0;
           }
 
-          if (pausedByIterator && queuedSize < highWaterMark && !done && !this._destroyed) {
-            pausedByIterator = false;
-            this.resume();
-          }
-
+          this._maybeResumeIterState(state);
           yield chunk as T;
           continue;
         }
 
-        if (done) {
+        if (state.done) {
           break;
         }
 
+        // No data available — park this iterator until a chunk arrives.
         const chunk = await new Promise<any | null>((resolve, reject) => {
-          resolveNext = resolve;
-          rejectNext = reject;
+          state.resolverQueue.push({ resolve, reject });
         });
 
-        if (chunk !== null) {
-          queuedSize -= chunkSizeForBackpressure(chunk);
-          if (pausedByIterator && queuedSize < highWaterMark && !done && !this._destroyed) {
-            pausedByIterator = false;
-            this.resume();
-          }
-          yield chunk as T;
+        if (chunk === null) {
+          // Stream ended / closed while we were waiting.
+          break;
         }
+
+        // Chunk was delivered directly by dataHandler (bypassed the queue),
+        // so queuedSize was never incremented — no need to decrement here.
+        yield chunk as T;
       }
     } finally {
-      this.off("data", dataHandler);
-      this.off("end", doneHandler);
-      this.off("error", errorHandler);
-      this.off("close", doneHandler);
-      // Node.js destroys the stream when the async iterator exits early (break/return/throw)
+      state.activeCount--;
+      // Node.js destroys the stream when ANY async iterator exits early
+      // (break/return/throw), even if other iterators are still active.
+      // This causes the remaining iterators' pending next() calls to resolve
+      // with done:true (via the 'close' handler).
+      if (state.activeCount === 0) {
+        this._teardownAsyncIterState();
+      }
       if (!this._destroyed) {
         this.destroy();
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Async iterator helpers (private)
+  // ---------------------------------------------------------------------------
+
+  private _chunkSizeForBackpressure(chunk: any): number {
+    if (this._objectMode) {
+      return 1;
+    }
+    if (chunk instanceof Uint8Array) {
+      return chunk.byteLength;
+    }
+    if (typeof chunk === "string") {
+      return chunk.length;
+    }
+    return 1;
+  }
+
+  private _maybeResumeIterState(state: _AsyncIterState<T>): void {
+    if (
+      state.pausedByIterator &&
+      state.queuedSize < this._highWaterMark &&
+      !state.done &&
+      !this._destroyed
+    ) {
+      state.pausedByIterator = false;
+      this.resume();
+    }
+  }
+
+  /**
+   * Create and attach the shared async-iterator state.
+   * A single `data` listener routes chunks to the first waiting resolver
+   * (FIFO) or enqueues them.  This matches Node.js semantics where multiple
+   * iterators compete for the same data stream.
+   */
+  private _initAsyncIterState(): _AsyncIterState<T> {
+    const hwm = this._highWaterMark;
+
+    const state: _AsyncIterState<T> = {
+      dataQueue: [],
+      dataQueueIndex: 0,
+      queuedSize: 0,
+      resolverQueue: [],
+      done: false,
+      streamError: null,
+      activeCount: 0,
+      listenersAttached: false,
+      pausedByIterator: false,
+      // Handlers are assigned below; typed as `any` first, then replaced.
+      dataHandler: null as any,
+      doneHandler: null as any,
+      errorHandler: null as any
+    };
+
+    // -- data handler ---------------------------------------------------------
+    state.dataHandler = (chunk: any): void => {
+      // Deliver directly to the first waiting resolver (FIFO competitive).
+      // Chunks delivered directly do not contribute to queuedSize because
+      // they never sit in the buffer — this avoids a transient inflation
+      // that could trigger an unnecessary pause().
+      if (state.resolverQueue.length > 0) {
+        const { resolve } = state.resolverQueue.shift()!;
+        resolve(chunk);
+        return;
+      }
+
+      state.dataQueue.push(chunk);
+      state.queuedSize += this._chunkSizeForBackpressure(chunk);
+      if (!state.pausedByIterator && state.queuedSize >= hwm) {
+        state.pausedByIterator = true;
+        this.pause();
+      }
+    };
+
+    // -- end / close handler --------------------------------------------------
+    state.doneHandler = (): void => {
+      state.done = true;
+      // Resolve all waiting iterators with null (signals completion).
+      for (const { resolve } of state.resolverQueue) {
+        resolve(null);
+      }
+      state.resolverQueue.length = 0;
+    };
+
+    // -- error handler --------------------------------------------------------
+    state.errorHandler = (err: Error): void => {
+      state.done = true;
+      state.streamError = err;
+      // Reject all waiting iterators.
+      for (const { reject } of state.resolverQueue) {
+        reject(err);
+      }
+      state.resolverQueue.length = 0;
+    };
+
+    // Drain any already-buffered data into the shared queue before attaching
+    // the `data` listener so that existing chunks are not lost.
+    while (this._buf.length > 0) {
+      const chunk = this._applyEncoding(this._buf.shift());
+      state.dataQueue.push(chunk);
+      state.queuedSize += this._chunkSizeForBackpressure(chunk);
+    }
+
+    if (this._ended) {
+      state.done = true;
+    } else {
+      this.on("data", state.dataHandler);
+      this.on("end", state.doneHandler);
+      this.on("error", state.errorHandler);
+      this.on("close", state.doneHandler);
+      state.listenersAttached = true;
+
+      // Drive the stream into flowing mode.
+      this.resume();
+    }
+
+    return state;
+  }
+
+  /** Remove shared listeners and discard state. */
+  private _teardownAsyncIterState(): void {
+    const state = this._asyncIterState;
+    if (!state) {
+      return;
+    }
+    if (state.listenersAttached) {
+      this.off("data", state.dataHandler);
+      this.off("end", state.doneHandler);
+      this.off("error", state.errorHandler);
+      this.off("close", state.doneHandler);
+    }
+    this._asyncIterState = null;
   }
 
   /**
@@ -2087,12 +2204,15 @@ export class Readable<T = Uint8Array> extends EventEmitter {
 // Readable overrides `on` from EventEmitter, so we must re-alias `addListener`.
 Readable.prototype.addListener = Readable.prototype.on;
 
-// Node.js: `Readable.prototype._read` exists as a no-op (it throws ERR_METHOD_NOT_IMPLEMENTED
-// in Node.js 18+ when actually called). We define it as a no-op here for API surface parity.
+// Node.js: `Readable.prototype._read` throws ERR_METHOD_NOT_IMPLEMENTED when called without
+// a subclass override (Node.js 18+).  We replicate that behavior here so that subclasses that
+// forget to implement `_read()` see the same error event as on Node.js.
 // Factory-created readables (e.g., from async iterables) rely on the internal `_read` check
 // being falsy, so the instance field `_read?: ...` shadows this prototype method when set.
 (Readable.prototype as any)._read = function _read(_size?: number): void {
-  // No-op: subclasses should override this method.
+  const err = new Error("The _read() method is not implemented") as Error & { code: string };
+  err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+  throw err;
 };
 
 // =============================================================================
@@ -2235,6 +2355,7 @@ export function pumpAsyncIterableToReadable<T>(
 
   // Pull-based: advance the iterator one chunk per _read() call,
   // matching Node.js Readable.from() behavior.
+  (readable as any)._hasReadImpl = true;
   (readable as any)._read = function () {
     if (reading || iteratorDone) {
       return;

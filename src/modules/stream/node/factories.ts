@@ -22,6 +22,7 @@ import type {
 
 import { PullStream } from "@stream/pull-stream";
 import { BufferedStream, StringChunk, ByteChunk } from "@stream/buffered-stream";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 // Re-export shared stream classes
 export { PullStream, BufferedStream, StringChunk, ByteChunk };
@@ -43,6 +44,22 @@ import { Writable } from "./writable";
 // =============================================================================
 
 /**
+ * Ensure the options include a highWaterMark so that native Node.js streams
+ * use the same default as the browser implementation (from common/utils.ts).
+ * This matters on Node.js 20/21 where the native default is 16 KB instead of
+ * the 64 KB we standardise on across both platforms.
+ */
+function withDefaultHWM<O extends { highWaterMark?: number; objectMode?: boolean }>(
+  options: O | undefined
+): O | { highWaterMark: number } {
+  if (options?.highWaterMark != null) {
+    return options;
+  }
+  const hwm = getDefaultHighWaterMark(options?.objectMode ?? false);
+  return options ? { ...options, highWaterMark: hwm } : { highWaterMark: hwm };
+}
+
+/**
  * Create a readable stream from various sources
  */
 export function createReadable<_T = Uint8Array>(
@@ -51,7 +68,7 @@ export function createReadable<_T = Uint8Array>(
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IReadable<_T> {
-  return new Readable(options);
+  return new Readable(withDefaultHWM(options));
 }
 
 /**
@@ -77,7 +94,7 @@ export function createReadableFromArray<T>(
 ): IReadable<T> {
   let index = 0;
   return new Readable({
-    ...options,
+    ...withDefaultHWM(options),
     objectMode: options?.objectMode ?? true,
     read() {
       while (index < data.length) {
@@ -115,7 +132,7 @@ export function createTransform<TInput = Uint8Array, TOutput = Uint8Array>(
   }
 ): ITransform<TInput, TOutput> {
   return new Transform({
-    ...options,
+    ...withDefaultHWM(options),
     transform(chunk: TInput, encoding: BufferEncoding, callback: NodeTransformCallback) {
       try {
         const result = transformFn(chunk, encoding);
@@ -179,8 +196,10 @@ export function createDuplex<_TRead = Uint8Array, TWrite = Uint8Array>(
     destroy?: (this: any, error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IDuplex<_TRead, TWrite> {
+  const objMode = options?.objectMode ?? false;
+  const defaultHWM = getDefaultHighWaterMark(objMode);
   return new Duplex({
-    highWaterMark: options?.highWaterMark,
+    highWaterMark: options?.highWaterMark ?? defaultHWM,
     objectMode: options?.objectMode,
     allowHalfOpen: (options as any)?.allowHalfOpen,
     readableHighWaterMark: options?.readableHighWaterMark,
@@ -198,7 +217,7 @@ export function createDuplex<_TRead = Uint8Array, TWrite = Uint8Array>(
  * Create a passthrough stream
  */
 export function createPassThrough<_T = any>(options?: TransformStreamOptions): IPassThrough<_T> {
-  return new PassThrough(options);
+  return new PassThrough(withDefaultHWM(options));
 }
 
 /**
@@ -222,7 +241,7 @@ export function createReadableFromPromise<T>(
   options?: ReadableStreamOptions
 ): IReadable<T> {
   const readable = new Readable({
-    ...options,
+    ...withDefaultHWM(options),
     objectMode: options?.objectMode ?? true,
     read() {}
   });
@@ -251,7 +270,7 @@ export function createEmptyReadable<_T = Uint8Array>(
   options?: ReadableStreamOptions
 ): IReadable<_T> {
   return new Readable({
-    ...options,
+    ...withDefaultHWM(options),
     read: emptyRead
   });
 }
@@ -270,7 +289,7 @@ const nullWrite = (
  */
 export function createNullWritable<_T = any>(options?: WritableStreamOptions): IWritable<_T> {
   return new Writable({
-    ...options,
+    ...withDefaultHWM(options),
     write: nullWrite
   });
 }

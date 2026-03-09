@@ -210,6 +210,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     // Node.js Transform uses _read() as the backpressure release mechanism:
     // when the consumer pulls data (read() or flowing-mode drain), the Readable
     // internals call _read(), which fires the deferred write callback.
+    (this._readable as any)._hasReadImpl = true;
     (this._readable as any)._read = () => {
       if (this._afterTransformCallback) {
         const cb = this._afterTransformCallback;

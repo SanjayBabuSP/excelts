@@ -22,6 +22,7 @@ export function compose<T = any, R = any>(
   const len = transforms.length;
   if (len === 0) {
     return new Transform({
+      highWaterMark: getDefaultHighWaterMark(true),
       objectMode: true,
       transform(chunk: any, _encoding: BufferEncoding, callback: NodeTransformCallback) {
         callback(null, chunk);
@@ -50,6 +51,8 @@ export function compose<T = any, R = any>(
   const writableObjMode = (first as any).writableObjectMode ?? false;
 
   const composed = new Transform({
+    readableHighWaterMark: getDefaultHighWaterMark(readableObjMode),
+    writableHighWaterMark: getDefaultHighWaterMark(writableObjMode),
     readableObjectMode: readableObjMode,
     writableObjectMode: writableObjMode,
     transform(chunk: any, encoding: BufferEncoding, callback: NodeTransformCallback) {
