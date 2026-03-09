@@ -4,7 +4,7 @@
 
 import type { IDuplex, ReadableStreamOptions, WritableLike } from "@stream/types";
 import { EventEmitter } from "@utils/event-emitter";
-import { createStreamDecoder, getTextDecoder } from "@utils/binary";
+import { createStreamDecoder, decodeBytesToString } from "@utils/binary";
 import type { StreamDecoder } from "@utils/binary";
 import { createAbortError } from "@utils/errors";
 import { getDefaultHighWaterMark } from "@stream/common/utils";
@@ -17,9 +17,10 @@ import { deferTask, inDeferredContext } from "./microtask-context";
 /**
  * Shared toString implementation for Uint8Array chunks converted from strings.
  * Uses `this`-binding to avoid per-chunk closure allocation.
+ * Supports all Node.js Buffer encodings (hex, base64, base64url, ascii, etc.).
  */
 function encodedBytesToString(this: Uint8Array, enc?: string): string {
-  return getTextDecoder(enc ?? "utf-8").decode(this);
+  return decodeBytesToString(this, enc ?? "utf-8");
 }
 
 // =============================================================================

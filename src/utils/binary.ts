@@ -229,6 +229,87 @@ class AsciiStreamDecoder implements StreamDecoder {
 }
 
 // =============================================================================
+// One-shot byte→string decode (Node.js Buffer.toString parity)
+// =============================================================================
+
+/** Encode bytes as a lowercase hex string (pure function, no state). */
+function _hexEncode(bytes: Uint8Array): string {
+  let result = "";
+  for (let i = 0; i < bytes.length; i++) {
+    result += hexTable[bytes[i]!];
+  }
+  return result;
+}
+
+/** Encode bytes as base64 / base64url (pure function, no state). */
+function _base64Encode(bytes: Uint8Array, urlSafe: boolean): string {
+  const chars = urlSafe ? _b64UrlChars : _b64Chars;
+  let result = "";
+  let i = 0;
+  for (; i + 2 < bytes.length; i += 3) {
+    const b0 = bytes[i]!;
+    const b1 = bytes[i + 1]!;
+    const b2 = bytes[i + 2]!;
+    result +=
+      chars[b0 >>> 2]! +
+      chars[((b0 & 0x03) << 4) | (b1 >>> 4)]! +
+      chars[((b1 & 0x0f) << 2) | (b2 >>> 6)]! +
+      chars[b2 & 0x3f]!;
+  }
+  const remaining = bytes.length - i;
+  if (remaining === 1) {
+    const b0 = bytes[i]!;
+    result += chars[b0 >>> 2]! + chars[(b0 & 0x03) << 4]!;
+    if (!urlSafe) {
+      result += "==";
+    }
+  } else if (remaining === 2) {
+    const b0 = bytes[i]!;
+    const b1 = bytes[i + 1]!;
+    result += chars[b0 >>> 2]! + chars[((b0 & 0x03) << 4) | (b1 >>> 4)]! + chars[(b1 & 0x0f) << 2]!;
+    if (!urlSafe) {
+      result += "=";
+    }
+  }
+  return result;
+}
+
+/** Decode bytes as 7-bit ASCII (pure function, no state). */
+function _asciiEncode(bytes: Uint8Array): string {
+  let result = "";
+  for (let i = 0; i < bytes.length; i++) {
+    result += String.fromCharCode(bytes[i]! & 0x7f);
+  }
+  return result;
+}
+
+/**
+ * Decode a Uint8Array to a string using the given encoding.
+ *
+ * Supports the full set of Node.js Buffer encodings:
+ * `utf8`, `utf-8`, `latin1`, `binary`, `ascii`, `hex`, `base64`, `base64url`,
+ * `utf16le`, `utf-16le`, `ucs2`, `ucs-2`.
+ *
+ * This is the browser-side equivalent of `Buffer.prototype.toString(encoding)`.
+ * All encode paths are pure functions with no shared mutable state.
+ */
+export function decodeBytesToString(bytes: Uint8Array, encoding?: string): string {
+  const enc = normalizeEncodingLabel(encoding);
+  switch (enc) {
+    case "hex":
+      return _hexEncode(bytes);
+    case "base64":
+      return _base64Encode(bytes, false);
+    case "base64url":
+      return _base64Encode(bytes, true);
+    case "ascii":
+      return _asciiEncode(bytes);
+    default:
+      return getTextDecoder(enc).decode(bytes);
+  }
+}
+
+// =============================================================================
 // Binary Operations
 // =============================================================================
 

@@ -13505,4 +13505,61 @@ export function runStreamTests(imports: StreamModuleImports): void {
       d.destroy();
     });
   });
+
+  // ===========================================================================
+  // chunk.toString(encoding) parity for non-UTF encodings
+  // ===========================================================================
+
+  describe("chunk.toString(encoding) with hex/base64/base64url/ascii", () => {
+    it("should decode pushed string chunk as hex via toString('hex')", async () => {
+      const r = new Readable({ read() {} });
+      r.push("AB");
+      r.push(null);
+
+      const chunks: string[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk.toString("hex")));
+      await new Promise(resolve => r.on("end", resolve));
+
+      // "AB" in UTF-8 is [0x41, 0x42] → hex "4142"
+      expect(chunks).toEqual(["4142"]);
+    });
+
+    it("should decode pushed string chunk as base64 via toString('base64')", async () => {
+      const r = new Readable({ read() {} });
+      r.push("AB");
+      r.push(null);
+
+      const chunks: string[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk.toString("base64")));
+      await new Promise(resolve => r.on("end", resolve));
+
+      // "AB" in UTF-8 is [0x41, 0x42] → base64 "QUI="
+      expect(chunks).toEqual(["QUI="]);
+    });
+
+    it("should decode pushed string chunk as base64url via toString('base64url')", async () => {
+      const r = new Readable({ read() {} });
+      r.push("AB");
+      r.push(null);
+
+      const chunks: string[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk.toString("base64url")));
+      await new Promise(resolve => r.on("end", resolve));
+
+      // "AB" in UTF-8 is [0x41, 0x42] → base64url "QUI" (no padding)
+      expect(chunks).toEqual(["QUI"]);
+    });
+
+    it("should decode pushed string chunk as ascii via toString('ascii')", async () => {
+      const r = new Readable({ read() {} });
+      r.push("AB");
+      r.push(null);
+
+      const chunks: string[] = [];
+      r.on("data", (chunk: any) => chunks.push(chunk.toString("ascii")));
+      await new Promise(resolve => r.on("end", resolve));
+
+      expect(chunks).toEqual(["AB"]);
+    });
+  });
 }
