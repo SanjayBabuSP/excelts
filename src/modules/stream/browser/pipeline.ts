@@ -30,12 +30,10 @@ export { isPipelineOptions } from "@stream/common/options";
 type PipelineStream = PipelineStreamLike;
 
 const supportsReadableSide = (stream: any): boolean => {
-  return (
-    "readableEnded" in stream ||
-    "readable" in stream ||
-    typeof stream.read === "function" ||
-    typeof stream.pipe === "function"
-  );
+  // Check for readable-side properties/methods.  Writable.pipe() is a no-op
+  // that emits ERR_STREAM_CANNOT_PIPE, so `typeof pipe === "function"` alone
+  // is not sufficient — we must also see an actual readable indicator.
+  return "readableEnded" in stream || "readable" in stream || typeof stream.read === "function";
 };
 
 const supportsWritableSide = (stream: any): boolean => {
@@ -52,6 +50,32 @@ const createPrematureCloseError = (): Error & { code: string } => {
   const err = new Error("Premature close") as Error & { code: string };
   err.code = "ERR_STREAM_PREMATURE_CLOSE";
   return err;
+};
+
+/**
+ * Wait for a stream's 'close' event after it has finished/ended.
+ * If the stream will emit close (autoDestroy && emitClose), wait for it.
+ * Otherwise resolve immediately (matching Node.js pipeline behavior where
+ * autoDestroy:false streams don't wait for close).
+ */
+const waitForClose = (
+  stream: any,
+  done: (err?: Error) => void,
+  registry: { once: (emitter: any, event: string, listener: (...args: any[]) => void) => void }
+): void => {
+  const s = stream as any;
+  // Already closed — resolve immediately.
+  if (s.closed || s._closed) {
+    done();
+    return;
+  }
+  const hasInternals = "_emitClose" in s && "_autoDestroy" in s;
+  const willEmitClose = hasInternals && s._emitClose !== false && s._autoDestroy !== false;
+  if (willEmitClose) {
+    registry.once(stream, "close", () => done());
+  } else {
+    done();
+  }
 };
 
 export const toBrowserPipelineStream = (stream: PipelineStream): any => {
@@ -280,14 +304,28 @@ export function pipeline(
         }
       };
 
-      const onEnd = (): void => cleanupWithSignal();
-
       registry.add(current, "data", onData);
-      registry.once(current, "end", onEnd);
+      // end:false — wait for source to fully close (not just 'end').
+      // Node.js pipeline uses finished(source, {writable:false}) internally,
+      // which waits until the 'close' event when the stream will emit close.
+      registry.once(current, "end", () => {
+        // Source ended — now wait for its close event (autoDestroy → close)
+        // before resolving the pipeline. If the stream has already closed
+        // (or won't emit close), resolve immediately.
+        waitForClose(current, cleanupWithSignal, registry);
+      });
     }
 
-    // Handle completion
-    registry.once(destination, "finish", () => cleanupWithSignal());
+    // Handle completion — wait for destination to fully close, not just finish.
+    // Node.js pipeline internally uses finished(destination) which waits for
+    // 'close' after 'finish' when the stream will emit close (autoDestroy &&
+    // emitClose). For streams that won't emit close (autoDestroy: false),
+    // resolve on 'finish' alone (matching Node.js behavior).
+    if (options.end !== false) {
+      registry.once(destination, "finish", () => {
+        waitForClose(destination, cleanupWithSignal, registry);
+      });
+    }
 
     // Node parity: close before completion is a premature close error.
     for (const stream of allStreams) {

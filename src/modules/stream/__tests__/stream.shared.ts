@@ -13240,4 +13240,53 @@ export function runStreamTests(imports: StreamModuleImports): void {
       expect(r.destroyed).toBe(true);
     });
   });
+
+  // ===========================================================================
+  // Pipeline completion state parity
+  // ===========================================================================
+
+  describe("pipeline completion state parity", () => {
+    it("pipeline should resolve with dest.destroyed=true for default autoDestroy", async () => {
+      const src = createReadableFromArray([new Uint8Array([1, 2]), new Uint8Array([3, 4])]);
+      const dest = createCollector();
+
+      await pipeline(src, dest);
+
+      expect(dest.writableFinished).toBe(true);
+      expect(dest.destroyed).toBe(true);
+    });
+
+    it("pipeline should resolve with dest.destroyed=false for autoDestroy:false", async () => {
+      const src = createReadableFromArray([new Uint8Array([1, 2])]);
+      const dest = new Writable({
+        autoDestroy: false,
+        write(_chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          cb();
+        }
+      });
+
+      await pipeline(src, dest);
+
+      expect(dest.writableFinished).toBe(true);
+      expect(dest.destroyed).toBe(false);
+    });
+
+    it("pipeline {end:false} should resolve with src.destroyed=true", async () => {
+      const src = createReadableFromArray(["a", "b", "c"], { objectMode: true });
+      const chunks: any[] = [];
+      const dest = new Writable({
+        objectMode: true,
+        write(chunk: any, _enc: string, cb: (err?: Error | null) => void) {
+          chunks.push(chunk);
+          cb();
+        }
+      });
+
+      await pipeline(src, dest, { end: false });
+
+      expect(src.destroyed).toBe(true);
+      expect(dest.writableEnded).toBe(false);
+      expect(chunks).toEqual(["a", "b", "c"]);
+    });
+  });
 }

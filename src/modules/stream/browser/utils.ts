@@ -16,6 +16,7 @@ import { createConsumers } from "@stream/common/consumers";
 import { createAddAbortSignal } from "@stream/common/add-abort-signal";
 import { createIsTransform, createIsDuplex, createIsStream } from "@stream/common/type-guards";
 import { toStreamBytes } from "@stream/common/binary-chunk";
+import { getDefaultHighWaterMark } from "@stream/common/utils";
 
 import { Readable } from "./readable";
 import { Writable } from "./writable";
@@ -213,7 +214,10 @@ export function duplexPair<T = any>(options?: DuplexStreamOptions): [IDuplex<T, 
   const objectMode =
     options?.readableObjectMode ?? options?.writableObjectMode ?? options?.objectMode ?? false;
   const highWaterMark =
-    options?.readableHighWaterMark ?? options?.writableHighWaterMark ?? options?.highWaterMark;
+    options?.readableHighWaterMark ??
+    options?.writableHighWaterMark ??
+    options?.highWaterMark ??
+    getDefaultHighWaterMark(objectMode);
 
   const duplexOpts: DuplexStreamOptions = {
     readableHighWaterMark: options?.readableHighWaterMark ?? highWaterMark,

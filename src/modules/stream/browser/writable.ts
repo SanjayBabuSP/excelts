@@ -160,35 +160,39 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     this._decodeStrings = options?.decodeStrings ?? true;
     this._defaultEncoding = options?.defaultEncoding ?? "utf8";
 
-    // Store user-provided write function
-    if (options?.write) {
-      this._writeFunc = options.write.bind(this);
-    }
-    // Store user-provided final function
-    if (options?.final) {
-      this._finalFunc = options.final.bind(this);
-    }
-
-    // Store user-provided destroy function
-    if (options?.destroy) {
-      this._destroy = options.destroy.bind(this);
-    }
-
-    // Store user-provided construct function
-    if (options?.construct) {
-      this._constructFunc = options.construct.bind(this);
-    }
-
-    // Store user-provided writev function
-    if (options?.writev) {
-      this._writevFunc = options.writev.bind(this);
-    }
-
     if (options?.stream) {
+      // Wrapping an existing Web WritableStream: proxy writes to the underlying
+      // stream and ignore user-provided write/final/destroy/construct/writev
+      // hooks (matching Node.js behavior where the {stream} option creates a
+      // transparent proxy with its own write/final handlers).
       this._stream = options.stream;
       this._ownsStream = false;
       this._directWrite = false;
     } else {
+      // Store user-provided write function
+      if (options?.write) {
+        this._writeFunc = options.write.bind(this);
+      }
+      // Store user-provided final function
+      if (options?.final) {
+        this._finalFunc = options.final.bind(this);
+      }
+
+      // Store user-provided destroy function
+      if (options?.destroy) {
+        this._destroy = options.destroy.bind(this);
+      }
+
+      // Store user-provided construct function
+      if (options?.construct) {
+        this._constructFunc = options.construct.bind(this);
+      }
+
+      // Store user-provided writev function
+      if (options?.writev) {
+        this._writevFunc = options.writev.bind(this);
+      }
+
       this._ownsStream = true;
 
       // When we own the stream AND have a user-provided _writeFunc, we bypass

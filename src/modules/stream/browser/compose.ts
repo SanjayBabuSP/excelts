@@ -66,10 +66,10 @@ export function compose<T = any, R = any>(
   const registry = createListenerRegistry();
 
   const composed = new Transform<T, R>({
-    // Use objectMode when both sides agree; otherwise use per-side modes.
-    ...(readableObjMode === writableObjMode
-      ? { objectMode: readableObjMode }
-      : { readableObjectMode: readableObjMode, writableObjectMode: writableObjMode }),
+    readableHighWaterMark: getDefaultHighWaterMark(readableObjMode),
+    writableHighWaterMark: getDefaultHighWaterMark(writableObjMode),
+    readableObjectMode: readableObjMode,
+    writableObjectMode: writableObjMode,
 
     // Write path: forward writes into the head of the chain.
     // Using the `write` constructor option ensures all writes go through the
