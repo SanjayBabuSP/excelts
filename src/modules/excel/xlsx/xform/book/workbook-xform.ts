@@ -49,9 +49,11 @@ class WorkbookXform extends BaseXform {
       if (sheet.pageSetup && sheet.pageSetup.printArea) {
         sheet.pageSetup.printArea.split("&&").forEach((printArea: string) => {
           const printAreaComponents = printArea.split(":");
+          const start = printAreaComponents[0];
+          const end = printAreaComponents[1] ?? start;
           const definedName = {
             name: "_xlnm.Print_Area",
-            ranges: [`'${sheet.name}'!$${printAreaComponents[0]}:$${printAreaComponents[1]}`],
+            ranges: [`'${sheet.name}'!$${start}:$${end}`],
             localSheetId: index
           };
           printAreas.push(definedName);
@@ -66,12 +68,16 @@ class WorkbookXform extends BaseXform {
 
         if (sheet.pageSetup.printTitlesColumn) {
           const titlesColumns = sheet.pageSetup.printTitlesColumn.split(":");
-          ranges.push(`'${sheet.name}'!$${titlesColumns[0]}:$${titlesColumns[1]}`);
+          const start = titlesColumns[0];
+          const end = titlesColumns[1] ?? start;
+          ranges.push(`'${sheet.name}'!$${start}:$${end}`);
         }
 
         if (sheet.pageSetup.printTitlesRow) {
           const titlesRows = sheet.pageSetup.printTitlesRow.split(":");
-          ranges.push(`'${sheet.name}'!$${titlesRows[0]}:$${titlesRows[1]}`);
+          const start = titlesRows[0];
+          const end = titlesRows[1] ?? start;
+          ranges.push(`'${sheet.name}'!$${start}:$${end}`);
         }
 
         const definedName = {
@@ -211,7 +217,7 @@ class WorkbookXform extends BaseXform {
       model.definedNames.forEach((definedName: any) => {
         if (definedName.name === "_xlnm.Print_Area") {
           worksheet = worksheets[definedName.localSheetId];
-          if (worksheet) {
+          if (worksheet && definedName.ranges?.length > 0) {
             if (!worksheet.pageSetup) {
               worksheet.pageSetup = {};
             }
@@ -222,7 +228,7 @@ class WorkbookXform extends BaseXform {
           }
         } else if (definedName.name === "_xlnm.Print_Titles") {
           worksheet = worksheets[definedName.localSheetId];
-          if (worksheet) {
+          if (worksheet && definedName.ranges?.length > 0) {
             if (!worksheet.pageSetup) {
               worksheet.pageSetup = {};
             }

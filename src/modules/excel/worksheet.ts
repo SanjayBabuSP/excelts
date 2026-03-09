@@ -102,6 +102,7 @@ interface PageSetup {
   horizontalCentered: boolean;
   verticalCentered: boolean;
   rowBreaks: RowBreak[];
+  printArea?: string;
   printTitlesRow?: string;
   printTitlesColumn?: string;
 }

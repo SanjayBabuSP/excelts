@@ -465,6 +465,34 @@ describe("Workbook", () => {
         expect(wb.worksheets.length).toBeGreaterThan(0);
       });
 
+      it("handles empty _xlnm.Print_Area ranges without crashing", async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        ws.getCell("A1").value = "test";
+
+        // Inject a Print_Area defined name with empty ranges,
+        // simulating an Excel file where print area was set then cleared
+        const workbookModel: any = wb.model;
+        workbookModel.definedNames = [
+          {
+            name: "_xlnm.Print_Area",
+            localSheetId: 0,
+            ranges: []
+          }
+        ];
+        wb.model = workbookModel;
+
+        const buffer = await wb.xlsx.writeBuffer();
+
+        const wb2 = new Workbook();
+        await wb2.xlsx.load(buffer);
+
+        const ws2 = wb2.getWorksheet("Sheet1");
+        expect(ws2).toBeDefined();
+        expect(ws2.getCell("A1").value).toBe("test");
+        expect(ws2.pageSetup.printArea).toBeUndefined();
+      });
+
       it("lastColumn with an empty column", async () => {
         const wb = new Workbook();
         const ws = wb.addWorksheet("Sheet1");
@@ -708,6 +736,51 @@ describe("Workbook", () => {
           expect(ws2.pageSetup.printTitlesRow).toBe("1:2");
           expect(ws2.pageSetup.printTitlesColumn).toBe("A:B");
         });
+    });
+
+    it("single-cell printArea without colon round-trips correctly", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "test";
+      ws.pageSetup.printArea = "A1";
+
+      const buffer = await wb.xlsx.writeBuffer();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      const ws2 = wb2.getWorksheet("Sheet1");
+      expect(ws2.pageSetup.printArea).toBe("A1:A1");
+    });
+
+    it("single-column printTitlesColumn without colon round-trips correctly", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "test";
+      ws.pageSetup.printTitlesColumn = "A";
+
+      const buffer = await wb.xlsx.writeBuffer();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      const ws2 = wb2.getWorksheet("Sheet1");
+      expect(ws2.pageSetup.printTitlesColumn).toBe("A:A");
+    });
+
+    it("single-row printTitlesRow without colon round-trips correctly", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "test";
+      ws.pageSetup.printTitlesRow = "1";
+
+      const buffer = await wb.xlsx.writeBuffer();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      const ws2 = wb2.getWorksheet("Sheet1");
+      expect(ws2.pageSetup.printTitlesRow).toBe("1:1");
     });
 
     it("shared formula", () => {
