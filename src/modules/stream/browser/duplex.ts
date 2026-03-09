@@ -674,6 +674,30 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       callback
     );
 
+    // Repeated end() protection (matches Node.js Writable.end() behavior)
+    if (this._writable.writableEnded) {
+      // If a chunk was provided, this is a write-after-end error.
+      if (chunk !== undefined) {
+        this.write(chunk, encoding, err => {
+          (cb as any)?.(err ?? null);
+        });
+        return this;
+      }
+
+      // If we've already finished, callback receives ERR_STREAM_ALREADY_FINISHED.
+      if (this.writableFinished && cb) {
+        const err = new Error("Cannot call end after a stream was finished") as Error & {
+          code: string;
+        };
+        err.code = "ERR_STREAM_ALREADY_FINISHED";
+        deferTask(() => (cb as any)(err));
+      } else if (cb) {
+        // Redundant end() is a no-op; callback called with no error.
+        deferTask(() => (cb as any)(null));
+      }
+      return this;
+    }
+
     if (cb) {
       // Node.js fires the end() callback on 'finish', but also on 'close'
       // (which is emitted after destroy). This ensures the callback fires
@@ -690,10 +714,16 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
     }
 
     if (chunk !== undefined) {
+      // Propagate write errors through destroy (matching Node.js)
+      const onWriteError = (err?: Error | null): void => {
+        if (err && !this.destroyed) {
+          this.destroy(err);
+        }
+      };
       if (encoding !== undefined) {
-        this._writable.write(chunk, encoding);
+        this._writable.write(chunk, encoding, onWriteError);
       } else {
-        this._writable.write(chunk);
+        this._writable.write(chunk, onWriteError as any);
       }
     }
     this._writable.end();
@@ -891,14 +921,26 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
    * Destroys the stream and resolves after the 'close' event.
    */
   async [Symbol.asyncDispose](): Promise<void> {
-    if (!this._destroyed) {
+    // Match Node.js behavior:
+    // 1. If not yet destroyed, destroy the stream (always resolves)
+    // 2. If already destroyed by someone else, reject with "Premature close"
+    //    unless the stream ended gracefully (writableFinished)
+    const selfInitiated = !this._destroyed;
+    if (selfInitiated) {
       this.destroy();
     }
-    return new Promise<void>(resolve => {
+    return new Promise<void>((resolve, reject) => {
+      const settle = (): void => {
+        if (selfInitiated || this.writableFinished) {
+          resolve();
+        } else {
+          reject(new Error("Premature close"));
+        }
+      };
       if (this._closed) {
-        resolve();
+        settle();
       } else {
-        this.once("close", () => resolve());
+        this.once("close", settle);
       }
     });
   }

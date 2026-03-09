@@ -868,6 +868,32 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
     callback?: () => void
   ): this {
     if (this._ended) {
+      const {
+        chunk,
+        encoding,
+        cb: endCb
+      } = parseEndArgs<TInput>(chunkOrCallback, encodingOrCallback, callback);
+
+      // If a chunk was provided, this is a write-after-end error (Node.js behavior).
+      if (chunk !== undefined) {
+        this.write(chunk, encoding, err => {
+          (endCb as any)?.(err ?? null);
+        });
+        return this;
+      }
+
+      // If we've already finished, Node.js calls the callback with
+      // ERR_STREAM_ALREADY_FINISHED (but does not emit an error event).
+      if (this.writableFinished && endCb) {
+        const err = new Error("Cannot call end after a stream was finished") as Error & {
+          code: string;
+        };
+        err.code = "ERR_STREAM_ALREADY_FINISHED";
+        deferTask(() => (endCb as any)(err));
+      } else if (endCb) {
+        // Redundant end() is a no-op; callback called with no error.
+        deferTask(() => (endCb as any)(null));
+      }
       return this;
     }
 
