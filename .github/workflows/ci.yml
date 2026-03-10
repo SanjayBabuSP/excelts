@@ -52,6 +52,58 @@ jobs:
         env:
           CI: true
 
+  test-bun:
+    timeout-minutes: 15
+    name: Bun v${{ matrix.bun-version }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        bun-version: [latest]
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Set git config
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.symlinks true
+        if: runner.os == 'Windows'
+
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install Bun ${{ matrix.bun-version }}
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run tests (Bun)
+        run: bun run vitest run
+        env:
+          CI: true
+
+      - name: Run browser tests (Bun)
+        run: bun run vitest run --config vitest.browser.config.ts
+        env:
+          CI: true
+
   lint:
     timeout-minutes: 10
     name: Lint and Type Check
