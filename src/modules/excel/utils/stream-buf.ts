@@ -314,8 +314,16 @@ class StreamBuf extends EventEmitter {
     } else {
       const chunkBuffer = chunk.toBuffer();
 
-      if (!this.paused) {
+      // Track whether the data has been delivered to a consumer.
+      // When a consumer exists ("data" listeners or a native WritableStream),
+      // the data is consumed externally and must NOT also be accumulated in
+      // internal buffers — otherwise the buffers grow without bound (memory leak)
+      // since no one ever calls read()/toBuffer() to drain them.
+      let consumed = false;
+
+      if (!this.paused && this.listenerCount("data") > 0) {
         this.emit("data", chunkBuffer);
+        consumed = true;
       }
 
       // Also write to native WritableStream if connected
@@ -323,10 +331,16 @@ class StreamBuf extends EventEmitter {
         this._asyncWriteQueue = this._asyncWriteQueue.then(() =>
           this._writableStreamWriter!.write(chunkBuffer)
         );
+        consumed = true;
       }
 
-      this._writeToBuffers(chunk);
-      this.emit("readable");
+      // Only buffer internally when no consumer has received the data.
+      // This keeps StreamBuf working as a memory buffer (write then read/toBuffer)
+      // while preventing unbounded growth when used as an event-driven pass-through.
+      if (!consumed) {
+        this._writeToBuffers(chunk);
+        this.emit("readable");
+      }
     }
 
     return true;

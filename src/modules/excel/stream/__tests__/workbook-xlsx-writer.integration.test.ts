@@ -653,4 +653,84 @@ describe("WorkbookWriter", () => {
       });
     });
   });
+
+  // ==========================================================================
+  // Regression tests for Issue #88 (memory leak) and Issue #89 (RangeError)
+  // ==========================================================================
+
+  describe("Streaming memory behavior", () => {
+    /** Write to a WorkbookWriter that streams to an in-memory buffer, then read it back. */
+    async function writeAndReadBack(
+      options: Record<string, any>,
+      populate: (ws: any) => void
+    ): Promise<any> {
+      const { PassThrough } = await import("@stream");
+      const output = new PassThrough();
+      const chunks: Uint8Array[] = [];
+      output.on("data", (chunk: Uint8Array) => chunks.push(chunk));
+
+      const workbook = new WorkbookWriter({ stream: output, useSharedStrings: false, ...options });
+      const worksheet = workbook.addWorksheet("Sheet 1");
+      populate(worksheet);
+      await workbook.commit();
+
+      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+      const xlsxBuffer = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        xlsxBuffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const readBack = new Workbook();
+      await readBack.xlsx.load(xlsxBuffer);
+      return readBack.getWorksheet("Sheet 1");
+    }
+
+    it("does not accumulate worksheet data in memory with trueStreaming (#88)", async () => {
+      const cellValue = "abcdefghij".repeat(40); // 400 chars per cell
+      const ws = await writeAndReadBack({ trueStreaming: true }, worksheet => {
+        for (let i = 0; i < 5000; i++) {
+          const row = worksheet.getRow(i + 1);
+          for (let c = 1; c <= 9; c++) {
+            row.getCell(c).value = cellValue;
+          }
+          row.commit();
+        }
+      });
+
+      expect(ws.rowCount).toBe(5000);
+      expect(ws.getCell("A1").value).toBe(cellValue);
+    }, 30000);
+
+    it("does not accumulate worksheet data in memory with default streaming (#88)", async () => {
+      const ws = await writeAndReadBack({}, worksheet => {
+        for (let i = 0; i < 5000; i++) {
+          const row = worksheet.getRow(i + 1);
+          for (let c = 1; c <= 9; c++) {
+            row.getCell(c).value = "abcdefghij".repeat(40);
+          }
+          row.commit();
+        }
+      });
+
+      expect(ws.rowCount).toBe(5000);
+    }, 30000);
+
+    it("handles very large cell values in trueStreaming mode without crashing (#89)", async () => {
+      const largeCellValue = "x".repeat(36_000); // ~36KB per cell × 9 cells = ~324KB per row
+      const ws = await writeAndReadBack({ trueStreaming: true }, worksheet => {
+        for (let i = 0; i < 100; i++) {
+          const row = worksheet.getRow(i + 1);
+          for (let c = 1; c <= 9; c++) {
+            row.getCell(c).value = largeCellValue;
+          }
+          row.commit();
+        }
+      });
+
+      expect(ws.rowCount).toBe(100);
+      expect(ws.getCell("A1").value).toBe(largeCellValue);
+    }, 30000);
+  });
 });
