@@ -60,9 +60,9 @@ describe("ZipReader Web Streams adapters", () => {
 
     const first = await entryReader.read();
     expect(first.done).toBe(false);
-    expect(first.value.path).toBe("big.bin");
+    expect(first.value!.path).toBe("big.bin");
 
-    const chunks = await readAllFromStream(first.value.readableStream());
+    const chunks = await readAllFromStream(first.value!.readableStream());
     const out = concatUint8Arrays(chunks);
     expect(new Uint8Array(out)).toEqual(payload);
 
@@ -88,7 +88,7 @@ describe("ZipReader Web Streams adapters", () => {
     const entryReader = reader.entriesStream().getReader();
     const { value: entry, done } = await entryReader.read();
     expect(done).toBe(false);
-    expect(entry.path).toBe("c.bin");
+    expect(entry!.path).toBe("c.bin");
 
     let closed = false;
     const chunks: Uint8Array[] = [];
@@ -101,7 +101,7 @@ describe("ZipReader Web Streams adapters", () => {
       }
     });
 
-    await entry.pipeTo(writable, { preventClose: true });
+    await entry!.pipeTo(writable, { preventClose: true });
     expect(closed).toBe(false);
 
     const out = concatUint8Arrays(chunks);

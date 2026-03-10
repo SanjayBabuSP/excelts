@@ -153,13 +153,13 @@ describe("Cell", () => {
     const column = sheetMock.getColumn(1);
 
     expect(() => {
-      new Cell(null, null, "A1");
+      new Cell(null as any, null as any, "A1");
     }).toThrow(Error);
     expect(() => {
-      new Cell(row, null, "A1");
+      new Cell(row, null as any, "A1");
     }).toThrow(Error);
     expect(() => {
-      new Cell(null, column, "A1");
+      new Cell(null as any, column, "A1");
     }).toThrow(Error);
   });
   it("merges", () => {

@@ -406,7 +406,7 @@ export async function parseCsvWithProgress(
 > {
   // Collect input and track bytes
   let content: string;
-  let totalBytes = 0;
+  let totalBytes: number;
 
   if (typeof input === "string") {
     content = input;

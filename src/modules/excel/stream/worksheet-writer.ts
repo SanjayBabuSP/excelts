@@ -383,7 +383,7 @@ class WorksheetWriter {
 
     // construct Column objects
     let count = 1;
-    const columns = (this._columns = []);
+    const columns: Column[] = (this._columns = []);
     value.forEach(defn => {
       const column = new Column(this as any, count++, false as any);
       columns.push(column);
@@ -622,7 +622,7 @@ class WorksheetWriter {
     if (options && "spinCount" in options) {
       // force spinCount to be integer >= 0
       options.spinCount = Number.isFinite(options.spinCount)
-        ? Math.round(Math.max(0, options.spinCount))
+        ? Math.round(Math.max(0, options.spinCount!))
         : 100000;
     }
     if (password) {
@@ -634,7 +634,7 @@ class WorksheetWriter {
         password,
         "SHA-512",
         this.sheetProtection.saltValue,
-        this.sheetProtection.spinCount
+        this.sheetProtection.spinCount!
       );
     }
     if (options) {

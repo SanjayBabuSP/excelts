@@ -31,7 +31,7 @@ class CommentsXform extends BaseXform<CommentsModel> {
 
     // comments
     xmlStream.openNode("commentList");
-    renderModel.comments.forEach(comment => {
+    renderModel!.comments.forEach(comment => {
       this.map.comment.render(xmlStream, comment);
     });
     xmlStream.closeNode();
@@ -69,7 +69,7 @@ class CommentsXform extends BaseXform<CommentsModel> {
       case "commentList":
         return false;
       case "comment":
-        this.model.comments.push(this.parser.model);
+        this.model!.comments.push(this.parser.model);
         this.parser = undefined;
         return true;
       default:

@@ -479,8 +479,8 @@ describe("ExcelTS Browser Tests", () => {
       const originalDecompressionStream = globalThis.DecompressionStream;
 
       // Disable native compression APIs to simulate old browsers
-      globalThis.CompressionStream = undefined;
-      globalThis.DecompressionStream = undefined;
+      globalThis.CompressionStream = undefined as any;
+      globalThis.DecompressionStream = undefined as any;
 
       try {
         const { Workbook } = ExcelTS;
@@ -518,8 +518,8 @@ describe("ExcelTS Browser Tests", () => {
       const originalCompressionStream = globalThis.CompressionStream;
       const originalDecompressionStream = globalThis.DecompressionStream;
 
-      globalThis.CompressionStream = undefined;
-      globalThis.DecompressionStream = undefined;
+      globalThis.CompressionStream = undefined as any;
+      globalThis.DecompressionStream = undefined as any;
 
       try {
         const { Workbook } = ExcelTS;
@@ -553,8 +553,8 @@ describe("ExcelTS Browser Tests", () => {
       const originalCompressionStream = globalThis.CompressionStream;
       const originalDecompressionStream = globalThis.DecompressionStream;
 
-      globalThis.CompressionStream = undefined;
-      globalThis.DecompressionStream = undefined;
+      globalThis.CompressionStream = undefined as any;
+      globalThis.DecompressionStream = undefined as any;
 
       try {
         const { Workbook } = ExcelTS;
@@ -601,8 +601,8 @@ describe("ExcelTS Browser Tests", () => {
       const originalCompressionStream = globalThis.CompressionStream;
       const originalDecompressionStream = globalThis.DecompressionStream;
 
-      globalThis.CompressionStream = undefined;
-      globalThis.DecompressionStream = undefined;
+      globalThis.CompressionStream = undefined as any;
+      globalThis.DecompressionStream = undefined as any;
 
       try {
         const wb2 = new Workbook();
@@ -624,8 +624,8 @@ describe("ExcelTS Browser Tests", () => {
       const originalCompressionStream = globalThis.CompressionStream;
       const originalDecompressionStream = globalThis.DecompressionStream;
 
-      globalThis.CompressionStream = undefined;
-      globalThis.DecompressionStream = undefined;
+      globalThis.CompressionStream = undefined as any;
+      globalThis.DecompressionStream = undefined as any;
 
       let buffer: ArrayBuffer;
       try {

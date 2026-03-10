@@ -27,6 +27,6 @@ describe("WorkbookWriter", () => {
 
     const ws2 = readBack.getWorksheet("myWorksheet");
     expect(ws2).toBeTruthy();
-    expect(ws2.getCell("A1").value).toBe("Hello");
+    expect(ws2!.getCell("A1").value).toBe("Hello");
   });
 });

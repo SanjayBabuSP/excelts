@@ -121,7 +121,7 @@ if (useStream) {
     .readFile(filename)
     .then(() => {
       const ws = wb.getWorksheet("blort");
-      ws.eachRow(checkRow);
+      ws!.eachRow(checkRow);
     })
     .then(report);
 }

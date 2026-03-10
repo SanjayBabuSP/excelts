@@ -698,7 +698,7 @@ export class CsvWorkerSession {
       const result = await this._pool.load(
         this._sessionId,
         csvOrData,
-        Array.isArray(options?.headers) ? options.headers : undefined
+        Array.isArray(options?.headers) ? (options.headers as string[]) : undefined
       );
       this._headers = result.data.headers;
       this._rowCount = result.data.rowCount;

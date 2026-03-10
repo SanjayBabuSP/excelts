@@ -99,7 +99,7 @@ class FilterColumnXform extends BaseXform<FilterColumnModel> {
     }
     switch (name) {
       case this.tag:
-        this.model.customFilters = this.map.customFilters.model;
+        this.model!.customFilters = this.map!.customFilters.model;
         return false;
       default:
         // could be some unrecognised tags

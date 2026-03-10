@@ -398,8 +398,8 @@ describe("Workbook", () => {
         expect(images.length).toBe(1);
 
         const imageData = await fsReadFileAsync(IMAGE_FILENAME);
-        const image = wb2.getImage(images[0].imageId);
-        expect(Buffer.compare(imageData, image!.buffer)).toBe(0);
+        const image = wb2.getImage(images[0].imageId!);
+        expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
       });
     });
 
@@ -733,15 +733,15 @@ describe("Workbook", () => {
         expect(images.length).toBe(3);
 
         // Verify positions survived round-trip
-        expect(images[0].range.tl.nativeRow).toBe(0);
-        expect(images[1].range.tl.nativeRow).toBe(1);
-        expect(images[2].range.tl.nativeRow).toBe(2);
+        expect(images[0].range!.tl.nativeRow).toBe(0);
+        expect(images[1].range!.tl.nativeRow).toBe(1);
+        expect(images[2].range!.tl.nativeRow).toBe(2);
 
         // Verify image data is intact
         const imageData = await fsReadFileAsync(IMAGE_FILENAME);
         for (const img of images) {
-          const imgBuffer = wb2.getImage(img.imageId);
-          expect(Buffer.compare(imageData, imgBuffer!.buffer)).toBe(0);
+          const imgBuffer = wb2.getImage(img.imageId!);
+          expect(Buffer.compare(imageData, imgBuffer!.buffer!)).toBe(0);
         }
       });
 
@@ -784,7 +784,7 @@ describe("Workbook", () => {
         expect(countBefore).toBeGreaterThan(0);
 
         // Find which row has the image (0-based nativeRow -> 1-based rowNum)
-        const srcRow0 = imagesBefore[0].range.tl.nativeRow;
+        const srcRow0 = imagesBefore[0].range!.tl.nativeRow;
         const srcRowNum = srcRow0 + 1;
 
         // Duplicate that row once (insert mode to push existing rows down)

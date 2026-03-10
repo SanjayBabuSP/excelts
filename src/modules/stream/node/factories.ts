@@ -286,7 +286,7 @@ export function createEmptyReadable<_T = Uint8Array>(
 // Reusable null write function
 const nullWrite = (
   _chunk: unknown,
-  _encoding: BufferEncoding,
+  _encoding: string,
   callback: (error?: Error | null) => void
 ): void => {
   callback();

@@ -2604,7 +2604,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       } else {
         // --- Regular File ---
         // Check overwrite strategy
-        let shouldWrite = false;
+        let shouldWrite: boolean;
         try {
           shouldWrite = await shouldExtract(targetPath, entry.lastModified, overwrite);
         } catch (err) {
@@ -2634,7 +2634,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         // Extract file content
         const data = await parser.extract(entry.path, effectivePassword);
         if (data) {
-          let writeSuccess = false;
+          let writeSuccess: boolean;
           try {
             await writeFileBytes(targetPath, data);
             bytesWritten += data.length;
@@ -2694,7 +2694,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
       }
 
       // Check overwrite strategy for symlink
-      let shouldWrite = false;
+      let shouldWrite: boolean;
       try {
         shouldWrite = await shouldExtract(targetPath, entry.lastModified, overwrite);
       } catch (err) {
@@ -2849,7 +2849,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         deferredSymlinks.push({ entry, targetPath, linkTarget });
       } else {
         // --- Regular File ---
-        let shouldWrite = false;
+        let shouldWrite: boolean;
         try {
           shouldWrite = shouldExtractSync(targetPath, entry.lastModified, overwrite);
         } catch (err) {
@@ -2877,7 +2877,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
 
         const data = parser.extractSync(entry.path, effectivePassword);
         if (data) {
-          let writeSuccess = false;
+          let writeSuccess: boolean;
           try {
             writeFileBytesSync(targetPath, data);
             bytesWritten += data.length;
@@ -2933,7 +2933,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         throw new Error("Extraction aborted");
       }
 
-      let shouldWrite = false;
+      let shouldWrite: boolean;
       try {
         shouldWrite = shouldExtractSync(targetPath, entry.lastModified, overwrite);
       } catch (err) {
@@ -3592,7 +3592,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         }
       } else {
         // Check overwrite strategy
-        let shouldWrite = false;
+        let shouldWrite: boolean;
         try {
           shouldWrite = await shouldExtract(targetPath, info.mtime, overwrite);
         } catch (err) {
@@ -3604,7 +3604,7 @@ export class ArchiveFile<F extends ArchiveFormat = "zip"> {
         }
 
         if (shouldWrite) {
-          let writeSuccess = false;
+          let writeSuccess: boolean;
           try {
             await ensureDir(path.dirname(targetPath));
             const data = await entry.bytes();

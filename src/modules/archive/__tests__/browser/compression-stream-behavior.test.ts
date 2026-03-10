@@ -94,7 +94,6 @@ describe("CompressionStream Behavior Analysis", () => {
     const writer = cs.writable.getWriter();
     const reader = cs.readable.getReader();
 
-    let chunksBeforeClose = 0;
     let totalChunks = 0;
 
     // Start reading in background
@@ -126,7 +125,7 @@ describe("CompressionStream Behavior Analysis", () => {
     await writer.write(chunk);
     await new Promise(r => setTimeout(r, 200));
 
-    chunksBeforeClose = totalChunks;
+    const chunksBeforeClose = totalChunks;
 
     await writer.close();
     await readPromise;

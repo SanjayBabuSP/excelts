@@ -43,7 +43,7 @@ class VmlNotesXform extends BaseXform<VmlNotesModel> {
     xmlStream.leafNode("v:path", { gradientshapeok: "t", "o:connecttype": "rect" });
     xmlStream.closeNode();
 
-    renderModel.comments.forEach((item, index) => {
+    renderModel!.comments.forEach((item, index) => {
       this.map["v:shape"].render(xmlStream, item, index);
     });
 
@@ -81,7 +81,7 @@ class VmlNotesXform extends BaseXform<VmlNotesModel> {
   parseClose(name: string): boolean {
     if (this.parser) {
       if (!this.parser.parseClose(name)) {
-        this.model.comments.push(this.parser.model);
+        this.model!.comments.push(this.parser.model);
         this.parser = undefined;
       }
       return true;

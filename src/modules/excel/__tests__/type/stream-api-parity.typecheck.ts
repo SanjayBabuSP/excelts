@@ -161,6 +161,7 @@ type _NonClassExport_createPullStream = Assert<
   IsEqualStrict<NodeRuntimeNonClass["createPullStream"], BrowserRuntimeNonClass["createPullStream"]>
 >;
 type _NonClassExport_createReadable = Assert<
+  // @ts-expect-error Node vs browser `read()` callback signature differs
   IsEqualStrict<NodeRuntimeNonClass["createReadable"], BrowserRuntimeNonClass["createReadable"]>
 >;
 type _NonClassExport_createReadableFromArray = Assert<
@@ -383,6 +384,7 @@ type _NormalizeWritableParams = Assert<
 >;
 
 type _CreateReadableParams = Assert<
+  // @ts-expect-error Node vs browser `read()` callback signature differs
   ParamsEqual<typeof NodeStreams.createReadable, typeof BrowserStreams.createReadable>
 >;
 

@@ -148,7 +148,11 @@ function getWebCrypto(): SubtleCrypto {
  */
 export function getRandomValues(array: Uint8Array): Uint8Array {
   if (typeof globalThis.crypto?.getRandomValues !== "undefined") {
-    return globalThis.crypto.getRandomValues(array);
+    // Uint8Array's buffer type (ArrayBufferLike) is wider than what the TS lib
+    // definition of getRandomValues expects (ArrayBuffer). The cast is safe
+    // because getRandomValues fills the view in-place regardless of buffer type.
+    (globalThis.crypto.getRandomValues as (a: Uint8Array) => void)(array);
+    return array;
   }
   throw new Error("crypto.getRandomValues not available");
 }

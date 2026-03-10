@@ -80,7 +80,7 @@ function resolveAliasToRelativeImport({
   for (const [aliasPattern, targetPatterns] of Object.entries(tsconfigPaths)) {
     const hasStar = aliasPattern.includes("*");
 
-    let captured: string | null = null;
+    let captured: string;
     if (hasStar) {
       const [prefix, suffix] = aliasPattern.split("*");
       if (specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
@@ -99,7 +99,7 @@ function resolveAliasToRelativeImport({
     }
 
     for (const targetPattern of targetPatterns) {
-      const replaced = hasStar ? replaceStarLiteral(targetPattern, captured!) : targetPattern;
+      const replaced = hasStar ? replaceStarLiteral(targetPattern, captured) : targetPattern;
       const absTarget = path.resolve(projectRoot, replaced);
       const absSrcFile = tryResolveFile(absTarget) ?? absTarget;
 

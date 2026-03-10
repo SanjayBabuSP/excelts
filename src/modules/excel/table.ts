@@ -26,6 +26,106 @@ interface TableModel {
   tableRef?: string;
 }
 
+/**
+ * Maximum length for an Excel defined name (and therefore table name).
+ */
+const MAX_TABLE_NAME_LENGTH = 255;
+
+/**
+ * Matches an A1-style cell reference pattern like A1, Z99, XFD1048576.
+ * Excel rejects table names that match this pattern.
+ */
+const CELL_REF_PATTERN = /^[A-Za-z]{1,3}\d+$/;
+
+/**
+ * Matches an R1C1-style cell reference, e.g. R1C1, R100C200.
+ * Must have at least one digit after R and at least one digit after C
+ * to be considered a cell reference. Bare "RC" is NOT a cell reference.
+ */
+const R1C1_PATTERN = /^[Rr]\d+[Cc]\d+$/;
+
+/**
+ * Single-character names that Excel reserves for row/column navigation.
+ * Per Microsoft docs: "You cannot use the uppercase and lowercase characters
+ * 'C', 'c', 'R', or 'r' as a defined name."
+ */
+const RESERVED_SINGLE_CHARS = new Set(["C", "c", "R", "r"]);
+
+/** Regex patterns used by sanitizeTableName, hoisted to module scope to avoid recompilation. */
+const WHITESPACE_RE = /\s/g;
+const INVALID_CHARS_RE = /[^\p{L}\p{N}_.]/gu;
+const VALID_FIRST_CHAR_RE = /^[\p{L}_\\]/u;
+
+/**
+ * Sanitize a table name to comply with OOXML defined name rules
+ * (ECMA-376, 4th edition, Part 1, §18.5.1.2).
+ *
+ * Rules enforced (per Microsoft documentation):
+ * - First character must be a letter (any script), underscore (_), or backslash (\)
+ * - Subsequent characters may be letters, digits, underscores, or periods (.)
+ * - Backslash is only valid as the first character
+ * - Spaces are replaced with underscores
+ * - Other invalid characters are stripped
+ * - Single-character names "C", "c", "R", "r" are prefixed with _
+ * - Names that look like cell references (e.g. A1, R1C1) are prefixed with _
+ * - Maximum 255 characters
+ * - Empty result falls back to "_Table"
+ *
+ * This library applies these rules automatically so that generated files
+ * always comply with the OOXML schema, avoiding Excel "repair" dialogs.
+ */
+function sanitizeTableName(name: string): string {
+  // Replace all whitespace characters (space, tab, newline, etc.) with underscores
+  let sanitized = name.replace(WHITESPACE_RE, "_");
+
+  // Preserve a leading backslash (valid only as first character per spec)
+  let leadingBackslash = false;
+  if (sanitized.startsWith("\\")) {
+    leadingBackslash = true;
+    sanitized = sanitized.slice(1);
+  }
+
+  // Strip characters not valid in defined names.
+  // Subsequent characters: Unicode letters, digits, underscore, period.
+  // Backslash is NOT valid in subsequent positions.
+  sanitized = sanitized.replace(INVALID_CHARS_RE, "");
+
+  // Re-attach leading backslash
+  if (leadingBackslash) {
+    sanitized = `\\${sanitized}`;
+  }
+
+  // Ensure the first character is valid (letter, underscore, or backslash).
+  // Test the whole string start rather than sanitized[0] to correctly handle
+  // supplementary Unicode characters (surrogate pairs).
+  if (sanitized.length > 0 && !VALID_FIRST_CHAR_RE.test(sanitized)) {
+    sanitized = `_${sanitized}`;
+  }
+
+  // Fallback if empty after sanitization
+  if (sanitized.length === 0) {
+    return "_Table";
+  }
+
+  // Avoid reserved single-character names (C, c, R, r)
+  if (sanitized.length === 1 && RESERVED_SINGLE_CHARS.has(sanitized)) {
+    sanitized = `_${sanitized}`;
+  }
+
+  // Avoid names that look like cell references
+  if (CELL_REF_PATTERN.test(sanitized) || R1C1_PATTERN.test(sanitized)) {
+    sanitized = `_${sanitized}`;
+  }
+
+  // Truncate to max length last, after all prefix additions,
+  // to guarantee the result never exceeds 255 characters.
+  if (sanitized.length > MAX_TABLE_NAME_LENGTH) {
+    sanitized = sanitized.slice(0, MAX_TABLE_NAME_LENGTH);
+  }
+
+  return sanitized;
+}
+
 interface CacheState {
   ref: string;
   width: number;
@@ -140,32 +240,31 @@ class Table {
     }
   }
 
+  private static readonly SUBTOTAL_FUNCTIONS: Record<string, number> = {
+    average: 101,
+    countNums: 102,
+    count: 103,
+    max: 104,
+    min: 105,
+    stdDev: 106,
+    var: 107,
+    sum: 109
+  };
+
   getFormula(column: TableColumnProperties): string | null {
-    // get the correct formula to apply to the totals row
-    switch (column.totalsRowFunction) {
-      case "none":
-        return null;
-      case "average":
-        return `SUBTOTAL(101,${this.table.name}[${column.name}])`;
-      case "countNums":
-        return `SUBTOTAL(102,${this.table.name}[${column.name}])`;
-      case "count":
-        return `SUBTOTAL(103,${this.table.name}[${column.name}])`;
-      case "max":
-        return `SUBTOTAL(104,${this.table.name}[${column.name}])`;
-      case "min":
-        return `SUBTOTAL(105,${this.table.name}[${column.name}])`;
-      case "stdDev":
-        return `SUBTOTAL(106,${this.table.name}[${column.name}])`;
-      case "var":
-        return `SUBTOTAL(107,${this.table.name}[${column.name}])`;
-      case "sum":
-        return `SUBTOTAL(109,${this.table.name}[${column.name}])`;
-      case "custom":
-        return column.totalsRowFormula ?? null;
-      default:
-        throw new TableError(`Invalid Totals Row Function: ${column.totalsRowFunction}`);
+    if (column.totalsRowFunction === "none") {
+      return null;
     }
+    if (column.totalsRowFunction === "custom") {
+      return column.totalsRowFormula ?? null;
+    }
+    const fnNum = column.totalsRowFunction
+      ? Table.SUBTOTAL_FUNCTIONS[column.totalsRowFunction]
+      : undefined;
+    if (fnNum !== undefined) {
+      return `SUBTOTAL(${fnNum},${this.table.name}[${column.name}])`;
+    }
+    throw new TableError(`Invalid Totals Row Function: ${column.totalsRowFunction}`);
   }
 
   get width(): number {
@@ -200,17 +299,28 @@ class Table {
     assign(table, "totalsRow", false);
 
     assign(table, "style", {});
-    assign(table.style, "theme", "TableStyleMedium2");
-    assign(table.style, "showFirstColumn", false);
-    assign(table.style, "showLastColumn", false);
-    assign(table.style, "showRowStripes", false);
-    assign(table.style, "showColumnStripes", false);
+    const style = table.style!;
+    assign(style, "theme", "TableStyleMedium2");
+    assign(style, "showFirstColumn", false);
+    assign(style, "showLastColumn", false);
+    assign(style, "showRowStripes", false);
+    assign(style, "showColumnStripes", false);
+
+    // Sanitize table name and displayName to comply with OOXML defined name rules.
+    // Excel UI rejects invalid names; here we auto-correct to avoid "repair" dialogs.
+    if (table.name) {
+      table.name = sanitizeTableName(table.name);
+    }
+    if (table.displayName) {
+      table.displayName = sanitizeTableName(table.displayName);
+    }
 
     const assert = (test: boolean, message: string) => {
       if (!test) {
         throw new TableError(message);
       }
     };
+    assert(!!table.name, "Table must have a name");
     assert(!!table.ref, "Table must have ref");
     assert(!!table.columns, "Table must have column definitions");
     assert(!!table.rows, "Table must have row definitions");
@@ -250,7 +360,7 @@ class Table {
     };
 
     const { worksheet, table } = this;
-    const { row, col } = table.tl;
+    const { row, col } = table.tl!;
     let count = 0;
     if (table.headerRow) {
       const r = worksheet.getRow(row + count++);
@@ -295,7 +405,7 @@ class Table {
           const formula = this.getFormula(column);
           if (formula) {
             cell.value = {
-              formula: column.totalsRowFormula,
+              formula,
               result: column.totalsRowResult
             };
           } else {
@@ -338,7 +448,7 @@ class Table {
           const formula = this.getFormula(column);
           if (formula) {
             cell.value = {
-              formula: column.totalsRowFormula,
+              formula,
               result: column.totalsRowResult
             };
           }
@@ -484,14 +594,16 @@ class Table {
     return this.table.name;
   }
   set name(value: string) {
-    this.table.name = value;
+    this.cacheState();
+    this.table.name = sanitizeTableName(value);
   }
 
   get displayName(): string {
     return this.table.displayName || this.table.name;
   }
   set displayName(value: string) {
-    this.table.displayName = value;
+    this.cacheState();
+    this.table.displayName = sanitizeTableName(value);
   }
 
   get headerRow(): boolean | undefined {
@@ -508,40 +620,47 @@ class Table {
     this._assign(this.table, "totalsRow", value);
   }
 
+  private _ensureStyle(): TableStyleProperties {
+    if (!this.table.style) {
+      this.table.style = {};
+    }
+    return this.table.style;
+  }
+
   get theme(): TableStyleProperties["theme"] {
-    return this.table.style.theme;
+    return this.table.style?.theme;
   }
   set theme(value: TableStyleProperties["theme"]) {
-    this.table.style.theme = value;
+    this._ensureStyle().theme = value;
   }
 
   get showFirstColumn(): boolean | undefined {
-    return this.table.style.showFirstColumn;
+    return this.table.style?.showFirstColumn;
   }
   set showFirstColumn(value: boolean | undefined) {
-    this.table.style.showFirstColumn = value;
+    this._ensureStyle().showFirstColumn = value;
   }
 
   get showLastColumn(): boolean | undefined {
-    return this.table.style.showLastColumn;
+    return this.table.style?.showLastColumn;
   }
   set showLastColumn(value: boolean | undefined) {
-    this.table.style.showLastColumn = value;
+    this._ensureStyle().showLastColumn = value;
   }
 
   get showRowStripes(): boolean | undefined {
-    return this.table.style.showRowStripes;
+    return this.table.style?.showRowStripes;
   }
   set showRowStripes(value: boolean | undefined) {
-    this.table.style.showRowStripes = value;
+    this._ensureStyle().showRowStripes = value;
   }
 
   get showColumnStripes(): boolean | undefined {
-    return this.table.style.showColumnStripes;
+    return this.table.style?.showColumnStripes;
   }
   set showColumnStripes(value: boolean | undefined) {
-    this.table.style.showColumnStripes = value;
+    this._ensureStyle().showColumnStripes = value;
   }
 }
 
-export { Table, type TableModel };
+export { Table, sanitizeTableName, type TableModel };

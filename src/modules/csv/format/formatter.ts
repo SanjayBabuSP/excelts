@@ -474,7 +474,7 @@ export function formatCsv(
       formatRowWithLookup(effectiveHeaders, cfg.regex, {
         quoteLookup: cfg.shouldQuoteHeader,
         delimiter: cfg.delimiter,
-        headers: effectiveHeaders,
+        headers: effectiveHeaders as string[],
         isHeader: true,
         outputRowIndex: 0,
         quoteAll: cfg.quoteAll,
@@ -491,7 +491,7 @@ export function formatCsv(
       formatRowWithLookup(rows[rowIdx], cfg.regex, {
         quoteLookup: cfg.shouldQuoteColumn,
         delimiter: cfg.delimiter,
-        headers: effectiveHeaders,
+        headers: effectiveHeaders as string[] | undefined,
         isHeader: false,
         outputRowIndex: rowIdx,
         quoteAll: cfg.quoteAll,

@@ -48,7 +48,7 @@ export function createBufferedStream(options?: BufferedStreamOptions): BufferedS
  */
 export function createReadable<T = Uint8Array>(
   options?: ReadableStreamOptions & {
-    read?: (size: number) => void;
+    read?: (this: Readable<T>, size?: number) => void;
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IReadable<T> {
@@ -224,7 +224,7 @@ export function createDuplex<TRead = Uint8Array, TWrite = Uint8Array>(
     writableHighWaterMark: options?.writableHighWaterMark,
     readableObjectMode: options?.readableObjectMode,
     writableObjectMode: options?.writableObjectMode,
-    read: options?.read,
+    read: options?.read as ((this: Duplex<TRead, TWrite>, size?: number) => void) | undefined,
     write: options?.write,
     final: options?.final,
     destroy: options?.destroy

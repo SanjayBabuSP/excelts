@@ -144,7 +144,7 @@ describe("Workbook", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(filename);
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       expect(ws2.getCell("A1").value).toBe("Hello, World!");
       expect(ws2.getCell("A2").value).toBe("Hello, World!");
     });
@@ -178,7 +178,7 @@ describe("Workbook", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(filename);
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       for (let i = 0; i < specialValues.length; i++) {
         const value = specialValues[i];
         expect(ws2.getCell(`A${i + 1}`).value).toBe(value);
@@ -221,7 +221,7 @@ describe("Workbook", () => {
         await wb.xlsx.readFile(excelTestDataPath("1904.xlsx"));
 
         expect(wb.properties.date1904).toBe(true);
-        const ws = wb.getWorksheet("Sheet1");
+        const ws = wb.getWorksheet("Sheet1")!;
         expect((ws.getCell("B4").value as Date).toISOString()).toBe("1904-01-01T00:00:00.000Z");
       });
 
@@ -237,7 +237,7 @@ describe("Workbook", () => {
         const wb2 = new Workbook();
         await wb2.xlsx.readFile(filename);
         expect(wb2.properties.date1904).toBe(true);
-        const ws2 = wb2.getWorksheet("Sheet1");
+        const ws2 = wb2.getWorksheet("Sheet1")!;
         expect((ws2.getCell("B4").value as Date).toISOString()).toBe("1904-01-01T00:00:00.000Z");
       });
     });
@@ -315,7 +315,7 @@ describe("Workbook", () => {
         });
       };
 
-      const ws = wb.getWorksheet(1);
+      const ws = wb.getWorksheet(1)!;
       assertBorder(ws.getCell("B2"), ["left", "top"]);
       assertBorder(ws.getCell("B3"), ["left", "bottom"]);
       assertBorder(ws.getCell("C2"), ["right", "top"]);
@@ -325,7 +325,7 @@ describe("Workbook", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(outFile);
-      const ws2 = wb2.getWorksheet(1);
+      const ws2 = wb2.getWorksheet(1)!;
       assertBorder(ws2.getCell("B2"), ["left", "top"]);
       assertBorder(ws2.getCell("B3"), ["left", "bottom"]);
       assertBorder(ws2.getCell("C2"), ["right", "top"]);
@@ -487,7 +487,7 @@ describe("Workbook", () => {
         const wb2 = new Workbook();
         await wb2.xlsx.load(buffer);
 
-        const ws2 = wb2.getWorksheet("Sheet1");
+        const ws2 = wb2.getWorksheet("Sheet1")!;
         expect(ws2).toBeDefined();
         expect(ws2.getCell("A1").value).toBe("test");
         expect(ws2.pageSetup.printArea).toBeUndefined();
@@ -505,7 +505,7 @@ describe("Workbook", () => {
         const wb2 = new Workbook();
         await wb2.xlsx.load(buffer);
 
-        const ws2 = wb2.getWorksheet("Sheet1");
+        const ws2 = wb2.getWorksheet("Sheet1")!;
         expect(ws2.lastColumn).toBe(ws2.getColumn(2));
       });
 
@@ -513,7 +513,7 @@ describe("Workbook", () => {
         const wb = new Workbook();
         await wb.xlsx.readFile(excelTestDataPath("inline-string-cells.xlsx"));
 
-        const ws = wb.getWorksheet("Sheet1");
+        const ws = wb.getWorksheet("Sheet1")!;
         expect(ws.getCell("A1").value).toBe("A");
         expect(ws.getCell("B1").value).toBe("B");
         expect(ws.getCell("C1").value).toBe("C");
@@ -541,7 +541,7 @@ describe("Workbook", () => {
 
           const wb2 = new Workbook();
           await wb2.xlsx.readFile(testFile);
-          const ws2 = wb2.getWorksheet("foo");
+          const ws2 = wb2.getWorksheet("foo")!;
           expect(ws2.getCell("A1").value).toBe(" leading");
           expect(ws2.getCell("A1").note).toBe(" leading");
           expect(ws2.getCell("B1").value).toBe("trailing ");
@@ -563,7 +563,7 @@ describe("Workbook", () => {
 
           const wb2 = new Workbook();
           await wb2.xlsx.readFile(testFile);
-          const ws2 = wb2.getWorksheet("foo");
+          const ws2 = wb2.getWorksheet("foo")!;
           expect(ws2.getCell("A1").value).toBe("Hello,\nWorld!");
           expect(ws2.getCell("A1").note).toBe("Later,\nAlligator!");
           expect(ws2.getCell("B1").value).toBe(" Hello, \n World! ");
@@ -593,7 +593,7 @@ describe("Workbook", () => {
 
           const wb2 = new Workbook();
           await wb2.xlsx.readFile(testFile);
-          const ws2 = wb2.getWorksheet("sheet1");
+          const ws2 = wb2.getWorksheet("sheet1")!;
           expect(ws2).toBeDefined();
           expect(ws2.getCell("A1").value).toEqual(TEST_VALUE);
         });
@@ -749,7 +749,7 @@ describe("Workbook", () => {
       const wb2 = new Workbook();
       await wb2.xlsx.load(buffer);
 
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       expect(ws2.pageSetup.printArea).toBe("A1:A1");
     });
 
@@ -764,7 +764,7 @@ describe("Workbook", () => {
       const wb2 = new Workbook();
       await wb2.xlsx.load(buffer);
 
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       expect(ws2.pageSetup.printTitlesColumn).toBe("A:A");
     });
 
@@ -779,7 +779,7 @@ describe("Workbook", () => {
       const wb2 = new Workbook();
       await wb2.xlsx.load(buffer);
 
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       expect(ws2.pageSetup.printTitlesRow).toBe("1:1");
     });
 

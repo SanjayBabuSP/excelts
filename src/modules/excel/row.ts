@@ -86,9 +86,9 @@ class Row {
    * Helps GC by breaking cyclic references
    */
   destroy(): void {
-    delete this._worksheet;
-    delete this._cells;
-    delete this.style;
+    this._worksheet = undefined!;
+    this._cells = undefined!;
+    this.style = undefined!;
   }
 
   findCell(colNumber: number): Cell | undefined {
@@ -171,7 +171,7 @@ class Row {
           cDst.style = copyStyle(cSrc.style) ?? {};
           cDst.comment = cSrc.comment;
         } else {
-          this._cells[i + nExpand - 1] = undefined;
+          this._cells[i + nExpand - 1] = undefined!;
         }
       }
     }
@@ -453,7 +453,7 @@ class Row {
 
   get collapsed(): boolean {
     return !!(
-      this._outlineLevel && this._outlineLevel >= this._worksheet.properties.outlineLevelRow
+      this._outlineLevel && this._outlineLevel >= (this._worksheet.properties.outlineLevelRow ?? 0)
     );
   }
 
@@ -522,6 +522,9 @@ class Row {
             };
           }
           previousAddress = address;
+          if (!address) {
+            break;
+          }
           const cell = this.getCellEx(address);
           cell.model = cellModel;
           break;

@@ -116,14 +116,14 @@ class TableXform extends BaseXform<TableModel> {
     }
     switch (name) {
       case this.tag:
-        this.model.columns = this.map.tableColumns.model;
-        if (this.map.autoFilter.model) {
-          this.model.autoFilterRef = this.map.autoFilter.model.autoFilterRef;
-          this.map.autoFilter.model.columns.forEach((column: any, index: number) => {
-            this.model.columns[index].filterButton = column.filterButton;
+        this.model!.columns = this.map!.tableColumns.model;
+        if (this.map!.autoFilter.model) {
+          this.model!.autoFilterRef = this.map!.autoFilter.model.autoFilterRef;
+          this.map!.autoFilter.model.columns.forEach((column: any, index: number) => {
+            this.model!.columns![index].filterButton = column.filterButton;
           });
         }
-        this.model.style = this.map.tableStyleInfo.model;
+        this.model!.style = this.map!.tableStyleInfo.model;
         return false;
       default:
         // could be some unrecognised tags
@@ -141,7 +141,7 @@ class TableXform extends BaseXform<TableModel> {
       model.rows = [];
     }
     // fetch the dfxs from styles
-    model.columns.forEach(column => {
+    model.columns!.forEach(column => {
       if (column.dxfId !== undefined) {
         column.style = options.styles.getDxfStyle(column.dxfId);
       }

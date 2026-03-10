@@ -29,6 +29,7 @@ import type {
   DataValidation,
   RowBreak,
   RowValues,
+  Style,
   TableProperties,
   WorksheetProperties,
   WorksheetView
@@ -183,7 +184,7 @@ class Worksheet {
 
   constructor(options: WorksheetOptions) {
     options = options || {};
-    this._workbook = options.workbook;
+    this._workbook = options.workbook!;
 
     // in a workbook, each sheet will have a number
     this.id = options.id ?? 0;
@@ -387,7 +388,7 @@ class Worksheet {
   /**
    * Get the current columns array
    */
-  get columns(): Column[] {
+  get columns(): Column[] | null {
     return this._columns;
   }
 
@@ -718,9 +719,9 @@ class Worksheet {
   private _copyStyle(src: number, dest: number, styleEmpty: boolean = false): void {
     const rSrc = this.getRow(src);
     const rDst = this.getRow(dest);
-    rDst.style = copyStyle(rSrc.style);
+    rDst.style = (copyStyle(rSrc.style) as Partial<Style>) ?? {};
     rSrc.eachCell({ includeEmpty: styleEmpty }, (cell: Cell, colNumber: number) => {
-      rDst.getCell(colNumber).style = copyStyle(cell.style);
+      rDst.getCell(colNumber).style = (copyStyle(cell.style) as Partial<Style>) ?? {};
     });
     rDst.height = rSrc.height;
   }
@@ -853,21 +854,21 @@ class Worksheet {
     if (nExpand < 0) {
       // remove rows
       if (start === nEnd) {
-        this._rows[nEnd - 1] = undefined;
+        this._rows[nEnd - 1] = undefined!;
       }
       for (i = nKeep; i <= nEnd; i++) {
         rSrc = this._rows[i - 1];
         if (rSrc) {
           const rDst = this.getRow(i + nExpand);
           rDst.values = rSrc.values;
-          rDst.style = copyStyle(rSrc.style) ?? {};
+          rDst.style = (copyStyle(rSrc.style) as Partial<Style>) ?? {};
           rDst.height = rSrc.height;
           rSrc.eachCell({ includeEmpty: true }, (cell: Cell, colNumber: number) => {
-            rDst.getCell(colNumber).style = copyStyle(cell.style) ?? {};
+            rDst.getCell(colNumber).style = (copyStyle(cell.style) as Partial<Style>) ?? {};
           });
-          this._rows[i - 1] = undefined;
+          this._rows[i - 1] = undefined!;
         } else {
-          this._rows[i + nExpand - 1] = undefined;
+          this._rows[i + nExpand - 1] = undefined!;
         }
       }
     } else if (nExpand > 0) {
@@ -877,13 +878,13 @@ class Worksheet {
         if (rSrc) {
           const rDst = this.getRow(i + nExpand);
           rDst.values = rSrc.values;
-          rDst.style = copyStyle(rSrc.style) ?? {};
+          rDst.style = (copyStyle(rSrc.style) as Partial<Style>) ?? {};
           rDst.height = rSrc.height;
           rSrc.eachCell({ includeEmpty: true }, (cell: Cell, colNumber: number) => {
-            rDst.getCell(colNumber).style = copyStyle(cell.style) ?? {};
+            rDst.getCell(colNumber).style = (copyStyle(cell.style) as Partial<Style>) ?? {};
           });
         } else {
-          this._rows[i + nExpand - 1] = undefined;
+          this._rows[i + nExpand - 1] = undefined!;
         }
       }
     }
@@ -1325,7 +1326,7 @@ class Worksheet {
     if (options && "spinCount" in options) {
       // force spinCount to be integer >= 0
       options.spinCount = Number.isFinite(options.spinCount)
-        ? Math.round(Math.max(0, options.spinCount))
+        ? Math.round(Math.max(0, options.spinCount!))
         : 100000;
     }
     if (password) {
@@ -1336,8 +1337,8 @@ class Worksheet {
       this.sheetProtection.hashValue = await Encryptor.convertPasswordToHash(
         password,
         "SHA-512",
-        this.sheetProtection.saltValue,
-        this.sheetProtection.spinCount
+        this.sheetProtection.saltValue!,
+        this.sheetProtection.spinCount!
       );
     }
     if (options) {
@@ -1360,7 +1361,8 @@ class Worksheet {
    */
   addTable(model: TableProperties): Table {
     const table = new Table(this, model);
-    this.tables[model.name] = table;
+    // Use table.name (sanitized by Table.validate()) as the key
+    this.tables[table.name] = table;
     return table;
   }
 
@@ -1501,7 +1503,7 @@ class Worksheet {
 
   set model(value: WorksheetModel) {
     this.name = value.name;
-    this._columns = Column.fromModel(this, value.cols);
+    this._columns = Column.fromModel(this, value.cols ?? []);
     this._parseRows(value);
 
     this._parseMergeCells(value);

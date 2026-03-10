@@ -8705,7 +8705,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       it("Readable.wrap returns a Readable instance", () => {
         const EventEmitter = imports.EventEmitter;
         const src = new EventEmitter();
-        const wrapped = Readable.wrap(src);
+        const wrapped = Readable.wrap!(src);
         expect(wrapped instanceof Readable).toBe(true);
         wrapped.destroy();
       });
@@ -8713,7 +8713,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       it("Readable.wrap forwards data from source", async () => {
         const EventEmitter = imports.EventEmitter;
         const src = new EventEmitter();
-        const wrapped = Readable.wrap(src);
+        const wrapped = Readable.wrap!(src);
         const chunks: any[] = [];
         wrapped.on("data", (c: any) => chunks.push(c));
 
@@ -8731,7 +8731,7 @@ export function runStreamTests(imports: StreamModuleImports): void {
       it("Readable.wrap wraps in objectMode by default", () => {
         const EventEmitter = imports.EventEmitter;
         const src = new EventEmitter();
-        const wrapped = Readable.wrap(src);
+        const wrapped = Readable.wrap!(src);
         expect(wrapped.readableObjectMode).toBe(true);
         wrapped.destroy();
       });

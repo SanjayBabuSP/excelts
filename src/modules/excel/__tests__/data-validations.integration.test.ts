@@ -54,7 +54,7 @@ describe("DataValidations", () => {
     };
 
     const ws = wb.getWorksheet(1);
-    expect(ws.dataValidations.model).toEqual(expected);
+    expect(ws!.dataValidations.model).toEqual(expected);
 
     await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
   });

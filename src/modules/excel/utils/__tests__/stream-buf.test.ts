@@ -204,4 +204,102 @@ describe("StreamBuf", () => {
     const rest = stream.read();
     expect(uint8ToString(rest)).toBe("World");
   });
+
+  // ==========================================================================
+  // Memory behavior: data listeners prevent internal buffering
+  // Regression tests for Issue #88 (memory leak) and Issue #89 (RangeError)
+  // ==========================================================================
+
+  describe("memory behavior with data listeners", () => {
+    it("emits data to listener and does not buffer internally", async () => {
+      const stream = new StreamBuf();
+      const received: Uint8Array[] = [];
+
+      stream.on("data", (chunk: Uint8Array) => {
+        received.push(chunk);
+      });
+
+      await stream.write("Hello, World!");
+      await stream.write("More data");
+
+      expect(received.length).toBe(2);
+      expect(uint8ToString(received[0])).toBe("Hello, World!");
+      expect(uint8ToString(received[1])).toBe("More data");
+
+      // Internal buffers must NOT have accumulated the data
+      expect(stream.toBuffer()).toBeNull();
+    });
+
+    it("still buffers data when paused even if data listener exists", async () => {
+      const stream = new StreamBuf();
+      const received: Uint8Array[] = [];
+
+      stream.on("data", (chunk: Uint8Array) => {
+        received.push(chunk);
+      });
+
+      stream.pause();
+      await stream.write("paused data");
+
+      expect(received.length).toBe(0);
+      expect(uint8ToString(stream.toBuffer())).toBe("paused data");
+
+      // After resume, new writes go to listener again
+      stream.resume();
+      await stream.write("after resume");
+      expect(received.length).toBe(1);
+      expect(uint8ToString(received[0])).toBe("after resume");
+    });
+  });
+
+  // ==========================================================================
+  // _openStream pattern reproduction
+  // ==========================================================================
+
+  describe("_openStream pattern reproduction", () => {
+    it("does not accumulate internal buffers when used as event-driven pass-through (#88)", async () => {
+      // Mirrors _openStream: StreamBuf + "data" listener + removeListener on finish
+      const stream = new StreamBuf({ bufSize: 4096 });
+      let totalBytesReceived = 0;
+
+      const onData = (chunk: Uint8Array) => {
+        totalBytesReceived += chunk.length;
+      };
+      stream.on("data", onData);
+
+      stream.once("finish", () => {
+        stream.removeListener("data", onData);
+      });
+
+      const rowXml = `<row r="1"><c r="A1" t="s"><v>${"x".repeat(3500)}</v></c></row>`;
+      for (let i = 0; i < 10_000; i++) {
+        await stream.write(rowXml);
+      }
+
+      expect(totalBytesReceived).toBeGreaterThan(0);
+      expect(stream.toBuffer()).toBeNull();
+
+      const finished = new Promise<void>(resolve => {
+        stream.on("finish", () => resolve());
+      });
+      stream.end();
+      await finished;
+    });
+
+    it("handles very large chunks without RangeError (#89)", async () => {
+      const stream = new StreamBuf({ bufSize: 4096 });
+      let totalBytesReceived = 0;
+
+      stream.on("data", (chunk: Uint8Array) => {
+        totalBytesReceived += chunk.length;
+      });
+
+      // ~110KB single write — 27x larger than bufSize
+      const largePayload = "x".repeat(110_000);
+      await stream.write(largePayload);
+
+      expect(totalBytesReceived).toBe(new TextEncoder().encode(largePayload).length);
+      expect(stream.toBuffer()).toBeNull();
+    });
+  });
 });

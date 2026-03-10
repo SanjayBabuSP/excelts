@@ -41,7 +41,7 @@ describe("worksheet.addRow", () => {
     const readBack = new Workbook();
     await readBack.xlsx.readFile(filename);
 
-    const ws2 = readBack.getWorksheet("ExampleWS");
+    const ws2 = readBack.getWorksheet("ExampleWS")!;
     expect(ws2).toBeTruthy();
 
     expect(ws2.getCell(2, 1).value).toBe(4);

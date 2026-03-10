@@ -718,7 +718,7 @@ export interface WriteStreamOptions {
  * @returns A readable stream
  */
 export function createReadStream(filePath: string, options?: ReadStreamOptions): nodeFs.ReadStream {
-  return _fs.createReadStream(filePath, options);
+  return _fs.createReadStream(filePath, options as nodeFs.ReadStreamOptions);
 }
 
 /**

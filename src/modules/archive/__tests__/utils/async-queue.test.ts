@@ -14,7 +14,7 @@ describe("async-queue", () => {
     const itor = q.iterable[Symbol.asyncIterator]();
 
     const pendingNext = itor.next();
-    const ret = await itor.return();
+    const ret = await itor.return!();
 
     expect(ret.done).toBe(true);
     expect(cancels).toBe(1);
@@ -27,7 +27,7 @@ describe("async-queue", () => {
     await expect(itor.next()).resolves.toEqual({ value: undefined, done: true });
 
     // Idempotent.
-    await itor.return();
+    await itor.return!();
     expect(cancels).toBe(1);
   });
 
@@ -44,7 +44,7 @@ describe("async-queue", () => {
     const pendingNext = itor.next();
     const err = new Error("boom");
 
-    await expect(itor.throw(err)).rejects.toBe(err);
+    await expect(itor.throw!(err)).rejects.toBe(err);
     expect(cancels).toBe(1);
 
     await expect(pendingNext).resolves.toEqual({ value: undefined, done: true });

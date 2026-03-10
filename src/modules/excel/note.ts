@@ -46,7 +46,7 @@ class Note {
   }
 
   get model(): NoteModel {
-    let value: NoteModel | null = null;
+    let value: NoteModel;
     switch (typeof this.note) {
       case "string":
         value = {

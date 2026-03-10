@@ -87,7 +87,7 @@ class TableColumnXform extends BaseXform<TableColumnModel> {
     }
     // Closing a recognised child element — store captured text
     if (this._childTag && name === this._childTag) {
-      this.model[this._childTag] = this._childText;
+      this.model![this._childTag] = this._childText;
       this._childTag = undefined;
     }
     return true;

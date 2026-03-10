@@ -115,7 +115,7 @@ describe("ZipParser", () => {
       const parser = new ZipParser(zipData);
       const extractedData = await parser.extract("test.txt");
       expect(extractedData).not.toBeNull();
-      const extractedContent = new TextDecoder().decode(extractedData);
+      const extractedContent = new TextDecoder().decode(extractedData ?? undefined);
 
       expect(extractedContent).toBe(originalContent);
     });

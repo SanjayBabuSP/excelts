@@ -113,7 +113,7 @@ describe("parse", () => {
 
       for await (const entry of parse) {
         const zipEntry = entry as ZipEntry;
-        if (zipEntry.type === "File" && zipEntry.vars.uncompressedSize > 0) {
+        if (zipEntry.type === "File" && zipEntry.vars.uncompressedSize! > 0) {
           const buffer = await zipEntry.buffer();
           expect(buffer.length).toBe(zipEntry.vars.uncompressedSize);
           break;

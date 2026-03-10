@@ -94,4 +94,37 @@ describe("OOXML validator", () => {
     expect(report.ok).toBe(true);
     expect(report.problems).toEqual([]);
   });
+
+  it("validates a workbook with table name containing spaces (issue #91)", async () => {
+    const wb = new Workbook();
+    const sheet = wb.addWorksheet("test");
+    sheet.addTable({
+      columns: [
+        { name: "A", filterButton: true },
+        { name: "B", filterButton: true },
+        { name: "C", filterButton: true }
+      ],
+      headerRow: true,
+      name: "test table",
+      ref: "A1",
+      rows: [
+        ["test", 2, "a4f"],
+        ["test 2", 1, "a4f"],
+        ["test 3", 6, "a4f"]
+      ],
+      totalsRow: false
+    });
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const report = await validateXlsxBuffer(new Uint8Array(buffer), {
+      maxProblems: 50
+    });
+
+    if (!report.ok) {
+      throw new Error(`OOXML validation failed:\n${JSON.stringify(report, null, 2)}`);
+    }
+
+    expect(report.ok).toBe(true);
+    expect(report.problems).toEqual([]);
+  });
 });

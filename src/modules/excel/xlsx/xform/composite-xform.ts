@@ -37,7 +37,7 @@ class CompositeXform<TModel = any> extends BaseXform<TModel> {
   onParserClose(name: string, parser: any): void {
     // parseClose has seen a child parser close
     // now need to incorporate into this.model somehow
-    this.model[name] = parser.model;
+    this.model![name] = parser.model;
   }
 
   parseClose(name: string): boolean {

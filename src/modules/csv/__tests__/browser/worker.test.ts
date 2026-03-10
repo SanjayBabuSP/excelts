@@ -24,7 +24,7 @@ function formatExpected(data: Parameters<typeof formatCsv>[0], options?: FormatO
 }
 
 function parseExpected(input: string, options?: ParseOptions): ReturnType<typeof parseCsv> {
-  return parseCsv(input, options);
+  return parseCsv(input, options ?? {});
 }
 
 describe("CSV Worker Pool - Browser", () => {

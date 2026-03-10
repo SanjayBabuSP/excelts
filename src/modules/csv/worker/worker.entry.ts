@@ -117,7 +117,7 @@ function sortData(data: any[], configs: SortConfig | SortConfig[]): void {
       const { column, order = "asc", comparator = "auto" } = config;
       const aVal = (a as any)[column as any];
       const bVal = (b as any)[column as any];
-      let result = 0;
+      let result: number;
       if (
         comparator === "number" ||
         (comparator === "auto" && !Number.isNaN(Number(aVal)) && !Number.isNaN(Number(bVal)))

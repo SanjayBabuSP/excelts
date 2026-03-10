@@ -208,7 +208,7 @@ class BrowserInflateRaw extends Duplex {
       this.writer.abort(error ?? undefined).catch(() => {});
     }
     this.reader.cancel(error ?? undefined).catch(() => {});
-    return super.destroy(error);
+    return super.destroy(error ?? undefined);
   }
 }
 
@@ -455,7 +455,7 @@ class WorkerInflateRaw extends Duplex {
 
     this._terminateWorker();
 
-    return super.destroy(error);
+    return super.destroy(error ?? undefined);
   }
 }
 
@@ -506,7 +506,7 @@ class FallbackInflateRaw extends Duplex {
   override destroy(error?: Error | null): this {
     this._finished = true;
     this.chunks = [];
-    return super.destroy(error);
+    return super.destroy(error ?? undefined);
   }
 }
 

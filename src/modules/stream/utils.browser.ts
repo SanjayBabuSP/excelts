@@ -29,7 +29,11 @@ import {
 let _deps: UtilsDeps | null = null;
 function getDeps(): UtilsDeps {
   if (!_deps) {
-    _deps = { createReadableFromArray, createTransform, consumers };
+    _deps = {
+      createReadableFromArray,
+      createTransform: createTransform as UtilsDeps["createTransform"],
+      consumers
+    };
   }
   return _deps;
 }

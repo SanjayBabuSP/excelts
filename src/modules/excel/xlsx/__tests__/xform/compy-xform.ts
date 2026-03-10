@@ -57,7 +57,7 @@ class CompyXform extends BaseXform {
         this.model = {};
         return true;
       default:
-        this.parser = this.map[node.name];
+        this.parser = this.map![node.name];
         if (this.parser) {
           this.parser.xform.parseOpen(node);
           return true;

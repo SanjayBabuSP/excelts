@@ -71,8 +71,8 @@ export function createTextDecoder(encoding?: string): TextDecoder {
 function createTextDecoderOrTypeError(encoding: string, options?: TextDecoderOptions): TextDecoder {
   try {
     return new TextDecoder(encoding, options);
-  } catch (error) {
-    throw new TypeError(`Unsupported text encoding: ${encoding}`, { cause: error as Error });
+  } catch (cause) {
+    throw new TypeError(`Unsupported text encoding: ${encoding}`, { cause });
   }
 }
 

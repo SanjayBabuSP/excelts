@@ -97,7 +97,7 @@ export function processHeaders(
   }
 
   let rawHeaders: (string | null | undefined)[];
-  let skipCurrentRow = false;
+  let skipCurrentRow: boolean;
 
   if (typeof headers === "function") {
     // Function: call with row, skip current row

@@ -179,10 +179,10 @@ class RowXform extends BaseXform<RowModel> {
         } else {
           // No r attribute, calculate address from position
           this.lastCellCol += 1;
-          cellModel.address = colCache.encodeAddress(this.model.number, this.lastCellCol);
+          cellModel.address = colCache.encodeAddress(this.model!.number, this.lastCellCol);
         }
-        this.model.cells.push(cellModel);
-        if (this.maxItems && this.model.cells.length > this.maxItems) {
+        this.model!.cells.push(cellModel);
+        if (this.maxItems && this.model!.cells.length > this.maxItems) {
           throw new MaxItemsExceededError("column", this.maxItems);
         }
         this.parser = undefined;

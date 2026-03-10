@@ -86,7 +86,7 @@ class FontXform extends BaseXform {
 
     xmlStream.openNode(this.options.tagName);
     renderOrder.forEach(tag => {
-      map[tag].xform.render(xmlStream, model[map[tag].prop as keyof FontModel]);
+      map![tag].xform.render(xmlStream, model[map![tag].prop as keyof FontModel]);
     });
     xmlStream.closeNode();
   }
@@ -96,9 +96,9 @@ class FontXform extends BaseXform {
       this.parser.parseOpen(node);
       return true;
     }
-    if (this.map[node.name]) {
-      this.parser = this.map[node.name].xform;
-      return this.parser.parseOpen(node);
+    if (this.map![node.name]) {
+      this.parser = this.map![node.name].xform;
+      return this.parser!.parseOpen(node);
     }
     switch (node.name) {
       case this.options.tagName:
@@ -117,7 +117,7 @@ class FontXform extends BaseXform {
 
   parseClose(name: string): boolean {
     if (this.parser && !this.parser.parseClose(name)) {
-      const item = this.map[name];
+      const item = this.map![name];
       if (this.parser.model) {
         this.model[item.prop] = this.parser.model;
       }

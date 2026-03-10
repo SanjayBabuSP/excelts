@@ -71,7 +71,7 @@ export function createParseState(
   if (headers === true) {
     state.useHeaders = true;
   } else if (Array.isArray(headers)) {
-    const result = processHeaders([], { headers, groupColumnsByName }, null);
+    const result = processHeaders([], { headers: headers as string[], groupColumnsByName }, null);
     if (result) {
       state.headerRow = result.headers;
       state.originalHeaders = result.originalHeaders;

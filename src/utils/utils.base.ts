@@ -103,7 +103,7 @@ export function xmlEncode(text: string): string {
   let lastIndex = 0;
   for (let i = regexResult.index; i < text.length; i++) {
     const charCode = text.charCodeAt(i);
-    let escape: string | null = null;
+    let escape: string;
     switch (charCode) {
       case 34: // "
         escape = "&quot;";

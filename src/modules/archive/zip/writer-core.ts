@@ -477,14 +477,14 @@ export function writeCentralDirectoryAndEocdInto(
       totalDisks: 1
     });
 
-    offset += writeEndOfCentralDirectoryInto(options.out, view, offset, {
+    writeEndOfCentralDirectoryInto(options.out, view, offset, {
       entryCount: UINT16_MAX,
       centralDirSize: UINT32_MAX,
       centralDirOffset: UINT32_MAX,
       comment: options.zipComment
     });
   } else {
-    offset += writeEndOfCentralDirectoryInto(options.out, view, offset, {
+    writeEndOfCentralDirectoryInto(options.out, view, offset, {
       entryCount: entries.length,
       centralDirSize: sizing.centralDirSize,
       centralDirOffset: options.centralDirOffset,

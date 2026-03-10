@@ -27,7 +27,7 @@ class CtrlPropXform extends BaseXform<FormCheckboxModel> {
   }
 
   render(xmlStream: any, model?: FormCheckboxModel): void {
-    const renderModel = model || this.model;
+    const renderModel = (model || this.model)!;
 
     const attrs: Record<string, string> = {
       xmlns: "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",

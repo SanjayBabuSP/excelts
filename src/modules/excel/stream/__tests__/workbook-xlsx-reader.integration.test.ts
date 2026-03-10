@@ -222,16 +222,16 @@ describe("WorkbookReader", () => {
 
       const ws = wb.getWorksheet("fib");
 
-      expect(ws.getCell("A4").value).toEqual({
+      expect(ws!.getCell("A4").value).toEqual({
         formula: "A3+1",
         shareType: "shared",
         ref: "A4:A19",
         result: 4
       });
-      expect(ws.getCell("A5").value).toEqual({ sharedFormula: "A4", result: 5 });
+      expect(ws!.getCell("A5").value).toEqual({ sharedFormula: "A4", result: 5 });
 
-      expect(ws.getCell("A4").type).toBe(ValueType.Formula);
-      expect(ws.getCell("A5").type).toBe(ValueType.Formula);
+      expect(ws!.getCell("A4").type).toBe(ValueType.Formula);
+      expect(ws!.getCell("A5").type).toBe(ValueType.Formula);
     });
   });
 

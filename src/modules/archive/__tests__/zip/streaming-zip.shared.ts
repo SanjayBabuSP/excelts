@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
+import type { ZipEncryptionMethod } from "@archive/crypto";
 import { parseZipExtraFields } from "@archive/zip-spec/zip-extra-fields";
 import { concatUint8Arrays } from "@utils/binary";
 import {
@@ -49,7 +50,7 @@ export interface StreamingZipModuleImports {
       birthTime?: Date;
       timestamps?: ZipTimestampMode;
 
-      encryptionMethod?: string;
+      encryptionMethod?: ZipEncryptionMethod;
       password?: string | Uint8Array;
 
       // Entry metadata / path behavior
@@ -62,7 +63,7 @@ export interface StreamingZipModuleImports {
   ) => {
     name: string;
     level: number;
-    ondata: ((data: Uint8Array, final: boolean) => void) | undefined;
+    ondata: ((data: Uint8Array, final: boolean) => void) | null;
     push(data: Uint8Array, final?: boolean, callback?: (err?: Error | null) => void): Promise<void>;
     isComplete(): boolean;
   };
@@ -85,7 +86,7 @@ export interface StreamingZipModuleImports {
       versionMadeBy?: number;
       extraField?: Uint8Array;
       isEncrypted?: boolean;
-      encryptionMethod?: string;
+      encryptionMethod?: ZipEncryptionMethod;
       aesKeyStrength?: number;
     }>;
     getEntry(path: string):

@@ -22,7 +22,8 @@ import {
   type EntryVars,
   type ParseDriverState,
   type ParseOptions,
-  type ZipExtraFields
+  type ZipExtraFields,
+  type ZipVars
 } from "@archive/unzip/parser-core";
 
 export const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
@@ -215,7 +216,7 @@ export class PullStream<TRead = any> extends Duplex {
     // Only release a deferred write callback when we've drained enough data.
     // This provides bounded buffering while still preventing deadlocks.
     if (typeof this.cb === STR_FUNCTION && this._queue.length <= this._inputLowWaterMarkBytes) {
-      const callback = this.cb;
+      const callback = this.cb as () => void;
       this.cb = undefined;
       callback();
     }
@@ -616,7 +617,6 @@ export function streamUntilValidatedDataDescriptor(
                 if (written > 0) {
                   source.discard(written);
                   bytesEmitted += written;
-                  available -= written;
                   scanner.onConsume(written);
                 }
                 if (waitingDrain) {
@@ -625,7 +625,6 @@ export function streamUntilValidatedDataDescriptor(
               } else {
                 const ok = output.write(source.read(idx));
                 bytesEmitted += idx;
-                available -= idx;
                 scanner.onConsume(idx);
 
                 if (!ok) {
@@ -957,7 +956,16 @@ async function readFileRecord(
   }
 
   // Parse extra fields first so we can use Unicode Path Extra Field for decoding
-  const extra = parseExtraField(extraFieldData, vars);
+  const zipVars: ZipVars = {
+    uncompressedSize: vars.uncompressedSize ?? 0,
+    compressedSize: vars.compressedSize ?? 0
+  };
+  const extra = parseExtraField(extraFieldData, zipVars);
+
+  // Write back ZIP64-corrected sizes so downstream code uses the real values
+  // instead of the 0xFFFFFFFF sentinel for entries > 4GB.
+  vars.uncompressedSize = zipVars.uncompressedSize;
+  vars.compressedSize = zipVars.compressedSize;
 
   const decoder = opts.encoding ? resolveZipStringCodec(opts.encoding) : undefined;
 
@@ -998,7 +1006,15 @@ async function readFileRecord(
     }
   }
 
-  vars.lastModifiedDateTime = resolveZipEntryLastModifiedDateTime(vars, extra);
+  vars.lastModifiedDateTime = resolveZipEntryLastModifiedDateTime(
+    {
+      flags: vars.flags,
+      uncompressedSize: vars.uncompressedSize ?? 0,
+      lastModifiedDate: vars.lastModifiedDate,
+      lastModifiedTime: vars.lastModifiedTime
+    },
+    extra
+  );
 
   entry.vars = vars;
   entry.extraFields = extra;

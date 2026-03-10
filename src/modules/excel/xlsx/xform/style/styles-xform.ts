@@ -37,6 +37,8 @@ interface StyleIndex {
 // StylesXform is used to generate and parse the styles.xml file
 // it manages the collections of fonts, number formats, alignments, etc
 class StylesXform extends BaseXform {
+  declare public map: { [key: string]: any };
+  declare public model: any;
   declare private index?: StyleIndex;
   declare private weakMap?: WeakMap<any, number>;
   declare private _hasCheckboxes?: boolean;
@@ -508,7 +510,7 @@ class StylesXform extends BaseXform {
     index = (this.index!.numFmt as any)[formatCode] = NUMFMT_BASE + this.model.numFmts.length;
     const xml = this.map.numFmt.toXml({ id: index, formatCode });
     this.model.numFmts.push(xml);
-    return index;
+    return index!;
   }
 
   // =========================================================================
@@ -654,7 +656,7 @@ class StylesXformMock extends StylesXform {
       this._dateStyleId = this.model.styles.length;
       this.model.styles.push(dateStyle);
     }
-    return this._dateStyleId;
+    return this._dateStyleId!;
   }
 
   // given a styleId (i.e. s="n"), get the cell's style model

@@ -133,7 +133,7 @@ class CellXform extends BaseXform {
   }
 
   renderFormula(xmlStream, model) {
-    let attrs = null;
+    let attrs: Record<string, any> | null = null;
     switch (model.shareType) {
       case "shared":
         attrs = {

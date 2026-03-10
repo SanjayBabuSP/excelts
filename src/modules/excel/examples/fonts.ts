@@ -12,7 +12,7 @@ workbook.xlsx
       );
       worksheet.eachRow(row => {
         row.eachCell(cell => {
-          if (cell.font.strike) {
+          if (cell.font!.strike) {
             console.log(`Strikethrough: ${cell.value}`);
           }
         });

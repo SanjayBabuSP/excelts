@@ -18,12 +18,12 @@ import {
 // Run Shared Tests
 // =============================================================================
 describe("ZIP Streaming - Browser", () => {
-  const imports: StreamingZipModuleImports = {
+  const imports = {
     Zip,
     ZipDeflate,
     createDeflateStream,
     ZipParser
-  };
+  } as StreamingZipModuleImports;
 
   runStreamingZipTests(imports);
 

@@ -101,7 +101,7 @@ describe("Column", () => {
   });
   it("sets sparse column values", () => {
     const sheet = testUtils.createSheetMock();
-    const values = [];
+    const values: (number | undefined)[] = [];
     values[2] = 2;
     values[3] = 3;
     values[5] = 5;

@@ -887,9 +887,9 @@ describe("Workbook", () => {
 
         const pivot = loadedWorkbook.pivotTables[0];
         expect(pivot.dataFields).toBeDefined();
-        expect(pivot.dataFields.length).toBe(2);
-        expect(pivot.dataFields[0].name).toContain("D");
-        expect(pivot.dataFields[1].name).toContain("E");
+        expect(pivot.dataFields!.length).toBe(2);
+        expect(pivot.dataFields![0].name).toContain("D");
+        expect(pivot.dataFields![1].name).toContain("E");
       });
 
       it("preserves count metric through load/save", async () => {
@@ -1054,7 +1054,7 @@ describe("Workbook", () => {
 
         // Verify the data is preserved
         expect(finalPivot.cacheFields.length).toBeGreaterThan(0);
-        expect(finalPivot.cacheRecords.records.length).toBe(6); // 6 data rows
+        expect(finalPivot.cacheRecords!.records.length).toBe(6); // 6 data rows
 
         // Clean up
         await promisify(fs.unlink)(NON_SEQ_CACHE_FILEPATH);

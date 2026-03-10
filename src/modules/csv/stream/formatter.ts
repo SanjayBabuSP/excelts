@@ -86,7 +86,7 @@ export class CsvFormatterStream extends Transform {
 
     // Deduplicate headers (consistent with batch formatCsv)
     if (this.displayHeaders) {
-      this.displayHeaders = deduplicateHeaders(this.displayHeaders);
+      this.displayHeaders = deduplicateHeaders(this.displayHeaders) as string[];
     }
   }
 
@@ -97,7 +97,7 @@ export class CsvFormatterStream extends Transform {
     const detectedKeys = detectRowKeys(chunk);
     if (detectedKeys.length > 0) {
       this.keys = detectedKeys;
-      this.displayHeaders = deduplicateHeaders(detectedKeys);
+      this.displayHeaders = deduplicateHeaders(detectedKeys) as string[];
     }
   }
 

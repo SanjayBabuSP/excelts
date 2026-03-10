@@ -169,6 +169,8 @@ interface StreamBufOptions {
 // StreamBuf - Cross-Platform Implementation
 // =============================================================================
 
+const nop = () => {};
+
 /**
  * StreamBuf is a multi-purpose read-write stream that works in both
  * Node.js and Browser environments.
@@ -190,7 +192,6 @@ class StreamBuf extends EventEmitter {
   private pipes: any[];
   private _ended: boolean;
   // Native WritableStream support
-  private _writableStream: WritableStream<Uint8Array> | null = null;
   private _writableStreamWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private _asyncWriteQueue: Promise<void> = Promise.resolve();
 
@@ -276,7 +277,6 @@ class StreamBuf extends EventEmitter {
     encoding?: TextEncoding | Function,
     callback?: Function
   ): Promise<boolean> {
-    const nop = () => {};
     if (typeof encoding === "function") {
       callback = encoding;
     }
@@ -319,8 +319,16 @@ class StreamBuf extends EventEmitter {
     } else {
       const chunkBuffer = chunk.toBuffer();
 
-      if (!this.paused) {
+      // Track whether the data has been delivered to a consumer.
+      // When a consumer exists ("data" listeners or a native WritableStream),
+      // the data is consumed externally and must NOT also be accumulated in
+      // internal buffers — otherwise the buffers grow without bound (memory leak)
+      // since no one ever calls read()/toBuffer() to drain them.
+      let consumed = false;
+
+      if (!this.paused && this.listenerCount("data") > 0) {
         this.emit("data", chunkBuffer);
+        consumed = true;
       }
 
       // Also write to native WritableStream if connected
@@ -328,10 +336,16 @@ class StreamBuf extends EventEmitter {
         this._asyncWriteQueue = this._asyncWriteQueue.then(() =>
           this._writableStreamWriter!.write(chunkBuffer)
         );
+        consumed = true;
       }
 
-      this._writeToBuffers(chunk);
-      this.emit("readable");
+      // Only buffer internally when no consumer has received the data.
+      // This keeps StreamBuf working as a memory buffer (write then read/toBuffer)
+      // while preventing unbounded growth when used as an event-driven pass-through.
+      if (!consumed) {
+        this._writeToBuffers(chunk);
+        this.emit("readable");
+      }
     }
 
     return true;
@@ -484,7 +498,6 @@ class StreamBuf extends EventEmitter {
    * This properly handles async writes and waits for completion before finish.
    */
   pipeTo(writableStream: WritableStream<Uint8Array>): void {
-    this._writableStream = writableStream;
     this._writableStreamWriter = writableStream.getWriter();
   }
 

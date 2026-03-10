@@ -40,9 +40,11 @@ class VmlDrawingXform extends BaseXform<VmlDrawingModel> {
    * Render VML drawing containing both notes and form controls
    */
   render(xmlStream: any, model?: VmlDrawingModel): void {
-    const renderModel = model || this.model;
-    const hasComments = renderModel.comments && renderModel.comments.length > 0;
-    const hasFormControls = renderModel.formControls && renderModel.formControls.length > 0;
+    const renderModel = (model || this.model)!;
+    const comments = renderModel.comments;
+    const formControls = renderModel.formControls;
+    const hasComments = comments && comments.length > 0;
+    const hasFormControls = formControls && formControls.length > 0;
 
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, VmlDrawingXform.DRAWING_ATTRIBUTES);
@@ -87,7 +89,6 @@ class VmlDrawingXform extends BaseXform<VmlDrawingModel> {
 
     // Render comment shapes
     if (hasComments) {
-      const comments = renderModel.comments!;
       for (let i = 0; i < comments.length; i++) {
         this.map["v:shape"].render(xmlStream, comments[i], i);
       }
@@ -95,7 +96,7 @@ class VmlDrawingXform extends BaseXform<VmlDrawingModel> {
 
     // Render form control shapes
     if (hasFormControls) {
-      for (const control of renderModel.formControls!) {
+      for (const control of formControls) {
         this._renderCheckboxShape(xmlStream, control);
       }
     }
@@ -219,7 +220,7 @@ class VmlDrawingXform extends BaseXform<VmlDrawingModel> {
   parseClose(name: string): boolean {
     if (this.parser) {
       if (!this.parser.parseClose(name)) {
-        this.model.comments!.push(this.parser.model);
+        this.model!.comments!.push(this.parser.model);
         this.parser = undefined;
       }
       return true;

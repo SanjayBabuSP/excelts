@@ -176,11 +176,11 @@ class Cell {
 
   // help GC by removing cyclic (and other) references
   destroy(): void {
-    delete this.style;
-    delete this._value;
-    delete this._row;
-    delete this._column;
-    delete this._address;
+    this.style = undefined!;
+    this._value = undefined!;
+    this._row = undefined!;
+    this._column = undefined!;
+    this._address = undefined!;
   }
 
   // =========================================================================
@@ -349,12 +349,12 @@ class Cell {
     if (this._value.type !== Cell.Types.Merge) {
       return false;
     }
-    return this._value.isMergedTo(master);
+    return this._value.isMergedTo ? this._value.isMergedTo(master) : false;
   }
 
   get master(): Cell {
     if (this.type === Cell.Types.Merge) {
-      return this._value.master;
+      return this._value.master!;
     }
     return this; // an unmerged cell is its own master
   }
@@ -447,7 +447,7 @@ class Cell {
   }
 
   get formulaType(): FormulaType {
-    return this._value.formulaType;
+    return this._value.formulaType ?? Enums.FormulaType.None;
   }
 
   // =========================================================================
@@ -940,7 +940,7 @@ class MergeValue {
       type: Cell.Types.Merge,
       master: master ? master.address : undefined
     };
-    this._master = master;
+    this._master = master as Cell;
     if (master) {
       master.addMergeRef();
     }
@@ -995,7 +995,7 @@ class MergeValue {
   }
 
   toString(): string {
-    return this.value.toString();
+    return this.value != null ? this.value.toString() : "";
   }
 }
 
@@ -1153,7 +1153,9 @@ class FormulaValue {
       const { worksheet } = this.cell;
       const master = worksheet.findCell(this.model.sharedFormula);
       this._translatedFormula =
-        master && slideFormula(master.formula, master.address, this.model.address);
+        master && master.formula
+          ? slideFormula(master.formula, master.address, this.model.address)
+          : undefined;
     }
     return this._translatedFormula;
   }
@@ -1490,12 +1492,12 @@ const Value = {
     []
   ),
 
-  create(type: number, cell: Cell, value?: CellValueType): ICellValue {
+  create(type: number, cell: Cell, value?: CellValueType | Cell): ICellValue {
     const T = this.types[type];
     if (!T) {
       throw new InvalidValueTypeError(String(type), "Could not create Value");
     }
-    return new T(cell, value);
+    return new T(cell, value as never) as unknown as ICellValue;
   }
 };
 

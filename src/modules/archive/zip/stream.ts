@@ -539,8 +539,8 @@ export class ZipDeflateFile {
     this._finalQueued = false;
   }
 
-  get ondata(): ((data: Uint8Array, final: boolean) => void) | undefined {
-    return this._ondata ?? undefined;
+  get ondata(): ((data: Uint8Array, final: boolean) => void) | null {
+    return this._ondata;
   }
 
   set ondata(cb: (data: Uint8Array, final: boolean) => void) {
@@ -549,8 +549,8 @@ export class ZipDeflateFile {
     this._flushQueue();
   }
 
-  get onerror(): ((err: Error) => void) | undefined {
-    return this._onerror ?? undefined;
+  get onerror(): ((err: Error) => void) | null {
+    return this._onerror;
   }
 
   set onerror(cb: (err: Error) => void) {
