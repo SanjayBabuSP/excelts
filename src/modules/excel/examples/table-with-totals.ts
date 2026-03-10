@@ -10,7 +10,7 @@ const now = Date.now();
 const today = now - (now % 86400000);
 
 const getRows = () => {
-  const rows = [];
+  const rows: (number | Date)[][] = [];
   for (let i = 0; i < 20; i++) {
     rows.push([new Date(today + 86400000 * i), Math.random() * 10]);
   }

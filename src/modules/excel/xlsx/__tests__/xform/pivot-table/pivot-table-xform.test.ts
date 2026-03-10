@@ -196,7 +196,7 @@ describe("PivotTableXform - renderPivotFields", () => {
     });
 
     it("should emit minimal rowItems regardless of unique value count", async () => {
-      const rows = [];
+      const rows: (string | number)[][] = [];
       for (let i = 1; i <= 10; i++) {
         rows.push([`Cat${i}`, i * 10]);
       }

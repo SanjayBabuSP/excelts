@@ -59,6 +59,7 @@ type _NonClass_finished = Assert<
 >;
 
 type _NonClass_createReadable = Assert<
+  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   IsEqualStrict<NodeRuntimeNonClass["createReadable"], BrowserRuntimeNonClass["createReadable"]>
 >;
 
@@ -71,6 +72,7 @@ type _NonClass_createTransform = Assert<
 >;
 
 type _NonClass_createDuplex = Assert<
+  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   IsEqualStrict<NodeRuntimeNonClass["createDuplex"], BrowserRuntimeNonClass["createDuplex"]>
 >;
 

@@ -110,10 +110,10 @@ class VmlClientDataXform extends BaseXform<ClientDataModel> {
       this.map["x:SizeWithCells"].model
     );
     const len = Object.keys(position).length;
-    this.model.editAs = POSITION_TYPE[len];
-    this.model.anchor = this.map["x:Anchor"].text;
-    this.model.protection.locked = this.map["x:Locked"].text;
-    this.model.protection.lockText = this.map["x:LockText"].text;
+    this.model!.editAs = POSITION_TYPE[len];
+    this.model!.anchor = this.map!["x:Anchor"].text;
+    this.model!.protection.locked = this.map!["x:Locked"].text;
+    this.model!.protection.lockText = this.map!["x:LockText"].text;
   }
 }
 

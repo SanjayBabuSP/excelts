@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseCsv, formatCsv, parseCsvStream } from "@csv/csv-core";
+import { parseCsv, formatCsv, parseCsvStream, type Row } from "@csv/csv-core";
 
 describe("CSV Core - RFC 4180 Compliance", () => {
   // ===========================================================================
@@ -1244,9 +1244,9 @@ describe("CSV Core - Parser Options", () => {
       const input = "name,age\nAlice,30\nBob,25";
       const result = parseCsv(input, {
         headers: true,
-        transform: (row: Record<string, string>) => ({
-          ...row,
-          age: String(Number(row.age) * 2)
+        transform: (row: Row) => ({
+          ...(row as Record<string, string>),
+          age: String(Number((row as Record<string, string>).age) * 2)
         })
       }) as any;
 
@@ -1260,11 +1260,12 @@ describe("CSV Core - Parser Options", () => {
       const input = "name,age\nAlice,30\nBob,25\nCharlie,35";
       const result = parseCsv(input, {
         headers: true,
-        transform: (row: Record<string, string>) => {
-          if (Number(row.age) < 30) {
+        transform: (row: Row) => {
+          const r = row as Record<string, string>;
+          if (Number(r.age) < 30) {
             return null;
           }
-          return row;
+          return r;
         }
       }) as any;
 
@@ -1277,7 +1278,7 @@ describe("CSV Core - Parser Options", () => {
     it("should apply sync transform to array rows (no headers)", () => {
       const input = "Alice,30\nBob,25";
       const result = parseCsv(input, {
-        transform: (row: string[]) => [row[0].toUpperCase(), row[1]]
+        transform: (row: Row) => [(row as string[])[0].toUpperCase(), (row as string[])[1]]
       }) as string[][];
 
       expect(result).toEqual([
@@ -1290,7 +1291,7 @@ describe("CSV Core - Parser Options", () => {
       const input = "name,age\nAlice,30\nBob,25\nCharlie,35";
       const result = parseCsv(input, {
         headers: true,
-        validate: (row: Record<string, string>) => Number(row.age) >= 30
+        validate: (row: Row) => Number((row as Record<string, string>).age) >= 30
       }) as any;
 
       expect(result.rows).toEqual([
@@ -1304,9 +1305,10 @@ describe("CSV Core - Parser Options", () => {
       const input = "name,age\nAlice,30\nBob,25";
       const result = parseCsv(input, {
         headers: true,
-        validate: (row: Record<string, string>) => {
-          if (Number(row.age) < 30) {
-            return { isValid: false, reason: `Age ${row.age} is below minimum` };
+        validate: (row: Row) => {
+          const r = row as Record<string, string>;
+          if (Number(r.age) < 30) {
+            return { isValid: false, reason: `Age ${r.age} is below minimum` };
           }
           return { isValid: true };
         }
@@ -1321,7 +1323,7 @@ describe("CSV Core - Parser Options", () => {
     it("should apply sync validate to array rows (no headers)", () => {
       const input = "Alice,30\nBob,25\nCharlie,35";
       const result = parseCsv(input, {
-        validate: (row: string[]) => Number(row[1]) >= 30
+        validate: (row: Row) => Number((row as string[])[1]) >= 30
       }) as any;
 
       expect(result.rows).toEqual([
@@ -1335,11 +1337,11 @@ describe("CSV Core - Parser Options", () => {
       const input = "name,age\nAlice,15\nBob,25";
       const result = parseCsv(input, {
         headers: true,
-        transform: (row: Record<string, string>) => ({
-          ...row,
-          age: String(Number(row.age) * 2)
+        transform: (row: Row) => ({
+          ...(row as Record<string, string>),
+          age: String(Number((row as Record<string, string>).age) * 2)
         }),
-        validate: (row: Record<string, string>) => Number(row.age) >= 30
+        validate: (row: Row) => Number((row as Record<string, string>).age) >= 30
       }) as any;
 
       expect(result.rows).toEqual([
@@ -1352,13 +1354,14 @@ describe("CSV Core - Parser Options", () => {
       const input = "name,age\nAlice,30\n,25\nCharlie,35";
       const result = parseCsv(input, {
         headers: true,
-        transform: (row: Record<string, string>) => {
-          if (!row.name) {
+        transform: (row: Row) => {
+          const r = row as Record<string, string>;
+          if (!r.name) {
             return null;
           }
-          return row;
+          return r;
         },
-        validate: (row: Record<string, string>) => Number(row.age) >= 30
+        validate: (row: Row) => Number((row as Record<string, string>).age) >= 30
       }) as any;
 
       expect(result.rows).toEqual([
@@ -1603,10 +1606,13 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           headers: true,
-          transform: (row: Record<string, string>) => ({
-            ...row,
-            name: row.name.toUpperCase()
-          })
+          transform: (row: Row) => {
+            const r = row as Record<string, string>;
+            return {
+              ...r,
+              name: r.name.toUpperCase()
+            };
+          }
         }
       );
       expect(result).toBe("name,age\nALICE,30\nBOB,25");
@@ -1621,11 +1627,12 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           headers: true,
-          transform: (row: Record<string, string>) => {
-            if (Number(row.age) < 30) {
+          transform: (row: Row) => {
+            const r = row as Record<string, string>;
+            if (Number(r.age) < 30) {
               return null;
             }
-            return row;
+            return r;
           }
         }
       );
@@ -1639,7 +1646,7 @@ describe("CSV Core - Formatter Options", () => {
           ["bob", "25"]
         ],
         {
-          transform: (row: string[]) => [row[0].toUpperCase(), row[1]]
+          transform: (row: Row) => [(row as string[])[0].toUpperCase(), (row as string[])[1]]
         }
       );
       expect(result).toBe("ALICE,30\nBOB,25");
@@ -1653,11 +1660,12 @@ describe("CSV Core - Formatter Options", () => {
           ["Charlie", "35"]
         ],
         {
-          transform: (row: string[]) => {
-            if (Number(row[1]) < 30) {
+          transform: (row: Row) => {
+            const r = row as string[];
+            if (Number(r[1]) < 30) {
               return null;
             }
-            return row;
+            return r;
           }
         }
       );
@@ -1672,7 +1680,7 @@ describe("CSV Core - Formatter Options", () => {
         ],
         {
           headers: ["Name", "Age"],
-          transform: (row: string[]) => [row[0].toUpperCase(), row[1]]
+          transform: (row: Row) => [(row as string[])[0].toUpperCase(), (row as string[])[1]]
         }
       );
       expect(result).toBe("Name,Age\nALICE,30\nBOB,25");

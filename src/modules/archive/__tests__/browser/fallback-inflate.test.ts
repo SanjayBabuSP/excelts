@@ -19,8 +19,8 @@ describe("FallbackInflateRaw", () => {
     const originalDecompressionStream = globalThis.DecompressionStream;
 
     // Simulate an older browser without CompressionStream/DecompressionStream.
-    globalThis.CompressionStream = undefined;
-    globalThis.DecompressionStream = undefined;
+    globalThis.CompressionStream = undefined as any;
+    globalThis.DecompressionStream = undefined as any;
 
     try {
       const chunks: Uint8Array[] = [];

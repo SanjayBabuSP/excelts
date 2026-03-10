@@ -27,7 +27,7 @@ describe("CSV Worksheet - Browser", () => {
     formatWorksheetToCsv,
     createDefaultValueMapper,
     createDefaultWriteMapper
-  } satisfies CsvWorksheetModuleImportsGeneric<InstanceType<typeof Workbook>>;
+  } as CsvWorksheetModuleImportsGeneric<InstanceType<typeof Workbook>>;
 
   runCsvWorksheetTests(imports);
 });

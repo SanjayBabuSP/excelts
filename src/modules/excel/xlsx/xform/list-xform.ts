@@ -88,10 +88,10 @@ class ListXform<TChild = any> extends BaseXform<TChild[]> {
   parseClose(name: string): boolean {
     if (this.parser) {
       if (!this.parser.parseClose(name)) {
-        this.model.push(this.parser.model);
+        this.model!.push(this.parser.model);
         this.parser = undefined;
 
-        if (this.maxItems && this.model.length > this.maxItems) {
+        if (this.maxItems && this.model!.length > this.maxItems) {
           throw new Error(`Max ${this.childXform.tag} count (${this.maxItems}) exceeded`);
         }
       }

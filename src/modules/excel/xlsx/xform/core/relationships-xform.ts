@@ -20,7 +20,7 @@ class RelationshipsXform extends BaseXform {
     xmlStream.openNode("Relationships", RelationshipsXform.RELATIONSHIPS_ATTRIBUTES);
 
     renderModel!.forEach(relationship => {
-      this.map.Relationship.render(xmlStream, relationship);
+      this.map!.Relationship.render(xmlStream, relationship);
     });
 
     xmlStream.closeNode();
@@ -36,7 +36,7 @@ class RelationshipsXform extends BaseXform {
         this.model = [];
         return true;
       default:
-        this.parser = this.map[node.name];
+        this.parser = this.map![node.name];
         if (this.parser) {
           this.parser.parseOpen(node);
           return true;

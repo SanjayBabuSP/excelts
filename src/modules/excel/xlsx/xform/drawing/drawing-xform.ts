@@ -45,7 +45,7 @@ class DrawingXform extends BaseXform<DrawingModel> {
     xmlStream.openXml(XmlStream.StdDocAttributes);
     xmlStream.openNode(this.tag, DrawingXform.DRAWING_ATTRIBUTES);
 
-    renderModel.anchors.forEach(item => {
+    renderModel!.anchors.forEach(item => {
       const anchor = this.map[item.anchorType];
       anchor.render(xmlStream, item);
     });
@@ -84,7 +84,7 @@ class DrawingXform extends BaseXform<DrawingModel> {
   parseClose(name: string): boolean {
     if (this.parser) {
       if (!this.parser.parseClose(name)) {
-        this.model.anchors.push(this.parser.model);
+        this.model!.anchors.push(this.parser.model);
         this.parser = undefined;
       }
       return true;

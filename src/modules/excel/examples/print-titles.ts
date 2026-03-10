@@ -10,7 +10,7 @@ const wb = new Workbook();
 const ws = wb.addWorksheet("blort");
 
 for (let row = 1; row <= 100; row++) {
-  const values = [];
+  const values: string[] = [];
   if (row === 1) {
     values.push("");
     for (let col = 2; col <= 100; col++) {

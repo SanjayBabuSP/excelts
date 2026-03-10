@@ -105,6 +105,7 @@ type _NonClassExport_createCollector = Assert<
   IsEqualStrict<NodeRuntimeNonClass["createCollector"], BrowserRuntimeNonClass["createCollector"]>
 >;
 type _NonClassExport_createDuplex = Assert<
+  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   IsEqualStrict<NodeRuntimeNonClass["createDuplex"], BrowserRuntimeNonClass["createDuplex"]>
 >;
 type _NonClassExport_createEmptyReadable = Assert<
@@ -129,6 +130,7 @@ type _NonClassExport_createPullStream = Assert<
   IsEqualStrict<NodeRuntimeNonClass["createPullStream"], BrowserRuntimeNonClass["createPullStream"]>
 >;
 type _NonClassExport_createReadable = Assert<
+  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   IsEqualStrict<NodeRuntimeNonClass["createReadable"], BrowserRuntimeNonClass["createReadable"]>
 >;
 type _NonClassExport_createReadableFromArray = Assert<
@@ -357,6 +359,7 @@ type _NormalizeWritableParams = Assert<
 >;
 
 type _CreateReadableParams = Assert<
+  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   ParamsEqual<typeof NodeStreams.createReadable, typeof BrowserStreams.createReadable>
 >;
 

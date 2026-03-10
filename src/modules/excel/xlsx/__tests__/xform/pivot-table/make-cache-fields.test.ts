@@ -334,7 +334,7 @@ describe("makeCacheFields", () => {
       const worksheet = workbook.addWorksheet();
 
       // Create 10 columns
-      const columns = [];
+      const columns: { name: string }[] = [];
       for (let i = 1; i <= 10; i++) {
         columns.push({ name: `Col${i}` });
       }

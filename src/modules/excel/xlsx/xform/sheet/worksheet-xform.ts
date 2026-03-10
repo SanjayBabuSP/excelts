@@ -94,6 +94,7 @@ const mergeConditionalFormattings = (model, extModel) => {
 };
 
 class WorkSheetXform extends BaseXform {
+  declare public map: { [key: string]: any };
   declare private ignoreNodes: string[];
   declare public parser: any;
   declare private preImageId: string | undefined;
@@ -184,7 +185,7 @@ class WorkSheetXform extends BaseXform {
     model.mergeCells = options.merges.mergeCells;
 
     // prepare relationships
-    const rels = (model.rels = []);
+    const rels: any[] = (model.rels = []);
 
     function nextRid(r) {
       return `rId${r.length + 1}`;
@@ -266,7 +267,7 @@ class WorkSheetXform extends BaseXform {
       });
     }
 
-    const drawingRelsHash = [];
+    const drawingRelsHash: any[] = [];
     let bookImage;
     model.media.forEach(medium => {
       if (medium.type === "background") {

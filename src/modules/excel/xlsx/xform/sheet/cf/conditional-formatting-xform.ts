@@ -25,7 +25,7 @@ class ConditionalFormattingXform extends CompositeXform {
     model.rules.forEach((rule: any) => {
       if (CfRuleXform.isPrimitive(rule)) {
         rule.ref = model.ref;
-        this.map.cfRule.render(xmlStream, rule);
+        this.map!.cfRule.render(xmlStream, rule);
       }
     });
 
@@ -40,7 +40,7 @@ class ConditionalFormattingXform extends CompositeXform {
   }
 
   onParserClose(name: string, parser: any): void {
-    this.model.rules.push(parser.model);
+    this.model!.rules.push(parser.model);
   }
 }
 

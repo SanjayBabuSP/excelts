@@ -291,11 +291,12 @@ class Table {
     assign(table, "totalsRow", false);
 
     assign(table, "style", {});
-    assign(table.style, "theme", "TableStyleMedium2");
-    assign(table.style, "showFirstColumn", false);
-    assign(table.style, "showLastColumn", false);
-    assign(table.style, "showRowStripes", false);
-    assign(table.style, "showColumnStripes", false);
+    const style = table.style!;
+    assign(style, "theme", "TableStyleMedium2");
+    assign(style, "showFirstColumn", false);
+    assign(style, "showLastColumn", false);
+    assign(style, "showRowStripes", false);
+    assign(style, "showColumnStripes", false);
 
     // Sanitize table name and displayName to comply with OOXML defined name rules.
     // Excel UI rejects invalid names; here we auto-correct to avoid "repair" dialogs.
@@ -351,7 +352,7 @@ class Table {
     };
 
     const { worksheet, table } = this;
-    const { row, col } = table.tl;
+    const { row, col } = table.tl!;
     let count = 0;
     if (table.headerRow) {
       const r = worksheet.getRow(row + count++);
@@ -396,7 +397,7 @@ class Table {
           const formula = this.getFormula(column);
           if (formula) {
             cell.value = {
-              formula: column.totalsRowFormula,
+              formula,
               result: column.totalsRowResult
             };
           } else {
@@ -439,7 +440,7 @@ class Table {
           const formula = this.getFormula(column);
           if (formula) {
             cell.value = {
-              formula: column.totalsRowFormula,
+              formula,
               result: column.totalsRowResult
             };
           }
@@ -610,37 +611,52 @@ class Table {
   }
 
   get theme(): TableStyleProperties["theme"] {
-    return this.table.style.theme;
+    return this.table.style?.theme;
   }
   set theme(value: TableStyleProperties["theme"]) {
+    if (!this.table.style) {
+      this.table.style = {};
+    }
     this.table.style.theme = value;
   }
 
   get showFirstColumn(): boolean | undefined {
-    return this.table.style.showFirstColumn;
+    return this.table.style?.showFirstColumn;
   }
   set showFirstColumn(value: boolean | undefined) {
+    if (!this.table.style) {
+      this.table.style = {};
+    }
     this.table.style.showFirstColumn = value;
   }
 
   get showLastColumn(): boolean | undefined {
-    return this.table.style.showLastColumn;
+    return this.table.style?.showLastColumn;
   }
   set showLastColumn(value: boolean | undefined) {
+    if (!this.table.style) {
+      this.table.style = {};
+    }
     this.table.style.showLastColumn = value;
   }
 
   get showRowStripes(): boolean | undefined {
-    return this.table.style.showRowStripes;
+    return this.table.style?.showRowStripes;
   }
   set showRowStripes(value: boolean | undefined) {
+    if (!this.table.style) {
+      this.table.style = {};
+    }
     this.table.style.showRowStripes = value;
   }
 
   get showColumnStripes(): boolean | undefined {
-    return this.table.style.showColumnStripes;
+    return this.table.style?.showColumnStripes;
   }
   set showColumnStripes(value: boolean | undefined) {
+    if (!this.table.style) {
+      this.table.style = {};
+    }
     this.table.style.showColumnStripes = value;
   }
 }

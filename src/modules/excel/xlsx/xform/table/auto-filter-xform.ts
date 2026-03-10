@@ -73,7 +73,7 @@ class AutoFilterXform extends BaseXform<AutoFilterModel> {
   parseClose(name: string): boolean {
     if (this.parser) {
       if (!this.parser.parseClose(name)) {
-        this.model.columns.push(this.parser.model);
+        this.model!.columns.push(this.parser.model);
         this.parser = undefined;
       }
       return true;

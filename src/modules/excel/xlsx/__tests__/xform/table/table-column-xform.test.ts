@@ -98,9 +98,9 @@ describe("TableColumnXform", () => {
     const model = await listXform.parse(parseSax(stream));
 
     expect(model).toHaveLength(3);
-    expect(model[0].name).toBe("Col1");
-    expect(model[1].name).toBe("Calc");
-    expect(model[1].calculatedColumnFormula).toBe("[Col1]*2");
-    expect(model[2].name).toBe("Col3");
+    expect(model![0].name).toBe("Col1");
+    expect(model![1].name).toBe("Calc");
+    expect(model![1].calculatedColumnFormula).toBe("[Col1]*2");
+    expect(model![2].name).toBe("Col3");
   });
 });

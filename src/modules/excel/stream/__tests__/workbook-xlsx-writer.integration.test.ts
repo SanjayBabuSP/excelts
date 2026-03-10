@@ -60,7 +60,7 @@ describe("WorkbookWriter", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(filename);
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       expect(ws2.getCell("A1").value).toEqual(hyperlink);
     });
 
@@ -98,7 +98,7 @@ describe("WorkbookWriter", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(filename);
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
       for (let i = 0, len = specialValues.length; i < len; i++) {
         const value = specialValues[i];
         expect(ws2.getCell(`A${i + 1}`).value).toBe(value);
@@ -130,7 +130,7 @@ describe("WorkbookWriter", () => {
           return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
         })
         .then(wb2 => {
-          const ws2 = wb2.getWorksheet("Hello");
+          const ws2 = wb2.getWorksheet("Hello")!;
           expect(ws2.getCell("A1").value).toEqual({
             formula: "ROW()+COLUMN()",
             shareType: "shared",
@@ -176,7 +176,7 @@ describe("WorkbookWriter", () => {
           return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
         })
         .then(wb2 => {
-          const ws2 = wb2.getWorksheet("Hello");
+          const ws2 = wb2.getWorksheet("Hello")!;
           expect(ws2.autoFilter).toBe("A1:B1");
         });
     });
@@ -236,7 +236,7 @@ describe("WorkbookWriter", () => {
           return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
         })
         .then(wb2 => {
-          const ws2 = wb2.getWorksheet("blort");
+          const ws2 = wb2.getWorksheet("blort")!;
           ["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"].forEach(address => {
             expect(ws2.getCell(address).value).toBe(address);
           });
@@ -293,7 +293,7 @@ describe("WorkbookWriter", () => {
           return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
         })
         .then(wb2 => {
-          const ws2 = wb2.getWorksheet("Hello");
+          const ws2 = wb2.getWorksheet("Hello")!;
           expect(ws2.getCell("A1").value).toEqual({
             richText: [
               {
@@ -329,7 +329,7 @@ describe("WorkbookWriter", () => {
         })
         .then(wb2 => {
           for (i = 1; i <= numSheets; i++) {
-            const ws2 = wb2.getWorksheet(`sheet${i}`);
+            const ws2 = wb2.getWorksheet(`sheet${i}`)!;
             expect(ws2).toBeTruthy();
             expect(ws2.getCell("A1").value).toBe(i);
           }
@@ -379,7 +379,7 @@ describe("WorkbookWriter", () => {
           return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
         })
         .then(wb2 => {
-          const ws2 = wb2.getWorksheet("blort");
+          const ws2 = wb2.getWorksheet("blort")!;
           expect(ws2.getCell("A1").name).toBe("five");
 
           expect(ws2.getCell("A3").name).toBe("threes");
@@ -409,7 +409,7 @@ describe("WorkbookWriter", () => {
           return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
         })
         .then(wb2 => {
-          const ws2 = wb2.getWorksheet("blort");
+          const ws2 = wb2.getWorksheet("blort")!;
           expect(ws2.getCell("A1").value).toBe(xmlCharacters);
         });
     });
@@ -488,7 +488,7 @@ describe("WorkbookWriter", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-      const ws2 = wb2.getWorksheet("Hello");
+      const ws2 = wb2.getWorksheet("Hello")!;
 
       expect(ws2.getCell("B2").value).toBe(5);
       expect(ws2.getCell("B2").note).toBe("five");
@@ -537,7 +537,7 @@ describe("WorkbookWriter", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-      const ws2 = wb2.getWorksheet("Hello");
+      const ws2 = wb2.getWorksheet("Hello")!;
       expect(ws2.getCell("B2").value).toBe(5);
       expect(ws2.getCell("B2").note).toBe("five");
 
@@ -567,12 +567,12 @@ describe("WorkbookWriter", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-      const ws2 = wb2.getWorksheet("Hello");
+      const ws2 = wb2.getWorksheet("Hello")!;
 
       const backgroundId2 = ws2.getBackgroundImageId();
-      const image = wb2.getImage(backgroundId2);
+      const image = wb2.getImage(backgroundId2!);
       const imageData = await fsReadFileAsync(IMAGE_FILENAME);
-      expect(Buffer.compare(imageData, image.buffer)).toBe(0);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
     });
 
     it("with background image where worksheet is commited in advance", async () => {
@@ -594,12 +594,12 @@ describe("WorkbookWriter", () => {
 
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-      const ws2 = wb2.getWorksheet("Hello");
+      const ws2 = wb2.getWorksheet("Hello")!;
 
       const backgroundId2 = ws2.getBackgroundImageId();
-      const image = wb2.getImage(backgroundId2);
+      const image = wb2.getImage(backgroundId2!);
       const imageData = await fsReadFileAsync(IMAGE_FILENAME);
-      expect(Buffer.compare(imageData, image.buffer)).toBe(0);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
     });
 
     it("with conditional formatting", async () => {
@@ -637,7 +637,7 @@ describe("WorkbookWriter", () => {
       // read generated file and extract saved conditional formatting rule
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-      const ws2 = wb2.getWorksheet(sheet);
+      const ws2 = wb2.getWorksheet(sheet)!;
       const [cf2] = ws2.conditionalFormattings;
 
       // verify that rules from generated file contain styles with valid numFmt

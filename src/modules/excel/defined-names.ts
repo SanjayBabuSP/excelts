@@ -137,7 +137,7 @@ class DefinedNames {
 
   _explore(matrix: CellMatrix, cell: DefinedNameCell): Range {
     cell.mark = false;
-    const { sheetName } = cell;
+    const sheetName = cell.sheetName!; // Always set for cells in defined names
 
     const range = new Range(cell.row, cell.col, cell.row, cell.col, sheetName);
     let x: number;
@@ -145,7 +145,7 @@ class DefinedNames {
 
     // Helper to get cell with proper type
     const getCell = (row: number, col: number): DefinedNameCell | undefined => {
-      return matrix.findCellAt(sheetName!, row, col) as DefinedNameCell | undefined;
+      return matrix.findCellAt(sheetName, row, col) as DefinedNameCell | undefined;
     };
 
     // grow vertical - only one col to worry about
@@ -197,7 +197,7 @@ class DefinedNames {
     });
     const ranges = matrix
       .map((cell: DefinedNameCell) => cell.mark && this._explore(matrix!, cell))
-      .filter(Boolean)
+      .filter((range): range is Range => Boolean(range))
       .map((range: Range) => range.$shortRange);
 
     return {

@@ -6,7 +6,7 @@ const wb = new Workbook();
 const ws = wb.addWorksheet("test sheet");
 
 for (let row = 1; row <= 10; row++) {
-  const values = [];
+  const values: string[] = [];
   if (row === 1) {
     values.push("");
     for (let col = 2; col <= 10; col++) {

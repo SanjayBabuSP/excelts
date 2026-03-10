@@ -29,7 +29,7 @@ interface ParsedColumnModel {
 /** Cell parsing state during XML processing */
 interface CellParseState {
   ref: string;
-  s: number;
+  s?: number;
   t?: string;
   f?: { text: string };
   v?: { text: string };
@@ -359,7 +359,10 @@ class WorksheetReader extends EventEmitter {
 
               case "row":
                 if (row) {
-                  this._dimensions.expandRow(row);
+                  this._dimensions.expandRow({
+                    number: row.number,
+                    dimensions: row.dimensions ?? undefined
+                  });
                   (worksheetEvents ||= []).push({ eventType: "row", value: row });
                 }
                 row = null;

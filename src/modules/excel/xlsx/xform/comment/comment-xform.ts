@@ -41,7 +41,7 @@ class CommentXform extends BaseXform<CommentModel> {
     const renderModel = model || this.model;
 
     xmlStream.openNode("comment", {
-      ref: renderModel.ref,
+      ref: renderModel!.ref,
       authorId: 0
     });
     xmlStream.openNode("text");
@@ -89,7 +89,7 @@ class CommentXform extends BaseXform<CommentModel> {
       case "comment":
         return false;
       case "r":
-        this.model.note.texts.push(this.parser.model);
+        this.model!.note.texts.push(this.parser.model);
         this.parser = undefined;
         return true;
       default:

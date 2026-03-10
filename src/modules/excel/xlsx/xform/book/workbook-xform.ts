@@ -12,6 +12,7 @@ import { WorkbookPivotCacheXform } from "@excel/xlsx/xform/book/workbook-pivot-c
 
 class WorkbookXform extends BaseXform {
   declare public parser: any;
+  declare public map: { [key: string]: any };
 
   constructor() {
     super();

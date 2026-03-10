@@ -29,7 +29,7 @@ async function save() {
     const value = values[index];
 
     stopwatch.start();
-    await ws.protect(password, { spinCount: value });
+    await ws.protect(password, { spinCount: value ?? undefined });
     console.log(`Protection Time [spinCount ${value}]:`, stopwatch.microseconds);
 
     await wb.xlsx.writeFile(`${index + 2}-${filename}`);

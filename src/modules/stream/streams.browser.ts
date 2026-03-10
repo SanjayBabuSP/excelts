@@ -177,7 +177,7 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       this._webStreamMode = true; // Created from external Web Stream
     } else {
       // Create a controllable stream
-      let controller: ReadableStreamDefaultController<T>;
+      let controller!: ReadableStreamDefaultController<T>;
       this._stream = new ReadableStream<T>({
         start: ctrl => {
           controller = ctrl;
@@ -1411,8 +1411,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     } else {
       this._ownsStream = true;
       // Create bound references to instance properties/methods for use in WritableStream callbacks
-      const getWriteFunc = (): typeof this._writeFunc => this._writeFunc;
-      const getFinalFunc = (): typeof this._finalFunc => this._finalFunc;
+      const getWriteFunc = ():
+        | ((chunk: T, encoding: string, callback: (error?: Error | null) => void) => void)
+        | undefined => this._writeFunc;
+      const getFinalFunc = (): ((callback: (error?: Error | null) => void) => void) | undefined =>
+        this._finalFunc;
       const getDefaultEncoding = (): string => this._defaultEncoding;
       const setFinished = (value: boolean): void => {
         this._finished = value;
@@ -2106,7 +2109,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
         chunk
       );
 
-      if (result && typeof result.then === "function") {
+      if (result instanceof Promise) {
         const awaited = await result;
         if (awaited !== undefined) {
           this.push(awaited);
@@ -2115,7 +2118,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       }
 
       if (result !== undefined) {
-        this.push(result);
+        this.push(result as TOutput);
       }
     } catch (err) {
       this._emitErrorOnce(err);
@@ -2173,7 +2176,7 @@ export class Transform<TInput = Uint8Array, TOutput = Uint8Array> extends EventE
       }
 
       const result = (userFlush as () => TOutput | void | Promise<TOutput | void>).call(this);
-      if (result && typeof result.then === "function") {
+      if (result instanceof Promise) {
         const awaited = await result;
         if (awaited !== undefined && awaited !== null) {
           this.push(awaited as TOutput);
@@ -3089,7 +3092,7 @@ export { PullStream, BufferedStream, StringChunk, BufferChunk };
  */
 export function createReadable<T = Uint8Array>(
   options?: ReadableStreamOptions & {
-    read?: (size: number) => void;
+    read?: (this: Readable<T>, size?: number) => void;
     destroy?: (error: Error | null, callback: (error: Error | null) => void) => void;
   }
 ): IReadable<T> {
@@ -3701,15 +3704,19 @@ export function createDuplex<TRead = Uint8Array, TWrite = Uint8Array>(
     writable?: unknown;
     allowHalfOpen?: boolean;
     objectMode?: boolean;
-    read?: (this: any, size: number) => void;
+    read?: (this: Duplex<TRead, TWrite>, size?: number) => void;
     write?: (
-      this: any,
+      this: Duplex<TRead, TWrite>,
       chunk: TWrite,
       encoding: string,
       callback: (error?: Error | null) => void
     ) => void;
-    final?: (this: any, callback: (error?: Error | null) => void) => void;
-    destroy?: (this: any, error: Error | null, callback: (error: Error | null) => void) => void;
+    final?: (this: Duplex<TRead, TWrite>, callback: (error?: Error | null) => void) => void;
+    destroy?: (
+      this: Duplex<TRead, TWrite>,
+      error: Error | null,
+      callback: (error: Error | null) => void
+    ) => void;
   }
 ): IDuplex<TRead, TWrite> {
   const readableObjectMode = options?.readableObjectMode ?? options?.objectMode;
@@ -4266,7 +4273,11 @@ export function duplexPair<T = Uint8Array>(
       stream2.push(chunk);
     }
     stream2.push(null);
-    return originalEnd1(typeof chunk === "function" ? chunk : undefined);
+    if (typeof chunk === "function") {
+      const cb = chunk as () => void;
+      return originalEnd1(cb);
+    }
+    return originalEnd1();
   };
 
   stream2.end = function (chunk?: T | (() => void)): any {
@@ -4274,7 +4285,11 @@ export function duplexPair<T = Uint8Array>(
       stream1.push(chunk);
     }
     stream1.push(null);
-    return originalEnd2(typeof chunk === "function" ? chunk : undefined);
+    if (typeof chunk === "function") {
+      const cb = chunk as () => void;
+      return originalEnd2(cb);
+    }
+    return originalEnd2();
   };
 
   return [stream1, stream2];

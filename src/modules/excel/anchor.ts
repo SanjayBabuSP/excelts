@@ -103,11 +103,8 @@ class Anchor {
   }
 
   get rowHeight(): number {
-    return this.worksheet &&
-      this.worksheet.getRow(this.nativeRow + 1) &&
-      this.worksheet.getRow(this.nativeRow + 1).height
-      ? Math.floor(this.worksheet.getRow(this.nativeRow + 1).height * 10000)
-      : 180000;
+    const height = this.worksheet?.getRow(this.nativeRow + 1)?.height;
+    return height ? Math.floor(height * 10000) : 180000;
   }
 
   get model(): AnchorModel {

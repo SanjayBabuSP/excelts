@@ -64,7 +64,7 @@ describe("xlsx styles roundtrip", () => {
     const wb2 = new Workbook();
     await wb2.xlsx.readFile(filename);
 
-    const ws2 = wb2.getWorksheet("blort");
+    const ws2 = wb2.getWorksheet("blort")!;
     expect(ws2).toBeTruthy();
 
     expect(ws2.getColumn(1).width).toBe(25);
@@ -114,7 +114,7 @@ describe("xlsx styles roundtrip", () => {
     const wb2 = new Workbook();
     await wb2.xlsx.readFile(filename);
 
-    const ws2 = wb2.getWorksheet("Sheet1");
+    const ws2 = wb2.getWorksheet("Sheet1")!;
     expect(ws2).toBeTruthy();
 
     // B1 should retain its bold style

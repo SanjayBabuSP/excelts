@@ -287,7 +287,7 @@ describe("WorksheetWriter", () => {
       const dateValue1 = new Date(1970, 1, 1);
       const dateValue2 = new Date(1965, 1, 7);
       const rows = [, [, 1, "John Doe", , dateValue1], [, 2, "Jane Doe", , dateValue2]];
-      const row3 = [];
+      const row3: any[] = [];
       row3[1] = 3;
       row3[3] = "Sam";
       row3[5] = dateValue1;
@@ -491,7 +491,7 @@ describe("WorksheetWriter", () => {
       const wb2 = new Workbook();
       await wb2.xlsx.load(buffer);
 
-      const ws2 = wb2.getWorksheet("Sheet1");
+      const ws2 = wb2.getWorksheet("Sheet1")!;
 
       // Verify A1 is preserved as string
       expect(ws2.getCell("A1").value).toBe("test");
@@ -541,17 +541,17 @@ describe("WorksheetWriter", () => {
       const wb2 = new Workbook();
       await wb2.xlsx.readFile(testFile);
 
-      const ws2 = wb2.getWorksheet("test");
+      const ws2 = wb2.getWorksheet("test")!;
       expect(ws2).toBeDefined();
 
       // Verify autoFilter is present and correct
       expect(ws2.autoFilter).toBe("A1:C1");
 
       // Verify protection is present with correct options
-      expect(ws2.sheetProtection.sheet).toBe(true);
-      expect(ws2.sheetProtection.formatColumns).toBe(true);
-      expect(ws2.sheetProtection.formatRows).toBe(true);
-      expect(ws2.sheetProtection.autoFilter).toBe(true);
+      expect(ws2.sheetProtection!.sheet).toBe(true);
+      expect(ws2.sheetProtection!.formatColumns).toBe(true);
+      expect(ws2.sheetProtection!.formatRows).toBe(true);
+      expect(ws2.sheetProtection!.autoFilter).toBe(true);
 
       // Verify data is intact
       expect(ws2.getCell("A1").value).toBe("Name");
@@ -588,7 +588,7 @@ describe("WorksheetWriter", () => {
       await checkBook.xlsx.readFile(testFile);
       const checkSheet = checkBook.getWorksheet("data");
       expect(checkSheet).toBeDefined();
-      expect(checkSheet!.sheetProtection.spinCount).toBe(1);
+      expect(checkSheet!.sheetProtection!.spinCount).toBe(1);
     });
   });
 });

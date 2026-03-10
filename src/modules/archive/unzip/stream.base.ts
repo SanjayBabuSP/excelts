@@ -282,7 +282,7 @@ export class PullStream extends Duplex {
 
   protected _maybeReleaseWriteCallback(): void {
     if (typeof this.cb === STR_FUNCTION) {
-      const callback = this.cb;
+      const callback = this.cb as () => void;
       this.cb = undefined;
       callback();
     }
@@ -919,7 +919,6 @@ export function streamUntilValidatedDataDescriptor(
                 if (written > 0) {
                   source.discard(written);
                   bytesEmitted += written;
-                  available -= written;
                   scanner.onConsume(written);
                 }
                 if (waitingDrain) {
@@ -928,7 +927,6 @@ export function streamUntilValidatedDataDescriptor(
               } else {
                 const ok = output.write(source.read(idx));
                 bytesEmitted += idx;
-                available -= idx;
                 scanner.onConsume(idx);
 
                 if (!ok) {
@@ -1423,8 +1421,20 @@ async function readFileRecord(
     }
   }
 
-  const extra = parseExtraField(extraFieldData, vars);
-  vars.lastModifiedDateTime = resolveZipEntryLastModifiedDateTime(vars, extra);
+  const zipVars: ZipVars = {
+    uncompressedSize: vars.uncompressedSize ?? 0,
+    compressedSize: vars.compressedSize ?? 0
+  };
+  const extra = parseExtraField(extraFieldData, zipVars);
+  vars.lastModifiedDateTime = resolveZipEntryLastModifiedDateTime(
+    {
+      flags: vars.flags,
+      uncompressedSize: zipVars.uncompressedSize,
+      lastModifiedDate: vars.lastModifiedDate,
+      lastModifiedTime: vars.lastModifiedTime
+    },
+    extra
+  );
 
   entry.vars = vars;
   entry.extraFields = extra;

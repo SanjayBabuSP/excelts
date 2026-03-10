@@ -31,7 +31,7 @@ resultSheet.columns = [
 // Data generation functions
 function randomName(length) {
   length = length || 5;
-  const text = [];
+  const text: string[] = [];
   const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
   for (let i = 0; i < length; i++) {
@@ -139,7 +139,7 @@ function runTest(options) {
 
 function runTests(options) {
   return function () {
-    const results = [];
+    const results: number[] = [];
     let promise = Promise.resolve();
     for (let pass = 0; pass < passes; pass++) {
       // run each test with a 10 second pause between (to let GC do its stuff)
@@ -162,7 +162,7 @@ function runTests(options) {
     return promise.then(() => {
       const testResult = reduceResults(results);
       const key = options.workbook[0] + options.style[0] + options.str[0];
-      resultSheet.lastRow.getCell(key).value = testResult;
+      resultSheet.lastRow!.getCell(key).value = testResult;
     });
   };
 }
@@ -188,7 +188,7 @@ counts.forEach(count => {
     });
   });
   mainPromise = mainPromise.then(() => {
-    resultSheet.lastRow.commit();
+    resultSheet.lastRow!.commit();
   });
 });
 

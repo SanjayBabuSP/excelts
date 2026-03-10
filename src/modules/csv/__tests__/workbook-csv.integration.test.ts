@@ -10,13 +10,13 @@ describe("Workbook", () => {
       const wb = new Workbook();
       const worksheet = await wb.csv.readFile(csvTestDataPath("date-vs-leading-zeros.csv"));
 
-      expect(worksheet.getCell("A1").value.toString()).toBe(
+      expect(worksheet.getCell("A1").value!.toString()).toBe(
         new Date("2019-11-04T00:00:00").toString()
       );
-      expect(worksheet.getCell("A2").value.toString()).toBe(
+      expect(worksheet.getCell("A2").value!.toString()).toBe(
         new Date("2019-11-04T00:00:00").toString()
       );
-      expect(worksheet.getCell("A3").value.toString()).toBe(
+      expect(worksheet.getCell("A3").value!.toString()).toBe(
         new Date("2019-11-04T10:17:55").toString()
       );
       expect(worksheet.getCell("A4").value).toBe("00210PRG1");

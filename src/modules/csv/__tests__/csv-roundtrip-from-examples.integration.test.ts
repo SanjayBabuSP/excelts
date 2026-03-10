@@ -56,7 +56,7 @@ describe("Workbook", () => {
       const wb2 = new Workbook();
       await wb2.csv.readFile(csvFile, { dateFormats: ["DD/MM/YYYY HH:mm:ss"] });
 
-      const ws2 = wb2.getWorksheet();
+      const ws2 = wb2.getWorksheet()!;
       expect(ws2).toBeTruthy();
 
       expect(ws2.getCell("A2").type).toBe(ValueType.Number);

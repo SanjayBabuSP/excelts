@@ -171,12 +171,12 @@ class Column {
   set key(value: string | undefined) {
     const column = this._key && this._worksheet.getColumnKey(this._key);
     if (column === this) {
-      this._worksheet.deleteColumnKey(this._key);
+      this._worksheet.deleteColumnKey(this._key!);
     }
 
     this._key = value;
     if (value) {
-      this._worksheet.setColumnKey(this._key, this);
+      this._worksheet.setColumnKey(value, this);
     }
   }
 
@@ -207,7 +207,7 @@ class Column {
    */
   get collapsed(): boolean {
     return !!(
-      this._outlineLevel && this._outlineLevel >= this._worksheet.properties.outlineLevelCol
+      this._outlineLevel && this._outlineLevel >= (this._worksheet.properties.outlineLevelCol ?? 0)
     );
   }
 

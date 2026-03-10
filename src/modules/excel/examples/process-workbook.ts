@@ -30,10 +30,10 @@ wb.xlsx
 
     assert(ws, "Expected to find a worksheet called sheet1", "");
 
-    ws.getCell("B1").value = new Date();
-    ws.getCell("B1").numFmt = "hh:mm:ss";
+    ws!.getCell("B1").value = new Date();
+    ws!.getCell("B1").numFmt = "hh:mm:ss";
 
-    ws.addRow([1, "hello"]);
+    ws!.addRow([1, "hello"]);
     return wb.xlsx.writeFile(outputFile);
   })
   .then(() => {
