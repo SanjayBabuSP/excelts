@@ -25,6 +25,98 @@ interface TableModel {
   tableRef?: string;
 }
 
+/**
+ * Maximum length for an Excel defined name (and therefore table name).
+ */
+const MAX_TABLE_NAME_LENGTH = 255;
+
+/**
+ * Matches an A1-style cell reference pattern like A1, Z99, XFD1048576.
+ * Excel rejects table names that match this pattern.
+ */
+const CELL_REF_PATTERN = /^[A-Za-z]{1,3}\d+$/;
+
+/**
+ * Matches an R1C1-style cell reference, e.g. R1C1, R100C200.
+ * Must have at least one digit after R and at least one digit after C
+ * to be considered a cell reference. Bare "RC" is NOT a cell reference.
+ */
+const R1C1_PATTERN = /^[Rr]\d+[Cc]\d+$/;
+
+/**
+ * Single-character names that Excel reserves for row/column navigation.
+ * Per Microsoft docs: "You cannot use the uppercase and lowercase characters
+ * 'C', 'c', 'R', or 'r' as a defined name."
+ */
+const RESERVED_SINGLE_CHARS = new Set(["C", "c", "R", "r"]);
+
+/**
+ * Sanitize a table name to comply with OOXML defined name rules
+ * (ECMA-376, 4th edition, Part 1, §18.5.1.2).
+ *
+ * Rules enforced (per Microsoft documentation):
+ * - First character must be a letter (any script), underscore (_), or backslash (\)
+ * - Subsequent characters may be letters, digits, underscores, or periods (.)
+ * - Backslash is only valid as the first character
+ * - Spaces are replaced with underscores
+ * - Other invalid characters are stripped
+ * - Single-character names "C", "c", "R", "r" are prefixed with _
+ * - Names that look like cell references (e.g. A1, R1C1) are prefixed with _
+ * - Maximum 255 characters
+ * - Empty result falls back to "_Table"
+ *
+ * This library applies these rules automatically so that generated files
+ * always comply with the OOXML schema, avoiding Excel "repair" dialogs.
+ */
+function sanitizeTableName(name: string): string {
+  // Replace all whitespace characters (space, tab, newline, etc.) with underscores
+  let sanitized = name.replace(/\s/g, "_");
+
+  // Preserve a leading backslash (valid only as first character per spec)
+  let leadingBackslash = false;
+  if (sanitized.startsWith("\\")) {
+    leadingBackslash = true;
+    sanitized = sanitized.slice(1);
+  }
+
+  // Strip characters not valid in defined names.
+  // Subsequent characters: Unicode letters, digits, underscore, period.
+  // Backslash is NOT valid in subsequent positions.
+  sanitized = sanitized.replace(/[^\p{L}\p{N}_.]/gu, "");
+
+  // Re-attach leading backslash
+  if (leadingBackslash) {
+    sanitized = `\\${sanitized}`;
+  }
+
+  // Ensure the first character is valid (letter, underscore, or backslash)
+  if (sanitized.length > 0 && !/^[\p{L}_\\]/u.test(sanitized[0])) {
+    sanitized = `_${sanitized}`;
+  }
+
+  // Truncate to max length
+  if (sanitized.length > MAX_TABLE_NAME_LENGTH) {
+    sanitized = sanitized.slice(0, MAX_TABLE_NAME_LENGTH);
+  }
+
+  // Fallback if empty after sanitization
+  if (sanitized.length === 0) {
+    return "_Table";
+  }
+
+  // Avoid reserved single-character names (C, c, R, r)
+  if (sanitized.length === 1 && RESERVED_SINGLE_CHARS.has(sanitized)) {
+    sanitized = `_${sanitized}`;
+  }
+
+  // Avoid names that look like cell references
+  if (CELL_REF_PATTERN.test(sanitized) || R1C1_PATTERN.test(sanitized)) {
+    sanitized = `_${sanitized}`;
+  }
+
+  return sanitized;
+}
+
 interface CacheState {
   ref: string;
   width: number;
@@ -205,11 +297,21 @@ class Table {
     assign(table.style, "showRowStripes", false);
     assign(table.style, "showColumnStripes", false);
 
+    // Sanitize table name and displayName to comply with OOXML defined name rules.
+    // Excel UI rejects invalid names; here we auto-correct to avoid "repair" dialogs.
+    if (table.name) {
+      table.name = sanitizeTableName(table.name);
+    }
+    if (table.displayName) {
+      table.displayName = sanitizeTableName(table.displayName);
+    }
+
     const assert = (test: boolean, message: string) => {
       if (!test) {
         throw new Error(message);
       }
     };
+    assert(!!table.name, "Table must have a name");
     assert(!!table.ref, "Table must have ref");
     assert(!!table.columns, "Table must have column definitions");
     assert(!!table.rows, "Table must have row definitions");
@@ -483,14 +585,14 @@ class Table {
     return this.table.name;
   }
   set name(value: string) {
-    this.table.name = value;
+    this.table.name = sanitizeTableName(value);
   }
 
   get displayName(): string {
     return this.table.displayName || this.table.name;
   }
   set displayName(value: string) {
-    this.table.displayName = value;
+    this.table.displayName = sanitizeTableName(value);
   }
 
   get headerRow(): boolean | undefined {
@@ -543,4 +645,4 @@ class Table {
   }
 }
 
-export { Table, type TableModel };
+export { Table, sanitizeTableName, type TableModel };

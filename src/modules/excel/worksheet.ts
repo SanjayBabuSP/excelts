@@ -1359,7 +1359,8 @@ class Worksheet {
    */
   addTable(model: TableProperties): Table {
     const table = new Table(this, model);
-    this.tables[model.name] = table;
+    // Use table.name (sanitized by Table.validate()) as the key
+    this.tables[table.name] = table;
     return table;
   }
 

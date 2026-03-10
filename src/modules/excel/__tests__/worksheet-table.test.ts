@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { colCache } from "@excel/utils/col-cache";
 import { Workbook } from "../../../index";
 import { extractAll } from "@archive/unzip/extract";
+import { sanitizeTableName } from "@excel/table";
 
 const spliceArray = (a: any[], index: number, count: number, ...rest: any[]) => {
   const clone = [...a];
@@ -335,6 +336,261 @@ describe("Worksheet", () => {
       const ws3: any = wb3.getWorksheet("Data");
       const table3 = ws3.getTable("CalcTable");
       expect(table3.table.columns[1].calculatedColumnFormula).toBe("[Value]*2");
+    });
+  });
+
+  // ========================================================================
+  // sanitizeTableName unit tests
+  // ========================================================================
+  describe("sanitizeTableName", () => {
+    it("returns valid names unchanged", () => {
+      expect(sanitizeTableName("TestTable")).toBe("TestTable");
+      expect(sanitizeTableName("_private")).toBe("_private");
+      expect(sanitizeTableName("Table1")).toBe("Table1");
+      expect(sanitizeTableName("my.table")).toBe("my.table");
+    });
+
+    it("replaces spaces with underscores", () => {
+      expect(sanitizeTableName("test table")).toBe("test_table");
+      expect(sanitizeTableName("my  table  name")).toBe("my__table__name");
+    });
+
+    it("replaces all whitespace characters (tab, newline) with underscores", () => {
+      expect(sanitizeTableName("test\ttable")).toBe("test_table");
+      expect(sanitizeTableName("test\ntable")).toBe("test_table");
+      expect(sanitizeTableName("test\r\ntable")).toBe("test__table");
+    });
+
+    it("strips invalid characters", () => {
+      expect(sanitizeTableName("test@table!")).toBe("testtable");
+      expect(sanitizeTableName("table#1$2%3")).toBe("table123");
+      expect(sanitizeTableName("hello-world")).toBe("helloworld");
+    });
+
+    it("prefixes with underscore when first char is digit", () => {
+      expect(sanitizeTableName("1Table")).toBe("_1Table");
+      expect(sanitizeTableName("123")).toBe("_123");
+    });
+
+    it("prefixes with underscore when first char is period", () => {
+      expect(sanitizeTableName(".table")).toBe("_.table");
+    });
+
+    it("returns _Table for empty string or all-invalid characters", () => {
+      expect(sanitizeTableName("")).toBe("_Table");
+      expect(sanitizeTableName("@#$%^&")).toBe("_Table");
+    });
+
+    it("converts all-spaces to underscores (not empty)", () => {
+      expect(sanitizeTableName("   ")).toBe("___");
+    });
+
+    it("avoids names that look like A1-style cell references", () => {
+      expect(sanitizeTableName("A1")).toBe("_A1");
+      expect(sanitizeTableName("XFD1048576")).toBe("_XFD1048576");
+      expect(sanitizeTableName("Z99")).toBe("_Z99");
+    });
+
+    it("avoids names that look like R1C1-style cell references", () => {
+      expect(sanitizeTableName("R1C1")).toBe("_R1C1");
+      expect(sanitizeTableName("R100C200")).toBe("_R100C200");
+    });
+
+    it("does not reject bare RC as a cell reference", () => {
+      // "RC" is not a valid R1C1 reference (needs digits), so it's a valid name
+      expect(sanitizeTableName("RC")).toBe("RC");
+      expect(sanitizeTableName("Rc")).toBe("Rc");
+    });
+
+    it("prefixes reserved single-character names (C, c, R, r)", () => {
+      expect(sanitizeTableName("C")).toBe("_C");
+      expect(sanitizeTableName("c")).toBe("_c");
+      expect(sanitizeTableName("R")).toBe("_R");
+      expect(sanitizeTableName("r")).toBe("_r");
+    });
+
+    it("allows other single-character names", () => {
+      expect(sanitizeTableName("A")).toBe("A");
+      expect(sanitizeTableName("Z")).toBe("Z");
+      expect(sanitizeTableName("_")).toBe("_");
+    });
+
+    it("preserves leading backslash (valid only as first char)", () => {
+      expect(sanitizeTableName("\\name")).toBe("\\name");
+      expect(sanitizeTableName("\\")).toBe("\\");
+    });
+
+    it("strips backslash in non-first positions", () => {
+      expect(sanitizeTableName("name\\value")).toBe("namevalue");
+      expect(sanitizeTableName("a\\b\\c")).toBe("abc");
+    });
+
+    it("preserves Unicode letters (CJK, etc.)", () => {
+      expect(sanitizeTableName("销售数据")).toBe("销售数据");
+      expect(sanitizeTableName("テーブル1")).toBe("テーブル1");
+      expect(sanitizeTableName("Données")).toBe("Données");
+      expect(sanitizeTableName("表格 测试")).toBe("表格_测试");
+    });
+
+    it("truncates to 255 characters", () => {
+      const long = "A".repeat(300);
+      expect(sanitizeTableName(long)).toHaveLength(255);
+    });
+
+    it("handles the exact reproduction case from issue #91", () => {
+      expect(sanitizeTableName("test table")).toBe("test_table");
+    });
+  });
+
+  // ========================================================================
+  // Issue #91: table names with spaces should be auto-sanitized
+  // ========================================================================
+  describe("table name sanitization integration", () => {
+    it("sanitizes table name with spaces on addTable", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+      const table = ws.addTable({
+        name: "test table",
+        ref: "A1",
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { name: "A", filterButton: true },
+          { name: "B", filterButton: true },
+          { name: "C", filterButton: true }
+        ],
+        rows: [
+          ["test", 2, "a4f"],
+          ["test 2", 1, "a4f"],
+          ["test 3", 6, "a4f"]
+        ]
+      });
+
+      // Name should have been sanitized
+      expect(table.name).toBe("test_table");
+      expect(table.displayName).toBe("test_table");
+
+      // Should be retrievable by sanitized name
+      expect(ws.getTable("test_table")).toBe(table);
+    });
+
+    it("issue #91 reproduction: writeBuffer produces valid OOXML", async () => {
+      const columns = ["A", "B", "C"];
+      const data = [
+        ["test", 2, "a4f"],
+        ["test 2", 1, "a4f"],
+        ["test 3", 6, "a4f"]
+      ];
+
+      const workbook = new Workbook();
+      const sheet = workbook.addWorksheet("test");
+      sheet.addTable({
+        columns: columns.map(i => ({ name: i, filterButton: true })),
+        headerRow: true,
+        name: "test table",
+        ref: "A1",
+        rows: data,
+        totalsRow: false
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+
+      // Verify the table XML has sanitized name
+      const entries = await extractAll(new Uint8Array(buffer));
+      const tableEntry = entries.get("xl/tables/table1.xml");
+      expect(tableEntry).toBeDefined();
+      const tableXml = new TextDecoder().decode(tableEntry!.data);
+
+      // Must NOT contain spaces in name/displayName
+      expect(tableXml).toContain('name="test_table"');
+      expect(tableXml).toContain('displayName="test_table"');
+      expect(tableXml).not.toContain('name="test table"');
+      expect(tableXml).not.toContain('displayName="test table"');
+    });
+
+    it("sanitizes displayName independently when provided", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+      const table = ws.addTable({
+        name: "my table",
+        displayName: "My Display Name",
+        ref: "A1",
+        headerRow: true,
+        totalsRow: false,
+        columns: [{ name: "Col1" }],
+        rows: [["val"]]
+      });
+
+      expect(table.name).toBe("my_table");
+      expect(table.displayName).toBe("My_Display_Name");
+    });
+
+    it("sanitizes name when set via setter", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+      const table = ws.addTable({
+        name: "ValidName",
+        ref: "A1",
+        headerRow: true,
+        totalsRow: false,
+        columns: [{ name: "Col1" }],
+        rows: [["val"]]
+      });
+
+      table.name = "new name with spaces";
+      expect(table.name).toBe("new_name_with_spaces");
+
+      table.displayName = "another display name";
+      expect(table.displayName).toBe("another_display_name");
+    });
+
+    it("sanitized name survives round-trip (write + load)", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+      ws.addTable({
+        name: "my table",
+        ref: "A1",
+        headerRow: true,
+        totalsRow: false,
+        columns: [{ name: "X", filterButton: true }],
+        rows: [["val1"], ["val2"]]
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      const ws2 = wb2.getWorksheet("test")!;
+      const table2 = (ws2 as any).getTable("my_table");
+      expect(table2).toBeDefined();
+      expect(table2.name).toBe("my_table");
+    });
+
+    it("totalsRow formulas use sanitized table name", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+      ws.addTable({
+        name: "sales data",
+        ref: "A1",
+        headerRow: true,
+        totalsRow: true,
+        columns: [
+          { name: "Category", totalsRowLabel: "Total" },
+          { name: "Amount", totalsRowFunction: "sum" }
+        ],
+        rows: [
+          ["A", 10],
+          ["B", 20]
+        ]
+      });
+
+      // The totals row formula cell should reference the sanitized name
+      // Row 1 = header, rows 2-3 = data, row 4 = totals
+      const totalsCell = ws.getCell("B4");
+      expect(totalsCell.value).toBeDefined();
+      const formula = (totalsCell.value as any).formula;
+      expect(formula).toContain("sales_data");
+      expect(formula).not.toContain("sales data");
     });
   });
 });
