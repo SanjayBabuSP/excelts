@@ -91,16 +91,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
-
       - name: Run tests (Bun)
         run: bun run vitest run
-        env:
-          CI: true
-
-      - name: Run browser tests (Bun)
-        run: bun run vitest run --config vitest.browser.config.ts
         env:
           CI: true
 
