@@ -329,4 +329,64 @@ describe("Browser-Specific True Streaming", () => {
       expect(totalDecompressed).toBe(testData.length);
     });
   });
+
+  describe("Streaming memory behavior (browser)", () => {
+    it("should not accumulate memory during streaming writes", async () => {
+      const chunks: Uint8Array[] = [];
+      const output = new WritableStream<Uint8Array>({
+        write(chunk) {
+          chunks.push(chunk);
+        }
+      });
+
+      const workbook = new WorkbookWriter({
+        stream: output,
+        useSharedStrings: false,
+        trueStreaming: true
+      });
+      const worksheet = workbook.addWorksheet("Sheet 1");
+
+      const cellValue = "abcdefghij".repeat(40); // 400 chars
+
+      // Warm up — stabilize JIT, GC, and internal structures
+      for (let i = 0; i < 1000; i++) {
+        const row = worksheet.getRow(i + 1);
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).value = cellValue;
+        }
+        row.commit();
+      }
+
+      // Yield to let browser GC settle
+      await new Promise(r => setTimeout(r, 100));
+      const perfMem = (performance as any).memory;
+      const baselineHeap = perfMem ? perfMem.usedJSHeapSize : 0;
+
+      // Steady-state — write 4000 more rows
+      for (let i = 1000; i < 5000; i++) {
+        const row = worksheet.getRow(i + 1);
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).value = cellValue;
+        }
+        row.commit();
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+      const finalHeap = perfMem ? perfMem.usedJSHeapSize : 0;
+
+      await workbook.commit();
+
+      const totalBytes = chunks.reduce((sum, c) => sum + c.length, 0);
+      expect(totalBytes).toBeGreaterThan(0);
+
+      // Memory assertion (Chrome only — performance.memory)
+      if (baselineHeap > 0 && finalHeap > 0) {
+        const growthMB = (finalHeap - baselineHeap) / 1024 / 1024;
+        // 4000 rows × 9 cells × 400 chars should not cause significant growth.
+        // Before the fix this would accumulate ~60MB+ in push chain closures.
+        // With the fix, growth should be well under 50MB.
+        expect(growthMB).toBeLessThan(50);
+      }
+    }, 30000);
+  });
 });

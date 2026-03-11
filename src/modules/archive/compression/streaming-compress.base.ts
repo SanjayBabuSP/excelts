@@ -72,3 +72,22 @@ export interface StreamingCodec {
 
 export type DeflateStream = StreamingCodec;
 export type InflateStream = StreamingCodec;
+
+/**
+ * Stateful synchronous DEFLATE compressor interface.
+ *
+ * Unlike one-shot `compressSync`, this maintains compression state across
+ * multiple `write()` calls (LZ77 window, bit position) to produce a single
+ * valid DEFLATE stream. Used by the streaming ZIP writer (`pushSync`) to
+ * achieve constant-memory streaming.
+ *
+ * Platform implementations:
+ * - **Node.js**: wraps `zlib.deflateRawSync` with `Z_SYNC_FLUSH` per chunk.
+ * - **Browser**: pure-JS LZ77 + fixed Huffman with a sliding window.
+ */
+export interface SyncDeflaterLike {
+  /** Compress a chunk. Returns compressed bytes (may be empty if buffered). */
+  write(data: Uint8Array): Uint8Array;
+  /** Finalize the stream. Returns remaining bytes including the final block. */
+  finish(): Uint8Array;
+}

@@ -11,7 +11,11 @@
  */
 
 import { EventEmitter } from "@utils/event-emitter";
-import { deflateRawCompressed, inflateRaw } from "@archive/compression/deflate-fallback";
+import {
+  deflateRawCompressed,
+  inflateRaw,
+  SyncDeflater as PureJsSyncDeflater
+} from "@archive/compression/deflate-fallback";
 import {
   hasDeflateRawWebStreams,
   hasGzipCompressionStream,
@@ -32,7 +36,8 @@ export type {
   DeflateStream,
   InflateStream,
   StreamingCodec,
-  StreamCompressOptions
+  StreamCompressOptions,
+  SyncDeflaterLike
 } from "@archive/compression/streaming-compress.base";
 import {
   toError,
@@ -435,3 +440,14 @@ export function createZlibStream(options: StreamCompressOptions = {}): ZlibStrea
 export function createUnzlibStream(options: StreamCompressOptions = {}): UnzlibStream {
   return createWrappedStream(ZLIB_CONFIG, false, options);
 }
+
+// =============================================================================
+// Synchronous stateful deflater (Browser — pure JS)
+// =============================================================================
+
+/**
+ * Browser synchronous deflater — re-exports the pure-JS `SyncDeflater`
+ * from deflate-fallback.ts which maintains a LZ77 sliding window and
+ * bit-stream state across `write()` calls.
+ */
+export { PureJsSyncDeflater as SyncDeflater };

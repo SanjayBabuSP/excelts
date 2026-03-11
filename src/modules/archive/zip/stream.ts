@@ -6,8 +6,8 @@
  * - In browser builds the bundler aliases those imports to their browser variants.
  */
 
-import { crc32Update, crc32Finalize } from "@archive/compression/crc32";
-import { createDeflateStream } from "@archive/compression/streaming-compress";
+import { crc32Update, crc32Finalize, ensureZlibSync } from "@archive/compression/crc32";
+import { createDeflateStream, SyncDeflater } from "@archive/compression/streaming-compress";
 import {
   zipCryptoInitKeys,
   zipCryptoCreateHeader,
@@ -124,6 +124,10 @@ export class ZipDeflateFile {
 
   // Serialize push() calls so callers don't need to await to preserve ordering.
   private _pushChain: Promise<void> = Promise.resolve();
+
+  // Synchronous compression state for pushSync() path.
+  private _syncDeflater: SyncDeflater | null = null;
+  private _syncZlibReady = false;
 
   readonly name: string;
   readonly level: number;
@@ -457,7 +461,11 @@ export class ZipDeflateFile {
     return final || this._sampleLen >= SMART_STORE_DECIDE_BYTES;
   }
 
-  private _decideCompressionIfNeeded(final: boolean, dataForDecision: Uint8Array): void {
+  private _decideCompressionIfNeeded(
+    final: boolean,
+    dataForDecision: Uint8Array,
+    skipDeflateInit = false
+  ): void {
     if (this._deflateWanted !== null) {
       return;
     }
@@ -492,7 +500,9 @@ export class ZipDeflateFile {
     this._localHeader = null;
 
     if (this._deflateWanted) {
-      this._initDeflateStream();
+      if (!skipDeflateInit) {
+        this._initDeflateStream();
+      }
     }
   }
 
@@ -601,6 +611,63 @@ export class ZipDeflateFile {
       return;
     }
     promise.then(() => callback()).catch(err => callback(err));
+  }
+
+  private _writeDataSync(data: Uint8Array, final: boolean): void {
+    if (data.length === 0 && !final) {
+      return;
+    }
+
+    // Update CRC32 on uncompressed data
+    if (data.length > 0) {
+      this._crc = crc32Update(this._crc, data);
+      this._uncompressedSize += data.length;
+    }
+
+    if (this._deflateWanted) {
+      // Stateful synchronous compression — maintains LZ77 window and bit position
+      // across chunks so the output is a single valid DEFLATE stream.
+      if (!this._syncDeflater) {
+        this._syncDeflater = new SyncDeflater();
+      }
+      if (data.length > 0) {
+        const compressed = this._syncDeflater.write(data);
+        if (compressed.length > 0) {
+          this._compressedSize += compressed.length;
+          this._enqueueData(compressed, false);
+        }
+      }
+      if (final) {
+        const tail = this._syncDeflater.finish();
+        if (tail.length > 0) {
+          this._compressedSize += tail.length;
+          this._enqueueData(tail, false);
+        }
+        this._syncDeflater = null;
+      }
+      return;
+    }
+
+    // STORE mode - handle encryption
+    if (this._aesKeyStrength) {
+      this._aesBuffer.push(data);
+      this._aesBufferSize += data.length;
+      return;
+    }
+
+    if (this._encryptionMethod === "zipcrypto") {
+      this._initZipCryptoEncryption();
+      const encrypted = this._zipCryptoEncryptChunk(data);
+      this._compressedSize += encrypted.length;
+      this._enqueueData(encrypted, false);
+      return;
+    }
+
+    // STORE mode without encryption - pass through
+    if (data.length > 0) {
+      this._compressedSize += data.length;
+      this._enqueueData(data, false);
+    }
   }
 
   private _writeData(data: Uint8Array): Promise<void> {
@@ -743,11 +810,28 @@ export class ZipDeflateFile {
   }
 
   /**
-   * Push data - immediately compresses and outputs
+   * Push data — compresses and outputs immediately.
+   *
    * Returns a Promise that resolves when the write is complete.
    * If final=true, it resolves after the data descriptor is emitted.
+   *
+   * When no async deflate stream is needed (the common case: smartStore without
+   * encryption), data is compressed and emitted synchronously via SyncDeflater.
+   * This avoids _pushChain closure accumulation that would cause unbounded
+   * memory growth when callers push data in a tight synchronous loop.
    */
   push(data: Uint8Array, final = false, callback?: (err?: Error | null) => void): Promise<void> {
+    if (!this._deflate && this._encryptionMethod === "none") {
+      try {
+        this._pushSyncPath(data, final);
+        callback?.();
+      } catch (err) {
+        callback?.(err instanceof Error ? err : new Error(String(err)));
+        return Promise.reject(err);
+      }
+      return Promise.resolve();
+    }
+
     const promise = (this._pushChain = this._pushChain.then(() =>
       this._pushUnchained(data, final, callback)
     ));
@@ -755,6 +839,88 @@ export class ZipDeflateFile {
     // Prevent unhandled rejection when callers intentionally ignore the Promise.
     promise.catch(() => {});
     return promise;
+  }
+
+  /**
+   * Synchronous push path — compresses and emits data without any Promises.
+   *
+   * Uses SyncDeflater (native zlib.deflateRawSync on Node.js, pure-JS LZ77 on
+   * browsers) so the entire data flow is synchronous:
+   *   push → _writeDataSync → SyncDeflater.write → _enqueueData → ondata
+   *
+   * Called automatically by push() when no async deflate stream is active.
+   */
+  private _pushSyncPath(data: Uint8Array, final = false): void {
+    if (this._finalized) {
+      throw new Error("Cannot push to finalized ZipDeflateFile");
+    }
+
+    // Ensure native CRC32 is available before the first _writeDataSync call.
+    // Without this, the JS fallback is ~60x slower.
+    if (!this._syncZlibReady) {
+      ensureZlibSync();
+      this._syncZlibReady = true;
+    }
+
+    if (this._deflateWanted === null) {
+      this._accumulateSampleLen(data);
+
+      if (!this._shouldDecide(final)) {
+        if (data.length > 0) {
+          this._pendingChunks.push(data);
+        }
+        return;
+      }
+
+      this._decideCompressionIfNeeded(final, data, true);
+      this._emitHeaderIfNeeded();
+
+      // Flush pending chunks synchronously
+      for (const chunk of this._pendingChunks) {
+        this._writeDataSync(chunk, false);
+      }
+      this._pendingChunks.length = 0;
+
+      if (data.length > 0) {
+        this._writeDataSync(data, final);
+      }
+
+      if (final) {
+        this._finalizeSyncAfterWrite();
+      }
+      return;
+    }
+
+    this._emitHeaderIfNeeded();
+
+    this._writeDataSync(data, final);
+
+    if (final) {
+      this._finalizeSyncAfterWrite();
+    }
+  }
+
+  private _finalizeSyncAfterWrite(): void {
+    this._finalized = true;
+    this._pendingEnd = false;
+    this._emittedDataDescriptor = true;
+
+    // AES encryption requires async crypto — not supported for sync path
+    if (this._aesKeyStrength && this._aesBufferSize > 0) {
+      throw new Error("AES encryption is not supported with synchronous push");
+    }
+
+    // Finalize the sync deflater if it has pending data
+    if (this._syncDeflater) {
+      const tail = this._syncDeflater.finish();
+      if (tail.length > 0) {
+        this._compressedSize += tail.length;
+        this._enqueueData(tail, false);
+      }
+      this._syncDeflater = null;
+    }
+
+    this._emitDataDescriptor();
   }
 
   /**

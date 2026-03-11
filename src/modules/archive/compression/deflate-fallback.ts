@@ -525,6 +525,28 @@ class BitWriter {
     this.chunks.push(new Uint8Array(this.buffer));
     return concatUint8Arrays(this.chunks);
   }
+
+  /**
+   * Return all fully completed bytes, leaving the partial byte intact.
+   * Used by SyncDeflater.write() to emit output between blocks while
+   * preserving the bit-stream state for the next block.
+   */
+  flushBytes(): Uint8Array {
+    if (this.chunks.length === 0 && this.buffer.length === 0) {
+      return new Uint8Array(0);
+    }
+
+    let result: Uint8Array;
+    if (this.chunks.length === 0) {
+      result = new Uint8Array(this.buffer);
+    } else {
+      this.chunks.push(new Uint8Array(this.buffer));
+      result = concatUint8Arrays(this.chunks);
+      this.chunks = [];
+    }
+    this.buffer = [];
+    return result;
+  }
 }
 
 // Fixed Huffman code tables
@@ -642,5 +664,134 @@ function writeDistanceCode(output: BitWriter, distance: number): void {
   output.writeBitsReverse(code, 5);
   if (extraBits > 0) {
     output.writeBits(extraValue, extraBits);
+  }
+}
+
+// ============================================================================
+// Stateful Streaming Deflater
+// ============================================================================
+
+/** Maximum LZ77 sliding window size (32 KB per RFC 1951). */
+const WINDOW_SIZE = 32768;
+
+/**
+ * Stateful synchronous DEFLATE compressor.
+ *
+ * Unlike `deflateRawCompressed` (which is a one-shot function), this class
+ * maintains state across multiple `write()` calls:
+ *
+ *  - **LZ77 sliding window**: back-references can span across chunks.
+ *  - **Hash table**: match positions persist across chunks.
+ *  - **Bit writer**: bit position is preserved, so consecutive blocks form
+ *    a single valid DEFLATE bit-stream without alignment issues.
+ *
+ * Each `write()` emits one non-final fixed-Huffman block (BFINAL=0).
+ * `finish()` emits a final empty block (BFINAL=1) and returns the tail bytes.
+ *
+ * This is the pure-JS equivalent of Node.js `zlib.deflateRawSync` with
+ * `Z_SYNC_FLUSH`, used by the streaming ZIP writer (`pushSync`) to achieve
+ * constant-memory streaming in both Node.js and browsers.
+ */
+export class SyncDeflater {
+  private _output = new BitWriter();
+  private _hashTable = new Map<number, number>();
+
+  /** Sliding window: the last WINDOW_SIZE bytes of uncompressed data. */
+  private _window = new Uint8Array(WINDOW_SIZE);
+  /** Number of valid bytes currently in the window. */
+  private _windowLen = 0;
+  /** Total bytes written so far (monotonically increasing; used for hash offsets). */
+  private _totalIn = 0;
+
+  /**
+   * Compress a chunk and return the compressed bytes produced so far.
+   * The output is a valid prefix of a DEFLATE stream (one or more non-final blocks).
+   */
+  write(data: Uint8Array): Uint8Array {
+    if (data.length === 0) {
+      return new Uint8Array(0);
+    }
+
+    const out = this._output;
+
+    // Start a non-final fixed-Huffman block
+    out.writeBits(0, 1); // BFINAL = 0
+    out.writeBits(1, 2); // BTYPE  = 01 (fixed Huffman)
+
+    const window = this._window;
+    let wLen = this._windowLen;
+    const hashTable = this._hashTable;
+    const totalIn = this._totalIn;
+
+    for (let pos = 0; pos < data.length; ) {
+      let bestLen = 0;
+      let bestDist = 0;
+
+      if (pos + 2 < data.length) {
+        const h = (data[pos] << 16) | (data[pos + 1] << 8) | data[pos + 2];
+        const matchGlobalPos = hashTable.get(h);
+
+        if (matchGlobalPos !== undefined) {
+          const dist = totalIn + pos - matchGlobalPos;
+          if (dist > 0 && dist <= WINDOW_SIZE) {
+            // Match candidate — scan in the sliding window
+            const wStart = (((wLen - dist) % WINDOW_SIZE) + WINDOW_SIZE) % WINDOW_SIZE;
+            const maxLen = Math.min(258, data.length - pos);
+            let len = 0;
+            while (len < maxLen) {
+              const wByte = window[(wStart + len) % WINDOW_SIZE];
+              if (wByte !== data[pos + len]) {
+                break;
+              }
+              len++;
+            }
+            if (len >= 3) {
+              bestLen = len;
+              bestDist = dist;
+            }
+          }
+        }
+
+        hashTable.set(h, totalIn + pos);
+      }
+
+      if (bestLen >= 3) {
+        writeLengthCode(out, bestLen);
+        writeDistanceCode(out, bestDist);
+        // Advance window
+        for (let i = 0; i < bestLen; i++) {
+          window[wLen % WINDOW_SIZE] = data[pos + i];
+          wLen++;
+        }
+        pos += bestLen;
+      } else {
+        writeLiteralCode(out, data[pos]);
+        window[wLen % WINDOW_SIZE] = data[pos];
+        wLen++;
+        pos++;
+      }
+    }
+
+    // End-of-block symbol
+    writeLiteralCode(out, 256);
+
+    this._windowLen = wLen;
+    this._totalIn = totalIn + data.length;
+
+    // Flush completed bytes from the bit writer
+    return out.flushBytes();
+  }
+
+  /**
+   * Finalize the DEFLATE stream. Emits a final empty fixed-Huffman block
+   * and returns any remaining bytes (including partial-byte padding).
+   */
+  finish(): Uint8Array {
+    const out = this._output;
+    // Final block: BFINAL=1, BTYPE=01, immediately followed by EOB (symbol 256)
+    out.writeBits(1, 1); // BFINAL = 1
+    out.writeBits(1, 2); // BTYPE  = 01
+    writeLiteralCode(out, 256);
+    return out.finish();
   }
 }

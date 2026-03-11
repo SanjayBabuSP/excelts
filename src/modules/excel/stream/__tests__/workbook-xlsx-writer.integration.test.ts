@@ -732,5 +732,91 @@ describe("WorkbookWriter", () => {
       expect(ws.rowCount).toBe(100);
       expect(ws.getCell("A1").value).toBe(largeCellValue);
     }, 30000);
+
+    it("maintains constant memory during streaming with large row count (#88)", async () => {
+      const { PassThrough } = await import("@stream");
+      const output = new PassThrough();
+      const chunks: Uint8Array[] = [];
+      output.on("data", (chunk: Uint8Array) => chunks.push(chunk));
+
+      const workbook = new WorkbookWriter({
+        stream: output,
+        useSharedStrings: false,
+        trueStreaming: true
+      });
+      const worksheet = workbook.addWorksheet("Sheet 1");
+
+      const bigValue = "abcdefghij".repeat(40); // 400 chars per cell
+
+      // Warm up — write initial rows to stabilize JIT, GC, and internal structures
+      for (let i = 0; i < 2000; i++) {
+        const row = worksheet.getRow(i + 1);
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).value = bigValue;
+        }
+        row.commit();
+      }
+      if (global.gc) {
+        global.gc();
+      }
+      const baselineRSS = process.memoryUsage().rss;
+
+      // Steady-state — write many more rows
+      for (let i = 2000; i < 20_000; i++) {
+        const row = worksheet.getRow(i + 1);
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).value = bigValue;
+        }
+        row.commit();
+      }
+      if (global.gc) {
+        global.gc();
+      }
+      const finalRSS = process.memoryUsage().rss;
+      const growthMB = (finalRSS - baselineRSS) / 1024 / 1024;
+
+      await workbook.commit();
+
+      // Verify the file is valid by reading it back
+      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+      expect(totalLength).toBeGreaterThan(0);
+
+      const xlsxBuffer = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        xlsxBuffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const readBack = new Workbook();
+      await readBack.xlsx.load(xlsxBuffer);
+      const ws = readBack.getWorksheet("Sheet 1");
+      expect(ws!.rowCount).toBe(20_000);
+      expect(ws!.getCell("A1").value).toBe(bigValue);
+      expect(ws!.getCell("I20000").value).toBe(bigValue);
+
+      // Memory assertion: 18K rows × 9 cells × 400 chars should NOT cause
+      // significant memory growth when streaming. Before the fix, this would
+      // accumulate ~300MB+ in push chain closures. With the fix, growth should
+      // be minimal (< 100MB allows for GC timing, V8 overhead, and output buffer).
+      expect(growthMB).toBeLessThan(100);
+    }, 30000);
+
+    it("correctly handles small worksheets via pushSync smart-store path (#88)", async () => {
+      // Small worksheets (< 16KB total) exercise the smart-store sampling path
+      // in pushSync where data is buffered in _pendingChunks before compression
+      // mode is decided. This verifies the sampling → decision → flush cycle.
+      const ws = await writeAndReadBack({ trueStreaming: true }, worksheet => {
+        for (let i = 0; i < 5; i++) {
+          const row = worksheet.getRow(i + 1);
+          row.getCell(1).value = "tiny";
+          row.commit();
+        }
+      });
+
+      expect(ws.rowCount).toBe(5);
+      expect(ws.getCell("A1").value).toBe("tiny");
+      expect(ws.getCell("A5").value).toBe("tiny");
+    });
   });
 });

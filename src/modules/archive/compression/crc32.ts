@@ -41,6 +41,24 @@ function ensureZlibLoading(): void {
 }
 
 /**
+ * Synchronously ensure zlib is loaded for Node.js.
+ * Used by the sync deflate path where the async dynamic import may not have
+ * resolved yet. Falls back to `require()` which is synchronous in Node.js.
+ */
+export function ensureZlibSync(): void {
+  if (_zlib || !isNode()) {
+    return;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _zlib = require("zlib") as typeof zlibType;
+    _zlibInitStarted = true;
+  } catch {
+    // Bundler or non-Node environment — JS fallback will be used
+  }
+}
+
+/**
  * Calculate CRC32 checksum for the given data
  * Uses native zlib.crc32 in Node.js for ~100x better performance
  *

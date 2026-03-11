@@ -145,7 +145,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
   commentRefs: CommentRef[];
   zip: Zip;
   stream: OutputStreamLike;
-  promise: Promise<void[]>;
+  promise: Promise<void[] | void>;
   protected _trueStreaming: boolean;
   protected WorksheetWriterClass: WorksheetWriterConstructor<TWorksheetWriter>;
 
@@ -201,8 +201,11 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     // Setup output stream
     this.stream = this._createOutputStream(options);
 
-    // Add initial files
-    this.promise = Promise.all([this.addThemes(), this.addOfficeRels()]);
+    // Theme and office rels are deferred to commit() so that worksheet files
+    // are added to the ZIP first. This ensures StreamingZip sets ondata on
+    // the worksheet immediately, allowing pushSync to flow data through
+    // without accumulating in _dataQueue.
+    this.promise = Promise.resolve();
   }
 
   /**
@@ -277,6 +280,8 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     await this._commitWorksheets();
     await this.addMedia();
     await Promise.all([
+      this.addThemes(),
+      this.addOfficeRels(),
       this.addContentTypes(),
       this.addApp(),
       this.addCore(),
