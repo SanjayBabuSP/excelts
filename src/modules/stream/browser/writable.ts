@@ -175,9 +175,16 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       if (options?.write) {
         this._writeFunc = options.write.bind(this);
       }
-      // Store user-provided final function
+      // Store user-provided final function (option takes precedence over prototype)
       if (options?.final) {
         this._finalFunc = options.final.bind(this);
+      } else {
+        // Node.js: detect subclass _final on the prototype chain, matching
+        // the pattern used for _write / _writev detection.
+        const subclassFinal = this._getSubclassFinal();
+        if (subclassFinal) {
+          this._finalFunc = subclassFinal;
+        }
       }
 
       // Store user-provided destroy function
@@ -234,6 +241,26 @@ export class Writable<T = Uint8Array> extends EventEmitter {
               }
             },
             close: async () => {
+              // Node.js: _final is called before finish is emitted.
+              // When using the Web WritableStream path (no direct-write mode),
+              // we must still honour a subclass _final if it was detected.
+              if (this._finalFunc) {
+                const finalErr = await new Promise<Error | null>(resolve => {
+                  this._finalFunc!((err?: Error | null) => {
+                    resolve(err ?? null);
+                  });
+                });
+                if (finalErr) {
+                  // Node.js: _final error → emit error, do NOT emit finish.
+                  this._errored = finalErr;
+                  this._errorEmitted = true;
+                  this.emit("error", finalErr);
+                  if (this._autoDestroy) {
+                    this.destroy(finalErr);
+                  }
+                  return;
+                }
+              }
               this._finished = true;
               this.emit("finish");
               if (this._autoDestroy) {
@@ -319,6 +346,23 @@ export class Writable<T = Uint8Array> extends EventEmitter {
     while (proto && proto !== Writable.prototype && proto !== Object.prototype) {
       if (Object.prototype.hasOwnProperty.call(proto, "_write")) {
         return (proto._write as Function).bind(this);
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+    return null;
+  }
+
+  /**
+   * Detect subclass _final on the prototype and return a bound function.
+   * Returns null if no subclass _final is found.
+   * Matches Node.js behavior where a subclass can define _final() on its
+   * prototype and have it called during the end() sequence.
+   */
+  private _getSubclassFinal(): ((callback: (error?: Error | null) => void) => void) | null {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Writable.prototype && proto !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(proto, "_final")) {
+        return (proto._final as Function).bind(this);
       }
       proto = Object.getPrototypeOf(proto);
     }
@@ -524,6 +568,11 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       if (!this._errored) {
         this._errored = err;
       }
+      // Node.js: callback is deferred via process.nextTick, not called synchronously.
+      // The callback fires BEFORE the error event (both deferred).
+      if (cb) {
+        deferTask(() => cb(err));
+      }
       // Node.js: only emit 'error' for write-after-end when NOT destroyed,
       // and only emit once. Setting _errorEmitted here is intentional — a stream
       // should only ever emit one 'error' event (including from later destroy()).
@@ -531,7 +580,6 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         this._errorEmitted = true;
         deferTask(() => this.emit("error", err));
       }
-      cb?.(err);
       return false;
     }
 
@@ -628,6 +676,12 @@ export class Writable<T = Uint8Array> extends EventEmitter {
       // Guard against user code calling the callback more than once.
       // Node.js has a similar guard in `onwrite()` (lib/internal/streams/writable.js).
       let cbCalled = false;
+      // Track whether the callback is invoked synchronously (before _writeFunc
+      // returns).  Node.js defers error emission and the write callback via
+      // process.nextTick when the callback fires synchronously; when it fires
+      // asynchronously (e.g. in a setTimeout / Promise callback), the error
+      // and callback execute synchronously in that async context.
+      let sync = true;
       this._writeFunc!(chunk, enc, err => {
         if (cbCalled) {
           // Node.js throws ERR_MULTIPLE_CALLBACK on double invocation.
@@ -643,12 +697,27 @@ export class Writable<T = Uint8Array> extends EventEmitter {
           if (!this._destroyed) {
             this._errored = err;
             this._errorEmitted = true;
-            this.emit("error", err);
-            if (this._autoDestroy) {
-              this.destroy(err);
+            if (sync) {
+              // Node.js: synchronous callback → defer both callback and error
+              // via process.nextTick.  Callback fires first, then error event.
+              deferTask(() => {
+                callback?.(err);
+                this.emit("error", err);
+                if (this._autoDestroy) {
+                  this.destroy(err);
+                }
+              });
+            } else {
+              // Async callback → execute synchronously (matches Node.js).
+              callback?.(err);
+              this.emit("error", err);
+              if (this._autoDestroy) {
+                this.destroy(err);
+              }
             }
+          } else {
+            callback?.(err);
           }
-          callback?.(err);
           // On error, drain remaining queued writes with the error and
           // don't process pending end.
           this._writing = false;
@@ -673,6 +742,7 @@ export class Writable<T = Uint8Array> extends EventEmitter {
         // Drain next queued write, or finalize if end() is pending.
         this._drainWriteQueue();
       });
+      sync = false;
     } catch (err) {
       this._writableLength -= chunkSize;
       const error = err instanceof Error ? err : new Error(String(err));

@@ -1078,7 +1078,9 @@ export class Readable<T = Uint8Array> extends EventEmitter {
    * Get a Web ReadableStream view of this stream (internal).
    *
    * For external Web Streams (_webStreamMode), returns the original stream.
-   * For controllable streams, creates a ReadableStream that mirrors data/end/error events.
+   * For controllable streams, creates a pull-based ReadableStream that reads
+   * from the Node-style Readable on demand — matching Node.js `Readable.toWeb()`
+   * which does NOT force the stream into flowing mode.
    * @internal
    */
   private get _webStream(): ReadableStream<T> {
@@ -1086,36 +1088,119 @@ export class Readable<T = Uint8Array> extends EventEmitter {
       return this._stream;
     }
 
-    // Create a Web ReadableStream that forwards data from Node-side events.
-    // Cache it on `_stream` so subsequent accesses return the same instance
-    // instead of duplicating listeners and data.
+    // Build a pull-based Web ReadableStream that only reads from the
+    // Node-style Readable when the consumer requests data (via pull()).
+    // This avoids forcing the stream into flowing mode immediately.
+    // oxlint-disable-next-line no-this-alias -- needed for ReadableStream callback closures
+    const readable = this;
+    let ended = false;
+
     const ws = new ReadableStream<T>({
-      start: controller => {
-        this.on("data", (chunk: T) => {
-          try {
-            controller.enqueue(chunk);
-          } catch {
-            // Controller may be closed
+      pull(controller) {
+        return new Promise<void>((resolve, reject) => {
+          if (ended) {
+            return resolve();
           }
+
+          const tryRead = (): void => {
+            // If the readable was destroyed or errored while we were waiting,
+            // check before attempting read.
+            if (readable._destroyed) {
+              if (readable._errored) {
+                ended = true;
+                try {
+                  controller.error(readable._errored);
+                } catch {
+                  /* controller may already be errored/closed */
+                }
+                return reject(readable._errored);
+              }
+              ended = true;
+              try {
+                controller.close();
+              } catch {
+                /* controller may already be closed */
+              }
+              return resolve();
+            }
+
+            const chunk = readable.read() as T | null;
+            if (chunk !== null) {
+              try {
+                controller.enqueue(chunk);
+              } catch {
+                /* controller may be closed */
+              }
+              return resolve();
+            }
+
+            // No data available yet — check if the stream has ended.
+            if (readable._endEmitted) {
+              ended = true;
+              try {
+                controller.close();
+              } catch {
+                /* controller may already be closed */
+              }
+              return resolve();
+            }
+
+            // Wait for more data or end/error.
+            const onReadable = (): void => {
+              cleanup();
+              tryRead();
+            };
+            const onEnd = (): void => {
+              cleanup();
+              ended = true;
+              try {
+                controller.close();
+              } catch {
+                /* controller may already be closed */
+              }
+              resolve();
+            };
+            const onError = (err: Error): void => {
+              cleanup();
+              ended = true;
+              try {
+                controller.error(err);
+              } catch {
+                /* controller may already be errored/closed */
+              }
+              reject(err);
+            };
+            const onClose = (): void => {
+              cleanup();
+              if (!ended) {
+                ended = true;
+                try {
+                  controller.close();
+                } catch {
+                  /* controller may already be closed */
+                }
+              }
+              resolve();
+            };
+
+            const cleanup = (): void => {
+              readable.off("readable", onReadable);
+              readable.off("end", onEnd);
+              readable.off("error", onError);
+              readable.off("close", onClose);
+            };
+
+            readable.once("readable", onReadable);
+            readable.once("end", onEnd);
+            readable.once("error", onError);
+            readable.once("close", onClose);
+          };
+
+          tryRead();
         });
-        this.on("end", () => {
-          try {
-            controller.close();
-          } catch {
-            // Controller may already be closed
-          }
-        });
-        this.on("error", (err: Error) => {
-          try {
-            controller.error(err);
-          } catch {
-            // Controller may already be errored/closed
-          }
-        });
-        // Start flowing if not already
-        if (!this._flowing) {
-          this.resume();
-        }
+      },
+      cancel() {
+        readable.destroy();
       }
     });
     this._stream = ws;

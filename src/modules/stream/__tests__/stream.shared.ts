@@ -20,6 +20,7 @@ export interface StreamModuleImports {
     new (options?: any): any;
     from: (...args: any[]) => any;
     wrap?: (src: any, options?: any) => any;
+    toWeb?: (stream: any) => any;
   };
   Writable: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
   Transform: { new (options?: any): any; isDisturbed?: (stream: any) => boolean };
@@ -13560,6 +13561,187 @@ export function runStreamTests(imports: StreamModuleImports): void {
       await new Promise(resolve => r.on("end", resolve));
 
       expect(chunks).toEqual(["AB"]);
+    });
+  });
+
+  // ===========================================================================
+  // Node.js Parity Fixes — Regression Tests
+  // ===========================================================================
+
+  describe("Node.js parity: Duplex async iterator destroys both sides", () => {
+    it("should destroy writable side when async iterator breaks early", async () => {
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+      d.push("a");
+      d.push("b");
+      d.push(null);
+
+      const chunks: string[] = [];
+      for await (const chunk of d) {
+        chunks.push(String(chunk));
+        break; // early exit
+      }
+      expect(chunks).toEqual(["a"]);
+
+      // Allow microtasks / deferred destroy to settle.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(d.destroyed).toBe(true);
+    });
+
+    it("should NOT destroy when destroyOnReturn is false", async () => {
+      const d = new Duplex({
+        objectMode: true,
+        read() {},
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+      d.push("a");
+      d.push("b");
+      d.push(null);
+
+      const iter = d.iterator({ destroyOnReturn: false });
+      const first = await iter.next();
+      expect(first.value).toBe("a");
+      await iter.return!();
+
+      // Allow microtasks to settle.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // With destroyOnReturn: false, the stream should NOT be destroyed.
+      expect(d.destroyed).toBe(false);
+    });
+  });
+
+  describe("Node.js parity: Writable subclass _final on prototype", () => {
+    it("should call _final defined on subclass prototype", async () => {
+      let finalCalled = false;
+
+      class MyWritable extends Writable {
+        _write(chunk: any, _encoding: string, callback: (error?: Error | null) => void): void {
+          callback();
+        }
+        _final(callback: (error?: Error | null) => void): void {
+          finalCalled = true;
+          callback();
+        }
+      }
+
+      const w = new MyWritable();
+      w.write("hello");
+      w.end();
+
+      await new Promise<void>(resolve => w.on("finish", resolve));
+      expect(finalCalled).toBe(true);
+    });
+
+    it("should prefer options.final over prototype _final", async () => {
+      let whichCalled = "";
+
+      class MyWritable extends Writable {
+        _write(_chunk: any, _encoding: string, callback: (error?: Error | null) => void): void {
+          callback();
+        }
+        _final(callback: (error?: Error | null) => void): void {
+          whichCalled = "prototype";
+          callback();
+        }
+      }
+
+      const w = new MyWritable({
+        final(callback: (error?: Error | null) => void) {
+          whichCalled = "options";
+          callback();
+        }
+      });
+      w.write("hello");
+      w.end();
+
+      await new Promise<void>(resolve => w.on("finish", resolve));
+      expect(whichCalled).toBe("options");
+    });
+  });
+
+  describe("Node.js parity: write-after-end callback is deferred", () => {
+    it("should call write callback asynchronously, not synchronously", async () => {
+      const w = new Writable({
+        write(_chunk: any, _enc: string, cb: () => void) {
+          cb();
+        }
+      });
+      w.end();
+      w.on("error", () => {}); // prevent unhandled
+
+      let cbCalledSync = false;
+      w.write("x", (err: any) => {
+        expect(err).toBeTruthy();
+        cbCalledSync = true;
+      });
+      // Callback must NOT have fired synchronously.
+      expect(cbCalledSync).toBe(false);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(cbCalledSync).toBe(true);
+    });
+  });
+
+  describe("Node.js parity: sync _write error emission is deferred", () => {
+    it("should defer error event when _write callback fires synchronously with error", async () => {
+      const writeErr = new Error("sync write fail");
+      const w = new Writable({
+        write(_chunk: any, _enc: string, cb: (err: Error) => void) {
+          cb(writeErr); // synchronous callback with error
+        }
+      });
+
+      const order: string[] = [];
+      w.on("error", () => order.push("error"));
+      w.write("x", () => order.push("write-cb"));
+      order.push("sync");
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Node.js: "sync" first (synchronous), then "write-cb", then "error"
+      // (both deferred via process.nextTick).
+      expect(order[0]).toBe("sync");
+      expect(order).toContain("write-cb");
+      expect(order).toContain("error");
+      expect(order.indexOf("write-cb")).toBeLessThan(order.indexOf("error"));
+    });
+  });
+
+  describe("Node.js parity: Readable.toWeb() is pull-based", () => {
+    it("should not switch Readable to flowing mode immediately", async () => {
+      if (!Readable.toWeb) {
+        return; // skip if toWeb not available
+      }
+      const r = new Readable({
+        read() {
+          // Push data on demand.
+          this.push("hello");
+          this.push(null);
+        }
+      });
+
+      // Get the Web ReadableStream view.
+      const ws = Readable.toWeb!(r);
+      expect(ws).toBeInstanceOf(ReadableStream);
+
+      // Before consuming the web stream, readableFlowing should not be true
+      // (the stream should remain in paused mode until pull() is called).
+      expect(r.readableFlowing).not.toBe(true);
+
+      // Consuming the web stream should work correctly.
+      const reader = ws.getReader();
+      const result = await reader.read();
+      expect(result.done).toBe(false);
+      reader.releaseLock();
     });
   });
 }

@@ -593,9 +593,27 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
       }
     });
 
+    // Node.js parity: when the internal _readable is destroyed independently
+    // (e.g. by a higher-order method like map/filter/forEach that uses the
+    // async iterator and calls _readable.destroy() on error or early exit),
+    // propagate the destruction to the outer Duplex.  Without this, only the
+    // readable side would be torn down, leaving the writable side open — a
+    // resource leak that doesn't happen in Node.js where Duplex IS the
+    // Readable (same object, so destroy() hits both sides).
+    const origReadableDestroy = this._readable.destroy.bind(this._readable);
+    (this._readable as any).destroy = (err?: Error): any => {
+      const result = origReadableDestroy(err);
+      if (!this._destroyed) {
+        this.destroy(err);
+      }
+      return result;
+    };
+
     this._sideForwardingCleanup = () => {
       registry.cleanup();
       this._readable.off("readable", readableForwarder);
+      // Restore original destroy to avoid leaking the closure after cleanup.
+      (this._readable as any).destroy = origReadableDestroy;
     };
   }
 
@@ -1059,17 +1077,62 @@ export class Duplex<TRead = Uint8Array, TWrite = Uint8Array> extends EventEmitte
   }
 
   /**
-   * Create an async iterator with options
+   * Create an async iterator with options.
+   *
+   * Node.js parity: when `destroyOnReturn` is true (the default) and the
+   * iterator exits early (break/return), the entire Duplex is destroyed —
+   * not just the readable side.  The inner `_readable`'s iterator would only
+   * destroy `_readable` (which has `autoDestroy: false`, `emitClose: false`),
+   * leaving the writable side open.  We wrap the iterator so that `return()`
+   * propagates destruction to the outer Duplex.
    */
   iterator(options?: { destroyOnReturn?: boolean }): AsyncIterableIterator<TRead> {
-    return this._readable.iterator(options);
+    const destroyOnReturn = options?.destroyOnReturn !== false;
+    if (!destroyOnReturn) {
+      // No destruction needed on return — delegate directly.
+      return this._readable.iterator(options);
+    }
+    return this._wrapAsyncIterator(this._readable[Symbol.asyncIterator]());
   }
 
   /**
-   * Async iterator support
+   * Async iterator support.
+   * Wraps the inner readable's iterator so that early exit destroys the
+   * entire Duplex (both readable and writable sides), matching Node.js.
    */
   [Symbol.asyncIterator](): AsyncIterableIterator<TRead> {
-    return this._readable[Symbol.asyncIterator]();
+    return this._wrapAsyncIterator(this._readable[Symbol.asyncIterator]());
+  }
+
+  /**
+   * Wrap an inner readable iterator so that return()/throw() destroy the
+   * outer Duplex, not just the inner readable.
+   */
+  private _wrapAsyncIterator(inner: AsyncIterableIterator<TRead>): AsyncIterableIterator<TRead> {
+    // oxlint-disable-next-line no-this-alias -- needed for object literal method closures
+    const duplex = this;
+    return {
+      next() {
+        return inner.next();
+      },
+      async return() {
+        const result = await inner.return?.();
+        if (!duplex.destroyed) {
+          duplex.destroy();
+        }
+        return result ?? { value: undefined as any, done: true as const };
+      },
+      async throw(err?: any) {
+        const result = await inner.throw?.(err);
+        if (!duplex.destroyed) {
+          duplex.destroy(err instanceof Error ? err : undefined);
+        }
+        return result ?? { value: undefined as any, done: true as const };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      }
+    };
   }
 
   // =============================================================================
