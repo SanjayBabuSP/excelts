@@ -20,6 +20,8 @@ jobs:
         id: release
         with:
           release-type: node
+          # TODO: Remove release-as after 6.0.0-beta.1 is published
+          release-as: 6.0.0-beta.1
 
   # Publish to npm when a release is created
   publish:
@@ -56,7 +58,13 @@ jobs:
         run: pnpm run build
 
       - name: Publish to npm
-        run: pnpm publish --no-git-checks
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if echo "$VERSION" | grep -q "beta\|alpha\|rc"; then
+            pnpm publish --no-git-checks --tag beta
+          else
+            pnpm publish --no-git-checks
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
