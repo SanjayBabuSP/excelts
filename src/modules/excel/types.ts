@@ -484,12 +484,15 @@ export type DataValidation = DataValidationWithFormulae | DataValidationAny;
 // ============================================================================
 // Image Types
 // ============================================================================
-export interface Image {
+export interface ImageData {
   extension: "jpeg" | "png" | "gif";
   base64?: string;
   filename?: string;
   buffer?: Buffer;
 }
+
+/** @deprecated Use {@link ImageData} instead */
+export type Image = ImageData;
 
 export interface ImagePosition {
   tl: { col: number; row: number };

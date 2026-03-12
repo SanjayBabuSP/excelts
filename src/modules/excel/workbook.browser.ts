@@ -31,7 +31,7 @@ import type {
   AddWorksheetOptions,
   CalculationProperties,
   CellErrorValue,
-  Image,
+  ImageData,
   WorkbookProperties,
   WorkbookView,
   Buffer as ExcelBuffer
@@ -1034,7 +1034,7 @@ class Workbook {
   /**
    * Add Image to Workbook and return the id
    */
-  addImage(image: Image): number {
+  addImage(image: ImageData): number {
     const id = this.media.length;
     this.media.push({ ...image, type: "image" });
     return id;

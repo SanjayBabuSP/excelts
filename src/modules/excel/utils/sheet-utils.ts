@@ -189,12 +189,15 @@ export interface CellAddress {
 /**
  * Range object with start and end addresses
  */
-export interface Range {
+export interface SheetRange {
   /** Start cell (top-left) */
   s: CellAddress;
   /** End cell (bottom-right) */
   e: CellAddress;
 }
+
+/** @deprecated Use {@link SheetRange} instead */
+export type Range = SheetRange;
 
 /**
  * Row data for JSON conversion
@@ -258,7 +261,7 @@ export function encodeCell(cell: CellAddress): string {
  * Decode range string to Range object
  * @example decodeRange("A1:B2") => {s: {c: 0, r: 0}, e: {c: 1, r: 1}}
  */
-export function decodeRange(range: string): Range {
+export function decodeRange(range: string): SheetRange {
   const idx = range.indexOf(":");
   if (idx === -1) {
     const cell = decodeCell(range);
@@ -273,11 +276,11 @@ export function decodeRange(range: string): Range {
 /**
  * Encode Range object to range string
  */
-export function encodeRange(range: Range): string;
+export function encodeRange(range: SheetRange): string;
 export function encodeRange(start: CellAddress, end: CellAddress): string;
-export function encodeRange(startOrRange: CellAddress | Range, end?: CellAddress): string {
+export function encodeRange(startOrRange: CellAddress | SheetRange, end?: CellAddress): string {
   if (end === undefined) {
-    const range = startOrRange as Range;
+    const range = startOrRange as SheetRange;
     return encodeRange(range.s, range.e);
   }
   const start = startOrRange as CellAddress;

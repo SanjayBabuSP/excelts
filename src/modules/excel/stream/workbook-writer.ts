@@ -10,12 +10,13 @@ import { ImageError } from "@excel/errors";
 import {
   WorkbookWriterBase,
   type WorkbookWriterOptions as BaseOptions,
+  type WorkbookZipOptions,
   type ZipOptions,
   type ZlibOptions
 } from "@excel/stream/workbook-writer.browser";
 import { mediaPath } from "@excel/utils/ooxml-paths";
 
-export type { ZipOptions, ZlibOptions };
+export type { WorkbookZipOptions, ZipOptions, ZlibOptions };
 
 // Node.js version also supports filename option for output
 export interface WorkbookWriterOptions extends BaseOptions {

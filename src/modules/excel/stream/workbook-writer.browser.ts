@@ -33,7 +33,7 @@ import {
   OOXML_REL_TARGETS,
   worksheetRelTarget
 } from "@excel/utils/ooxml-paths";
-import type { Image, WorkbookView, AddWorksheetOptions } from "@excel/types";
+import type { ImageData, WorkbookView, AddWorksheetOptions } from "@excel/types";
 import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 
 const EMPTY_U8 = new Uint8Array(0);
@@ -43,7 +43,7 @@ const TEXT_DECODER = new TextDecoder();
 // Types
 // ============================================================================
 
-interface Medium extends Image {
+interface Medium extends ImageData {
   type: "image";
   name: string;
 }
@@ -64,7 +64,7 @@ export interface ZlibOptions {
   dictionary?: Uint8Array | ArrayBuffer;
 }
 
-export interface ZipOptions {
+export interface WorkbookZipOptions {
   comment?: string;
   forceLocalTime?: boolean;
   forceZip64?: boolean;
@@ -72,6 +72,9 @@ export interface ZipOptions {
   zlib?: Partial<ZlibOptions>;
   compressionOptions?: { level?: number };
 }
+
+/** @deprecated Use {@link WorkbookZipOptions} instead */
+export type ZipOptions = WorkbookZipOptions;
 
 export interface WorkbookWriterOptions {
   created?: Date;
@@ -81,7 +84,7 @@ export interface WorkbookWriterOptions {
   lastPrinted?: Date;
   useSharedStrings?: boolean;
   useStyles?: boolean;
-  zip?: Partial<ZipOptions>;
+  zip?: Partial<WorkbookZipOptions>;
   stream?: Writable | WritableStream<Uint8Array>;
   filename?: string; // Node.js only
   trueStreaming?: boolean;
@@ -139,7 +142,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
   private _definedNames: DefinedNames;
   private _worksheets: TWorksheetWriter[];
   views: WorkbookView[];
-  zipOptions?: Partial<ZipOptions>;
+  zipOptions?: Partial<WorkbookZipOptions>;
   compressionLevel: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   media: Medium[];
   commentRefs: CommentRef[];
@@ -303,7 +306,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return this._worksheets.length || 1;
   }
 
-  addImage(image: Image): number {
+  addImage(image: ImageData): number {
     const id = this.media.length;
     const medium: Medium = {
       ...image,
@@ -314,7 +317,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return id;
   }
 
-  getImage(id: number): Image | undefined {
+  getImage(id: number): ImageData | undefined {
     return this.media[id];
   }
 

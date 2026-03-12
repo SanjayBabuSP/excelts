@@ -78,45 +78,68 @@ export type {
 } from "@excel/stream/worksheet-reader";
 
 // Node.js Only: Streaming writer types
-export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "@excel/stream/workbook-writer";
+export type {
+  WorkbookWriterOptions,
+  WorkbookZipOptions,
+  ZipOptions,
+  ZlibOptions
+} from "@excel/stream/workbook-writer";
 
-// Node.js CSV types (from workbook)
+// CSV types and stream classes
 export type { CsvOptions, CsvInput } from "@excel/workbook";
-
-// CSV stream classes
 export {
   CsvParserStream,
   CsvFormatterStream,
   createCsvParserStream,
   createCsvFormatterStream
 } from "@csv/stream";
-export { parseCsv } from "@csv/parse";
-export { parseCsvAsync, parseCsvRows, parseCsvWithProgress } from "@csv/parse";
-export { formatCsv } from "@csv/format";
 
-// CSV Generator (extras)
-export {
-  csvGenerate,
-  csvGenerateRows,
-  csvGenerateAsync,
-  csvGenerateData,
-  createCsvGenerator,
-  type CsvGenerateOptions,
-  type CsvGenerateResult,
-  type ColumnDef,
-  type GeneratorColumnConfig,
-  type BuiltinColumnType,
-  type GeneratorFn,
-  type GeneratorContext,
-  type StopCondition,
-  type StopContext
-} from "@csv/utils/generate";
+// =============================================================================
+// Additional Classes & Types
+// =============================================================================
+
+export { DefinedNames, type DefinedNameModel } from "@excel/defined-names";
+export type { CheckboxState } from "@excel/form-control";
+export type { ColumnDefn, ColumnHeaderValue } from "@excel/column";
+export type { RangeInput } from "@excel/range";
+export type { WorkbookModel, WorkbookMedia } from "@excel/workbook";
+export type { NodeInput } from "@excel/stream/workbook-reader";
 
 // =============================================================================
 // Utilities
 // =============================================================================
 
 export * from "@excel/utils/sheet-utils";
+
+// Date conversion (Excel serial dates <-> JS Date)
+export { dateToExcel, excelToDate } from "@utils/utils.base";
+
+// Base64 utilities (cross-platform)
+export { base64ToUint8Array, uint8ArrayToBase64 } from "@utils/utils.base";
+
+// XML utilities
+export { xmlEncode, xmlDecode } from "@utils/utils.base";
+
+// Date parsing/formatting (high-performance, zero-dep)
+export { DateParser, DateFormatter, getSupportedFormats, type DateFormat } from "@utils/datetime";
+
+// Error infrastructure
+export {
+  BaseError,
+  type BaseErrorOptions,
+  toError,
+  errorToJSON,
+  getErrorChain,
+  getRootCause
+} from "@utils/errors";
+
+// Binary utilities (cross-platform)
+export {
+  concatUint8Arrays,
+  toUint8Array,
+  stringToUint8Array,
+  uint8ArrayToString
+} from "@utils/binary";
 
 // =============================================================================
 // Errors
@@ -141,5 +164,3 @@ export {
   ImageError,
   MaxItemsExceededError
 } from "@excel/errors";
-
-export { CsvError, CsvWorkerError } from "@csv/errors";
