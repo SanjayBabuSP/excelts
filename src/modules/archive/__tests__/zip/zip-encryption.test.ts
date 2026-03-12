@@ -418,4 +418,88 @@ describe("ZIP Encryption End-to-End", () => {
       expect(new TextDecoder().decode(extracted!)).toBe("Secret data");
     });
   });
+
+  describe("UnzipEntry.isEncrypted", () => {
+    it("should be true for encrypted entries in buffer mode", async () => {
+      const zipData = await createZip(
+        [{ name: "secret.txt", data: new TextEncoder().encode("data") }],
+        { encryptionMethod: "zipcrypto", password: "pw" }
+      );
+
+      const { ZipReader } = await import("@archive/unzip");
+      const reader = new ZipReader(zipData, { password: "pw" });
+      const entries: any[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+        await entry.bytes(); // consume
+      }
+      expect(entries).toHaveLength(1);
+      expect(entries[0].isEncrypted).toBe(true);
+    });
+
+    it("should be false for non-encrypted entries in buffer mode", async () => {
+      const zipData = await createZip(
+        [{ name: "plain.txt", data: new TextEncoder().encode("data") }],
+        { level: 0, smartStore: false }
+      );
+
+      const { ZipReader } = await import("@archive/unzip");
+      const reader = new ZipReader(zipData);
+      const entries: any[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+        await entry.bytes();
+      }
+      expect(entries).toHaveLength(1);
+      expect(entries[0].isEncrypted).toBe(false);
+    });
+
+    it("should be true for encrypted entries in streaming mode", async () => {
+      const zipData = await createZip(
+        [{ name: "secret.txt", data: new TextEncoder().encode("data") }],
+        { encryptionMethod: "zipcrypto", password: "pw" }
+      );
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(zipData);
+          controller.close();
+        }
+      });
+
+      const { ZipReader } = await import("@archive/unzip");
+      const reader = new ZipReader(stream);
+      const entries: any[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+        await entry.discard();
+      }
+      expect(entries).toHaveLength(1);
+      expect(entries[0].isEncrypted).toBe(true);
+    });
+
+    it("should be false for non-encrypted entries in streaming mode", async () => {
+      const zipData = await createZip(
+        [{ name: "plain.txt", data: new TextEncoder().encode("data") }],
+        { level: 0, smartStore: false }
+      );
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(zipData);
+          controller.close();
+        }
+      });
+
+      const { ZipReader } = await import("@archive/unzip");
+      const reader = new ZipReader(stream);
+      const entries: any[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+        await entry.discard();
+      }
+      expect(entries).toHaveLength(1);
+      expect(entries[0].isEncrypted).toBe(false);
+    });
+  });
 });

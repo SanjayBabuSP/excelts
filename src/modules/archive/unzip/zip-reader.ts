@@ -147,6 +147,8 @@ export class UnzipEntry {
    * Unix file mode/permissions (0 if unavailable).
    */
   readonly mode: number;
+  /** Whether this entry is encrypted (ZipCrypto or AES). */
+  readonly isEncrypted: boolean;
 
   private readonly _data?: Uint8Array;
   private readonly _info?: ZipEntryInfo;
@@ -171,12 +173,15 @@ export class UnzipEntry {
       this.path = args.info.path;
       this.type = args.info.type;
       this.mode = args.info.mode;
+      this.isEncrypted = args.info.isEncrypted;
     } else {
       this._parseEntry = args.entry;
       this.path = args.entry.path;
       // Streaming parser cannot detect symlinks (requires Central Directory)
       this.type = args.entry.type === "Directory" ? "directory" : "file";
       this.mode = 0;
+      const flags = args.entry.vars.flags ?? 0;
+      this.isEncrypted = (flags & 0x01) !== 0 || args.entry.vars.compressionMethod === 99;
     }
 
     this._onBytesOut = hooks.onBytesOut;
