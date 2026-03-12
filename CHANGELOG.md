@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0-beta.2](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.1...v6.0.0-beta.2) (2026-03-12)
+
+
+### Bug Fixes
+
+* decode OOXML _xHHHH_ escapes in table column name attributes ([#94](https://github.com/cjnoname/excelts/issues/94)) ([bbfe148](https://github.com/cjnoname/excelts/commit/bbfe1484799d21ed477cdaad3d7d23e4a1404e50))
+* stabilize flaky ZipCrypto checkPassword test ([b54eb15](https://github.com/cjnoname/excelts/commit/b54eb1544ce9f2e6e8f31c4006306a139e1f0c1d))
+
 ## [6.0.0-beta.1](https://github.com/cjnoname/excelts/compare/v5.1.18...v6.0.0-beta.1) (2026-03-12)
 
 
