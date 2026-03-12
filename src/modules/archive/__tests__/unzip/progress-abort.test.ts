@@ -86,7 +86,7 @@ describe("unzip progress + abort", () => {
       .add("b.bin", new Uint8Array(1024 * 128));
     const zipBytes = await z.bytes();
 
-    const reader = unzip(chunkBytes(zipBytes, 128));
+    const reader = unzip(chunkBytes(zipBytes, 4096));
     const op = reader.operation({ progressIntervalMs: 0 });
 
     let seen = 0;
@@ -115,7 +115,7 @@ describe("unzip progress + abort", () => {
         .add("b.bin", new Uint8Array(1024 * 16));
       const zipBytes = await z.bytes();
 
-      const reader = unzip(chunkBytes(zipBytes, 128));
+      const reader = unzip(chunkBytes(zipBytes, 4096));
       const op = reader.operation({ progressIntervalMs: 0 });
 
       const seen: string[] = [];
