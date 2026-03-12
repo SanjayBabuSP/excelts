@@ -419,39 +419,37 @@ class Column {
     // Convert array of Column into compressed list cols
     const cols: ColumnModel[] = [];
     let col: ColumnModel | null = null;
-    if (columns) {
-      columns.forEach((column, index) => {
-        if (column.isDefault) {
-          if (col) {
-            col = null;
-          }
-        } else if (!col || !column.equivalentToModel(col)) {
-          col = {
-            min: index + 1,
-            max: index + 1,
-            width: column.width !== undefined ? column.width : DEFAULT_COLUMN_WIDTH,
-            style: column.style,
-            isCustomWidth: column.isCustomWidth,
-            hidden: column.hidden,
-            outlineLevel: column.outlineLevel,
-            collapsed: column.collapsed,
-            bestFit: column.bestFit
-          };
-          cols.push(col);
-        } else {
-          col.max = index + 1;
+    columns.forEach((column, index) => {
+      if (column.isDefault) {
+        if (col) {
+          col = null;
         }
-      });
-    }
+      } else if (!col || !column.equivalentToModel(col)) {
+        col = {
+          min: index + 1,
+          max: index + 1,
+          width: column.width !== undefined ? column.width : DEFAULT_COLUMN_WIDTH,
+          style: column.style,
+          isCustomWidth: column.isCustomWidth,
+          hidden: column.hidden,
+          outlineLevel: column.outlineLevel,
+          collapsed: column.collapsed,
+          bestFit: column.bestFit
+        };
+        cols.push(col);
+      } else {
+        col.max = index + 1;
+      }
+    });
     return cols.length ? cols : undefined;
   }
 
-  static fromModel(cols: ColumnModel[]): Column[] | null;
-  static fromModel(worksheet: Worksheet, cols: ColumnModel[]): Column[] | null;
+  static fromModel(cols: ColumnModel[]): Column[];
+  static fromModel(worksheet: Worksheet, cols: ColumnModel[]): Column[];
   static fromModel(
     worksheetOrCols: Worksheet | ColumnModel[],
     colsMaybe?: ColumnModel[]
-  ): Column[] | null {
+  ): Column[] {
     // Streaming readers historically called Column.fromModel(cols) without a Worksheet.
     // Preserve that behavior by accepting the 1-arg form and intentionally using the
     // cols array as the backing "worksheet" object.
@@ -480,7 +478,7 @@ class Column {
         columns.push(new Column(worksheet, count++, col));
       }
     }
-    return columns.length ? columns : null;
+    return columns;
   }
 }
 

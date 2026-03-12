@@ -161,7 +161,7 @@ class Worksheet {
   declare private _name: string;
   declare public state: string;
   declare private _rows: Row[];
-  declare private _columns: Column[] | null;
+  declare private _columns: Column[];
   declare private _keys: { [key: string]: Column };
   declare private _merges: { [key: string]: Range };
   declare public rowBreaks: RowBreak[];
@@ -201,7 +201,7 @@ class Worksheet {
     this._rows = [];
 
     // column definitions
-    this._columns = null;
+    this._columns = [];
 
     // column keys (addRow convenience): key ==> this._collumns index
     this._keys = {};
@@ -388,7 +388,7 @@ class Worksheet {
   /**
    * Get the current columns array
    */
-  get columns(): Column[] | null {
+  get columns(): Column[] {
     return this._columns;
   }
 
@@ -448,9 +448,6 @@ class Worksheet {
     } else {
       colNum = c;
     }
-    if (!this._columns) {
-      this._columns = [];
-    }
     if (colNum > this._columns.length) {
       let n = this._columns.length + 1;
       while (n <= colNum) {
@@ -507,7 +504,7 @@ class Worksheet {
     // splice column definitions
     const nExpand = inserts.length - count;
     const nKeep = start + count;
-    const nEnd = this._columns ? this._columns.length : 0;
+    const nEnd = this._columns.length;
     if (nExpand < 0) {
       for (let i = start + inserts.length; i <= nEnd; i++) {
         this.getColumn(i).defn = this.getColumn(i - nExpand).defn;
@@ -1456,7 +1453,7 @@ class Worksheet {
 
     // =================================================
     // columns
-    model.cols = Column.toModel(this.columns ?? []);
+    model.cols = Column.toModel(this.columns);
 
     // ==========================================================
     // Rows

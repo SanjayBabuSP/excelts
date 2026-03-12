@@ -99,7 +99,7 @@ class WorksheetWriter {
   /** Rows stored while being worked on. Set to null after commit. */
   private _rows: Row[] | null;
   /** Column definitions */
-  private _columns: Column[] | null;
+  private _columns: Column[];
   /** Column keys mapping: key => Column */
   private _keys: { [key: string]: Column };
   /** Merged cell ranges */
@@ -162,7 +162,7 @@ class WorksheetWriter {
     this._rows = [];
 
     // column definitions
-    this._columns = null;
+    this._columns = [];
 
     // column keys (addRow convenience): key ==> this._columns index
     this._keys = {};
@@ -368,7 +368,7 @@ class WorksheetWriter {
   // Columns
 
   // get the current columns array.
-  get columns(): Column[] | null {
+  get columns(): Column[] {
     return this._columns;
   }
 
@@ -419,9 +419,6 @@ class WorksheetWriter {
 
       // otherwise, assume letter
       c = colCache.l2n(c);
-    }
-    if (!this._columns) {
-      this._columns = [];
     }
     if (c > this._columns.length) {
       let n = this._columns.length + 1;

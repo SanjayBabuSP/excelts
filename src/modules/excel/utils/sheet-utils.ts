@@ -696,8 +696,8 @@ export function bookAppendSheet(workbook: Workbook, worksheet: Worksheet, name?:
   });
 
   // Copy column properties
-  worksheet.columns?.forEach((col, idx) => {
-    if (col && newWs.columns?.[idx]) {
+  worksheet.columns.forEach((col, idx) => {
+    if (col && newWs.columns[idx]) {
       if (col.width) {
         newWs.getColumn(idx + 1).width = col.width;
       }

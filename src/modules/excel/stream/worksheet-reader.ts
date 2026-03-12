@@ -78,7 +78,7 @@ class WorksheetReader extends EventEmitter {
   options: InternalWorksheetOptions;
   name: string;
   state?: WorksheetState;
-  declare private _columns: Column[] | null;
+  declare private _columns: Column[];
   declare private _keys: Record<string, Column>;
   declare private _dimensions: Dimensions;
   hyperlinks?: Record<string, WorksheetHyperlink>;
@@ -96,7 +96,7 @@ class WorksheetReader extends EventEmitter {
     this.name = `Sheet${this.id}`;
 
     // column definitions
-    this._columns = null;
+    this._columns = [];
     this._keys = Object.create(null) as Record<string, Column>;
 
     // keep a record of dimensions
@@ -118,7 +118,7 @@ class WorksheetReader extends EventEmitter {
   // Columns
 
   // get the current columns array.
-  get columns(): Column[] | null {
+  get columns(): Column[] {
     return this._columns;
   }
 
@@ -134,9 +134,6 @@ class WorksheetReader extends EventEmitter {
 
       // otherwise, assume letter
       c = colCache.l2n(c);
-    }
-    if (!this._columns) {
-      this._columns = [];
     }
     if (c > this._columns.length) {
       let n = this._columns.length + 1;
