@@ -7,7 +7,7 @@
 import { EventEmitter } from "@utils/event-emitter";
 import { parseSax } from "@excel/utils/parse-sax";
 import { ExcelStreamStateError } from "@excel/errors";
-import { xmlDecode, isDateFmt, excelToDate } from "@utils/utils";
+import { xmlDecode, isDateFmt, excelToDate, decodeOoxmlEscape } from "@utils/utils";
 import { colCache } from "@excel/utils/col-cache";
 import { Dimensions } from "@excel/range";
 import { Row } from "@excel/row";
@@ -408,6 +408,10 @@ class WorksheetReader extends EventEmitter {
                       }
 
                       case "inlineStr":
+                        // Inline strings come from <is><t>...</t></is> which uses
+                        // OOXML _xHHHH_ escaping in addition to XML entities.
+                        cell.value = decodeOoxmlEscape(xmlDecode(c.v.text));
+                        break;
                       case "str":
                         cell.value = xmlDecode(c.v.text);
                         break;

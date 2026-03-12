@@ -103,6 +103,34 @@ const expectations = [
     xml: '<si><t xml:space="preserve">Hello,\nWorld!</t></si>',
     parsedModel: "Hello,\nWorld!",
     tests: ["render", "renderIn", "parse"]
+  },
+  {
+    title: "text with lowercase OOXML escape (e.g. _x000a_)",
+    create() {
+      return new SharedStringXform();
+    },
+    xml: "<si><t>Col3_x000a_new line</t></si>",
+    parsedModel: "Col3\nnew line",
+    tests: ["parse"]
+  },
+  {
+    title: "text with uppercase OOXML escape (_x000A_)",
+    create() {
+      return new SharedStringXform();
+    },
+    xml: "<si><t>Hello_x000A_World</t></si>",
+    parsedModel: "Hello\nWorld",
+    tests: ["parse"]
+  },
+  {
+    title: "text with escaped underscore (_x005F_x000D_) roundtrips to literal _x000D_",
+    create() {
+      return new SharedStringXform();
+    },
+    preparedModel: "_x000D_",
+    xml: "<si><t>_x005F_x000D_</t></si>",
+    parsedModel: "_x000D_",
+    tests: ["render", "renderIn", "parse"]
   }
 ];
 

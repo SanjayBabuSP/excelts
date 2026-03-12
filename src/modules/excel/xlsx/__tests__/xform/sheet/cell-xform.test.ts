@@ -151,6 +151,25 @@ const expectations = [
     options: { hyperlinkMap: fakeHyperlinkMap, styles: fakeStyles }
   },
   {
+    title: "Inline String with OOXML escape (lowercase _x000a_)",
+    create() {
+      return new CellXform();
+    },
+    xml: '<c r="A1" t="inlineStr"><is><t>Col3_x000a_new line</t></is></c>',
+    parsedModel: {
+      address: "A1",
+      type: Enums.ValueType.String,
+      value: "Col3\nnew line"
+    },
+    reconciledModel: {
+      address: "A1",
+      type: Enums.ValueType.String,
+      value: "Col3\nnew line"
+    },
+    tests: ["parse", "reconcile"],
+    options: { hyperlinkMap: fakeHyperlinkMap, styles: fakeStyles }
+  },
+  {
     title: "Inline String with RichText",
     create() {
       return new CellXform();

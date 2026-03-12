@@ -59,6 +59,44 @@ export function parseOoxmlDate(raw: string): Date {
 }
 
 // =============================================================================
+// OOXML escape utilities (ST_Xstring, ISO/IEC 29500 clause 22.4.2.4)
+// =============================================================================
+
+/**
+ * Pattern matching OOXML `_xHHHH_` escape sequences (case-insensitive hex).
+ *
+ * Per the OOXML spec, `_xHHHH_` encodes a Unicode code point where HHHH is
+ * a 4-digit hexadecimal number. The spec uses uppercase, but real-world files
+ * from third-party tools (Google Sheets, LibreOffice, etc.) may use lowercase.
+ */
+const ooxmlEscapeRegex = /_x([0-9A-Fa-f]{4})_/g;
+
+/**
+ * Decode OOXML `_xHHHH_` escape sequences in a string.
+ *
+ * Used when reading text content from `<t>` elements in shared strings,
+ * rich text runs, and inline strings. The replacement works left-to-right,
+ * so `_x005F_x000D_` correctly decodes to the literal string `_x000D_`
+ * (the `_x005F_` decodes to `_`, consuming the match).
+ */
+export function decodeOoxmlEscape(text: string): string {
+  return text.replace(ooxmlEscapeRegex, (_$0, $1) => String.fromCharCode(parseInt($1, 16)));
+}
+
+/**
+ * Encode literal `_xHHHH_` patterns in a string for OOXML output.
+ *
+ * If a string naturally contains the pattern `_xHHHH_` (e.g., the user typed
+ * `_x000D_`), the leading underscore must be escaped as `_x005F_` to prevent
+ * readers from misinterpreting it as an escape sequence.
+ *
+ * Roundtrip guarantee: `decodeOoxmlEscape(encodeOoxmlEscape(s)) === s`
+ */
+export function encodeOoxmlEscape(text: string): string {
+  return text.replace(ooxmlEscapeRegex, "_x005F_x$1_");
+}
+
+// =============================================================================
 // XML utilities
 // =============================================================================
 

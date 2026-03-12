@@ -215,6 +215,65 @@ describe("WorkbookReader", () => {
     });
   });
 
+  describe("streaming reader should decode OOXML escapes in cached shared strings", () => {
+    it("should decode _x005F_x000D_ to literal _x000D_", async () => {
+      const workbookReader = new WorkbookReader(
+        streamTestDataPath("shared_string_with_escape.xlsx"),
+        {
+          entries: "emit",
+          sharedStrings: "cache",
+          styles: "cache",
+          worksheets: "emit"
+        }
+      );
+
+      await new Promise<void>((resolve, reject) => {
+        workbookReader.on("worksheet", worksheet =>
+          worksheet.on("row", row => {
+            expect(row.values[1]).toBe("_x000D_");
+            resolve();
+          })
+        );
+        workbookReader.on("error", reject);
+        workbookReader.read();
+      });
+    });
+
+    it("should roundtrip literal _xHHHH_ patterns through streaming write + read", async () => {
+      const testFile = testFilePath("ooxml-escape-streaming.test");
+
+      const workbook = new WorkbookWriter({
+        filename: testFile,
+        useSharedStrings: true
+      });
+
+      const sheet = workbook.addWorksheet("data");
+      sheet.addRow(["_x000D_", "Normal", "_x000a_test"]).commit();
+      sheet.commit();
+      await workbook.commit();
+
+      const workbookReader = new WorkbookReader(testFile, {
+        entries: "emit",
+        sharedStrings: "cache",
+        styles: "cache",
+        worksheets: "emit"
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        workbookReader.on("worksheet", worksheet =>
+          worksheet.on("row", row => {
+            expect(row.values[1]).toBe("_x000D_");
+            expect(row.values[2]).toBe("Normal");
+            expect(row.values[3]).toBe("_x000a_test");
+            resolve();
+          })
+        );
+        workbookReader.on("error", reject);
+        workbookReader.read();
+      });
+    });
+  });
+
   describe("with a spreadsheet that contains shared formulas", () => {
     it("should read shared formula models from a file", async () => {
       const wb = new Workbook();

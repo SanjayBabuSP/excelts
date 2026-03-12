@@ -11,6 +11,8 @@ export {
   parseOoxmlDate,
   xmlDecode,
   xmlEncode,
+  decodeOoxmlEscape,
+  encodeOoxmlEscape,
   validInt,
   isDateFmt,
   splitFormatSections,

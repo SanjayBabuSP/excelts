@@ -1,4 +1,5 @@
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { decodeOoxmlEscape, encodeOoxmlEscape } from "@utils/utils";
 
 //   <t xml:space="preserve"> is </t>
 
@@ -14,7 +15,7 @@ class TextXform extends BaseXform {
     if (/^\s|\n|\s$/.test(model)) {
       xmlStream.addAttribute("xml:space", "preserve");
     }
-    xmlStream.writeText(model);
+    xmlStream.writeText(encodeOoxmlEscape(model));
     xmlStream.closeNode();
   }
 
@@ -30,9 +31,7 @@ class TextXform extends BaseXform {
   parseText(text: string): void {
     this._text.push(text);
     // Update model immediately after receiving text
-    this.model = this._text
-      .join("")
-      .replace(/_x([0-9A-F]{4})_/g, ($0, $1) => String.fromCharCode(parseInt($1, 16)));
+    this.model = decodeOoxmlEscape(this._text.join(""));
   }
 
   parseClose(): boolean {

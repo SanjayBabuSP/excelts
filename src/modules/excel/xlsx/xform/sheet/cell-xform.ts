@@ -1,4 +1,4 @@
-import { dateToExcel, xmlDecode, isDateFmt, excelToDate } from "@utils/utils";
+import { dateToExcel, xmlDecode, isDateFmt, excelToDate, decodeOoxmlEscape } from "@utils/utils";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { Range } from "@excel/range";
 import { Enums } from "@excel/enums";
@@ -386,6 +386,11 @@ class CellXform extends BaseXform {
               break;
             case "inlineStr":
               model.type = Enums.ValueType.String;
+              // Decode OOXML _xHHHH_ escapes for plain text inline strings.
+              // Rich text inline strings are already decoded via RichTextXform -> TextXform.
+              if (typeof model.value === "string") {
+                model.value = decodeOoxmlEscape(model.value);
+              }
               break;
             case "b":
               model.type = Enums.ValueType.Boolean;

@@ -27,6 +27,7 @@ import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
 import { RelationshipsXform } from "@excel/xlsx/xform/core/relationships-xform";
 import type { WorksheetState, Font, WorkbookProperties } from "@excel/types";
 
+import { decodeOoxmlEscape } from "@utils/utils";
 import { WorksheetReader } from "@excel/stream/worksheet-reader";
 import { HyperlinkReader, type Hyperlink } from "@excel/stream/hyperlink-reader";
 
@@ -467,6 +468,14 @@ export abstract class WorkbookReaderBase<
         } else if (eventType === "closetag") {
           const node = value;
           switch (node.name) {
+            case "t":
+              // Decode OOXML _xHHHH_ escapes when closing <t> elements.
+              // This covers both plain text (<si><t>...</t></si>) and
+              // rich text runs (<si><r>...<t>...</t></r></si>).
+              if (text != null) {
+                text = decodeOoxmlEscape(text);
+              }
+              break;
             case "r":
               if (inRichText) {
                 richText.push({ font, text });
