@@ -96,6 +96,40 @@ export function encodeOoxmlEscape(text: string): string {
   return text.replace(ooxmlEscapeRegex, "_x005F_x$1_");
 }
 
+/**
+ * Characters that XML attribute-value normalisation replaces with spaces
+ * (XML 1.0 §3.3.3). When writing OOXML attribute values we must encode
+ * these as `_xHHHH_` so that the original characters survive a round-trip.
+ */
+const xmlAttrUnsafeRe = /[\t\n\r]/g;
+const xmlAttrUnsafeMap: Record<string, string> = {
+  "\t": "_x0009_",
+  "\n": "_x000A_",
+  "\r": "_x000D_"
+};
+
+/**
+ * Encode a string for safe use in an OOXML **XML attribute** value.
+ *
+ * Two transformations are applied (order matters):
+ * 1. Literal `_xHHHH_` patterns are escaped (`_x005F_xHHHH_`) so readers
+ *    do not misinterpret them as escape sequences.
+ * 2. Characters that XML attribute-value normalisation would mangle
+ *    (`\t`, `\n`, `\r`) are encoded as `_x0009_`, `_x000A_`, `_x000D_`.
+ *
+ * This is the write-side counterpart of {@link decodeOoxmlEscape}.
+ * Use `encodeOoxmlEscape` for element **text** content and this function
+ * for **attribute** values.
+ */
+export function encodeOoxmlAttr(text: string): string {
+  // Step 1 – protect literal _xHHHH_ patterns (must come first so that
+  // the _xHHHH_ sequences produced in step 2 are not double-escaped).
+  let result = text.replace(ooxmlEscapeRegex, "_x005F_x$1_");
+  // Step 2 – encode characters unsafe in XML attributes.
+  result = result.replace(xmlAttrUnsafeRe, ch => xmlAttrUnsafeMap[ch]);
+  return result;
+}
+
 // =============================================================================
 // XML utilities
 // =============================================================================

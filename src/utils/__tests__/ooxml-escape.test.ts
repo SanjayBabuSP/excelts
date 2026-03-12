@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decodeOoxmlEscape, encodeOoxmlEscape } from "@utils/utils";
+import { decodeOoxmlEscape, encodeOoxmlEscape, encodeOoxmlAttr } from "@utils/utils";
 
 describe("decodeOoxmlEscape", () => {
   it("decodes uppercase hex digits", () => {
@@ -62,6 +62,49 @@ describe("encodeOoxmlEscape", () => {
     const testCases = ["_x000D_", "_x000a_", "Col3_x000A_new line", "Hello World", ""];
     for (const input of testCases) {
       expect(decodeOoxmlEscape(encodeOoxmlEscape(input))).toBe(input);
+    }
+  });
+});
+
+describe("encodeOoxmlAttr", () => {
+  it("encodes newline as _x000A_", () => {
+    expect(encodeOoxmlAttr("Col3\nnew line")).toBe("Col3_x000A_new line");
+  });
+
+  it("encodes carriage return as _x000D_", () => {
+    expect(encodeOoxmlAttr("Hello\rWorld")).toBe("Hello_x000D_World");
+  });
+
+  it("encodes tab as _x0009_", () => {
+    expect(encodeOoxmlAttr("A\tB")).toBe("A_x0009_B");
+  });
+
+  it("encodes multiple control characters", () => {
+    expect(encodeOoxmlAttr("A\nB\rC\tD")).toBe("A_x000A_B_x000D_C_x0009_D");
+  });
+
+  it("escapes literal _xHHHH_ patterns AND encodes control chars", () => {
+    // A string with both a literal _x000D_ pattern and a real \n
+    expect(encodeOoxmlAttr("_x000D_\n")).toBe("_x005F_x000D__x000A_");
+  });
+
+  it("passes through normal text unchanged", () => {
+    expect(encodeOoxmlAttr("Hello World")).toBe("Hello World");
+    expect(encodeOoxmlAttr("")).toBe("");
+  });
+
+  it("roundtrips correctly with decodeOoxmlEscape", () => {
+    const testCases = [
+      "Col3\nnew line",
+      "Hello\rWorld",
+      "A\tB",
+      "_x000D_",
+      "_x000a_\ntest",
+      "Hello World",
+      ""
+    ];
+    for (const input of testCases) {
+      expect(decodeOoxmlEscape(encodeOoxmlAttr(input))).toBe(input);
     }
   });
 });

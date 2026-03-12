@@ -13,6 +13,7 @@ export {
   xmlEncode,
   decodeOoxmlEscape,
   encodeOoxmlEscape,
+  encodeOoxmlAttr,
   validInt,
   isDateFmt,
   splitFormatSections,

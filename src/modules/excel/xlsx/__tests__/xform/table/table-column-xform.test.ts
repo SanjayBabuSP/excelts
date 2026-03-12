@@ -27,6 +27,35 @@ const expectations = [
     tests: ["render", "renderIn", "parse"]
   },
   {
+    title: "OOXML escape in name (_x000a_ → newline)",
+    create() {
+      return new TableColumnXform();
+    },
+    preparedModel: { id: 1, name: "Col3\nnew line" },
+    xml: '<tableColumn id="1" name="Col3_x000A_new line" />',
+    parsedModel: { name: "Col3\nnew line" },
+    tests: ["render", "renderIn", "parse"]
+  },
+  {
+    title: "OOXML escape in name (lowercase _x000a_ → newline)",
+    create() {
+      return new TableColumnXform();
+    },
+    xml: '<tableColumn id="1" name="Col3_x000a_new line" />',
+    parsedModel: { name: "Col3\nnew line" },
+    tests: ["parse"]
+  },
+  {
+    title: "OOXML escape in totalsRowLabel",
+    create() {
+      return new TableColumnXform();
+    },
+    preparedModel: { id: 1, name: "Totals", totalsRowLabel: "Sum\ntotal" },
+    xml: '<tableColumn id="1" name="Totals" totalsRowLabel="Sum_x000A_total" />',
+    parsedModel: { name: "Totals", totalsRowLabel: "Sum\ntotal" },
+    tests: ["render", "renderIn", "parse"]
+  },
+  {
     title: "with calculatedColumnFormula child element",
     create() {
       return new TableColumnXform();

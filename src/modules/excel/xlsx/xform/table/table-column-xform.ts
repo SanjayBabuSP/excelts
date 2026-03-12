@@ -1,4 +1,5 @@
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { decodeOoxmlEscape, encodeOoxmlAttr } from "@utils/utils";
 
 interface TableColumnModel {
   id?: number;
@@ -33,8 +34,8 @@ class TableColumnXform extends BaseXform<TableColumnModel> {
   private _renderAttributes(model: TableColumnModel) {
     return {
       id: model.id!.toString(),
-      name: model.name,
-      totalsRowLabel: model.totalsRowLabel,
+      name: encodeOoxmlAttr(model.name),
+      totalsRowLabel: model.totalsRowLabel ? encodeOoxmlAttr(model.totalsRowLabel) : undefined,
       // Excel doesn't output totalsRowFunction when value is 'none'
       totalsRowFunction: model.totalsRowFunction === "none" ? undefined : model.totalsRowFunction,
       dxfId: model.dxfId
@@ -60,8 +61,10 @@ class TableColumnXform extends BaseXform<TableColumnModel> {
     if (node.name === this.tag) {
       const { attributes } = node;
       this.model = {
-        name: attributes.name,
-        totalsRowLabel: attributes.totalsRowLabel,
+        name: decodeOoxmlEscape(attributes.name),
+        totalsRowLabel: attributes.totalsRowLabel
+          ? decodeOoxmlEscape(attributes.totalsRowLabel)
+          : undefined,
         totalsRowFunction: attributes.totalsRowFunction,
         dxfId: attributes.dxfId
       };
