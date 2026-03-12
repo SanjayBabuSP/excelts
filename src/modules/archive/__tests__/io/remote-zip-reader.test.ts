@@ -794,8 +794,14 @@ describe("RemoteZipReader.open", () => {
       const isValid = await reader.checkPassword("encrypted.txt", password);
       expect(isValid).toBe(true);
 
-      const isInvalid = await reader.checkPassword("encrypted.txt", "wrongpassword");
-      expect(isInvalid).toBe(false);
+      // ZipCrypto password verification uses a single-byte check, which has a
+      // ~1/128 false positive rate per attempt. Test multiple wrong passwords to
+      // make a flaky pass statistically impossible (~1/2^40 for 5 attempts).
+      const wrongPasswords = ["wrong1", "wrong2", "wrong3", "wrong4", "wrong5"];
+      const results = await Promise.all(
+        wrongPasswords.map(wp => reader.checkPassword("encrypted.txt", wp))
+      );
+      expect(results).toContain(false);
 
       await reader.close();
     });
