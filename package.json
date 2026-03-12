@@ -51,7 +51,7 @@
       "types": "./dist/browser/index.browser.d.ts",
       "default": "./dist/browser/index.browser.js"
     },
-    "./zip": {
+    "./archive": {
       "browser": {
         "types": "./dist/browser/modules/archive/index.browser.d.ts",
         "default": "./dist/browser/modules/archive/index.browser.js"
