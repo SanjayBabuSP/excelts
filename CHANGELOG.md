@@ -5,6 +5,241 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0-beta.3](https://github.com/SanjayBabuSP/excelts/compare/v6.0.0-beta.3...v6.0.0-beta.3) (2026-03-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* Module structure and entry points have been reorganized. The archive, CSV, and stream submodules are now first-class exports. See MIGRATION.md for details.
+* **csv:** Scanner.nextRow() and Scanner.flush() now reuse internal arrays for performance. Copy the arrays if you need to store results: `const fieldsCopy = [...result.fields]`
+* **csv:** `normalizeEscapeOption()` now returns `{ enabled, char }` instead of `string` for consistency with `normalizeQuoteOption()`
+* **csv:** Duplicate headers are now auto-renamed instead of throwing errors   - e.g., ["A", "B", "A", "A"] → ["A", "B", "A_1", "A_2"]
+* **csv:** CSV Worker types renamed for consistency
+    - AggregateResultType → AggregateResult
+    - BatchQueryResult → QueryResult
+    - QueryResult → FilterResult
+* **csv:** unified API with parse/stringify/toBuffer and delimiter auto-detection
+* **archive:** simplify ZIP entry type system with breaking changes
+* **excel:** None - passthrough is opt-in via workbook options
+* **excel:** None - passthrough is opt-in via workbook options
+* **compression:** Renamed zlib compression functions to match gzip naming convention
+* The main package entrypoints no longer re-export the internal stream utility surface. If you were importing stream helpers from the root package, migrate to standard Web Streams (ReadableStream/WritableStream) or pin to an older version.
+* **exports:** Browser build no longer exports the exceljs-compatible stream.xlsx namespace. Use top-level WorkbookWriter/WorkbookReader/WorksheetWriter/WorksheetReader exports instead.
+* dyDescent is no longer output by default for new worksheets
+* **deps:** All external runtime dependencies removed
+* **datetime:** dayjs is no longer used internally
+* Minimum Node.js version is now 20.0.0. Node.js 18 is no longer supported.
+* TypeScript configuration now uses bundler moduleResolution
+* **unzip:** extractAll, extractFile, forEachEntry now return Uint8Array instead of Buffer
+* None
+
+### Features
+
+* add cell format parser and improve browser compatibility ([975b508](https://github.com/SanjayBabuSP/excelts/commit/975b508c5de1fe00d5df2e7fe54902a0696c78c2))
+* add release-please for automated releases ([735d7ef](https://github.com/SanjayBabuSP/excelts/commit/735d7efc114a7aa1c1ebbbbae9894ed2a971dc66))
+* **archive:** add browser Worker Pool for off-main-thread compression ([f0da9fc](https://github.com/SanjayBabuSP/excelts/commit/f0da9fc324e2b5b0e4866a87a974095a196e5b01))
+* **archive:** add deleteDirectory() to ZipEditor ([d80a11f](https://github.com/SanjayBabuSP/excelts/commit/d80a11fd87b709fb47bdae7e304b6e11bc9c41d3))
+* **archive:** add full GZIP support for Node.js and browser ([9e125b1](https://github.com/SanjayBabuSP/excelts/commit/9e125b159a57736bc842b888c71f069ec71015e0))
+* **archive:** add full streaming support to ArchiveFile ([487f455](https://github.com/SanjayBabuSP/excelts/commit/487f455faa89e469dac63b7a0a34a818443fff46))
+* **archive:** add HTTP Range support for remote ZIP reading ([2fd74c6](https://github.com/SanjayBabuSP/excelts/commit/2fd74c664d00dd590ad2d6704e19461c81e2cc42))
+* **archive:** add progress + abort operations for zip/unzip ([9557a37](https://github.com/SanjayBabuSP/excelts/commit/9557a37fc7207c074c956e598da232f6aaad8010))
+* **archive:** add TAR archive support with unified API ([e2d1e39](https://github.com/SanjayBabuSP/excelts/commit/e2d1e3950fcdbf7a8981a26eb08eaaa8f512902d))
+* **archive:** add transform function and concurrency option ([9f11f52](https://github.com/SanjayBabuSP/excelts/commit/9f11f523240fa94c11f98a65865d976adedcc3d2))
+* **archive:** add warnings, stream adapters, and IO concurrency ([c6d0bbd](https://github.com/SanjayBabuSP/excelts/commit/c6d0bbd19457a3688349cf3da7b42631d2be1b41))
+* **archive:** add ZIP encryption support (ZipCrypto + AES) ([23ac09b](https://github.com/SanjayBabuSP/excelts/commit/23ac09b99e76e3f016a607d793adcf26078a627a))
+* **archive:** add zip noSort and ZipParser.childCount ([53c4bf7](https://github.com/SanjayBabuSP/excelts/commit/53c4bf7ff202d831e331f4736aea48548cf7dfaf))
+* **archive:** add ZIP64 write support and safe ZIP64 parsing ([ff866e6](https://github.com/SanjayBabuSP/excelts/commit/ff866e699d4164d983cc4e312ec56c0b4a188c62))
+* **archive:** add ZipEditor best-effort preserve mode ([e69497d](https://github.com/SanjayBabuSP/excelts/commit/e69497d962164a923f8750c772f7535707d8d149))
+* **archive:** add ZipFile class for high-level ZIP operations ([008d89b](https://github.com/SanjayBabuSP/excelts/commit/008d89b2fc81ef4851895bd825c39fc095d741ba))
+* **archive:** Web Streams unzip + true streaming RemoteZipReader ([5fe7051](https://github.com/SanjayBabuSP/excelts/commit/5fe70518553fd24b9433670c6fa103492ac48b54))
+* **browser:** add pure JavaScript DEFLATE fallback for older browsers ([2a9c29c](https://github.com/SanjayBabuSP/excelts/commit/2a9c29cc7020d9834883827142330d136706f07b))
+* **browser:** native browser support with zero config ([ea3620c](https://github.com/SanjayBabuSP/excelts/commit/ea3620cd363d7fa0c2d8c62293e7b222c2687066))
+* **column:** support CellValue types for column headers (fixes [#2740](https://github.com/SanjayBabuSP/excelts/issues/2740)) ([18a6eb6](https://github.com/SanjayBabuSP/excelts/commit/18a6eb617607e14cf968ebe7f9d72f71c387f7ef))
+* complete pivot table implementation with roundtrip support and codebase refactoring ([2801053](https://github.com/SanjayBabuSP/excelts/commit/2801053450c369bfaeb6a14701cb08a01ed156a7))
+* **csv:** add append mode for writeFile ([593deae](https://github.com/SanjayBabuSP/excelts/commit/593deaeae9f7be476a9aeec6ca6d084841fe3bc2))
+* **csv:** add compatibility features and optimizations ([68ef7ec](https://github.com/SanjayBabuSP/excelts/commit/68ef7ec325c2260e70e90d24c4885def1d2fad3a))
+* **csv:** add csv-generate utility for random CSV data generation ([c75d73c](https://github.com/SanjayBabuSP/excelts/commit/c75d73c3c22f2db37db616719633df1d3b632608))
+* **csv:** add dynamicTyping, chunk callback, and beforeFirstChunk options ([919f48b](https://github.com/SanjayBabuSP/excelts/commit/919f48b12b09a61d5d7c292de09a044eda9cda09))
+* **csv:** add escapeFormulae, fastMode options and refactor streaming ([ac12f41](https://github.com/SanjayBabuSP/excelts/commit/ac12f410dd50cdb56cf29b7d75150c49b050884f))
+* **csv:** add field-level quoting control and refactor utilities ([0a82203](https://github.com/SanjayBabuSP/excelts/commit/0a82203ff6b06b18eced85e69f29059fa6b8ca08))
+* **csv:** add info/raw and relaxQuotes options ([521e484](https://github.com/SanjayBabuSP/excelts/commit/521e484565eea202a4839f2f1a30fd0ef0a82b92))
+* **csv:** add maxRowBytes option for DoS protection ([3245b08](https://github.com/SanjayBabuSP/excelts/commit/3245b080d86ffc6a93f4d42c03433768857a49c5))
+* **csv:** add new parsing options and refactor shared utilities ([45a84b0](https://github.com/SanjayBabuSP/excelts/commit/45a84b05bc3cf15db6c9e6ec43d19ed6e3715f17))
+* **csv:** add RowHashArray support for formatting ([0c8d432](https://github.com/SanjayBabuSP/excelts/commit/0c8d432a3b4357e4a1a003f395ffaa82538e2315))
+* **csv:** add TypeTransformMap for type-based formatting ([2c37345](https://github.com/SanjayBabuSP/excelts/commit/2c3734510eeecc44d673291557d78dde3732021e))
+* **csv:** add valueMapperOptions for decimalSeparator ([b93d66e](https://github.com/SanjayBabuSP/excelts/commit/b93d66e5488e4c9833c913c901bb78f9bfb8a1cf))
+* **csv:** add Web Worker pool for browser CSV operations ([e6758e8](https://github.com/SanjayBabuSP/excelts/commit/e6758e8761e211db896f2cecf9037d7e7276d5a3))
+* **csv:** enhance escapeFormulae with additional characters for CSV injection prevention ([124d19a](https://github.com/SanjayBabuSP/excelts/commit/124d19a8623016e1ca58f4d7c4ac4a86de17d636))
+* **csv:** generate bundled browser worker + centralize CSV types ([7761cc3](https://github.com/SanjayBabuSP/excelts/commit/7761cc33beef135bda1ef96cb88503058842cfa6))
+* **csv:** implement native CSV parser with browser support ([9e9ff9c](https://github.com/SanjayBabuSP/excelts/commit/9e9ff9c9e1d9548327a9c6d668f09fb0782d4dda))
+* **csv:** support decimalSeparator option ([418eccf](https://github.com/SanjayBabuSP/excelts/commit/418eccf56d8ce94127b89a913f6194743d7157d1)), closes [#20](https://github.com/SanjayBabuSP/excelts/issues/20)
+* **csv:** unified API with parse/stringify/toBuffer and delimiter auto-detection ([bd9f88e](https://github.com/SanjayBabuSP/excelts/commit/bd9f88e2d1eff8c317dad212f6dda5cfe2ad0fe4))
+* enhance stream API with improved typing and error handling ([53cf027](https://github.com/SanjayBabuSP/excelts/commit/53cf02751febcf6abf9528b7f10227191370619f))
+* enhance Transform and Writable streams for better backpressure handling and error management ([4773dd8](https://github.com/SanjayBabuSP/excelts/commit/4773dd80a4454587666d8341afad4b668498b88c))
+* enhance ZipCrypto security and add CSV error collection ([7a08413](https://github.com/SanjayBabuSP/excelts/commit/7a08413f5c367bac724dfe4138ab37152dfe5c2f))
+* **errors:** add comprehensive error system with typed error classes ([ef73f6c](https://github.com/SanjayBabuSP/excelts/commit/ef73f6c074457703e016e8de035de2fc5659fa13))
+* **excel:** add chart and drawing passthrough preservation ([a4ea35e](https://github.com/SanjayBabuSP/excelts/commit/a4ea35e2ea4297d7e7a06f9dbc83ffd37fd90de4))
+* **excel:** add chart and drawing passthrough preservation ([501d0bd](https://github.com/SanjayBabuSP/excelts/commit/501d0bdf89d980034d634fc82d45a6897803d6cc))
+* **excel:** add legacy Form Control Checkbox support ([e7d8c4e](https://github.com/SanjayBabuSP/excelts/commit/e7d8c4e4b650aba90d83bb9a2a7d6934945e8a7e))
+* **excel:** add Office Online-compatible in-cell checkboxes ([8ac37ef](https://github.com/SanjayBabuSP/excelts/commit/8ac37efb46a5f33e85462ef53bf8c6a6cc38025d))
+* excelts v6 — cross-platform streaming, archive, and CSV ([28d4f5a](https://github.com/SanjayBabuSP/excelts/commit/28d4f5ab129f57977d3d9fe6b0bfa90e6dcce560))
+* **exports:** unify node and browser entrypoints ([c8bc979](https://github.com/SanjayBabuSP/excelts/commit/c8bc979725b97b33eac7c8433fe9a60c593483f3))
+* expose isEncrypted on UnzipEntry in streaming mode ([bd03cf5](https://github.com/SanjayBabuSP/excelts/commit/bd03cf56b48e121629e69b8ee8aeff83f2dfe1ae))
+* **fs:** add useFs() for custom file system injection ([c94413c](https://github.com/SanjayBabuSP/excelts/commit/c94413c700c984f8fbf598e9cc952091ccc9cea1))
+* **pivot-table:** enhance pivot table support with multiple improvements ([ad9f123](https://github.com/SanjayBabuSP/excelts/commit/ad9f123cfe7739438f3bfaf5b96fc70966d68de8))
+* **pivot-table:** implement pivot table read and preserve functionality (Issue [#261](https://github.com/SanjayBabuSP/excelts/issues/261)) ([9883e5c](https://github.com/SanjayBabuSP/excelts/commit/9883e5c6484fe3a15d6d386b22e64fb0cb418839))
+* remove stream utility re-exports ([ea16582](https://github.com/SanjayBabuSP/excelts/commit/ea16582e8434d845ced099ffca80a63c970d3da2))
+* **row:** add getValues and valuesToString helpers ([9dca08f](https://github.com/SanjayBabuSP/excelts/commit/9dca08f1ad30144121719ad65b4eb622eef66226)), closes [#19](https://github.com/SanjayBabuSP/excelts/issues/19)
+* **stream:** add Symbol.hasInstance, static isDisturbed, pause/resume events, _construct/_undestroy, writev, and addListener/removeListener aliases ([8de5efe](https://github.com/SanjayBabuSP/excelts/commit/8de5efe7cbff9c54edd3d8498e77397a40e385d4))
+* **stream:** enhance Duplex and Readable implementations for better compatibility and performance ([60badc1](https://github.com/SanjayBabuSP/excelts/commit/60badc1a147468500341b0a67c5d32c8ed8489b9))
+* **stream:** enhance stream functionality with new tests, utility functions, and improved options handling ([123ffcf](https://github.com/SanjayBabuSP/excelts/commit/123ffcfce0dbbc34b343480d120599fed3fae829))
+* **streaming:** browser streaming support ([381817c](https://github.com/SanjayBabuSP/excelts/commit/381817ce46b7e367542d251a4da06e98fa747810))
+* **streaming:** support Web Streams across environments ([204ba36](https://github.com/SanjayBabuSP/excelts/commit/204ba365f4100e05d5fe668ab71f3550a789f94a))
+* **types:** add proper typing for Row, Cell, and related methods ([3b4a4f1](https://github.com/SanjayBabuSP/excelts/commit/3b4a4f1f8759391c22ce73b602b647c62ed5a969)), closes [#2](https://github.com/SanjayBabuSP/excelts/issues/2)
+* **unzip:** add cross-platform buffer-based ZIP parser ([7621827](https://github.com/SanjayBabuSP/excelts/commit/76218273571f1c28e16803be0af787f180a7a7e4))
+* v1.1.0 - Major improvements and bug fixes ([52d301f](https://github.com/SanjayBabuSP/excelts/commit/52d301f5e2c054f0103b53a7d86b8dd2c87c3029))
+* **worksheet:** add column page breaks support ([ad90492](https://github.com/SanjayBabuSP/excelts/commit/ad90492a29b6b21f618f0533e20c1e505804e6c6))
+* **xlsx:** allow deterministic zip entry timestamps ([d17da6a](https://github.com/SanjayBabuSP/excelts/commit/d17da6a8eea6db0b2c0fff208fcc11c13d71723f))
+* **xlsx:** store data validations as ranges ([09c2a40](https://github.com/SanjayBabuSP/excelts/commit/09c2a4062c2a4daf1b703dfca195fff0f8dc1987))
+
+
+### Bug Fixes
+
+* add main, module, and types fields to package.json for legacy moduleResolution compatibility ([3f67511](https://github.com/SanjayBabuSP/excelts/commit/3f67511325b183a0752debaebca223b6cbe99d67)), closes [#69](https://github.com/SanjayBabuSP/excelts/issues/69)
+* add post-publish verification step to CI workflows ([c93c9c4](https://github.com/SanjayBabuSP/excelts/commit/c93c9c4b10600821fd6689533e89fbd06b005f3e))
+* **archive:** keep ZIP parse streaming for large entries ([c88c61c](https://github.com/SanjayBabuSP/excelts/commit/c88c61cc3b3e22b693147303be1e500cd4402a6a))
+* **archive:** stabilize flaky ZipCrypto wrong password test ([75cfc53](https://github.com/SanjayBabuSP/excelts/commit/75cfc53bea7dec8f16d0ceec49b04a526859444e))
+* **archive:** stabilize streaming unzip and browser parsing ([a503090](https://github.com/SanjayBabuSP/excelts/commit/a50309085bceb6986a07d098c57749b4c1476f5a))
+* **archive:** stabilize streaming unzip and browser parsing ([a148bdf](https://github.com/SanjayBabuSP/excelts/commit/a148bdfd7c77af75413a701999db74a6827004ae))
+* **browser:** fix drawing parsing failure in loadFromFiles path ([98c7ee0](https://github.com/SanjayBabuSP/excelts/commit/98c7ee0a91caf82a5f43bce8cdd97970152ef2ec))
+* **build:** copy LICENSE and THIRD_PARTY_NOTICES to dist/iife ([0919d4d](https://github.com/SanjayBabuSP/excelts/commit/0919d4d6313f4b54dd3dfb20d450be287b71830a))
+* **build:** rewrite tsconfig path aliases in dist outputs ([6791d4e](https://github.com/SanjayBabuSP/excelts/commit/6791d4ea91f0296f70a9914d9817fc96cc3e6f53))
+* change Worksheet.columns return type from Column[] | null to Column[] ([ab3f3fe](https://github.com/SanjayBabuSP/excelts/commit/ab3f3fef022d8f6d081fdc064bf3a1a38a0ef121))
+* **ci:** add npm publish job to release-please workflow ([a84e54e](https://github.com/SanjayBabuSP/excelts/commit/a84e54e2e238e349fe0218af41036d987a8aa089))
+* **ci:** add outputs to release-please for better integration ([cddf12a](https://github.com/SanjayBabuSP/excelts/commit/cddf12ada88a9e172388c24a61699edc409a0619))
+* clone images when duplicating rows ([#57](https://github.com/SanjayBabuSP/excelts/issues/57)) ([bd7d949](https://github.com/SanjayBabuSP/excelts/commit/bd7d949694641f2968a94424f14123827c5634c3))
+* correct PivotTable XML generation for rowItems, colItems, and recordCount ([2e956a6](https://github.com/SanjayBabuSP/excelts/commit/2e956a6e39be34db854f1d7d56cfca2646b98dc6))
+* correct Table headerRowCount parsing per ECMA-376 ([6cc6016](https://github.com/SanjayBabuSP/excelts/commit/6cc60169b2cd6934b28bbff844195a184990af08))
+* **csv:** comprehensive audit fixes across parse, format, stream, and worker modules ([c664dd9](https://github.com/SanjayBabuSP/excelts/commit/c664dd99ad0c6ecd0ea3555b647c01ef1d6542b7))
+* **csv:** make streaming record offsets character-based ([76d2574](https://github.com/SanjayBabuSP/excelts/commit/76d2574ba9ed6d70d81a245f0de7d0f6e35a94c1))
+* decode OOXML _xHHHH_ escapes in table column name attributes ([#94](https://github.com/SanjayBabuSP/excelts/issues/94)) ([bbfe148](https://github.com/SanjayBabuSP/excelts/commit/bbfe1484799d21ed477cdaad3d7d23e4a1404e50))
+* decode OOXML _xHHHH_ escapes with lowercase hex digits ([#94](https://github.com/SanjayBabuSP/excelts/issues/94)) ([9c3163f](https://github.com/SanjayBabuSP/excelts/commit/9c3163fef636f6b600f133fdb1a9f94aa35617cc))
+* **docs:** add Vite polyfill configuration for browser usage ([0b06ae9](https://github.com/SanjayBabuSP/excelts/commit/0b06ae93fa98dfeb04b17a14de1553df8c8ce526))
+* **duplex:** change Transform import to type-only import ([13efb04](https://github.com/SanjayBabuSP/excelts/commit/13efb046b13f551009c3dba4de8fe439510c86ce))
+* empty style object shadowing in _mergeStyle and shared style references in row/cell operations ([7df419d](https://github.com/SanjayBabuSP/excelts/commit/7df419daeac85c743c4ae50c885025c7b69bcee6))
+* **excel:** add default cfvo and color for dataBar conditional formatting ([d7abd28](https://github.com/SanjayBabuSP/excelts/commit/d7abd28db0cc8acd987324c6a3057d39d6a2ce17))
+* **excel:** hydrate loaded table rows for mutations ([4f97ebb](https://github.com/SanjayBabuSP/excelts/commit/4f97ebb00671c157fac89cdb789fef8727b6deaa))
+* **excel:** improve legacy form checkbox anchors and controls ([7805a16](https://github.com/SanjayBabuSP/excelts/commit/7805a16a85f81eaccf542c6ad093beb5e7d1e73d))
+* **excel:** keep table formulas readable ([3972145](https://github.com/SanjayBabuSP/excelts/commit/3972145fe1eec92a3d0895583e6dc91eb9aea9fe)), closes [#29](https://github.com/SanjayBabuSP/excelts/issues/29)
+* **excel:** make legacy form controls OOXML-valid ([1af59b7](https://github.com/SanjayBabuSP/excelts/commit/1af59b7f0a2305305c4ab9e6a6b9b9975aaa3add))
+* **excel:** make legacy form controls OOXML-valid ([fe7a444](https://github.com/SanjayBabuSP/excelts/commit/fe7a444a3586977089ee6b8ad9b24f13d8830152))
+* **excel:** make table structured refs work ([302e682](https://github.com/SanjayBabuSP/excelts/commit/302e6827bb0a286bddaeeaf7abf563ada77cda08)), closes [#26](https://github.com/SanjayBabuSP/excelts/issues/26)
+* handle empty defined name ranges and missing colon in print area/titles ([74ce4e6](https://github.com/SanjayBabuSP/excelts/commit/74ce4e6a7bc711c334580bc9cb603800c9b07888))
+* handle missing r attribute in row and cell elements ([#2961](https://github.com/SanjayBabuSP/excelts/issues/2961)) ([1fe4709](https://github.com/SanjayBabuSP/excelts/commit/1fe4709b06bc0da9c90cc2366b0780568400f266))
+* handle styleId=0 correctly in reconcile functions ([01a532b](https://github.com/SanjayBabuSP/excelts/commit/01a532bd0185c6b1381e5dc2c7caf9e875fe8e40))
+* handle styleId=0 correctly in reconcile functions ([50e097a](https://github.com/SanjayBabuSP/excelts/commit/50e097a4edf977331ecb30ee7b86ae000016b755))
+* hide internal underscore-prefixed members from public type declarations ([f94d157](https://github.com/SanjayBabuSP/excelts/commit/f94d1579a2c964e4b4d42269e560d3642f1e06cb)), closes [#68](https://github.com/SanjayBabuSP/excelts/issues/68)
+* ignore dynamicFilter nodes in filterColumn parsing ([#2972](https://github.com/SanjayBabuSP/excelts/issues/2972)) ([609fa18](https://github.com/SanjayBabuSP/excelts/commit/609fa1866b0c0c61b3b942eb35d2143239e42280))
+* improve normalizeWritable function to handle Web WritableStream correctly ([f5cf6f5](https://github.com/SanjayBabuSP/excelts/commit/f5cf6f5fd5167004d90d7f12ae9bfb0ddb053c08))
+* improve public API return types and enum types ([d261785](https://github.com/SanjayBabuSP/excelts/commit/d261785d4ade30ad5db953a17286e309a0753193))
+* improve public API return types and enum types ([c8ca73c](https://github.com/SanjayBabuSP/excelts/commit/c8ca73c10da12fbe5c824e502938a4e6ab0e5017))
+* improve XML output to match Excel's minimal format ([379d895](https://github.com/SanjayBabuSP/excelts/commit/379d895a52b33cfa1c3815953d59d4170e3ca7ec))
+* isDateFmt now correctly recognizes date formats with text fallback sections ([#79](https://github.com/SanjayBabuSP/excelts/issues/79)) ([2d5f238](https://github.com/SanjayBabuSP/excelts/commit/2d5f2389a8d7d145b34a92dc6c7ef7231be7beab))
+* make dyDescent optional per ECMA-376 minimum output principle ([76f9c2b](https://github.com/SanjayBabuSP/excelts/commit/76f9c2b7b87d659f254836b8c92c2bfc071be3d6))
+* make generated types NodeNext-safe ([b618378](https://github.com/SanjayBabuSP/excelts/commit/b618378a19871d2175a452cc658fbd8859d50704))
+* merge main fixes, resolve lint errors, and improve code quality ([8a33545](https://github.com/SanjayBabuSP/excelts/commit/8a335459b5acde8e4a8a25b3fcdfb2f382f3228e))
+* mergeCells now preserves perimeter borders like Excel ([d9d28d6](https://github.com/SanjayBabuSP/excelts/commit/d9d28d66500b05665fab2399277ba2536b2a7d65))
+* move test fixture to tracked directory for CI ([eede864](https://github.com/SanjayBabuSP/excelts/commit/eede86496574c76315e40a5a3c9ed1998690b5c6))
+* **pivot-table:** correctly link pivot cache data using pivotCaches from workbook.xml (Issue [#1678](https://github.com/SanjayBabuSP/excelts/issues/1678)) ([3bfc50e](https://github.com/SanjayBabuSP/excelts/commit/3bfc50eda13f0454cdd3f5a6d01cc7b988153ccb))
+* **pivot-table:** preserve worksheetSource name attribute for table references ([#45](https://github.com/SanjayBabuSP/excelts/issues/45)) ([ef1722b](https://github.com/SanjayBabuSP/excelts/commit/ef1722b69c3b84a22e4083024958797f9c1b5b6a))
+* PivotTable not forming correctly when rows and values fields are equal ([#15](https://github.com/SanjayBabuSP/excelts/issues/15)) ([d3eb98d](https://github.com/SanjayBabuSP/excelts/commit/d3eb98d2e04a54d05ec3895ec6f3ee49d90a520a))
+* post-merge csv parsing + pivot test import ([8f31be3](https://github.com/SanjayBabuSP/excelts/commit/8f31be3b6afd806363d419f3f88365229023a11c))
+* preserve merge information when splicing rows/columns and duplicating rows ([#53](https://github.com/SanjayBabuSP/excelts/issues/53)) ([62bbc16](https://github.com/SanjayBabuSP/excelts/commit/62bbc160cfb76ed6686b4c81620feb4c3fc5c143))
+* preserve merged cell styles when splicing rows/columns ([#55](https://github.com/SanjayBabuSP/excelts/issues/55)) ([668bec7](https://github.com/SanjayBabuSP/excelts/commit/668bec7956818fd6d30b57993d6c74b9b3f213a6))
+* prevent image duplication on read-write round-trips ([#58](https://github.com/SanjayBabuSP/excelts/issues/58)) ([3da3461](https://github.com/SanjayBabuSP/excelts/commit/3da3461c68bd751e2b43527e458e4ee847b5a9b4))
+* prevent memory overflow when loading files with many definedNames ([#2925](https://github.com/SanjayBabuSP/excelts/issues/2925)) ([bd8d041](https://github.com/SanjayBabuSP/excelts/commit/bd8d0415525c92e5d6d9b5a6599d1314b0b383a5))
+* prevent string formula results from being converted to date ([#2970](https://github.com/SanjayBabuSP/excelts/issues/2970)) ([4750f59](https://github.com/SanjayBabuSP/excelts/commit/4750f59c9de6b47f32a5a0ca514bb4181ab8d1a7))
+* prevent unbounded memory growth in StreamBuf when data listeners are attached ([090b2e4](https://github.com/SanjayBabuSP/excelts/commit/090b2e42b659f251f2409cbf7691939f0fb7e9a0))
+* remove redundant no-op string replacement in workbook roundtrip test ([09ee8dc](https://github.com/SanjayBabuSP/excelts/commit/09ee8dc4ea0336be72f0e1c4236548c88e305ddf))
+* rename zip export to archive in package.json ([f5b3efb](https://github.com/SanjayBabuSP/excelts/commit/f5b3efbbe9cc57f2999fe9aff5eab8db6f1d5359))
+* resolve CI failures on Node.js 22 and Windows ([83bd891](https://github.com/SanjayBabuSP/excelts/commit/83bd891d4e85d77adfd9bed9f6b2efd222956b38))
+* resolve PivotTable XML generation bugs (Issue [#5](https://github.com/SanjayBabuSP/excelts/issues/5)) ([d564470](https://github.com/SanjayBabuSP/excelts/commit/d564470c3989405a5d4783c669727723cfe020e2))
+* resolve TypeError when loading workbook with table column child elements ([f4bcbe6](https://github.com/SanjayBabuSP/excelts/commit/f4bcbe63921060984762fb48f2aa07f5446962a7)), closes [#76](https://github.com/SanjayBabuSP/excelts/issues/76)
+* revert unnecessary optional chaining for date1904 property access ([042f6c3](https://github.com/SanjayBabuSP/excelts/commit/042f6c35981208e284c4aeb60f6f2631cb32362b))
+* row height=0 ignored due to falsy-zero checks, add customHeight support ([9c91fdc](https://github.com/SanjayBabuSP/excelts/commit/9c91fdc8e3d2ac4a8dc44ea654a8c8cd2767e0e8)), closes [#82](https://github.com/SanjayBabuSP/excelts/issues/82)
+* sanitize table names to comply with OOXML defined name rules ([#91](https://github.com/SanjayBabuSP/excelts/issues/91)) ([b6f9b0e](https://github.com/SanjayBabuSP/excelts/commit/b6f9b0e7dd46872b066e90c6ece705931f082ffe))
+* **security:** address CodeQL findings ([77dafd9](https://github.com/SanjayBabuSP/excelts/commit/77dafd9c012bf6ca45f6ec245d320c7edc1ab7ed))
+* **security:** address CodeQL security warnings ([e89b618](https://github.com/SanjayBabuSP/excelts/commit/e89b618872e488e9b5c677fae3389610574817db))
+* simplify release-please to only manage versions, keep tag-based npm publish ([f1236e6](https://github.com/SanjayBabuSP/excelts/commit/f1236e6f36e783cf8012ae29f7dd6c79746f9c64))
+* stabilize flaky ZipCrypto checkPassword test ([b54eb15](https://github.com/SanjayBabuSP/excelts/commit/b54eb1544ce9f2e6e8f31c4006306a139e1f0c1d))
+* **stream:** align browser API surface with Node.js and add comprehensive tests ([6693fbb](https://github.com/SanjayBabuSP/excelts/commit/6693fbb6f9ba253aa0df427f2763ffae4c36e391))
+* **stream:** align browser Duplex/Transform end() and asyncDispose with Node.js behavior ([b0aa31f](https://github.com/SanjayBabuSP/excelts/commit/b0aa31fe7b10fcbc9854802d8f11af680da4f6a1))
+* **stream:** align browser edge-case behaviors with Node.js ([d216cb9](https://github.com/SanjayBabuSP/excelts/commit/d216cb9e6c59d21e24158b0d2e8040cd054e7eae))
+* **stream:** align browser pipeline, compose, duplexPair, and Writable with Node.js behavior ([851b37f](https://github.com/SanjayBabuSP/excelts/commit/851b37f4cafba97ac0fa85af6943d0c0b518fc64))
+* **stream:** align browser stream behavior with Node.js and add cross-platform test coverage ([3aaa945](https://github.com/SanjayBabuSP/excelts/commit/3aaa945bb8b42a562beb643f0b10e10db50ad8d0))
+* **stream:** align browser stream behavior with Node.js and harden internals ([e1220cc](https://github.com/SanjayBabuSP/excelts/commit/e1220ccf43515539a63c5343ed7869162195639e))
+* **stream:** align browser stream behavior with Node.js for _read, async iterators, setEncoding, and HWM defaults ([6d4a835](https://github.com/SanjayBabuSP/excelts/commit/6d4a83549936215a33d55867aa9ed3c3f418263a))
+* **stream:** align browser stream behavior with Node.js parity ([34f69c4](https://github.com/SanjayBabuSP/excelts/commit/34f69c4c4f9a4284efa504fbf491a79d1a45e462))
+* **stream:** align browser stream event timing and API behavior with Node.js ([d317bf2](https://github.com/SanjayBabuSP/excelts/commit/d317bf2279002c219813e2d31780c78b0c0a2e9b))
+* **stream:** align browser stream parity with Node.js for double-callback, destroyed writes, and shorthand removal ([5073134](https://github.com/SanjayBabuSP/excelts/commit/5073134d5ec565101a6047b9d3f393958f99bd7f))
+* **stream:** avoid extra args in browser transform ([6ddacdd](https://github.com/SanjayBabuSP/excelts/commit/6ddacddf719aaf784100179dabac26fdd29432bb))
+* **stream:** constant-memory streaming for ZIP and Excel writers ([#88](https://github.com/SanjayBabuSP/excelts/issues/88)) ([532d7bb](https://github.com/SanjayBabuSP/excelts/commit/532d7bb7261893b2d13c54ced27e8db7c85c8a37))
+* **stream:** fix browser finished() arg parsing, Writable end() chunk normalization, and Duplex _undestroy() event forwarding ([7624d09](https://github.com/SanjayBabuSP/excelts/commit/7624d09d7589b3b4f332f619df7d7e27ba8bb530))
+* **stream:** handle browser transform/flush arity safely ([d80b29d](https://github.com/SanjayBabuSP/excelts/commit/d80b29de30d667125b51684cb3d2d0aa23bfe634))
+* **stream:** harden browser compose() for Node.js parity ([7dc16e3](https://github.com/SanjayBabuSP/excelts/commit/7dc16e33721f0d6d69ff0015718396a69cc7267e))
+* **streaming:** add null guard in WorksheetWriter.eachRow() for sparse rows ([b0f3079](https://github.com/SanjayBabuSP/excelts/commit/b0f30795045794de1231ef53bc761232c50201f2))
+* **stream:** make transform arity dispatch CodeQL-friendly ([4ffdd8b](https://github.com/SanjayBabuSP/excelts/commit/4ffdd8b66847e809a31ed0d43f69051793083bb2))
+* **stream:** refactor compose to use constructor options and fix double-event bugs ([2e1b88a](https://github.com/SanjayBabuSP/excelts/commit/2e1b88a97450d4c1a4909825764109a20c938bd8))
+* **stream:** remove unreachable streamError rethrow ([b80904d](https://github.com/SanjayBabuSP/excelts/commit/b80904dee784b6dc0c1ed92f846194bccec0dcc9))
+* **stream:** resolve 12 browser-vs-Node.js behavioral inconsistencies ([388c1c1](https://github.com/SanjayBabuSP/excelts/commit/388c1c10dbc7ec85d3b73306558e43a2bcfaa900))
+* **stream:** support hex/base64/base64url/ascii in browser chunk.toString() ([3c86549](https://github.com/SanjayBabuSP/excelts/commit/3c86549565b9ea7d95ffdab37b723347324693ff))
+* **stream:** unify Node/browser API behavior and strengthen test quality ([121d824](https://github.com/SanjayBabuSP/excelts/commit/121d82460d96e55c79620ea1dcb54b59fb67da38))
+* **stream:** use direct call with known signature to satisfy CodeQL ([ea53170](https://github.com/SanjayBabuSP/excelts/commit/ea531702c0450c6116c26538da17e48f16c2f6a3))
+* **stream:** use proper type assertion for userFlush call ([51d781c](https://github.com/SanjayBabuSP/excelts/commit/51d781ca286c7747789bb066071112dd5012bb80))
+* support HAN CELL xlsx files with namespace prefixes ([88820eb](https://github.com/SanjayBabuSP/excelts/commit/88820eb94192c2b9a10c7794cf698aaa66254387))
+* **test:** align csv mapper typing ([ab0d509](https://github.com/SanjayBabuSP/excelts/commit/ab0d509c1c1d8b8867a6a4ec1be9f74686f03888))
+* **tests:** update transform and flush methods to use rest parameters for better argument handling ([fb8313a](https://github.com/SanjayBabuSP/excelts/commit/fb8313a23734eca39b52f56ce0381f9e8248a97a))
+* **types:** avoid .d.ts specifiers in declarations ([0e5d37f](https://github.com/SanjayBabuSP/excelts/commit/0e5d37f63b650ad15f02d13c9548899023152c95))
+* **types:** restore proper Row typing for eachRow and add JSDoc comments ([45665af](https://github.com/SanjayBabuSP/excelts/commit/45665afc2b080f47729ff3a173065403446c8ea2))
+* update image anchor positions when rows or columns are spliced ([#50](https://github.com/SanjayBabuSP/excelts/issues/50)) ([c164bec](https://github.com/SanjayBabuSP/excelts/commit/c164becdf233e1b96e9cff7ece2e8e2e9dc45990))
+* update worksheet fileIndex handling for consistency in ZIP entry paths ([5cda867](https://github.com/SanjayBabuSP/excelts/commit/5cda86708efb9007e86435157687a705019fb046))
+* use optional chaining for date1904 property access in XLSX class ([4e74f80](https://github.com/SanjayBabuSP/excelts/commit/4e74f805b1817a0a917c5fd73d7faf34f791810d))
+* use optional chaining for date1904 property access in XLSX class ([2bfbd90](https://github.com/SanjayBabuSP/excelts/commit/2bfbd90fe175b49400829bec1c001b172f33e189))
+* write ht="1" for height=0 rows to reliably trigger Excel auto-height ([69728a6](https://github.com/SanjayBabuSP/excelts/commit/69728a6ad6da6cb7bcf7c128dc2a7a75998f9193))
+* **xlsx:** correct worksheet file naming and pivot table linking (fixes [#2315](https://github.com/SanjayBabuSP/excelts/issues/2315)) ([84144cc](https://github.com/SanjayBabuSP/excelts/commit/84144cc99a8143810f7bd08d65305ca0b8e352e1))
+* **xlsx:** preserve metadata attributes during round-trip ([#41](https://github.com/SanjayBabuSP/excelts/issues/41)) ([5f5d54d](https://github.com/SanjayBabuSP/excelts/commit/5f5d54d1825ce5e64bd69ded42a2511c8070f8bf))
+* **xlsx:** preserve metadata attributes during round-trip ([#41](https://github.com/SanjayBabuSP/excelts/issues/41)) ([21d1ef9](https://github.com/SanjayBabuSP/excelts/commit/21d1ef95bd44fef2d2ed0dca153e3cebd4756deb))
+
+
+### Performance Improvements
+
+* **archive:** speed up streaming unzip hot path ([f808a37](https://github.com/SanjayBabuSP/excelts/commit/f808a37255750a26e2db10a95de98461f52b8241))
+* **archive:** speed up streaming unzip hot path ([64acb02](https://github.com/SanjayBabuSP/excelts/commit/64acb02310d7395143467121ddf5d4a9c2781b52))
+* **archive:** speed up ZIP parse & browser (5MB threshold) ([05484d5](https://github.com/SanjayBabuSP/excelts/commit/05484d59e78bd3f0bcacc313234e787ea1acffa0))
+* **csv:** add structural performance optimizations (S1-S5) ([19668c8](https://github.com/SanjayBabuSP/excelts/commit/19668c8fdab1678911a3c1e2e9d52c01d93a9892))
+* **csv:** optimize parsing with pre-compiled regex and shared utilities ([c3ac575](https://github.com/SanjayBabuSP/excelts/commit/c3ac575d97017489abbede32e5ff263057ded5da))
+* **csv:** optimize parsing with unified helpers and reduced allocations ([270b53c](https://github.com/SanjayBabuSP/excelts/commit/270b53c6e9fd8eb214053ece0245717b2a4ea087))
+* **csv:** optimize streaming parser hot path ([50bf1ef](https://github.com/SanjayBabuSP/excelts/commit/50bf1ef27b59eb8994934262c5deb2217b3346af))
+* **datetime:** replace dayjs with high-performance native datetime utilities ([f804811](https://github.com/SanjayBabuSP/excelts/commit/f8048114d5a1dbd043017d688976d14172acb867))
+* move HAN CELL namespace handling from SAX parser to BaseXform ([cc11b20](https://github.com/SanjayBabuSP/excelts/commit/cc11b206bec2e0eabf5bd2164743bca0cc43fc97))
+* optimize parsing of large data validation ranges ([cfea95a](https://github.com/SanjayBabuSP/excelts/commit/cfea95a31708707cf5cfe4306909423505559a50))
+* replace fflate with native zlib for ZIP compression ([f6ff675](https://github.com/SanjayBabuSP/excelts/commit/f6ff6754cab37b82b58c5b3032cb4dbe228d9381)), closes [#2941](https://github.com/SanjayBabuSP/excelts/issues/2941)
+* **sax:** optimize XML SAX parser with lookup tables and fast paths ([4dc99eb](https://github.com/SanjayBabuSP/excelts/commit/4dc99ebd548f669b38f96e76d7db9ed3078210d5))
+
+
+### Miscellaneous Chores
+
+* **deps:** remove all runtime dependencies ([15e7b50](https://github.com/SanjayBabuSP/excelts/commit/15e7b501344042bb8240eb5404df0bc21b59202e))
+* drop Node.js 18 support, require Node.js 20+ ([9568b93](https://github.com/SanjayBabuSP/excelts/commit/9568b9354d8fc84a18c03822d2f49e35acd57f3c))
+* release 1.6.2 ([d075b45](https://github.com/SanjayBabuSP/excelts/commit/d075b45009aee8e699f02d9ba4f3926415250946))
+
+
+### Code Refactoring
+
+* **archive:** simplify ZIP entry type system with breaking changes ([ad63dac](https://github.com/SanjayBabuSP/excelts/commit/ad63dac4905837e27d4ab6362d8d9b3c8f55e720))
+* **compression:** rename zlib functions for API consistency ([c29c03a](https://github.com/SanjayBabuSP/excelts/commit/c29c03a7a07622ac4eda938121c54d6ab4316020))
+* switch TypeScript moduleResolution from nodenext to bundler ([73c5d94](https://github.com/SanjayBabuSP/excelts/commit/73c5d941ae2cd18c99752e3e22415cbb23353cd5))
+
 ## [6.0.0-beta.3](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.2...v6.0.0-beta.3) (2026-03-12)
 
 
