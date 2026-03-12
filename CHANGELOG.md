@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0-beta.3](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.2...v6.0.0-beta.3) (2026-03-12)
+
+
+### Bug Fixes
+
+* change Worksheet.columns return type from Column[] | null to Column[] ([ab3f3fe](https://github.com/cjnoname/excelts/commit/ab3f3fef022d8f6d081fdc064bf3a1a38a0ef121))
+
 ## [6.0.0-beta.2](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.1...v6.0.0-beta.2) (2026-03-12)
 
 

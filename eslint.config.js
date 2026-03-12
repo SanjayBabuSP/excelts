@@ -22,6 +22,7 @@ export const commonLintConfig = defineConfig(
   ...oxlint.configs["flat/recommended"],
   {
     ignores: [
+      "**/benchmark/**",
       "**/dist/**",
       "**/node_modules/**",
       "tmp/**",
