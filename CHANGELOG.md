@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0-beta.1](https://github.com/cjnoname/excelts/compare/v5.1.18...v6.0.0-beta.1) (2026-03-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* Module structure and entry points have been reorganized. The archive, CSV, and stream submodules are now first-class exports. See MIGRATION.md for details.
+
+### Features
+
+* excelts v6 — cross-platform streaming, archive, and CSV ([28d4f5a](https://github.com/cjnoname/excelts/commit/28d4f5ab129f57977d3d9fe6b0bfa90e6dcce560))
+* expose isEncrypted on UnzipEntry in streaming mode ([bd03cf5](https://github.com/cjnoname/excelts/commit/bd03cf56b48e121629e69b8ee8aeff83f2dfe1ae))
+
+
+### Bug Fixes
+
+* decode OOXML _xHHHH_ escapes with lowercase hex digits ([#94](https://github.com/cjnoname/excelts/issues/94)) ([9c3163f](https://github.com/cjnoname/excelts/commit/9c3163fef636f6b600f133fdb1a9f94aa35617cc))
+* merge main fixes, resolve lint errors, and improve code quality ([8a33545](https://github.com/cjnoname/excelts/commit/8a335459b5acde8e4a8a25b3fcdfb2f382f3228e))
+* rename zip export to archive in package.json ([f5b3efb](https://github.com/cjnoname/excelts/commit/f5b3efbbe9cc57f2999fe9aff5eab8db6f1d5359))
+* resolve CI failures on Node.js 22 and Windows ([83bd891](https://github.com/cjnoname/excelts/commit/83bd891d4e85d77adfd9bed9f6b2efd222956b38))
+* **stream:** align browser stream behavior with Node.js parity ([34f69c4](https://github.com/cjnoname/excelts/commit/34f69c4c4f9a4284efa504fbf491a79d1a45e462))
+* **stream:** constant-memory streaming for ZIP and Excel writers ([#88](https://github.com/cjnoname/excelts/issues/88)) ([532d7bb](https://github.com/cjnoname/excelts/commit/532d7bb7261893b2d13c54ced27e8db7c85c8a37))
+
 ## [5.1.18](https://github.com/cjnoname/excelts/compare/v5.1.17...v5.1.18) (2026-03-10)
 
 ### Bug Fixes
