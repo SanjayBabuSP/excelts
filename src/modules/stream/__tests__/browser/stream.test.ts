@@ -121,7 +121,9 @@ describe("Stream Module - Shared Tests (Browser)", () => {
     stringToUint8Array,
     uint8ArrayToString,
     uint8ArrayEquals,
-    uint8ArrayIndexOf
+    uint8ArrayIndexOf,
+    // Browser uses the project's own compose implementation which always returns a Duplex.
+    nativeComposeReturnsDuplex: true
   };
 
   runStreamTests(imports);

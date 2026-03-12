@@ -67,6 +67,10 @@ import {
 
 import { runStreamTests, type StreamModuleImports } from "@stream/__tests__/stream.shared";
 
+// Node.js v24+ moved Readable.prototype.compose out of streamReturningOperators,
+// so it returns a Duplex directly instead of wrapping through Readable.from().
+const nodeMajor = parseInt(process.versions.node, 10);
+
 describe("Stream Module - Shared Tests (Node)", () => {
   const imports: StreamModuleImports = {
     EventEmitter,
@@ -120,7 +124,8 @@ describe("Stream Module - Shared Tests (Node)", () => {
     stringToUint8Array,
     uint8ArrayToString,
     uint8ArrayEquals,
-    uint8ArrayIndexOf
+    uint8ArrayIndexOf,
+    nativeComposeReturnsDuplex: nodeMajor >= 24
   };
 
   runStreamTests(imports);

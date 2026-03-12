@@ -23,7 +23,7 @@
     "url": "https://github.com/cjnoname/excelts/issues"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "browserslist": [
     "chrome >= 89",

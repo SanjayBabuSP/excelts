@@ -181,7 +181,7 @@ For processing large Excel files without loading them entirely into memory, Exce
 
 - **Node.js**: `WorkbookReader` supports reading from a file path, and `WorkbookWriter` supports writing to a filename.
 - **Browsers**: use `Uint8Array` / `ArrayBuffer` / Web `ReadableStream<Uint8Array>` for reading, and Web `WritableStream<Uint8Array>` for writing.
-- Note: ExcelTS does not re-export the internal stream utility surface (e.g. `Readable`, `Writable`). Prefer standard Web Streams (browser/Node 20+) or Node.js streams.
+- Note: ExcelTS does not re-export the internal stream utility surface (e.g. `Readable`, `Writable`). Prefer standard Web Streams (browser/Node 22+) or Node.js streams.
 
 ### Streaming Reader
 
@@ -232,7 +232,7 @@ sheet.commit();
 await workbook.commit();
 ```
 
-### Web Streams (Node.js 20+ and Browsers)
+### Web Streams (Node.js 22+ and Browsers)
 
 `WorkbookWriter` can write to a Web `WritableStream<Uint8Array>`, and `WorkbookReader` can read from a Web `ReadableStream<Uint8Array>`.
 
@@ -240,7 +240,7 @@ This does **not** require importing any extra stream utility surface from ExcelT
 
 - Full runnable example: [src/modules/excel/examples/web-streams-reader-writer.ts](src/modules/excel/examples/web-streams-reader-writer.ts)
 
-Run locally (Node.js 20+):
+Run locally (Node.js 22+):
 
 ```bash
 npx tsx src/modules/excel/examples/web-streams-reader-writer.ts
@@ -442,7 +442,7 @@ import {
 
 ### Node.js
 
-- **Node.js >= 20.0.0** (ES2020 native support)
+- **Node.js >= 22.0.0** (ES2020 native support)
 
 ### Browsers (No Polyfills Required)
 

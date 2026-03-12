@@ -853,6 +853,14 @@ async function pumpKnownCompressedSizeToEntry(
       }
       entry.once("__autodrain", onAutodrain);
       entry.once("close", onClose);
+
+      // Guard against a race where __autodrain was emitted between the
+      // inflater.write() call and the listener registration above.
+      // Without this check the pump can deadlock on Windows where
+      // event-loop scheduling differs from macOS/Linux.
+      if (entry.__autodraining || (entry as any).destroyed) {
+        resolveWait();
+      }
     });
   };
 

@@ -407,6 +407,10 @@ describe("ArchiveFile", () => {
     });
 
     it("should emit onWarning for non-writable target (ZIP)", async () => {
+      // Skip on Windows where chmod has no effect on directory write permissions
+      if (process.platform === "win32") {
+        return;
+      }
       const archive = new ArchiveFile();
       archive.addText("content", "file.txt");
 
@@ -468,6 +472,10 @@ describe("ArchiveFile", () => {
     });
 
     it("should emit onWarning for non-writable target (TAR)", async () => {
+      // Skip on Windows where chmod has no effect on directory write permissions
+      if (process.platform === "win32") {
+        return;
+      }
       const archive = new ArchiveFile({ format: "tar" });
       archive.addText("content", "file.txt");
 

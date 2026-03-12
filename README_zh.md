@@ -179,7 +179,7 @@ const out = await editor.bytes();
 
 - **Node.js**：`WorkbookReader` 支持从文件路径读取；`WorkbookWriter` 支持写入到 `filename`。
 - **浏览器**：读取使用 `Uint8Array` / `ArrayBuffer` / Web `ReadableStream<Uint8Array>`；写入使用 Web `WritableStream<Uint8Array>`。
-- 说明：ExcelTS 不再从主入口 re-export 内部那套 stream 工具类（如 `Readable`、`Writable`）。建议直接使用标准 Web Streams（浏览器/Node 20+）或 Node.js 原生 streams。
+- 说明：ExcelTS 不再从主入口 re-export 内部那套 stream 工具类（如 `Readable`、`Writable`）。建议直接使用标准 Web Streams（浏览器/Node 22+）或 Node.js 原生 streams。
 
 ### 流式读取器
 
@@ -204,7 +204,7 @@ for await (const worksheet of reader) {
 }
 ```
 
-### Web Streams（Node.js 20+ 与浏览器）
+### Web Streams（Node.js 22+ 与浏览器）
 
 `WorkbookWriter` 支持写入 Web `WritableStream<Uint8Array>`，`WorkbookReader` 支持从 Web `ReadableStream<Uint8Array>` 读取。
 
@@ -212,7 +212,7 @@ for await (const worksheet of reader) {
 
 - 可运行完整示例: [src/modules/excel/examples/web-streams-reader-writer.ts](src/modules/excel/examples/web-streams-reader-writer.ts)
 
-本地运行（Node.js 20+）:
+本地运行（Node.js 22+）:
 
 ```bash
 npx tsx src/modules/excel/examples/web-streams-reader-writer.ts
@@ -440,7 +440,7 @@ import {
 
 ### Node.js
 
-- **Node.js >= 20.0.0**（原生支持 ES2020）
+- **Node.js >= 22.0.0**（原生支持 ES2020）
 
 ### 浏览器（无需 Polyfills）
 

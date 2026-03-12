@@ -111,6 +111,17 @@ export interface StreamModuleImports {
     start?: number,
     end?: number
   ) => number;
+
+  // Platform capabilities
+  /**
+   * Whether the native `Readable.prototype.compose()` returns a Duplex (with `.write`).
+   *
+   * In Node.js v20–v22, `compose` is in `streamReturningOperators` and the result is
+   * wrapped through `Readable.from()`, producing a plain Readable without `.write`.
+   * Node.js v24+ moved `compose` to the prototype directly, returning a Duplex.
+   * Browser implementations always return a Duplex.
+   */
+  nativeComposeReturnsDuplex: boolean;
 }
 
 /**
@@ -169,7 +180,8 @@ export function runStreamTests(imports: StreamModuleImports): void {
     stringToUint8Array,
     uint8ArrayToString,
     uint8ArrayEquals,
-    uint8ArrayIndexOf
+    uint8ArrayIndexOf,
+    nativeComposeReturnsDuplex
   } = imports;
 
   // ==========================================================================
@@ -6188,34 +6200,44 @@ export function runStreamTests(imports: StreamModuleImports): void {
   });
 
   describe("Fix #2: compose() returns Duplex-like stream", () => {
-    it("Readable.compose() result should have write method (Duplex-like)", async () => {
-      const r = Readable.from([1, 2, 3], { objectMode: true });
-      const t = new Transform({
-        objectMode: true,
-        transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
-          cb(null, chunk * 2);
+    // In Node.js v22 and earlier, Readable.prototype.compose() is registered in
+    // streamReturningOperators and the result is wrapped through Readable.from(),
+    // which strips the writable side (no .write method). Node.js v24+ fixed this
+    // by placing compose directly on the prototype, returning a Duplex.
+    it.skipIf(!nativeComposeReturnsDuplex)(
+      "Readable.compose() result should have write method (Duplex-like)",
+      async () => {
+        const r = Readable.from([1, 2, 3], { objectMode: true });
+        const t = new Transform({
+          objectMode: true,
+          transform(chunk: number, _enc: string, cb: (err: null, data: number) => void) {
+            cb(null, chunk * 2);
+          }
+        });
+        const composed = r.compose(t);
+
+        // compose() should return a Duplex-like stream with write method
+        expect(typeof composed.write).toBe("function");
+        expect(typeof composed.end).toBe("function");
+
+        const result: any[] = [];
+        for await (const chunk of composed) {
+          result.push(chunk);
         }
-      });
-      const composed = r.compose(t);
-
-      // compose() should return a Duplex-like stream with write method
-      expect(typeof composed.write).toBe("function");
-      expect(typeof composed.end).toBe("function");
-
-      const result: any[] = [];
-      for await (const chunk of composed) {
-        result.push(chunk);
+        expect(result).toEqual([2, 4, 6]);
       }
-      expect(result).toEqual([2, 4, 6]);
-    });
+    );
 
-    it("Transform.compose() result should have write method", () => {
-      const t1 = createTransform<number, number>(n => n + 1, { objectMode: true });
-      const t2 = createTransform<number, number>(n => n * 2, { objectMode: true });
-      const composed = (t1 as any).compose(t2);
-      expect(typeof composed.write).toBe("function");
-      expect(typeof composed.end).toBe("function");
-    });
+    it.skipIf(!nativeComposeReturnsDuplex)(
+      "Transform.compose() result should have write method",
+      () => {
+        const t1 = createTransform<number, number>(n => n + 1, { objectMode: true });
+        const t2 = createTransform<number, number>(n => n * 2, { objectMode: true });
+        const composed = (t1 as any).compose(t2);
+        expect(typeof composed.write).toBe("function");
+        expect(typeof composed.end).toBe("function");
+      }
+    );
   });
 
   describe("Fix #3: emitClose: false honored in destroy()", () => {
@@ -12083,26 +12105,32 @@ export function runStreamTests(imports: StreamModuleImports): void {
   });
 
   describe("Readable.compose: close back-propagation to source", () => {
-    it("should destroy source when composed result is destroyed", async () => {
-      const r = createReadableFromArray([1, 2, 3, 4, 5]);
+    // In Node.js v22 and earlier, compose() wraps the result through Readable.from(),
+    // which does not reliably propagate destroy() back to the source stream.
+    // Node.js v24+ returns a Duplex directly, enabling proper destroy propagation.
+    it.skipIf(!nativeComposeReturnsDuplex)(
+      "should destroy source when composed result is destroyed",
+      async () => {
+        const r = createReadableFromArray([1, 2, 3, 4, 5]);
 
-      const composed = r.compose(async function* (source: AsyncIterable<number>) {
-        for await (const chunk of source) {
-          yield chunk * 10;
-        }
-      });
+        const composed = r.compose(async function* (source: AsyncIterable<number>) {
+          for await (const chunk of source) {
+            yield chunk * 10;
+          }
+        });
 
-      // Suppress unhandled error events from the composed stream/source
-      (composed as any).on("error", () => {});
-      r.on("error", () => {});
+        // Suppress unhandled error events from the composed stream/source
+        (composed as any).on("error", () => {});
+        r.on("error", () => {});
 
-      // Destroy the composed result
-      (composed as any).destroy();
-      await new Promise(resolve => setTimeout(resolve, 100));
+        // Destroy the composed result
+        (composed as any).destroy();
+        await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Source should also be destroyed
-      expect(r.destroyed).toBe(true);
-    });
+        // Source should also be destroyed
+        expect(r.destroyed).toBe(true);
+      }
+    );
   });
 
   describe("map() with undefined values and concurrency", () => {

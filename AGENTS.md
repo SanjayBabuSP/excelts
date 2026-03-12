@@ -7,7 +7,7 @@ This document provides guidelines for AI coding agents working in the excelts co
 **excelts** is a TypeScript Excel workbook manager for reading/writing XLSX and CSV files.
 
 - Zero runtime dependencies
-- Cross-platform: Node.js (20+) and browsers (Chrome 89+, Firefox 102+, Safari 14.1+)
+- Cross-platform: Node.js (22+) and browsers (Chrome 89+, Firefox 102+, Safari 14.1+)
 - ESM-first with CommonJS compatibility
 
 ## Build/Lint/Test Commands
@@ -146,7 +146,7 @@ describe("Cell", () => {
 ## Git Hooks & CI
 
 - **pre-push**: Runs `pnpm run check`
-- **CI**: Node 20.x/22.x/24.x/25.x on Ubuntu/macOS/Windows
+- **CI**: Node 22.x/24.x/25.x on Ubuntu/macOS/Windows
 - **Browser tests**: Playwright with Chromium
 
 ## Important Notes
