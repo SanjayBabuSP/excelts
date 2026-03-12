@@ -21,7 +21,7 @@ jobs:
         with:
           release-type: node
           # TODO: Remove release-as after 6.0.0-beta.1 is published
-          release-as: 6.0.0-beta.1
+          release-as: 6.0.0-beta.2
 
   # Publish to npm when a release is created
   publish:
