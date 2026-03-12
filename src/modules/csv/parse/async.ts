@@ -1,0 +1,445 @@
+/**
+ * Async CSV Parser
+ *
+ * Provides async CSV parsing supporting:
+ * - String input (delegates to sync parser)
+ * - AsyncIterable<string|Uint8Array> inputs
+ * - ReadableStream inputs (WHATWG streams)
+ *
+ * API Semantics:
+ * - parseCsvAsync(): Collects all rows into memory, returns full CsvParseResult.
+ *   Best for small-to-medium files where you need complete data at once.
+ *
+ * - parseCsvRows(): True streaming async generator that yields rows one at a time.
+ *   Best for large files or when processing rows incrementally.
+ *   Memory-efficient as it doesn't buffer the entire result.
+ *
+ * Note: Both functions are async but have different memory characteristics.
+ * parseCsvAsync buffers the entire input; parseCsvRows streams progressively.
+ */
+
+import type {
+  CsvParseOptions,
+  CsvParseArrayOptions,
+  CsvParseObjectOptions,
+  CsvParseResult,
+  RecordWithInfo
+} from "../types";
+import { parseCsv } from "./sync";
+import { CsvParserStream } from "../stream/parser";
+import { getUtf8ByteLength } from "../constants";
+import { CsvError } from "../errors";
+import { isReadableStreamLike, readableStreamToAsyncIterable } from "@stream/utils.base";
+
+type ReadableStreamLike = { getReader: () => any };
+type AsyncInput = AsyncIterable<string | Uint8Array>;
+type AnyAsyncInput = AsyncInput | ReadableStreamLike;
+type CsvAsyncInput = string | AnyAsyncInput;
+
+function isAsyncIterable(value: unknown): value is AsyncInput {
+  return Boolean(value && typeof (value as any)[Symbol.asyncIterator] === "function");
+}
+
+function normalizeAsyncInput(input: unknown): AsyncInput {
+  if (isAsyncIterable(input)) {
+    return input;
+  }
+  if (isReadableStreamLike(input)) {
+    return readableStreamToAsyncIterable(input);
+  }
+  throw new TypeError("input must be an AsyncIterable or a ReadableStream");
+}
+
+/** Result from collectText with optional byte tracking */
+interface CollectResult {
+  content: string;
+  totalBytes: number;
+}
+
+/**
+ * Collect AsyncIterable<string|Uint8Array> to a complete string.
+ * Unified helper for both collectAsyncInput and parseCsvWithProgress.
+ *
+ * @param input - Async iterable of chunks
+ * @param encoding - Text encoding (default: utf-8)
+ * @param onChunk - Optional callback for each chunk (for progress reporting)
+ */
+async function collectText(
+  input: AsyncIterable<string | Uint8Array>,
+  encoding?: BufferEncoding,
+  onChunk?: (bytesProcessed: number) => void
+): Promise<CollectResult> {
+  const chunks: string[] = [];
+  const decoder = new TextDecoder(encoding || "utf-8");
+  let totalBytes = 0;
+
+  for await (const chunk of input) {
+    if (typeof chunk === "string") {
+      chunks.push(chunk);
+      // Always track bytes for consistent semantics
+      totalBytes += getUtf8ByteLength(chunk);
+    } else {
+      chunks.push(decoder.decode(chunk, { stream: true }));
+      totalBytes += chunk.length;
+    }
+
+    if (onChunk) {
+      onChunk(totalBytes);
+    }
+  }
+
+  // Flush decoder
+  const final = decoder.decode();
+  if (final) {
+    chunks.push(final);
+  }
+
+  return { content: chunks.join(""), totalBytes };
+}
+
+/**
+ * Parse CSV asynchronously.
+ *
+ * For string input, this simply wraps the sync parser.
+ * For AsyncIterable input (streams), collects chunks and parses.
+ *
+ * @example
+ * ```ts
+ * // From string
+ * const result = await parseCsvAsync("a,b\n1,2", { headers: true });
+ *
+ * // From fetch response
+ * const response = await fetch("data.csv");
+ * const result = await parseCsvAsync(response.body, { headers: true });
+ *
+ * // From file stream (Node.js)
+ * import { createReadStream } from "fs";
+ * const result = await parseCsvAsync(createReadStream("data.csv"), { headers: true });
+ * ```
+ */
+
+// =============================================================================
+// Function Overloads for Better Type Inference
+// =============================================================================
+
+/**
+ * Parse CSV async - returns string[][] when no options provided.
+ */
+export function parseCsvAsync(input: CsvAsyncInput): Promise<string[][]>;
+
+/**
+ * Parse CSV async - returns string[][] when headers is false/undefined and no info option.
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseArrayOptions & { info?: false }
+): Promise<string[][]>;
+
+/**
+ * Parse CSV async - returns CsvParseResult with RecordWithInfo when info: true (array mode).
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseArrayOptions & { info: true }
+): Promise<CsvParseResult<RecordWithInfo<string[]>>>;
+
+/**
+ * Parse CSV async - returns CsvParseResult when headers are enabled.
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseObjectOptions & { info?: false }
+): Promise<CsvParseResult<Record<string, unknown>>>;
+
+/**
+ * Parse CSV async - returns CsvParseResult with RecordWithInfo when info: true (object mode).
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseObjectOptions & { info: true }
+): Promise<CsvParseResult<RecordWithInfo<Record<string, unknown>>>>;
+
+/**
+ * Parse CSV async - general overload for backward compatibility.
+ */
+export function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseOptions
+): Promise<
+  | string[][]
+  | CsvParseResult<Record<string, string>>
+  | CsvParseResult<Record<string, unknown>>
+  | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+  | CsvParseResult<RecordWithInfo<string[]>>
+>;
+
+/**
+ * Parse CSV asynchronously (implementation).
+ */
+export async function parseCsvAsync(
+  input: CsvAsyncInput,
+  options: CsvParseOptions = {}
+): Promise<
+  | string[][]
+  | CsvParseResult<Record<string, string>>
+  | CsvParseResult<Record<string, unknown>>
+  | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+  | CsvParseResult<RecordWithInfo<string[]>>
+> {
+  // If input is a string, use sync parser directly
+  if (typeof input === "string") {
+    return parseCsv(input, options);
+  }
+
+  const asyncInput = normalizeAsyncInput(input);
+  const { content } = await collectText(asyncInput, options.encoding);
+  return parseCsv(content, options);
+}
+
+/**
+ * Parse CSV as an async generator, yielding rows as they are parsed.
+ * This is the true streaming version that yields rows one at a time.
+ *
+ * @example
+ * ```ts
+ * // Process large file row by row
+ * for await (const row of parseCsvRows(fileStream, { headers: true })) {
+ *   console.log(row);
+ * }
+ *
+ * // With validation
+ * for await (const row of parseCsvRows(input, {
+ *   headers: true,
+ *   validate: (row) => row.id !== ""
+ * })) {
+ *   // Only valid rows
+ * }
+ * ```
+ */
+export async function* parseCsvRows(
+  input: string | AnyAsyncInput,
+  options: CsvParseOptions = {}
+): AsyncGenerator<
+  | Record<string, unknown>
+  | string[]
+  | RecordWithInfo<Record<string, unknown>>
+  | RecordWithInfo<string[]>,
+  void,
+  unknown
+> {
+  // objname produces a map output in the sync parser, which cannot be produced
+  // in a true streaming fashion. Fall back to buffered parsing.
+  if (options.objname) {
+    let content: string;
+    try {
+      content =
+        typeof input === "string"
+          ? input
+          : (await collectText(normalizeAsyncInput(input), options.encoding)).content;
+    } catch (error) {
+      throw new CsvError("Failed to read input for objname parsing", { cause: error });
+    }
+
+    let result: ReturnType<typeof parseCsv>;
+    try {
+      result = parseCsv(content, options);
+    } catch (error) {
+      throw new CsvError("Failed to parse CSV with objname option", { cause: error });
+    }
+
+    if (Array.isArray(result)) {
+      for (const row of result) {
+        yield row;
+      }
+      return;
+    }
+
+    const rowsValue = (result as CsvParseResult<any>).rows;
+    if (Array.isArray(rowsValue)) {
+      for (const row of rowsValue) {
+        yield row;
+      }
+      return;
+    }
+
+    if (rowsValue && typeof rowsValue === "object") {
+      for (const row of Object.values(rowsValue)) {
+        yield row as any;
+      }
+    }
+    return;
+  }
+
+  const parser = new CsvParserStream(options);
+
+  type StreamEvent =
+    | { type: "data"; value: any }
+    | { type: "end" }
+    | { type: "error"; error: unknown };
+
+  const queue: StreamEvent[] = [];
+  let pendingResolve: ((ev: StreamEvent) => void) | null = null;
+  let ended = false;
+  let streamError: unknown = null;
+  let aborted = false;
+
+  const pushEvent = (ev: StreamEvent): void => {
+    if (pendingResolve) {
+      const resolve = pendingResolve;
+      pendingResolve = null;
+      resolve(ev);
+      return;
+    }
+    queue.push(ev);
+  };
+
+  const onData = (value: any): void => {
+    pushEvent({ type: "data", value });
+  };
+  const onEnd = (): void => {
+    ended = true;
+    pushEvent({ type: "end" });
+  };
+  const onError = (error: unknown): void => {
+    streamError = error;
+    pushEvent({ type: "error", error });
+  };
+
+  parser.on("data", onData);
+  parser.once("end", onEnd);
+  parser.once("error", onError);
+
+  const writePromise = (async (): Promise<void> => {
+    try {
+      if (typeof input === "string") {
+        parser.end(input);
+        return;
+      }
+
+      const asyncInput = normalizeAsyncInput(input);
+
+      for await (const chunk of asyncInput) {
+        if (aborted) {
+          break;
+        }
+        const canContinue = parser.write(chunk as any);
+        if (!canContinue && !aborted) {
+          await new Promise<void>(resolve => parser.once("drain", resolve));
+        }
+      }
+
+      if (!aborted) {
+        parser.end();
+      } else {
+        parser.destroy();
+      }
+    } catch (e) {
+      parser.destroy(e as Error);
+    }
+  })();
+
+  try {
+    while (true) {
+      if (queue.length > 0) {
+        const ev = queue.shift()!;
+        if (ev.type === "data") {
+          yield ev.value;
+          continue;
+        }
+        if (ev.type === "error") {
+          throw ev.error;
+        }
+        // end
+        break;
+      }
+
+      if (streamError) {
+        throw streamError;
+      }
+      if (ended) {
+        break;
+      }
+
+      const ev = await new Promise<StreamEvent>(resolve => {
+        pendingResolve = resolve;
+      });
+
+      if (ev.type === "data") {
+        yield ev.value;
+      } else if (ev.type === "error") {
+        throw ev.error;
+      } else {
+        break;
+      }
+    }
+  } finally {
+    aborted = true;
+    // Ensure stream stops as soon as possible.
+    parser.destroy();
+    // Release the writer if it is waiting for drain (destroy does not emit drain).
+    parser.emit("drain");
+    parser.off("data", onData);
+    parser.off("end", onEnd);
+    parser.off("error", onError);
+    // Avoid unhandled rejections from the writer task.
+    await writePromise.catch(() => undefined);
+  }
+}
+
+/**
+ * Parse CSV with progress callback for large files.
+ *
+ * @param input - CSV string or async iterable
+ * @param options - Parse options
+ * @param onProgress - Called periodically with progress info
+ */
+export async function parseCsvWithProgress(
+  input: string | AnyAsyncInput,
+  options: CsvParseOptions = {},
+  onProgress?: (info: { rowsProcessed: number; bytesProcessed?: number }) => void
+): Promise<
+  | string[][]
+  | CsvParseResult<Record<string, string>>
+  | CsvParseResult<Record<string, unknown>>
+  | CsvParseResult<RecordWithInfo<Record<string, unknown>>>
+  | CsvParseResult<RecordWithInfo<string[]>>
+> {
+  // Collect input and track bytes
+  let content: string;
+  let totalBytes: number;
+
+  if (typeof input === "string") {
+    content = input;
+    totalBytes = getUtf8ByteLength(content);
+  } else {
+    const asyncInput = normalizeAsyncInput(input);
+    const result = await collectText(
+      asyncInput,
+      options.encoding,
+      onProgress ? bytes => onProgress({ rowsProcessed: 0, bytesProcessed: bytes }) : undefined
+    );
+    content = result.content;
+    totalBytes = result.totalBytes;
+  }
+
+  // Parse
+  const result = parseCsv(content, options);
+
+  // Report final progress
+  if (onProgress) {
+    let rowCount: number;
+    if (Array.isArray(result)) {
+      rowCount = result.length;
+    } else if (typeof result.rows === "object" && !Array.isArray(result.rows)) {
+      // objname mode: rows is a plain object
+      rowCount = Object.keys(result.rows).length;
+    } else if (Array.isArray(result.rows)) {
+      rowCount = result.rows.length;
+    } else {
+      rowCount = 0;
+    }
+    onProgress({ rowsProcessed: rowCount, bytesProcessed: totalBytes });
+  }
+
+  return result;
+}

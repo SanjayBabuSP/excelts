@@ -3,6 +3,9 @@
  */
 import { describe, it, expect } from "vitest";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
+import { hasSignature } from "@archive/__tests__/zip/zip-test-utils";
+import { concatUint8Arrays } from "@utils/binary";
+import { CENTRAL_DIR_HEADER_SIG, END_OF_CENTRAL_DIR_SIG } from "@archive/zip-spec/zip-records";
 
 describe("Debug ZIP output", () => {
   it("should produce ZIP with data descriptor", async () => {
@@ -34,22 +37,7 @@ describe("Debug ZIP output", () => {
     zip.end();
     await finishPromise;
 
-    // Concatenate all chunks
-    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-    const fullZip = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      fullZip.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    console.log("ZIP total size:", fullZip.length, "bytes");
-    console.log(
-      "ZIP hex:",
-      Array.from(fullZip.slice(0, 100))
-        .map(b => b.toString(16).padStart(2, "0"))
-        .join(" ")
-    );
+    const fullZip = concatUint8Arrays(chunks);
 
     // ZIP should be larger than just the local header (30 bytes + filename)
     expect(fullZip.length).toBeGreaterThan(50);
@@ -67,38 +55,20 @@ describe("Debug ZIP output", () => {
         0;
       if (sig === 0x08074b50) {
         foundDataDescriptor = true;
-        console.log("Found data descriptor at offset:", i);
         break;
       }
     }
     expect(foundDataDescriptor).toBe(true);
 
-    // Look for central directory header (0x02014b50)
-    let foundCentralDir = false;
-    for (let i = 0; i < fullZip.length - 4; i++) {
-      const sig =
-        (fullZip[i] | (fullZip[i + 1] << 8) | (fullZip[i + 2] << 16) | (fullZip[i + 3] << 24)) >>>
-        0;
-      if (sig === 0x02014b50) {
-        foundCentralDir = true;
-        console.log("Found central directory at offset:", i);
-        break;
-      }
-    }
-    expect(foundCentralDir).toBe(true);
+    expect(hasSignature(fullZip, CENTRAL_DIR_HEADER_SIG, 0, fullZip.length)).toBe(true);
 
-    // Look for end of central directory (0x06054b50)
-    let foundEOCD = false;
-    for (let i = 0; i < fullZip.length - 4; i++) {
-      const sig =
-        (fullZip[i] | (fullZip[i + 1] << 8) | (fullZip[i + 2] << 16) | (fullZip[i + 3] << 24)) >>>
-        0;
-      if (sig === 0x06054b50) {
-        foundEOCD = true;
-        console.log("Found end of central directory at offset:", i);
-        break;
-      }
-    }
-    expect(foundEOCD).toBe(true);
+    expect(
+      hasSignature(
+        fullZip,
+        END_OF_CENTRAL_DIR_SIG,
+        Math.max(0, fullZip.length - 256),
+        fullZip.length
+      )
+    ).toBe(true);
   });
 });

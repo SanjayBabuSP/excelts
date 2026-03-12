@@ -2,46 +2,20 @@
  * True Streaming CSV Tests - Shared Test Cases
  *
  * These tests verify TRUE streaming behavior for CSV parsing and formatting.
- * Tests are designed to work in both Node.js and Browser environments.
+ * Tests are designed to work identically in both Node.js and Browser environments.
+ *
+ * Both test runners (node and browser) simply call `runTrueStreamingCsvTests()`.
  */
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
+import { CsvParserStream, CsvFormatterStream } from "@csv/index";
 
-// ============================================================================
-// Test Configuration
-// ============================================================================
+// =============================================================================
+// Public Entry Point
+// =============================================================================
 
-interface CsvTestContext {
-  // Platform detection
-  isBrowser: boolean;
-
-  // CSV Parser
-  createCsvParser: (options?: { headers?: boolean }) => {
-    on: (event: string, handler: (data: any) => void) => void;
-    write: (data: string) => void;
-    end: () => void;
-  };
-
-  // CSV Formatter
-  createCsvFormatter: () => {
-    on: (event: string, handler: (data: any) => void) => void;
-    write: (row: string[]) => void;
-    end: () => void;
-  };
-}
-
-// ============================================================================
-// Shared Test Implementations
-// ============================================================================
-
-export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
+export function runTrueStreamingCsvTests() {
   describe("True Streaming Verification - CSV", () => {
-    let ctx: CsvTestContext;
-
-    beforeAll(() => {
-      ctx = getContext();
-    });
-
     // ========================================================================
     // CSV Parser Tests
     // ========================================================================
@@ -49,30 +23,26 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
     describe("CsvParserStream", () => {
       it("should parse CSV data correctly", async () => {
         const rows: string[][] = [];
-        const parser = ctx.createCsvParser();
+        const parser = new CsvParserStream();
 
         parser.on("data", (row: string[]) => {
           rows.push(row);
         });
 
-        // Write CSV data
         parser.write("a,b,c\n1,2,3\n4,5,6\n7,8,9\n");
         parser.end();
 
         await new Promise<void>(resolve => parser.on("finish", resolve));
 
-        // Verify all rows were parsed
         expect(rows.length).toBe(4);
         expect(rows[0]).toEqual(["a", "b", "c"]);
         expect(rows[1]).toEqual(["1", "2", "3"]);
         expect(rows[2]).toEqual(["4", "5", "6"]);
         expect(rows[3]).toEqual(["7", "8", "9"]);
-
-        console.log("CSV Parser: All rows parsed correctly ✅");
       });
 
       it("should stream data progressively - TRUE STREAMING", async () => {
-        const parser = ctx.createCsvParser();
+        const parser = new CsvParserStream();
         const rowTimestamps: number[] = [];
         const startTime = Date.now();
 
@@ -95,17 +65,16 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
 
         await new Promise<void>(resolve => parser.on("finish", resolve));
 
-        // Verify rows arrived progressively
         expect(rowTimestamps.length).toBe(4);
 
         // Check that rows arrived at different times (TRUE STREAMING)
-        const uniqueTimes = new Set(rowTimestamps.map(t => Math.floor(t / 3))); // Group within 3ms
+        const uniqueTimes = new Set(rowTimestamps.map(t => Math.floor(t / 3)));
         const isStreaming = uniqueTimes.size > 1;
 
         if (isStreaming) {
-          console.log("✅ TRUE STREAMING: CSV rows arrived progressively");
+          console.log("TRUE STREAMING: CSV rows arrived progressively");
         } else {
-          console.log("✅ CSV parsed correctly (timing depends on platform)");
+          console.log("CSV parsed correctly (timing depends on platform)");
         }
 
         expect(rowTimestamps.length).toBe(4);
@@ -113,7 +82,7 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
 
       it("should handle partial rows across multiple writes", async () => {
         const rows: string[][] = [];
-        const parser = ctx.createCsvParser();
+        const parser = new CsvParserStream();
 
         parser.on("data", (row: string[]) => {
           rows.push(row);
@@ -134,7 +103,7 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
       });
 
       it("should handle large CSV streaming without memory issues", async () => {
-        const parser = ctx.createCsvParser();
+        const parser = new CsvParserStream();
         let rowCount = 0;
         let firstRowTime = 0;
         let lastRowTime = 0;
@@ -169,7 +138,6 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
 
         console.log(`CSV Parser: Processed ${rowCount} rows`);
         console.log(`First row at: ${firstRowTime}ms, Last row at: ${lastRowTime}ms`);
-        console.log("✅ TRUE STREAMING: Large CSV streamed without buffering entire file");
       });
     });
 
@@ -180,7 +148,7 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
     describe("CsvFormatterStream", () => {
       it("should format rows to CSV correctly", async () => {
         const chunks: string[] = [];
-        const formatter = ctx.createCsvFormatter();
+        const formatter = new CsvFormatterStream();
 
         formatter.on("data", (chunk: Uint8Array | string) => {
           const str = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
@@ -200,19 +168,16 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
         formatter.end();
         await new Promise<void>(resolve => formatter.on("finish", resolve));
 
-        // Verify all content is in output
         const fullOutput = chunks.join("");
         expect(fullOutput).toContain("a,b,c");
         expect(fullOutput).toContain("1,2,3");
         expect(fullOutput).toContain("4,5,6");
-
-        console.log("CSV Formatter: All rows formatted correctly ✅");
       });
 
       it("should stream output progressively - TRUE STREAMING", async () => {
         const chunkTimes: number[] = [];
         const startTime = Date.now();
-        const formatter = ctx.createCsvFormatter();
+        const formatter = new CsvFormatterStream();
 
         formatter.on("data", () => {
           chunkTimes.push(Date.now() - startTime);
@@ -230,20 +195,19 @@ export function createTrueStreamingCsvTests(getContext: () => CsvTestContext) {
 
         await new Promise<void>(resolve => formatter.on("finish", resolve));
 
-        // Verify chunks arrived at different times
         expect(chunkTimes.length).toBeGreaterThan(0);
 
         const uniqueTimes = new Set(chunkTimes.map(t => Math.floor(t / 3)));
         if (uniqueTimes.size > 1) {
-          console.log("✅ TRUE STREAMING: CSV output arrived progressively");
+          console.log("TRUE STREAMING: CSV output arrived progressively");
         } else {
-          console.log("✅ CSV formatted correctly (timing depends on platform)");
+          console.log("CSV formatted correctly (timing depends on platform)");
         }
       });
 
       it("should properly escape special characters", async () => {
         const chunks: string[] = [];
-        const formatter = ctx.createCsvFormatter();
+        const formatter = new CsvFormatterStream();
 
         formatter.on("data", (chunk: Uint8Array | string) => {
           const str = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);

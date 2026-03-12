@@ -65,10 +65,13 @@ const HASH = 0x23; // #
 // ============================================================================
 
 // ASCII character lookup (0-127) for String.fromCharCode
-const ASCII_CHARS: string[] = new Array(128);
-for (let i = 0; i < 128; i++) {
-  ASCII_CHARS[i] = String.fromCharCode(i);
-}
+const ASCII_CHARS: string[] = /* @__PURE__ */ (() => {
+  const t = new Array<string>(128);
+  for (let i = 0; i < 128; i++) {
+    t[i] = String.fromCharCode(i);
+  }
+  return t;
+})();
 
 // Fast charFromCode - use lookup for ASCII, fallback for others
 function charFromCode(c: number): string {
@@ -76,31 +79,37 @@ function charFromCode(c: number): string {
 }
 
 // Bitmap for ASCII name start chars (a-zA-Z_:)
-const NAME_START_CHAR_ASCII = new Uint8Array(128);
-for (let i = 0x61; i <= 0x7a; i++) {
-  NAME_START_CHAR_ASCII[i] = 1;
-} // a-z
-for (let i = 0x41; i <= 0x5a; i++) {
-  NAME_START_CHAR_ASCII[i] = 1;
-} // A-Z
-NAME_START_CHAR_ASCII[0x5f] = 1; // _
-NAME_START_CHAR_ASCII[0x3a] = 1; // :
+const NAME_START_CHAR_ASCII = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(128);
+  for (let i = 0x61; i <= 0x7a; i++) {
+    t[i] = 1;
+  } // a-z
+  for (let i = 0x41; i <= 0x5a; i++) {
+    t[i] = 1;
+  } // A-Z
+  t[0x5f] = 1; // _
+  t[0x3a] = 1; // :
+  return t;
+})();
 
 // Bitmap for ASCII name chars (a-zA-Z0-9_:-.)
-const NAME_CHAR_ASCII = new Uint8Array(128);
-for (let i = 0x61; i <= 0x7a; i++) {
-  NAME_CHAR_ASCII[i] = 1;
-} // a-z
-for (let i = 0x41; i <= 0x5a; i++) {
-  NAME_CHAR_ASCII[i] = 1;
-} // A-Z
-for (let i = 0x30; i <= 0x39; i++) {
-  NAME_CHAR_ASCII[i] = 1;
-} // 0-9
-NAME_CHAR_ASCII[0x5f] = 1; // _
-NAME_CHAR_ASCII[0x3a] = 1; // :
-NAME_CHAR_ASCII[0x2d] = 1; // -
-NAME_CHAR_ASCII[0x2e] = 1; // .
+const NAME_CHAR_ASCII = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(128);
+  for (let i = 0x61; i <= 0x7a; i++) {
+    t[i] = 1;
+  } // a-z
+  for (let i = 0x41; i <= 0x5a; i++) {
+    t[i] = 1;
+  } // A-Z
+  for (let i = 0x30; i <= 0x39; i++) {
+    t[i] = 1;
+  } // 0-9
+  t[0x5f] = 1; // _
+  t[0x3a] = 1; // :
+  t[0x2d] = 1; // -
+  t[0x2e] = 1; // .
+  return t;
+})();
 
 // ============================================================================
 // Character classification (inlined for performance)

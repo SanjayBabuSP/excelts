@@ -11,6 +11,7 @@
 import { Zip, ZipDeflate } from "@archive/zip/stream";
 import { StreamBuf } from "@excel/utils/stream-buf";
 import { base64ToUint8Array } from "@utils/utils";
+import { ExcelNotSupportedError, ImageError } from "@excel/errors";
 import { RelType } from "@excel/xlsx/rel-type";
 import { StylesXform } from "@excel/xlsx/xform/style/styles-xform";
 import { SharedStrings } from "@excel/utils/shared-strings";
@@ -24,14 +25,15 @@ import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xfo
 import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property-bag-xform";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import type { Writable } from "@stream";
-import { Writeable, stringToUint8Array } from "@stream";
+import { toWritable } from "@stream";
+import { stringToUint8Array } from "@utils/binary";
 import {
   mediaPath,
   OOXML_PATHS,
   OOXML_REL_TARGETS,
   worksheetRelTarget
 } from "@excel/utils/ooxml-paths";
-import type { Image, WorkbookView, AddWorksheetOptions } from "@excel/types";
+import type { ImageData, WorkbookView, AddWorksheetOptions } from "@excel/types";
 import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 
 const EMPTY_U8 = new Uint8Array(0);
@@ -41,7 +43,7 @@ const TEXT_DECODER = new TextDecoder();
 // Types
 // ============================================================================
 
-interface Medium extends Image {
+interface Medium extends ImageData {
   type: "image";
   name: string;
 }
@@ -62,7 +64,7 @@ export interface ZlibOptions {
   dictionary?: Uint8Array | ArrayBuffer;
 }
 
-export interface ZipOptions {
+export interface WorkbookZipOptions {
   comment?: string;
   forceLocalTime?: boolean;
   forceZip64?: boolean;
@@ -70,6 +72,9 @@ export interface ZipOptions {
   zlib?: Partial<ZlibOptions>;
   compressionOptions?: { level?: number };
 }
+
+/** @deprecated Use {@link WorkbookZipOptions} instead */
+export type ZipOptions = WorkbookZipOptions;
 
 export interface WorkbookWriterOptions {
   created?: Date;
@@ -79,7 +84,7 @@ export interface WorkbookWriterOptions {
   lastPrinted?: Date;
   useSharedStrings?: boolean;
   useStyles?: boolean;
-  zip?: Partial<ZipOptions>;
+  zip?: Partial<WorkbookZipOptions>;
   stream?: Writable | WritableStream<Uint8Array>;
   filename?: string; // Node.js only
   trueStreaming?: boolean;
@@ -137,13 +142,13 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
   private _definedNames: DefinedNames;
   private _worksheets: TWorksheetWriter[];
   views: WorkbookView[];
-  zipOptions?: Partial<ZipOptions>;
+  zipOptions?: Partial<WorkbookZipOptions>;
   compressionLevel: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   media: Medium[];
   commentRefs: CommentRef[];
   zip: Zip;
   stream: OutputStreamLike;
-  promise: Promise<void[]>;
+  promise: Promise<void[] | void>;
   protected _trueStreaming: boolean;
   protected WorksheetWriterClass: WorksheetWriterConstructor<TWorksheetWriter>;
 
@@ -199,8 +204,11 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     // Setup output stream
     this.stream = this._createOutputStream(options);
 
-    // Add initial files
-    this.promise = Promise.all([this.addThemes(), this.addOfficeRels()]);
+    // Theme and office rels are deferred to commit() so that worksheet files
+    // are added to the ZIP first. This ensures StreamingZip sets ondata on
+    // the worksheet immediately, allowing pushSync to flow data through
+    // without accumulating in _dataQueue.
+    this.promise = Promise.resolve();
   }
 
   /**
@@ -208,7 +216,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
    */
   protected _createOutputStream(options: WorkbookWriterOptions): OutputStreamLike {
     if (options.stream) {
-      return Writeable(options.stream);
+      return toWritable(options.stream);
     }
     return new StreamBuf();
   }
@@ -275,6 +283,8 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     await this._commitWorksheets();
     await this.addMedia();
     await Promise.all([
+      this.addThemes(),
+      this.addOfficeRels(),
       this.addContentTypes(),
       this.addApp(),
       this.addCore(),
@@ -296,7 +306,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return this._worksheets.length || 1;
   }
 
-  addImage(image: Image): number {
+  addImage(image: ImageData): number {
     const id = this.media.length;
     const medium: Medium = {
       ...image,
@@ -307,7 +317,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     return id;
   }
 
-  getImage(id: number): Image | undefined {
+  getImage(id: number): ImageData | undefined {
     return this.media[id];
   }
 
@@ -420,12 +430,13 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
             return;
           }
           if (medium.filename) {
-            throw new Error(
-              "Loading images from filename is not supported in browser. Use buffer or base64."
+            throw new ExcelNotSupportedError(
+              "Loading images from filename",
+              "not supported in browser. Use buffer or base64."
             );
           }
         }
-        throw new Error("Unsupported media");
+        throw new ImageError("Unsupported media");
       })
     );
   }

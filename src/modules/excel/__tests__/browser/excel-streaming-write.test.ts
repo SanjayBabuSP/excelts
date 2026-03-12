@@ -26,6 +26,8 @@ describe("Real Excel Streaming Write - Browser", () => {
     // Test CompressionStream directly - no wrapper
     const chunks: number[] = [];
 
+    const encoder = new TextEncoder();
+
     const cs = new CompressionStream("deflate-raw");
     const writer = cs.writable.getWriter();
     const reader = cs.readable.getReader();
@@ -42,13 +44,20 @@ describe("Real Excel Streaming Write - Browser", () => {
       }
     })();
 
-    // Write 200000 rows
-    console.log("Writing 200000 rows directly to CompressionStream...");
-    for (let i = 0; i < 200000; i++) {
-      const row = `<row r="${i}"><c r="A${i}"><v>Row ${i} data content</v></c></row>\n`;
-      await writer.write(new TextEncoder().encode(row));
+    // Write a moderately large payload in fewer, larger chunks.
+    // This keeps the test fast and avoids appearing to hang on slower machines.
+    const totalRows = 20000;
+    const rowsPerChunk = 250;
+    console.log(`Writing ${totalRows} rows directly to CompressionStream...`);
+    for (let i = 0; i < totalRows; i += rowsPerChunk) {
+      let xml = "";
+      const end = Math.min(totalRows, i + rowsPerChunk);
+      for (let r = i; r < end; r++) {
+        xml += `<row r=\"${r}\"><c r=\"A${r}\"><v>Row ${r} data content</v></c></row>\n`;
+      }
+      await writer.write(encoder.encode(xml));
 
-      if (i > 0 && i % 50000 === 0) {
+      if (i > 0 && i % (rowsPerChunk * 20) === 0) {
         console.log(`Row ${i}: ${chunks.length} chunks`);
       }
     }
@@ -135,24 +144,29 @@ describe("Real Excel Streaming Write - Browser", () => {
 
     const worksheet = workbook.addWorksheet("Sheet1");
 
-    // Write 200000 rows with lots of data per row to exceed 5MB threshold
-    // Each row ~100 bytes * 200000 = ~20MB uncompressed
-    for (let i = 0; i < 200000; i++) {
+    // Write a large-enough worksheet to exceed streaming thresholds, but keep runtime sane.
+    // We use fewer rows with larger per-row payload.
+    const totalRows = 30000;
+    const padX = "X".repeat(256);
+    const padY = "Y".repeat(256);
+    const padZ = "Z".repeat(256);
+
+    for (let i = 0; i < totalRows; i++) {
       worksheet
         .addRow([
           `Row ${i}`,
           i,
-          `Data ${i} with extra content`,
-          `More data ${i} padding`,
-          `Even more ${i} content`,
-          `Column F ${i} value`,
-          `Column G ${i} text`,
-          `Column H ${i} end`
+          `Data ${i} with extra content ${padX}`,
+          `More data ${i} padding ${padY}`,
+          `Even more ${i} content ${padZ}`,
+          `Column F ${i} value ${padX}`,
+          `Column G ${i} text ${padY}`,
+          `Column H ${i} end ${padZ}`
         ])
         .commit();
 
-      // Log progress every 50000 rows
-      if (i > 0 && i % 50000 === 0) {
+      // Log progress every 10000 rows
+      if (i > 0 && i % 10000 === 0) {
         const size = outputChunks[0].reduce((sum, c) => sum + c.length, 0);
         console.log(`At row ${i}: ${chunks.length} chunks, ${(size / 1024 / 1024).toFixed(2)} MB`);
       }
@@ -173,7 +187,7 @@ describe("Real Excel Streaming Write - Browser", () => {
     const phase2Size = outputChunks[2].reduce((sum, c) => sum + c.length, 0);
 
     const totalSize = phase0Size + phase1Size + phase2Size;
-    console.log(`\n=== Very Large Excel (200000 rows) Summary ===`);
+    console.log(`\n=== Very Large Excel (${totalRows} rows) Summary ===`);
     console.log(`Total: ${chunks.length} chunks, ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
     console.log(
       `During row writes: ${chunksBeforeCommit} chunks, ${(phase0Size / 1024 / 1024).toFixed(2)} MB`
@@ -189,7 +203,7 @@ describe("Real Excel Streaming Write - Browser", () => {
     expect(chunks.length).toBeGreaterThan(0);
     expect(totalSize).toBeGreaterThan(1000000);
 
-    // For 200000 rows (~20MB uncompressed), DEFLATE buffer should overflow
+    // For a large dataset, DEFLATE output may appear during row writes depending on yielding.
     // and produce chunks DURING row writes (TRUE STREAMING)
     if (chunksBeforeCommit > 0) {
       console.log("✅ TRUE STREAMING: Chunks emitted during row writes!");
@@ -238,22 +252,26 @@ describe("Real Excel Streaming Write - Browser", () => {
     // Track bytes at different stages
     const bytesLog: { stage: string; chunks: number; bytes: number }[] = [];
 
-    // Write 50000 rows with ~500 bytes each = ~25MB uncompressed
-    const totalRows = 50000;
+    // Write enough rows to clearly see streaming behavior without being too slow.
+    // Each row has a fairly large payload to exceed thresholds.
+    const padX = "X".repeat(256);
+    const padY = "Y".repeat(256);
+    const padZ = "Z".repeat(256);
+    const totalRows = 20000;
     for (let i = 0; i < totalRows; i++) {
       // Make each row ~500 bytes of data
       worksheet
         .addRow([
           `Row ${i}`,
           i,
-          `Data ${i} - ${"X".repeat(100)}`,
-          `More ${i} - ${"Y".repeat(100)}`,
-          `Extra ${i} - ${"Z".repeat(100)}`
+          `Data ${i} - ${padX}`,
+          `More ${i} - ${padY}`,
+          `Extra ${i} - ${padZ}`
         ])
         .commit();
 
-      // Yield to event loop every 5000 rows
-      if (i > 0 && i % 5000 === 0) {
+      // Yield to event loop regularly so async readers can flush.
+      if (i > 0 && i % 2000 === 0) {
         await new Promise(r => setTimeout(r, 0));
         bytesLog.push({ stage: `Row ${i}`, chunks: chunks.length, bytes: totalBytes });
       }

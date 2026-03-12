@@ -1,6 +1,7 @@
 import { XmlStream } from "@excel/utils/xml-stream";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { RelationshipXform } from "@excel/xlsx/xform/core/relationship-xform";
+import { XmlParseError } from "@excel/errors";
 
 class RelationshipsXform extends BaseXform {
   declare public parser: any;
@@ -41,7 +42,10 @@ class RelationshipsXform extends BaseXform {
           this.parser.parseOpen(node);
           return true;
         }
-        throw new Error(`Unexpected xml node in parseOpen: ${JSON.stringify(node)}`);
+        throw new XmlParseError(
+          "Relationships",
+          `Unexpected xml node in parseOpen: ${JSON.stringify(node)}`
+        );
     }
   }
 
@@ -63,7 +67,7 @@ class RelationshipsXform extends BaseXform {
       case "Relationships":
         return false;
       default:
-        throw new Error(`Unexpected xml node in parseClose: ${name}`);
+        throw new XmlParseError("Relationships", `Unexpected xml node in parseClose: ${name}`);
     }
   }
 

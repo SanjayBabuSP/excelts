@@ -23,10 +23,5 @@ export {
   stringToUtf16Le
 } from "@utils/utils.base";
 
-// =============================================================================
-// File system utilities (Browser stub - always returns false)
-// =============================================================================
-
-export function fileExists(_path: string): Promise<boolean> {
-  return Promise.resolve(false);
-}
+// Re-export file system utilities from centralized fs module (browser stubs)
+export { fileExists } from "@utils/fs.browser";

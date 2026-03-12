@@ -1,6 +1,7 @@
 import { XmlStream } from "@excel/utils/xml-stream";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { SharedStringXform } from "@excel/xlsx/xform/strings/shared-string-xform";
+import { XmlParseError } from "@excel/errors";
 
 interface SharedStringsModel {
   values: any[];
@@ -107,7 +108,10 @@ class SharedStringsXform extends BaseXform {
         this.parser.parseOpen(node);
         return true;
       default:
-        throw new Error(`Unexpected xml node in parseOpen: ${JSON.stringify(node)}`);
+        throw new XmlParseError(
+          "sharedStrings",
+          `Unexpected xml node in parseOpen: ${JSON.stringify(node)}`
+        );
     }
   }
 
@@ -130,7 +134,7 @@ class SharedStringsXform extends BaseXform {
       case "sst":
         return false;
       default:
-        throw new Error(`Unexpected xml node in parseClose: ${name}`);
+        throw new XmlParseError("sharedStrings", `Unexpected xml node in parseClose: ${name}`);
     }
   }
 }

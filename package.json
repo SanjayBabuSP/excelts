@@ -51,6 +51,48 @@
       "types": "./dist/browser/index.browser.d.ts",
       "default": "./dist/browser/index.browser.js"
     },
+    "./zip": {
+      "browser": {
+        "types": "./dist/browser/modules/archive/index.browser.d.ts",
+        "default": "./dist/browser/modules/archive/index.browser.js"
+      },
+      "import": {
+        "types": "./dist/types/modules/archive/index.d.ts",
+        "default": "./dist/esm/modules/archive/index.js"
+      },
+      "require": {
+        "types": "./dist/types/modules/archive/index.d.ts",
+        "default": "./dist/cjs/modules/archive/index.js"
+      }
+    },
+    "./csv": {
+      "browser": {
+        "types": "./dist/browser/modules/csv/index.d.ts",
+        "default": "./dist/browser/modules/csv/index.js"
+      },
+      "import": {
+        "types": "./dist/types/modules/csv/index.d.ts",
+        "default": "./dist/esm/modules/csv/index.js"
+      },
+      "require": {
+        "types": "./dist/types/modules/csv/index.d.ts",
+        "default": "./dist/cjs/modules/csv/index.js"
+      }
+    },
+    "./stream": {
+      "browser": {
+        "types": "./dist/browser/modules/stream/index.browser.d.ts",
+        "default": "./dist/browser/modules/stream/index.browser.js"
+      },
+      "import": {
+        "types": "./dist/types/modules/stream/index.d.ts",
+        "default": "./dist/esm/modules/stream/index.js"
+      },
+      "require": {
+        "types": "./dist/types/modules/stream/index.d.ts",
+        "default": "./dist/cjs/modules/stream/index.js"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -61,14 +103,31 @@
     "README_zh.md"
   ],
   "sideEffects": false,
+  "typesVersions": {
+    "*": {
+      "zip": [
+        "dist/types/modules/archive/index.d.ts"
+      ],
+      "csv": [
+        "dist/types/modules/csv/index.d.ts"
+      ],
+      "stream": [
+        "dist/types/modules/stream/index.d.ts"
+      ],
+      "browser": [
+        "dist/browser/index.browser.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "example": "node scripts/run-examples.ts",
+    "generate:csv-worker": "node scripts/generate-csv-worker-script.ts",
     "check": "concurrently --raw \"npm run type\" \"npm run lint\"",
     "test": "vitest run && npm run test:browser --",
-    "test:browser": "rimraf dist && npm run build:browser:bundle && vitest run --config vitest.browser.config.ts",
+    "test:browser": "npm run generate:csv-worker && rimraf dist && npm run build:browser:bundle && vitest run --config vitest.browser.config.ts",
     "test:watch": "vitest",
-    "build": "rimraf dist && concurrently \"npm run build:esm\" \"npm run build:cjs\" \"npm run build:browser\" \"npm run build:browser:bundle\" && npm run build:verify",
-    "build:verify": "tsc --noEmit --module NodeNext --moduleResolution NodeNext dist/types/index.d.ts",
+    "build": "npm run generate:csv-worker && rimraf dist && concurrently \"npm run build:esm\" \"npm run build:cjs\" \"npm run build:browser\" \"npm run build:browser:bundle\" && npm run build:verify",
+    "build:verify": "tsc --noEmit --module NodeNext --moduleResolution NodeNext dist/types/index.d.ts dist/types/modules/archive/index.d.ts dist/types/modules/csv/index.d.ts dist/types/modules/stream/index.d.ts",
     "analyze:browser": "rimraf dist && node --input-type=module -e \"import { execSync } from 'node:child_process'; process.env.ANALYZE='true'; execSync('rolldown -c rolldown.config.ts', { stdio: 'inherit' });\"",
     "clean": "pnpm dlx --reporter=silent rimraf \"**/node_modules\" pnpm-lock.yaml \"**/dist\" -g && pnpm i",
     "lint": "eslint && oxlint",

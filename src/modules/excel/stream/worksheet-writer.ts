@@ -1,6 +1,7 @@
 import { RelType } from "@excel/xlsx/rel-type";
 import { colCache } from "@excel/utils/col-cache";
 import { Encryptor } from "@excel/utils/encryptor";
+import { ExcelStreamStateError, MergeConflictError, RowOutOfBoundsError } from "@excel/errors";
 import { uint8ArrayToBase64 } from "@utils/utils";
 import { Dimensions } from "@excel/range";
 import { StringBuf } from "@excel/utils/string-buf";
@@ -13,7 +14,7 @@ import { applyMergeBorders, collectMergeBorders } from "@excel/utils/merge-borde
 import type { StreamBuf } from "@excel/utils/stream-buf";
 import { mediaRelTargetFromRels, worksheetPath } from "@excel/utils/ooxml-paths";
 
-const xmlBuffer = new StringBuf();
+const xmlBuffer = /* @__PURE__ */ new StringBuf();
 
 // ============================================================================================
 // Xforms
@@ -301,7 +302,7 @@ class WorksheetWriter {
   // destroy - not a valid operation for a streaming writer
   // even though some streamers might be able to, it's a bad idea.
   destroy(): void {
-    throw new Error("Invalid Operation: destroy");
+    throw new ExcelStreamStateError("destroy", "Invalid operation for a streaming writer");
   }
 
   commit(): void {
@@ -514,7 +515,7 @@ class WorksheetWriter {
 
     // may fail if rows have been comitted
     if (index < this._rowOffset) {
-      throw new Error("Out of bounds: this row has been committed");
+      throw new RowOutOfBoundsError(rowNumber, "this row has been committed");
     }
     let row = this._rows![index];
     if (!row) {
@@ -554,7 +555,7 @@ class WorksheetWriter {
     // check cells aren't already merged
     this._merges.forEach(merge => {
       if (merge.intersects(dimensions)) {
-        throw new Error("Cannot merge already merged cells");
+        throw new MergeConflictError();
       }
     });
 

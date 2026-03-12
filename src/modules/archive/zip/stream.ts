@@ -6,44 +6,73 @@
  * - In browser builds the bundler aliases those imports to their browser variants.
  */
 
-import { crc32Update, crc32Finalize } from "@archive/compression/crc32";
-import { createDeflateStream } from "@archive/compression/streaming-compress";
-import type { ZipTimestampMode } from "@archive/utils/timestamps";
-import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/defaults";
+import { crc32Update, crc32Finalize, ensureZlibSync } from "@archive/compression/crc32";
+import { createDeflateStream, SyncDeflater } from "@archive/compression/streaming-compress";
+import {
+  zipCryptoInitKeys,
+  zipCryptoCreateHeader,
+  zipCryptoEncryptByte,
+  aesEncrypt,
+  buildAesExtraField,
+  randomBytes,
+  type ZipCryptoState,
+  type AesKeyStrength,
+  type ZipEncryptionMethod,
+  isAesEncryption,
+  getAesKeyStrength
+} from "@archive/crypto";
+import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
+import { DEFAULT_ZIP_LEVEL, DEFAULT_ZIP_TIMESTAMPS } from "@archive/shared/defaults";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import {
   buildZipEntryMetadata,
   resolveZipCompressionMethod
 } from "@archive/zip/zip-entry-metadata";
-import { decodeUtf8, encodeUtf8 } from "@archive/utils/text";
-import { isProbablyIncompressible } from "@archive/utils/compressibility";
-import type { ZipEntryInfo as UnzipZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
+import { resolveZipExternalAttributesAndVersionMadeBy } from "@archive/zip/zip-entry-attributes";
+import { normalizeZipPath, type ZipPathOptions } from "@archive/zip-spec/zip-path";
 import {
-  buildCentralDirectoryHeader,
+  encodeZipStringWithCodec,
+  resolveZipStringCodec,
+  type ZipStringCodec,
+  type ZipStringEncoding
+} from "@archive/shared/text";
+import { isProbablyIncompressibleChunks } from "@archive/zip/compressibility";
+import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
+import { createAbortError, toError } from "@archive/shared/errors";
+import { measureCentralDirectoryAndEocd, writeCentralDirectoryAndEocdInto } from "./writer-core";
+import type { ZipCentralDirEntry, ZipWritableFile } from "./writable-file";
+import {
   buildDataDescriptor,
-  buildEndOfCentralDirectory,
+  buildDataDescriptorZip64,
+  concatExtraFields,
+  UINT16_MAX,
+  UINT32_MAX,
   buildLocalFileHeader,
-  VERSION_MADE_BY,
-  VERSION_NEEDED
+  VERSION_ZIP64,
+  VERSION_NEEDED,
+  FLAG_ENCRYPTED,
+  FLAG_DATA_DESCRIPTOR,
+  FLAG_UTF8,
+  COMPRESSION_AES,
+  getUnixModeFromExternalAttributes,
+  isSymlinkMode,
+  type Zip64Mode
 } from "@archive/zip-spec/zip-records";
 
-/**
- * Internal entry info for central directory
- */
-interface ZipEntryInfo {
-  name: Uint8Array;
-  extraField: Uint8Array;
-  comment: Uint8Array;
-  flags: number;
-  crc: number;
-  compressedSize: number;
-  uncompressedSize: number;
-  compressionMethod: number;
-  dosTime: number;
-  dosDate: number;
-  offset: number;
-}
+export type { Zip64Mode } from "@archive/zip-spec/zip-records";
+export type { ZipCentralDirEntry, ZipWritableFile } from "./writable-file";
 
-type CentralDirectoryEntryInfo = ZipEntryInfo;
+const SMART_STORE_DECIDE_BYTES = 16 * 1024;
+
+/**
+ * Encryption options for streaming ZIP creation.
+ */
+export interface StreamingZipEncryptionOptions {
+  /** Encryption method to use */
+  encryptionMethod?: ZipEncryptionMethod;
+  /** Password for encryption */
+  password?: string | Uint8Array;
+}
 
 /**
  * True Streaming ZIP File - compresses chunk by chunk
@@ -57,15 +86,16 @@ export class ZipDeflateFile {
   private _headerEmitted = false;
   private _ondata: ((data: Uint8Array, final: boolean) => void) | null = null;
   private _onerror: ((err: Error) => void) | null = null;
-  private _centralDirEntryInfo: CentralDirectoryEntryInfo | null = null;
+  private _centralDirEntryInfo: ZipCentralDirEntry | null = null;
   private _pendingEnd = false;
   private _emittedDataDescriptor = false;
   private _localHeader: Uint8Array | null = null;
+  private _zip64Mode: Zip64Mode = "auto";
+  private _zip64 = false;
 
   // Smart STORE: delay method selection until we sample data.
   private _deflateWanted: boolean | null = null;
   private _pendingChunks: Uint8Array[] = [];
-  private _sampleBuffer: Uint8Array;
   private _sampleLen = 0;
   private _smartStore: boolean;
 
@@ -75,6 +105,19 @@ export class ZipDeflateFile {
   private _completePromise: Promise<void> | null = null;
   private _completeError: Error | null = null;
 
+  // Encryption state
+  private _encryptionMethod: ZipEncryptionMethod = "none";
+  private _password: string | Uint8Array | undefined;
+  private _zipCryptoState: ZipCryptoState | null = null;
+  private _aesKeyStrength: AesKeyStrength | undefined;
+  // For AES, we need to buffer compressed data before encryption (HMAC requires full ciphertext)
+  private _aesBuffer: Uint8Array[] = [];
+  private _aesBufferSize = 0;
+  // Original compression method for AES extra field
+  private _originalCompressionMethod: number = 0;
+  // Cached AES extra field (built once, reused for local header and central directory)
+  private _aesExtraField: Uint8Array | null = null;
+
   // Queue for incoming data before ondata is set
   private _dataQueue: Uint8Array[] = [];
   private _finalQueued = false;
@@ -82,43 +125,94 @@ export class ZipDeflateFile {
   // Serialize push() calls so callers don't need to await to preserve ordering.
   private _pushChain: Promise<void> = Promise.resolve();
 
+  // Synchronous compression state for pushSync() path.
+  private _syncDeflater: SyncDeflater | null = null;
+  private _syncZlibReady = false;
+
   readonly name: string;
   readonly level: number;
   readonly nameBytes: Uint8Array;
   readonly commentBytes: Uint8Array;
   readonly dosTime: number;
   readonly dosDate: number;
-  readonly extraField: Uint8Array;
-  private readonly _flags: number;
+  extraField: Uint8Array;
+  private _flags: number;
   private _compressionMethod: number;
   private readonly _modTime: Date;
+
+  private _externalAttributes: number;
+  private _versionMadeBy?: number;
+  private readonly _stringCodec: ReturnType<typeof resolveZipStringCodec>;
 
   constructor(
     name: string,
     options?: {
       level?: number;
       modTime?: Date;
+      atime?: Date;
+      ctime?: Date;
+      birthTime?: Date;
       timestamps?: ZipTimestampMode;
       comment?: string;
       smartStore?: boolean;
+      zip64?: Zip64Mode;
+      /** Encryption method to use */
+      encryptionMethod?: ZipEncryptionMethod;
+      /** Password for encryption */
+      password?: string | Uint8Array;
+
+      /** Optional Unix mode/permissions (may include type bits). */
+      mode?: number;
+      /** Optional MS-DOS attributes (low 8 bits). */
+      msDosAttributes?: number;
+      /** Advanced override for external attributes. */
+      externalAttributes?: number;
+      /** Advanced override for central directory versionMadeBy. */
+      versionMadeBy?: number;
+
+      /** Optional entry name normalization. */
+      path?: false | ZipPathOptions;
+
+      /** Optional string encoding for this entry name/comment. */
+      encoding?: ZipStringEncoding;
     }
   ) {
-    this.name = name;
+    const resolvedName = options?.path ? normalizeZipPath(name, options.path) : name;
+    this.name = resolvedName;
     const modTime = options?.modTime ?? new Date();
     this._modTime = modTime;
     this.level = options?.level ?? DEFAULT_ZIP_LEVEL;
 
     this._smartStore = options?.smartStore ?? true;
 
-    this._sampleBuffer = this._smartStore ? new Uint8Array(64 * 1024) : new Uint8Array(0);
+    this._zip64Mode = options?.zip64 ?? "auto";
+    this._zip64 = this._zip64Mode === true;
+
+    // Encryption setup
+    this._encryptionMethod = options?.encryptionMethod ?? "none";
+    this._password = options?.password;
+    if (this._encryptionMethod !== "none" && !this._password) {
+      throw new Error("Password is required for encryption");
+    }
+    if (isAesEncryption(this._encryptionMethod)) {
+      this._aesKeyStrength = getAesKeyStrength(this._encryptionMethod);
+    }
+
+    // Smart-store sampling does not allocate a contiguous buffer.
+
+    this._stringCodec = resolveZipStringCodec(options?.encoding);
 
     const metadata = buildZipEntryMetadata({
-      name,
-      comment: options?.comment ?? "",
+      name: resolvedName,
+      comment: options?.comment,
       modTime,
+      atime: options?.atime,
+      ctime: options?.ctime,
+      birthTime: options?.birthTime,
       timestamps: options?.timestamps ?? DEFAULT_ZIP_TIMESTAMPS,
       useDataDescriptor: true,
-      deflate: false
+      deflate: false,
+      codec: this._stringCodec
     });
 
     this.nameBytes = metadata.nameBytes;
@@ -128,6 +222,23 @@ export class ZipDeflateFile {
     this.extraField = metadata.extraField;
     this._flags = metadata.flags;
     this._compressionMethod = metadata.compressionMethod;
+
+    // External attributes + versionMadeBy
+    const attrs = resolveZipExternalAttributesAndVersionMadeBy({
+      name: resolvedName,
+      mode: options?.mode,
+      msDosAttributes: options?.msDosAttributes,
+      externalAttributes: options?.externalAttributes,
+      versionMadeBy: options?.versionMadeBy
+    });
+
+    this._externalAttributes = attrs.externalAttributes;
+    this._versionMadeBy = attrs.versionMadeBy;
+
+    // Set encryption flag
+    if (this._encryptionMethod !== "none") {
+      this._flags |= FLAG_ENCRYPTED;
+    }
 
     // If smart store is disabled, decide method upfront and keep true streaming semantics.
     if (!this._smartStore) {
@@ -151,6 +262,60 @@ export class ZipDeflateFile {
     return resolveZipCompressionMethod(deflate);
   }
 
+  /**
+   * Get or build the AES extra field (cached for reuse).
+   */
+  private _getAesExtraField(): Uint8Array {
+    if (!this._aesKeyStrength) {
+      return EMPTY_UINT8ARRAY;
+    }
+    if (!this._aesExtraField) {
+      this._aesExtraField = buildAesExtraField(
+        2,
+        this._aesKeyStrength,
+        this._originalCompressionMethod
+      );
+    }
+    return this._aesExtraField;
+  }
+
+  /**
+   * Initialize ZipCrypto encryption state and emit header.
+   * Called once before first data write.
+   */
+  private _initZipCryptoEncryption(): void {
+    if (this._zipCryptoState || this._encryptionMethod !== "zipcrypto") {
+      return;
+    }
+
+    this._zipCryptoState = zipCryptoInitKeys(this._password!);
+
+    // Create and emit encryption header (12 bytes)
+    // Note: We use CRC=0 here since we don't know it yet (data descriptor mode)
+    // The check byte will be based on DOS time instead
+    const dosTimeForCheck = (this.dosTime << 16) | this.dosDate;
+    const header = zipCryptoCreateHeader(this._zipCryptoState, dosTimeForCheck, randomBytes);
+
+    this._compressedSize += header.length;
+    this._enqueueData(header, false);
+  }
+
+  /**
+   * Encrypt data chunk using ZipCrypto (streaming).
+   * Uses the exported zipCryptoEncryptByte for each byte.
+   */
+  private _zipCryptoEncryptChunk(data: Uint8Array): Uint8Array {
+    if (!this._zipCryptoState) {
+      return data;
+    }
+
+    const output = new Uint8Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      output[i] = zipCryptoEncryptByte(this._zipCryptoState, data[i]!);
+    }
+    return output;
+  }
+
   private _initDeflateStream(): void {
     if (this._deflate) {
       return;
@@ -164,6 +329,23 @@ export class ZipDeflateFile {
 
     // Handle compressed output - this is true streaming!
     this._deflate.on("data", (chunk: Uint8Array) => {
+      // For AES, buffer compressed data (HMAC needs full ciphertext)
+      if (this._aesKeyStrength) {
+        this._aesBuffer.push(chunk);
+        this._aesBufferSize += chunk.length;
+        return;
+      }
+
+      // For ZipCrypto, encrypt and emit immediately (true streaming)
+      if (this._encryptionMethod === "zipcrypto") {
+        this._initZipCryptoEncryption();
+        const encrypted = this._zipCryptoEncryptChunk(chunk);
+        this._compressedSize += encrypted.length;
+        this._enqueueData(encrypted, false);
+        return;
+      }
+
+      // No encryption
       this._compressedSize += chunk.length;
       this._enqueueData(chunk, false);
     });
@@ -174,39 +356,101 @@ export class ZipDeflateFile {
     this._deflate.on("end", () => {
       if (this._pendingEnd && !this._emittedDataDescriptor) {
         this._emittedDataDescriptor = true;
-        this._emitDataDescriptor();
+        this._finalizeEncryptionAndEmitDescriptor();
       }
     });
   }
 
+  /**
+   * Finalize encryption (if needed) and emit data descriptor.
+   */
+  private _finalizeEncryptionAndEmitDescriptor(): void {
+    // AES: encrypt buffered data and emit
+    if (this._aesKeyStrength && this._aesBuffer.length > 0) {
+      this._finalizeAesEncryption()
+        .then(() => this._emitDataDescriptor())
+        .catch(err => this._rejectComplete(err));
+      return;
+    }
+
+    this._emitDataDescriptor();
+  }
+
+  /**
+   * Finalize AES encryption: encrypt buffered data and emit.
+   */
+  private async _finalizeAesEncryption(): Promise<void> {
+    if (!this._aesKeyStrength || this._aesBufferSize === 0) {
+      return;
+    }
+
+    let compressedData: Uint8Array;
+    if (this._aesBuffer.length === 1) {
+      compressedData = this._aesBuffer[0]!;
+    } else {
+      // Concatenate all buffered chunks
+      compressedData = new Uint8Array(this._aesBufferSize);
+      let offset = 0;
+      for (let i = 0; i < this._aesBuffer.length; i++) {
+        const chunk = this._aesBuffer[i]!;
+        compressedData.set(chunk, offset);
+        offset += chunk.length;
+      }
+    }
+    this._aesBuffer.length = 0;
+    this._aesBufferSize = 0;
+
+    // Encrypt using AES
+    const encrypted = await aesEncrypt(compressedData, this._password!, this._aesKeyStrength);
+
+    this._compressedSize = encrypted.length;
+    this._enqueueData(encrypted, false);
+  }
+
   private _buildLocalHeader(): Uint8Array {
+    // For AES encryption, add AES extra field
+    let extraField = this.extraField;
+    let compressionMethod = this._compressionMethod;
+
+    if (this._aesKeyStrength) {
+      // Store original compression method for AES extra field
+      this._originalCompressionMethod = this._compressionMethod;
+      // Set compression method to AES indicator
+      compressionMethod = COMPRESSION_AES;
+      // Use cached AES extra field
+      extraField = concatExtraFields(this.extraField, this._getAesExtraField());
+    }
+
     // CRC + sizes are written via data descriptor for true streaming.
     return buildLocalFileHeader({
       fileName: this.nameBytes,
-      extraField: this.extraField,
+      extraField,
       flags: this._flags,
-      compressionMethod: this._compressionMethod,
+      compressionMethod,
       dosTime: this.dosTime,
       dosDate: this.dosDate,
       crc32: 0,
       compressedSize: 0,
       uncompressedSize: 0,
-      versionNeeded: VERSION_NEEDED
+      versionNeeded: this._zip64 ? VERSION_ZIP64 : VERSION_NEEDED
     });
   }
 
-  private _accumulateSample(data: Uint8Array): void {
+  private _accumulateSampleLen(data: Uint8Array): void {
     if (this._deflateWanted !== null) {
       return;
     }
-    if (this._sampleLen >= this._sampleBuffer.length) {
+    if (data.length === 0) {
       return;
     }
-    const take = Math.min(this._sampleBuffer.length - this._sampleLen, data.length);
+
+    if (this._sampleLen >= SMART_STORE_DECIDE_BYTES) {
+      return;
+    }
+    const take = Math.min(SMART_STORE_DECIDE_BYTES - this._sampleLen, data.length);
     if (take <= 0) {
       return;
     }
-    this._sampleBuffer.set(data.subarray(0, take), this._sampleLen);
     this._sampleLen += take;
   }
 
@@ -214,10 +458,14 @@ export class ZipDeflateFile {
     if (this._deflateWanted !== null) {
       return false;
     }
-    return final || this._sampleLen >= 16 * 1024;
+    return final || this._sampleLen >= SMART_STORE_DECIDE_BYTES;
   }
 
-  private _decideCompressionIfNeeded(final: boolean): void {
+  private _decideCompressionIfNeeded(
+    final: boolean,
+    dataForDecision: Uint8Array,
+    skipDeflateInit = false
+  ): void {
     if (this._deflateWanted !== null) {
       return;
     }
@@ -225,21 +473,36 @@ export class ZipDeflateFile {
     // Match non-streaming builder semantics: empty files never need DEFLATE.
     if (final && this._sampleLen === 0) {
       this._deflateWanted = false;
+      this._sampleLen = 0;
       this._compressionMethod = this._buildCompressionMethod(false);
       this._localHeader = null;
       return;
     }
 
     // Default to DEFLATE unless heuristic says STORE.
-    const sample = this._sampleBuffer.subarray(0, this._sampleLen);
-    const store = isProbablyIncompressible(sample);
+    const store = isProbablyIncompressibleChunks(
+      (function* (pending: Uint8Array[], current: Uint8Array): Iterable<Uint8Array> {
+        for (const c of pending) {
+          if (c.length) {
+            yield c;
+          }
+        }
+        if (current.length) {
+          yield current;
+        }
+      })(this._pendingChunks, dataForDecision),
+      { sampleBytes: SMART_STORE_DECIDE_BYTES, minDecisionBytes: SMART_STORE_DECIDE_BYTES }
+    );
     this._deflateWanted = !store;
+    this._sampleLen = 0;
 
     this._compressionMethod = this._buildCompressionMethod(this._deflateWanted);
     this._localHeader = null;
 
     if (this._deflateWanted) {
-      this._initDeflateStream();
+      if (!skipDeflateInit) {
+        this._initDeflateStream();
+      }
     }
   }
 
@@ -258,7 +521,7 @@ export class ZipDeflateFile {
     for (const chunk of this._pendingChunks) {
       await this._writeData(chunk);
     }
-    this._pendingChunks = [];
+    this._pendingChunks.length = 0;
   }
 
   private _enqueueData(data: Uint8Array, final: boolean): void {
@@ -282,12 +545,12 @@ export class ZipDeflateFile {
     for (let i = 0; i < len; i++) {
       this._ondata(this._dataQueue[i], i === finalIndex);
     }
-    this._dataQueue = [];
+    this._dataQueue.length = 0;
     this._finalQueued = false;
   }
 
-  get ondata(): ((data: Uint8Array, final: boolean) => void) | undefined {
-    return this._ondata ?? undefined;
+  get ondata(): ((data: Uint8Array, final: boolean) => void) | null {
+    return this._ondata;
   }
 
   set ondata(cb: (data: Uint8Array, final: boolean) => void) {
@@ -296,8 +559,8 @@ export class ZipDeflateFile {
     this._flushQueue();
   }
 
-  get onerror(): ((err: Error) => void) | undefined {
-    return this._onerror ?? undefined;
+  get onerror(): ((err: Error) => void) | null {
+    return this._onerror;
   }
 
   set onerror(cb: (err: Error) => void) {
@@ -350,6 +613,63 @@ export class ZipDeflateFile {
     promise.then(() => callback()).catch(err => callback(err));
   }
 
+  private _writeDataSync(data: Uint8Array, final: boolean): void {
+    if (data.length === 0 && !final) {
+      return;
+    }
+
+    // Update CRC32 on uncompressed data
+    if (data.length > 0) {
+      this._crc = crc32Update(this._crc, data);
+      this._uncompressedSize += data.length;
+    }
+
+    if (this._deflateWanted) {
+      // Stateful synchronous compression — maintains LZ77 window and bit position
+      // across chunks so the output is a single valid DEFLATE stream.
+      if (!this._syncDeflater) {
+        this._syncDeflater = new SyncDeflater();
+      }
+      if (data.length > 0) {
+        const compressed = this._syncDeflater.write(data);
+        if (compressed.length > 0) {
+          this._compressedSize += compressed.length;
+          this._enqueueData(compressed, false);
+        }
+      }
+      if (final) {
+        const tail = this._syncDeflater.finish();
+        if (tail.length > 0) {
+          this._compressedSize += tail.length;
+          this._enqueueData(tail, false);
+        }
+        this._syncDeflater = null;
+      }
+      return;
+    }
+
+    // STORE mode - handle encryption
+    if (this._aesKeyStrength) {
+      this._aesBuffer.push(data);
+      this._aesBufferSize += data.length;
+      return;
+    }
+
+    if (this._encryptionMethod === "zipcrypto") {
+      this._initZipCryptoEncryption();
+      const encrypted = this._zipCryptoEncryptChunk(data);
+      this._compressedSize += encrypted.length;
+      this._enqueueData(encrypted, false);
+      return;
+    }
+
+    // STORE mode without encryption - pass through
+    if (data.length > 0) {
+      this._compressedSize += data.length;
+      this._enqueueData(data, false);
+    }
+  }
+
   private _writeData(data: Uint8Array): Promise<void> {
     if (data.length === 0) {
       return Promise.resolve();
@@ -372,7 +692,24 @@ export class ZipDeflateFile {
       });
     }
 
-    // STORE mode - pass through
+    // STORE mode - handle encryption
+    if (this._aesKeyStrength) {
+      // For AES in STORE mode, buffer data for later encryption
+      this._aesBuffer.push(data);
+      this._aesBufferSize += data.length;
+      return Promise.resolve();
+    }
+
+    if (this._encryptionMethod === "zipcrypto") {
+      // For ZipCrypto in STORE mode, encrypt and emit immediately
+      this._initZipCryptoEncryption();
+      const encrypted = this._zipCryptoEncryptChunk(data);
+      this._compressedSize += encrypted.length;
+      this._enqueueData(encrypted, false);
+      return Promise.resolve();
+    }
+
+    // STORE mode without encryption - pass through
     this._compressedSize += data.length;
     this._enqueueData(data, false);
     return Promise.resolve();
@@ -409,6 +746,15 @@ export class ZipDeflateFile {
       return writePromise.then(() => this._endDeflateAndWait()).then(() => completePromise);
     }
 
+    // STORE mode - handle AES encryption before emitting data descriptor
+    if (this._aesKeyStrength && this._aesBufferSize > 0) {
+      this._emittedDataDescriptor = true;
+      this._finalizeAesEncryption()
+        .then(() => this._emitDataDescriptor())
+        .catch(err => this._rejectComplete(err));
+      return completePromise;
+    }
+
     // STORE mode - emit data descriptor directly
     this._emittedDataDescriptor = true;
     this._emitDataDescriptor();
@@ -427,7 +773,7 @@ export class ZipDeflateFile {
     }
 
     if (this._deflateWanted === null) {
-      this._accumulateSample(data);
+      this._accumulateSampleLen(data);
 
       if (!this._shouldDecide(final)) {
         if (data.length > 0) {
@@ -438,7 +784,7 @@ export class ZipDeflateFile {
         return promise;
       }
 
-      this._decideCompressionIfNeeded(final);
+      this._decideCompressionIfNeeded(final, data);
       this._emitHeaderIfNeeded();
 
       const hadPendingChunks = this._pendingChunks.length > 0;
@@ -464,11 +810,28 @@ export class ZipDeflateFile {
   }
 
   /**
-   * Push data - immediately compresses and outputs
+   * Push data — compresses and outputs immediately.
+   *
    * Returns a Promise that resolves when the write is complete.
    * If final=true, it resolves after the data descriptor is emitted.
+   *
+   * When no async deflate stream is needed (the common case: smartStore without
+   * encryption), data is compressed and emitted synchronously via SyncDeflater.
+   * This avoids _pushChain closure accumulation that would cause unbounded
+   * memory growth when callers push data in a tight synchronous loop.
    */
   push(data: Uint8Array, final = false, callback?: (err?: Error | null) => void): Promise<void> {
+    if (!this._deflate && this._encryptionMethod === "none") {
+      try {
+        this._pushSyncPath(data, final);
+        callback?.();
+      } catch (err) {
+        callback?.(err instanceof Error ? err : new Error(String(err)));
+        return Promise.reject(err);
+      }
+      return Promise.resolve();
+    }
+
     const promise = (this._pushChain = this._pushChain.then(() =>
       this._pushUnchained(data, final, callback)
     ));
@@ -476,6 +839,88 @@ export class ZipDeflateFile {
     // Prevent unhandled rejection when callers intentionally ignore the Promise.
     promise.catch(() => {});
     return promise;
+  }
+
+  /**
+   * Synchronous push path — compresses and emits data without any Promises.
+   *
+   * Uses SyncDeflater (native zlib.deflateRawSync on Node.js, pure-JS LZ77 on
+   * browsers) so the entire data flow is synchronous:
+   *   push → _writeDataSync → SyncDeflater.write → _enqueueData → ondata
+   *
+   * Called automatically by push() when no async deflate stream is active.
+   */
+  private _pushSyncPath(data: Uint8Array, final = false): void {
+    if (this._finalized) {
+      throw new Error("Cannot push to finalized ZipDeflateFile");
+    }
+
+    // Ensure native CRC32 is available before the first _writeDataSync call.
+    // Without this, the JS fallback is ~60x slower.
+    if (!this._syncZlibReady) {
+      ensureZlibSync();
+      this._syncZlibReady = true;
+    }
+
+    if (this._deflateWanted === null) {
+      this._accumulateSampleLen(data);
+
+      if (!this._shouldDecide(final)) {
+        if (data.length > 0) {
+          this._pendingChunks.push(data);
+        }
+        return;
+      }
+
+      this._decideCompressionIfNeeded(final, data, true);
+      this._emitHeaderIfNeeded();
+
+      // Flush pending chunks synchronously
+      for (const chunk of this._pendingChunks) {
+        this._writeDataSync(chunk, false);
+      }
+      this._pendingChunks.length = 0;
+
+      if (data.length > 0) {
+        this._writeDataSync(data, final);
+      }
+
+      if (final) {
+        this._finalizeSyncAfterWrite();
+      }
+      return;
+    }
+
+    this._emitHeaderIfNeeded();
+
+    this._writeDataSync(data, final);
+
+    if (final) {
+      this._finalizeSyncAfterWrite();
+    }
+  }
+
+  private _finalizeSyncAfterWrite(): void {
+    this._finalized = true;
+    this._pendingEnd = false;
+    this._emittedDataDescriptor = true;
+
+    // AES encryption requires async crypto — not supported for sync path
+    if (this._aesKeyStrength && this._aesBufferSize > 0) {
+      throw new Error("AES encryption is not supported with synchronous push");
+    }
+
+    // Finalize the sync deflater if it has pending data
+    if (this._syncDeflater) {
+      const tail = this._syncDeflater.finish();
+      if (tail.length > 0) {
+        this._compressedSize += tail.length;
+        this._enqueueData(tail, false);
+      }
+      this._syncDeflater = null;
+    }
+
+    this._emitDataDescriptor();
   }
 
   /**
@@ -494,21 +939,51 @@ export class ZipDeflateFile {
   private _emitDataDescriptor(): void {
     const crcValue = crc32Finalize(this._crc);
 
-    const descriptor = buildDataDescriptor(crcValue, this._compressedSize, this._uncompressedSize);
+    // ZIP64 trigger: when sizes exceed classic limits.
+    const needsZip64Sizes =
+      this._compressedSize > UINT32_MAX || this._uncompressedSize > UINT32_MAX;
+
+    if (this._zip64Mode === false && needsZip64Sizes) {
+      this._rejectComplete(new Error("ZIP64 is required but zip64=false"));
+      return;
+    }
+
+    if (this._zip64Mode === true) {
+      this._zip64 = true;
+    } else if (needsZip64Sizes && !this._zip64) {
+      this._zip64 = true;
+    }
+
+    const descriptor = this._zip64
+      ? buildDataDescriptorZip64(crcValue, this._compressedSize, this._uncompressedSize)
+      : buildDataDescriptor(crcValue, this._compressedSize, this._uncompressedSize);
+
+    // Determine compression method and extra field for central directory
+    let cdCompressionMethod = this._compressionMethod;
+    let cdExtraField = this.extraField;
+
+    if (this._aesKeyStrength) {
+      // For AES, use COMPRESSION_AES and reuse cached AES extra field
+      cdCompressionMethod = COMPRESSION_AES;
+      cdExtraField = concatExtraFields(this.extraField, this._getAesExtraField());
+    }
 
     // Store entry info for central directory
     this._centralDirEntryInfo = {
       name: this.nameBytes,
-      extraField: this.extraField,
+      extraField: cdExtraField,
       comment: this.commentBytes,
       flags: this._flags,
       crc: crcValue,
       compressedSize: this._compressedSize,
       uncompressedSize: this._uncompressedSize,
-      compressionMethod: this._compressionMethod,
+      compressionMethod: cdCompressionMethod,
       dosTime: this.dosTime,
       dosDate: this.dosDate,
-      offset: -1
+      offset: -1,
+      zip64: this._zip64,
+      externalAttributes: this._externalAttributes,
+      versionMadeBy: this._versionMadeBy
     };
 
     this._enqueueData(descriptor, true);
@@ -528,36 +1003,359 @@ export class ZipDeflateFile {
    * Get entry metadata in the same shape as unzip parser outputs.
    * This is best-effort: writer-only fields like encryption are always false.
    */
-  getEntryInfo(): UnzipZipEntryInfo | null {
+  getEntryInfo(): ZipEntryInfo | null {
     if (!this._centralDirEntryInfo) {
       return null;
     }
 
     const path = this.name;
-    const isDirectory = path.endsWith("/") || path.endsWith("\\");
+    const pathIsDir = path.endsWith("/") || path.endsWith("\\");
+
+    // Extract Unix mode from external attributes for symlink detection
+    const externalAttributes = this._centralDirEntryInfo.externalAttributes;
+    const mode = getUnixModeFromExternalAttributes(externalAttributes);
+    const type = isSymlinkMode(mode) ? "symlink" : pathIsDir ? "directory" : "file";
 
     return {
       path,
-      isDirectory,
+      type,
       compressedSize: this._centralDirEntryInfo.compressedSize,
       uncompressedSize: this._centralDirEntryInfo.uncompressedSize,
       compressionMethod: this._centralDirEntryInfo.compressionMethod,
       crc32: this._centralDirEntryInfo.crc,
       lastModified: this._modTime,
       localHeaderOffset: this._centralDirEntryInfo.offset,
-      comment: decodeUtf8(this._centralDirEntryInfo.comment),
-      externalAttributes: 0,
-      isEncrypted: false
+      comment: this._stringCodec.decode(this._centralDirEntryInfo.comment),
+      externalAttributes,
+      mode,
+      versionMadeBy: this._centralDirEntryInfo.versionMadeBy,
+      extraField: this._centralDirEntryInfo.extraField,
+      isEncrypted: this._encryptionMethod !== "none",
+      encryptionMethod: this._aesKeyStrength
+        ? "aes"
+        : this._encryptionMethod === "zipcrypto"
+          ? "zipcrypto"
+          : undefined,
+      aesKeyStrength: this._aesKeyStrength,
+      originalCompressionMethod: this._aesKeyStrength ? this._originalCompressionMethod : undefined
     };
   }
 
   /** Writer-only metadata for building the Central Directory. */
-  getCentralDirectoryEntryInfo(): CentralDirectoryEntryInfo | null {
+  getCentralDirectoryEntryInfo(): ZipCentralDirEntry | null {
     return this._centralDirEntryInfo;
   }
 
   isComplete(): boolean {
     return this._emittedDataDescriptor && this._centralDirEntryInfo !== null;
+  }
+
+  abort(reason?: unknown): void {
+    if (this._completeError) {
+      return;
+    }
+
+    const err = createAbortError(reason);
+    this._finalized = true;
+    this._pendingEnd = true;
+    this._rejectComplete(err);
+
+    try {
+      const anyDeflate = this._deflate as any;
+      if (anyDeflate && typeof anyDeflate.destroy === "function") {
+        anyDeflate.destroy(err);
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Passthrough ZIP entry writer.
+ *
+ * Emits a local header with data-descriptor flag, then streams the provided
+ * raw payload (already compressed and/or encrypted), then emits a data descriptor.
+ */
+export class ZipRawFile implements ZipWritableFile {
+  private _headerEmitted = false;
+  private _finalized = false;
+  private _started = false;
+  private _zip64Mode: Zip64Mode = "auto";
+  private _zip64 = false;
+
+  private _dataQueue: Uint8Array[] = [];
+  private _dataQueueHead = 0;
+  private _finalQueued = false;
+
+  private _ondata: ((data: Uint8Array, final: boolean) => void) | null = null;
+  private _onerror: ((err: Error) => void) | null = null;
+
+  private _centralDirEntryInfo: ZipCentralDirEntry;
+
+  readonly name: string;
+  readonly nameBytes: Uint8Array;
+  readonly commentBytes: Uint8Array;
+  readonly dosTime: number;
+  readonly dosDate: number;
+  readonly extraField: Uint8Array;
+  private readonly _flags: number;
+  private readonly _compressionMethod: number;
+  private readonly _crc32: number;
+  private readonly _compressedSize: number;
+  private readonly _uncompressedSize: number;
+  private readonly _externalAttributes: number;
+  private readonly _versionMadeBy?: number;
+
+  private _source: Uint8Array | AsyncIterable<Uint8Array>;
+  private _chunkSize: number;
+  private readonly _stringCodec: ReturnType<typeof resolveZipStringCodec>;
+
+  private _doneResolve: (() => void) | null = null;
+  private _doneReject: ((err: Error) => void) | null = null;
+  private _donePromise: Promise<void>;
+
+  constructor(
+    name: string,
+    options: {
+      compressedData: Uint8Array | AsyncIterable<Uint8Array>;
+      crc32: number;
+      compressedSize: number;
+      uncompressedSize: number;
+      compressionMethod: number;
+      flags?: number;
+      comment?: Uint8Array;
+      extraField?: Uint8Array;
+      dosTime: number;
+      dosDate: number;
+      zip64?: Zip64Mode;
+      externalAttributes?: number;
+      versionMadeBy?: number;
+      chunkSize?: number;
+      codec?: ZipStringCodec;
+    }
+  ) {
+    this.name = name;
+    this._stringCodec = options.codec ?? resolveZipStringCodec();
+    this.nameBytes = this._stringCodec.encode(name);
+    this.commentBytes = options.comment ?? EMPTY_UINT8ARRAY;
+    this.dosTime = options.dosTime;
+    this.dosDate = options.dosDate;
+    this.extraField = options.extraField ?? EMPTY_UINT8ARRAY;
+
+    this._crc32 = options.crc32 >>> 0;
+    this._compressedSize = options.compressedSize;
+    this._uncompressedSize = options.uncompressedSize;
+    this._compressionMethod = options.compressionMethod;
+
+    this._externalAttributes = options.externalAttributes ?? 0;
+    this._versionMadeBy = options.versionMadeBy;
+
+    this._zip64Mode = options.zip64 ?? "auto";
+    this._zip64 =
+      this._zip64Mode === true ||
+      this._compressedSize > UINT32_MAX ||
+      this._uncompressedSize > UINT32_MAX;
+
+    // Always write data descriptor for passthrough entries to avoid
+    // local-header ZIP64 complexity.
+    this._flags =
+      (options.flags ?? 0) | (this._stringCodec.useUtf8Flag ? FLAG_UTF8 : 0) | FLAG_DATA_DESCRIPTOR;
+
+    this._centralDirEntryInfo = {
+      name: this.nameBytes,
+      extraField: this.extraField,
+      comment: this.commentBytes,
+      flags: this._flags,
+      crc: this._crc32,
+      compressedSize: this._compressedSize,
+      uncompressedSize: this._uncompressedSize,
+      compressionMethod: this._compressionMethod,
+      dosTime: this.dosTime,
+      dosDate: this.dosDate,
+      offset: 0,
+      zip64: this._zip64,
+      externalAttributes: this._externalAttributes,
+      versionMadeBy: this._versionMadeBy
+    };
+
+    this._source = options.compressedData;
+    this._chunkSize = options.chunkSize ?? 64 * 1024;
+
+    this._donePromise = new Promise<void>((resolve, reject) => {
+      this._doneResolve = resolve;
+      this._doneReject = reject;
+    });
+  }
+
+  /**
+   * Resolves when the file has fully emitted its local header, payload,
+   * and trailing data descriptor.
+   */
+  done(): Promise<void> {
+    return this._donePromise;
+  }
+
+  get ondata(): ((data: Uint8Array, final: boolean) => void) | null {
+    return this._ondata;
+  }
+
+  set ondata(fn: ((data: Uint8Array, final: boolean) => void) | null) {
+    this._ondata = fn;
+    this._drainQueue();
+  }
+
+  get onerror(): ((err: Error) => void) | null {
+    return this._onerror;
+  }
+
+  set onerror(fn: ((err: Error) => void) | null) {
+    this._onerror = fn;
+  }
+
+  getCentralDirectoryEntryInfo(): ZipCentralDirEntry | null {
+    return this._centralDirEntryInfo;
+  }
+
+  private _enqueueData(data: Uint8Array, final: boolean): void {
+    if (this._finalQueued) {
+      return;
+    }
+    if (data.length) {
+      this._dataQueue.push(data);
+    }
+    if (final) {
+      this._finalQueued = true;
+    }
+    this._drainQueue();
+  }
+
+  private _drainQueue(): void {
+    if (!this._ondata) {
+      return;
+    }
+
+    while (this._dataQueueHead < this._dataQueue.length) {
+      const chunk = this._dataQueue[this._dataQueueHead++]!;
+      this._ondata(chunk, false);
+    }
+
+    if (this._dataQueueHead > 0) {
+      this._dataQueue.length = 0;
+      this._dataQueueHead = 0;
+    }
+
+    if (this._finalQueued) {
+      this._finalQueued = false;
+      this._ondata(EMPTY_UINT8ARRAY, true);
+
+      // Emitting final means this file is fully written.
+      try {
+        this._doneResolve?.();
+      } catch {
+        // ignore
+      } finally {
+        this._doneResolve = null;
+        this._doneReject = null;
+      }
+    }
+  }
+
+  private _buildLocalHeader(): Uint8Array {
+    return buildLocalFileHeader({
+      fileName: this.nameBytes,
+      extraField: this.extraField,
+      flags: this._flags,
+      compressionMethod: this._compressionMethod,
+      dosTime: this.dosTime,
+      dosDate: this.dosDate,
+      crc32: 0,
+      compressedSize: 0,
+      uncompressedSize: 0,
+      versionNeeded: this._zip64 ? VERSION_ZIP64 : VERSION_NEEDED
+    });
+  }
+
+  private _buildDataDescriptor(): Uint8Array {
+    if (this._zip64) {
+      return buildDataDescriptorZip64(this._crc32, this._compressedSize, this._uncompressedSize);
+    }
+    return buildDataDescriptor(this._crc32, this._compressedSize, this._uncompressedSize);
+  }
+
+  async start(): Promise<void> {
+    if (this._started) {
+      return;
+    }
+    this._started = true;
+
+    try {
+      if (!this._headerEmitted) {
+        this._headerEmitted = true;
+        this._enqueueData(this._buildLocalHeader(), false);
+      }
+
+      if (this._source instanceof Uint8Array) {
+        // Fast path: emit entire buffer if small enough (avoids loop overhead)
+        if (this._source.length <= this._chunkSize) {
+          this._enqueueData(this._source, false);
+        } else {
+          for (let offset = 0; offset < this._source.length; offset += this._chunkSize) {
+            const chunk = this._source.subarray(
+              offset,
+              Math.min(this._source.length, offset + this._chunkSize)
+            );
+            this._enqueueData(chunk, false);
+          }
+        }
+      } else {
+        for await (const chunk of this._source) {
+          this._enqueueData(chunk, false);
+        }
+      }
+
+      if (!this._finalized) {
+        this._finalized = true;
+        this._enqueueData(this._buildDataDescriptor(), true);
+      }
+    } catch (e) {
+      const err = toError(e);
+      try {
+        this._doneReject?.(err);
+      } catch {
+        // ignore
+      } finally {
+        this._doneResolve = null;
+        this._doneReject = null;
+      }
+      try {
+        this._onerror?.(err);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  abort(reason?: unknown): void {
+    if (this._finalized) {
+      return;
+    }
+    this._finalized = true;
+    const err = createAbortError(reason);
+
+    try {
+      this._doneReject?.(err);
+    } catch {
+      // ignore
+    } finally {
+      this._doneResolve = null;
+      this._doneReject = null;
+    }
+    try {
+      this._onerror?.(err);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -566,31 +1364,47 @@ export class ZipDeflateFile {
  */
 export class StreamingZip {
   private callback: (err: Error | null, data: Uint8Array, final: boolean) => void;
-  private entries: CentralDirectoryEntryInfo[] = [];
+  private entries: ZipCentralDirEntry[] = [];
   private currentOffset = 0;
   private ended = false;
   private endPending = false;
 
+  private addedEntryCount = 0;
+
   private zipComment: Uint8Array;
+  private zip64Mode: Zip64Mode;
+  private readonly _stringCodec: ZipStringCodec;
 
   // Queue for sequential file processing
-  private fileQueue: ZipDeflateFile[] = [];
+  private fileQueue: ZipWritableFile[] = [];
   private fileQueueIndex = 0;
-  private activeFile: ZipDeflateFile | null = null;
+  private activeFile: ZipWritableFile | null = null;
 
   constructor(
     callback: (err: Error | null, data: Uint8Array, final: boolean) => void,
-    options?: { comment?: string }
+    options?: {
+      comment?: string;
+      zip64?: Zip64Mode;
+      encoding?: ZipStringEncoding;
+      codec?: ZipStringCodec;
+    }
   ) {
     this.callback = callback;
-    // Avoid per-instance TextEncoder allocations.
-    this.zipComment = options?.comment ? encodeUtf8(options.comment) : new Uint8Array(0);
+    this._stringCodec = options?.codec ?? resolveZipStringCodec(options?.encoding);
+    this.zipComment = encodeZipStringWithCodec(options?.comment, this._stringCodec);
+    this.zip64Mode = options?.zip64 ?? "auto";
   }
 
-  add(file: ZipDeflateFile): void {
+  add(file: ZipWritableFile): void {
     if (this.ended) {
       throw new Error("Cannot add files after calling end() ");
     }
+
+    // Fail fast: if ZIP64 is forbidden, classic ZIP can't exceed 65535 entries.
+    if (this.zip64Mode === false && this.addedEntryCount >= UINT16_MAX) {
+      throw new Error("ZIP64 is required but zip64=false");
+    }
+    this.addedEntryCount++;
 
     this.fileQueue.push(file);
 
@@ -619,14 +1433,12 @@ export class StreamingZip {
     this.activeFile = file;
     const startOffset = this.currentOffset;
 
-    const empty = new Uint8Array(0);
-
     file.onerror = (err: Error) => {
       if (this.ended) {
         return;
       }
       this.ended = true;
-      this.callback(err, empty, true);
+      this.callback(err, EMPTY_UINT8ARRAY, true);
     };
 
     file.ondata = (data: Uint8Array, final: boolean) => {
@@ -647,6 +1459,29 @@ export class StreamingZip {
         this._processNextFile();
       }
     };
+
+    // Auto-start writers that require an explicit start().
+    if (typeof file.start === "function") {
+      try {
+        const promise = file.start();
+        // Avoid unhandled rejections and surface errors to the pipeline.
+        promise.catch(e => {
+          const err = toError(e);
+          try {
+            file.onerror?.(err);
+          } catch {
+            // ignore
+          }
+        });
+      } catch (e) {
+        const err = toError(e);
+        try {
+          file.onerror?.(err);
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 
   private _finalize(): void {
@@ -656,39 +1491,29 @@ export class StreamingZip {
     this.ended = true;
 
     const centralDirOffset = this.currentOffset;
-    let centralDirSize = 0;
 
-    const empty = new Uint8Array(0);
-
-    for (const entry of this.entries) {
-      const header = buildCentralDirectoryHeader({
-        fileName: entry.name,
-        extraField: entry.extraField,
-        comment: entry.comment ?? empty,
-        flags: entry.flags,
-        compressionMethod: entry.compressionMethod,
-        dosTime: entry.dosTime,
-        dosDate: entry.dosDate,
-        crc32: entry.crc,
-        compressedSize: entry.compressedSize,
-        uncompressedSize: entry.uncompressedSize,
-        localHeaderOffset: entry.offset,
-        versionMadeBy: VERSION_MADE_BY,
-        versionNeeded: VERSION_NEEDED
+    let finalChunk: Uint8Array;
+    try {
+      const sizing = measureCentralDirectoryAndEocd(this.entries, {
+        zipComment: this.zipComment,
+        zip64Mode: this.zip64Mode,
+        centralDirOffset
       });
-
-      centralDirSize += header.length;
-      this.callback(null, header, false);
+      finalChunk = new Uint8Array(sizing.totalSize);
+      writeCentralDirectoryAndEocdInto(this.entries, {
+        zipComment: this.zipComment,
+        zip64Mode: this.zip64Mode,
+        centralDirOffset,
+        out: finalChunk,
+        offset: 0
+      });
+    } catch (e) {
+      const err = toError(e);
+      this.callback(err, EMPTY_UINT8ARRAY, true);
+      return;
     }
 
-    const eocd = buildEndOfCentralDirectory({
-      entryCount: this.entries.length,
-      centralDirSize,
-      centralDirOffset,
-      comment: this.zipComment
-    });
-
-    this.callback(null, eocd, true);
+    this.callback(null, finalChunk, true);
   }
 
   end(): void {
@@ -702,6 +1527,24 @@ export class StreamingZip {
       this._finalize();
     }
     // Otherwise, _processNextFile will call _finalize when done
+  }
+
+  abort(reason?: unknown): void {
+    if (this.ended) {
+      return;
+    }
+
+    const err = createAbortError(reason);
+    this.ended = true;
+    this.endPending = true;
+
+    try {
+      this.activeFile?.abort(err);
+    } catch {
+      // ignore
+    }
+
+    this.callback(err, EMPTY_UINT8ARRAY, true);
   }
 }
 

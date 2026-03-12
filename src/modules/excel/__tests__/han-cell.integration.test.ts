@@ -6,8 +6,6 @@
  * instead of the more common unprefixed element names used by Microsoft Excel.
  *
  * This test ensures that files created by HAN CELL can be loaded correctly.
- *
- * Related issue: https://github.com/exceljs/exceljs/issues/3014
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

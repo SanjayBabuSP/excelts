@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { createDeflateStream, createInflateStream, hasDeflateRaw } from "@archive";
 import { Zip as _Zip, ZipDeflate as _ZipDeflate } from "@archive/zip/stream";
+import { concatUint8Arrays } from "@utils/binary";
 
 // Keep the rest of the test unchanged while sourcing Zip/ZipDeflate from the streaming-zip module.
 const Zip = _Zip;
@@ -155,13 +156,7 @@ describe("True Streaming Verification - Browser", () => {
       await deflateEndPromise;
 
       // Concatenate compressed chunks
-      const totalLength = compressedChunks.reduce((sum, c) => sum + c.length, 0);
-      const compressed = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of compressedChunks) {
-        compressed.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const compressed = concatUint8Arrays(compressedChunks);
 
       // Decompress using our createInflateStream
       inflate.write(compressed);
@@ -169,13 +164,7 @@ describe("True Streaming Verification - Browser", () => {
       await inflateEndPromise;
 
       // Concatenate decompressed chunks
-      const decompressedLength = decompressedChunks.reduce((sum, c) => sum + c.length, 0);
-      const decompressed = new Uint8Array(decompressedLength);
-      offset = 0;
-      for (const chunk of decompressedChunks) {
-        decompressed.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const decompressed = concatUint8Arrays(decompressedChunks);
 
       const decoder = new TextDecoder();
       expect(decoder.decode(decompressed)).toBe(originalText);

@@ -3,6 +3,7 @@ import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { Range } from "@excel/range";
 import { Enums } from "@excel/enums";
 import { RichTextXform } from "@excel/xlsx/xform/strings/rich-text-xform";
+import { InvalidValueTypeError, ExcelError } from "@excel/errors";
 
 function getValueType(v) {
   if (v === null || v === undefined) {
@@ -29,7 +30,7 @@ function getValueType(v) {
   if (v.error) {
     return Enums.ValueType.Error;
   }
-  throw new Error("I could not understand type of value");
+  throw new InvalidValueTypeError(typeof v, "Could not understand type of value");
 }
 
 function getEffectiveCellType(cell) {
@@ -111,7 +112,7 @@ class CellXform extends BaseXform {
         } else if (model.sharedFormula) {
           const master = options.formulae[model.sharedFormula];
           if (!master) {
-            throw new Error(
+            throw new ExcelError(
               `Shared Formula master must exist above and or left of clone for cell ${model.address}`
             );
           }
@@ -196,7 +197,10 @@ class CellXform extends BaseXform {
       // case Enums.ValueType.Hyperlink: // ??
       // case Enums.ValueType.Formula:
       default:
-        throw new Error("I could not understand type of value");
+        throw new InvalidValueTypeError(
+          String(getValueType(model.result)),
+          "Could not understand type of value"
+        );
     }
   }
 

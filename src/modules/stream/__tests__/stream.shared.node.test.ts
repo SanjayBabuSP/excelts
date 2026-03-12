@@ -9,22 +9,17 @@
 import { describe } from "vitest";
 
 import {
-  EventEmitter,
   Readable,
   Writable,
   Transform,
   Duplex,
+  PassThrough,
   BufferedStream,
   StringChunk,
-  BufferChunk,
+  ByteChunk,
   ChunkedBuilder,
   TransactionalChunkedBuilder,
   PullStream,
-  stringToUint8Array,
-  uint8ArrayToString,
-  uint8ArrayEquals,
-  uint8ArrayIndexOf,
-  concatUint8Arrays,
   createCollector,
   createDuplex,
   createEmptyReadable,
@@ -42,6 +37,9 @@ import {
   isErrored,
   createTransform,
   createReadableFromArray,
+  createReadable,
+  createWritable,
+  createPassThrough,
   pipeline,
   finished,
   streamToUint8Array,
@@ -51,7 +49,6 @@ import {
   addAbortSignal,
   compose,
   finishedAll,
-  once,
   getDefaultHighWaterMark,
   setDefaultHighWaterMark,
   duplexPair,
@@ -59,6 +56,14 @@ import {
   promises,
   promisify
 } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
+import {
+  stringToUint8Array,
+  uint8ArrayToString,
+  uint8ArrayEquals,
+  uint8ArrayIndexOf,
+  concatUint8Arrays
+} from "@utils/binary";
 
 import { runStreamTests, type StreamModuleImports } from "@stream/__tests__/stream.shared";
 
@@ -69,12 +74,16 @@ describe("Stream Module - Shared Tests (Node)", () => {
     Writable,
     Transform,
     Duplex,
+    PassThrough,
     BufferedStream,
     PullStream,
     StringChunk,
-    BufferChunk,
+    ByteChunk,
     ChunkedBuilder,
     TransactionalChunkedBuilder,
+    createReadable,
+    createWritable,
+    createPassThrough,
     createTransform,
     createCollector,
     createDuplex,
@@ -95,7 +104,6 @@ describe("Stream Module - Shared Tests (Node)", () => {
     addAbortSignal,
     compose,
     finishedAll,
-    once,
     promisify,
     isReadable,
     isWritable,

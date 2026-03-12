@@ -1,4 +1,5 @@
 import { xmlEncode } from "@utils/utils";
+import { ExcelStreamStateError } from "@excel/errors";
 
 // constants
 const OPEN_ANGLE = "<";
@@ -107,7 +108,7 @@ class XmlStream {
 
   addAttribute(name: string, value: any): void {
     if (!this.open) {
-      throw new Error("Cannot write attributes to node if it is not open");
+      throw new ExcelStreamStateError("write attributes", "node is not open");
     }
     if (value !== undefined) {
       pushAttribute(this._xml, name, value);
@@ -116,7 +117,7 @@ class XmlStream {
 
   addAttributes(attrs: Attributes): void {
     if (!this.open) {
-      throw new Error("Cannot write attributes to node if it is not open");
+      throw new ExcelStreamStateError("write attributes", "node is not open");
     }
     pushAttributes(this._xml, attrs);
   }

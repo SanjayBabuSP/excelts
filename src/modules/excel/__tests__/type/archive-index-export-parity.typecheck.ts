@@ -45,17 +45,67 @@ type ClassKeys<T> = {
 
 type NonClassKeys<T> = Exclude<keyof T, ClassKeys<T>>;
 
-type NodeRuntimeNonClass = Pick<NodeRuntime, NonClassKeys<NodeRuntime>>;
-type BrowserRuntimeNonClass = Pick<BrowserRuntime, NonClassKeys<BrowserRuntime>>;
+// Node-only exports (file system convenience layer + gzip support)
+type NodeOnlyClassExports = "ArchiveFile" | "TarGzArchive";
+type NodeOnlyNonClassExports =
+  | "toNodeReadable"
+  | "traverseDirectory"
+  | "traverseDirectorySync"
+  | "glob"
+  | "globSync"
+  | "globToRegex"
+  | "matchGlob"
+  | "matchGlobAny"
+  | "ensureDir"
+  | "ensureDirSync"
+  | "fileExists"
+  | "fileExistsSync"
+  | "readFileBytes"
+  | "readFileBytesSync"
+  | "writeFileBytes"
+  | "writeFileBytesSync"
+  | "setFileTime"
+  | "setFileTimeSync"
+  | "safeStats"
+  | "safeStatsSync"
+  | "readFileText"
+  | "readFileTextSync"
+  | "writeFileText"
+  | "writeFileTextSync"
+  | "remove"
+  | "removeSync"
+  | "copyFile"
+  | "copyFileSync"
+  | "createReadStream"
+  | "createWriteStream"
+  | "createTempDir"
+  | "createTempDirSync"
+  // TAR + Gzip support (Node.js only - requires zlib)
+  | "targz"
+  | "parseTarGz"
+  | "parseTarGzStream"
+  | "untargz"
+  | "gzipTar"
+  | "gunzip"
+  | "gzip"
+  | "gzipSync"
+  | "gunzipSync";
 
-// Export name parity
+// Exclude Node-only exports from parity checks
+type SharedClassKeys<T> = Exclude<ClassKeys<T>, NodeOnlyClassExports>;
+type SharedNonClassKeys<T> = Exclude<NonClassKeys<T>, NodeOnlyNonClassExports>;
+
+type NodeRuntimeNonClass = Pick<NodeRuntime, SharedNonClassKeys<NodeRuntime>>;
+type BrowserRuntimeNonClass = Pick<BrowserRuntime, SharedNonClassKeys<BrowserRuntime>>;
+
+// Export name parity (for shared exports)
 
 type _ClassExportNames_NodeExtra = Assert<
-  IsNever<Exclude<ClassKeys<NodeRuntime>, ClassKeys<BrowserRuntime>>>
+  IsNever<Exclude<SharedClassKeys<NodeRuntime>, SharedClassKeys<BrowserRuntime>>>
 >;
 
 type _ClassExportNames_BrowserExtra = Assert<
-  IsNever<Exclude<ClassKeys<BrowserRuntime>, ClassKeys<NodeRuntime>>>
+  IsNever<Exclude<SharedClassKeys<BrowserRuntime>, SharedClassKeys<NodeRuntime>>>
 >;
 
 type _NonClassExportNames_NodeExtra = Assert<

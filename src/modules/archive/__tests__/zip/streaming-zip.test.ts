@@ -17,12 +17,12 @@ import {
 // Run Shared Tests
 // =============================================================================
 describe("ZIP Streaming - Node.js", () => {
-  const imports: StreamingZipModuleImports = {
+  const imports = {
     Zip,
     ZipDeflate,
     createDeflateStream,
     ZipParser
-  };
+  } as StreamingZipModuleImports;
 
   runStreamingZipTests(imports);
 });

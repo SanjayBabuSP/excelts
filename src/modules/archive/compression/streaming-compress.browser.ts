@@ -4,101 +4,129 @@
  * Uses native CompressionStream("deflate-raw") for real chunk-by-chunk streaming.
  * Falls back to buffered compression if not supported.
  *
+ * Worker Pool: Optional off-main-thread streaming compression/decompression
+ * to prevent UI blocking.
+ *
  * API compatible with Node.js version - supports .on("data"), .on("end"), .write(callback), .end()
  */
 
-import { EventEmitter } from "@stream";
-import { deflateRawCompressed, inflateRaw } from "@archive/compression/deflate-fallback";
-import { hasDeflateRawWebStreams } from "@archive/compression/compress.base";
-import { concatUint8Arrays } from "@archive/utils/bytes";
-import { DEFAULT_COMPRESS_LEVEL } from "@archive/defaults";
+import { EventEmitter } from "@utils/event-emitter";
+import {
+  deflateRawCompressed,
+  inflateRaw,
+  SyncDeflater as PureJsSyncDeflater
+} from "@archive/compression/deflate-fallback";
+import {
+  hasDeflateRawWebStreams,
+  hasGzipCompressionStream,
+  hasGzipDecompressionStream,
+  hasDeflateCompressionStream,
+  hasDeflateDecompressionStream
+} from "@archive/compression/compress.base";
+import { concatUint8Arrays } from "@utils/binary";
+import { DEFAULT_COMPRESS_LEVEL } from "@archive/shared/defaults";
+import type { WorkerPool, WorkerTaskType } from "@archive/compression/worker-pool/index.browser";
+import {
+  hasWorkerSupport,
+  getDefaultWorkerPool
+} from "@archive/compression/worker-pool/index.browser";
+import { gzipSync, gunzipSync, zlibSync, unzlibSync } from "@archive/compression/compress.browser";
 
 export type {
   DeflateStream,
   InflateStream,
+  StreamingCodec,
   StreamCompressOptions,
-  StreamingCodec
+  SyncDeflaterLike
 } from "@archive/compression/streaming-compress.base";
 import {
-  asError,
+  toError,
   type DeflateStream,
   type InflateStream,
   type StreamCallback,
   type StreamCompressOptions
 } from "@archive/compression/streaming-compress.base";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
+
+export { hasWorkerSupport };
+
+/** Shared error message constant */
+const WRITE_AFTER_END_ERROR = "write after end";
+
+/** Helper to handle errors with optional callback */
+function handleError(emitter: EventEmitter, err: unknown, callback?: StreamCallback): void {
+  const error = toError(err);
+  if (callback) {
+    callback(error);
+  } else {
+    emitter.emit("error", error);
+  }
+}
 
 /**
  * Check if deflate-raw streaming compression is supported by this library.
- *
- * In browsers, the library always supports deflate-raw via the JS fallback.
- * Native deflate-raw Web Streams support (CompressionStream/DecompressionStream)
- * is used when available, but is not required.
  */
 export function hasDeflateRaw(): boolean {
   return true;
 }
 
-function hasNativeDeflateRawWebStreams(): boolean {
-  return hasDeflateRawWebStreams();
+// =============================================================================
+// Base Codec - shared write/end/destroy lifecycle
+// =============================================================================
+
+/**
+ * Async codec interface - abstracted write/end/close operations.
+ */
+interface AsyncCodecBackend {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(err?: Error): void;
 }
 
-class WebStreamCodec extends EventEmitter {
-  private writer: WritableStreamDefaultWriter<Uint8Array>;
-  private reader: ReadableStreamDefaultReader<Uint8Array>;
-  private readPromise: Promise<void>;
+/**
+ * Base streaming codec with unified lifecycle management.
+ * Backend can emit events via the returned codec reference.
+ */
+class AsyncStreamCodec extends EventEmitter {
   private ended = false;
+  private destroyed = false;
+  private writeChain: Promise<void> = Promise.resolve();
+  private _backend: AsyncCodecBackend | null = null;
 
-  constructor(
-    writer: WritableStreamDefaultWriter<Uint8Array>,
-    reader: ReadableStreamDefaultReader<Uint8Array>
-  ) {
-    super();
-    this.writer = writer;
-    this.reader = reader;
-    this.readPromise = this._startReading();
-  }
-
-  private async _startReading(): Promise<void> {
-    try {
-      while (true) {
-        const { value, done } = await this.reader.read();
-        if (done) {
-          break;
-        }
-        if (value) {
-          this.emit("data", value);
-        }
-      }
-      this.emit("end");
-    } catch (err) {
-      this.emit("error", asError(err));
-    }
+  setBackend(backend: AsyncCodecBackend): void {
+    this._backend = backend;
   }
 
   write(chunk: Uint8Array, callback?: StreamCallback): boolean {
     if (this.ended) {
-      const err = new Error("write after end");
-      if (callback) {
-        callback(err);
-      } else {
-        this.emit("error", err);
-      }
+      handleError(this, new Error(WRITE_AFTER_END_ERROR), callback);
       return false;
     }
 
-    this.writer
-      .write(chunk)
+    if (chunk.byteLength === 0) {
+      if (callback) {
+        queueMicrotask(callback);
+      }
+      return true;
+    }
+
+    const backend = this._backend;
+    if (!backend) {
+      throw new Error("Backend not initialized");
+    }
+
+    const promise = this.writeChain.then(() => backend.write(chunk));
+    this.writeChain = promise;
+
+    promise
       .then(() => {
-        if (callback) {
-          callback();
+        if (!this.destroyed) {
+          callback?.();
         }
       })
       .catch(err => {
-        const error = asError(err);
-        if (callback) {
-          callback(error);
-        } else {
-          this.emit("error", error);
+        if (!this.destroyed) {
+          handleError(this, err, callback);
         }
       });
 
@@ -107,111 +135,143 @@ class WebStreamCodec extends EventEmitter {
 
   end(callback?: StreamCallback): void {
     if (this.ended) {
-      if (callback) {
-        callback();
-      }
+      callback?.();
       return;
     }
     this.ended = true;
 
-    this.writer
-      .close()
-      .then(() => this.readPromise)
-      .then(() => {
-        if (callback) {
-          callback();
-        }
-      })
-      .catch(err => {
-        const error = asError(err);
-        if (callback) {
-          callback(error);
-        } else {
-          this.emit("error", error);
-        }
-      });
+    const backend = this._backend;
+    if (!backend) {
+      throw new Error("Backend not initialized");
+    }
+
+    void this.writeChain
+      .then(() => backend.close())
+      .then(() => callback?.())
+      .catch(err => handleError(this, err, callback));
   }
 
   destroy(err?: Error): void {
     this.ended = true;
+    this.destroyed = true;
+    this._backend?.abort(err);
     if (err) {
       this.emit("error", err);
     }
+  }
+}
+
+// =============================================================================
+// WebStream Codec - uses native CompressionStream/DecompressionStream
+// =============================================================================
+
+type WebStreamFormat = "deflate-raw" | "deflate" | "gzip";
+
+function createNativeWebStreamCodec(
+  format: WebStreamFormat,
+  isCompress: boolean
+): DeflateStream | InflateStream {
+  const stream = isCompress
+    ? new CompressionStream(format as CompressionFormat)
+    : new DecompressionStream(format as CompressionFormat);
+  const writer = stream.writable.getWriter() as WritableStreamDefaultWriter<Uint8Array>;
+  const reader = stream.readable.getReader();
+
+  const codec = new AsyncStreamCodec();
+  let readLoopError: Error | null = null;
+
+  const readLoop = (async (): Promise<void> => {
     try {
-      this.reader.cancel(err);
-    } catch {
-      // Ignore
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value) {
+          codec.emit("data", value);
+        }
+      }
+      codec.emit("end");
+    } catch (err) {
+      const error = toError(err);
+      readLoopError = error;
+      codec.emit("error", error);
     }
-    try {
-      this.writer.abort(err);
-    } catch {
-      // Ignore
+  })();
+
+  codec.setBackend({
+    write: chunk => writer.write(chunk),
+    close: async () => {
+      await writer.close();
+      await readLoop;
+      if (readLoopError) {
+        throw readLoopError;
+      }
+    },
+    abort: err => {
+      reader.cancel(err).catch(() => {});
+      writer.abort(err).catch(() => {});
     }
-  }
+  });
+
+  return codec;
 }
 
-/**
- * Browser True Streaming Deflate using CompressionStream API
- * Simple EventEmitter-based - emits "data" as compressed chunks arrive
- */
-class TrueStreamingDeflate extends EventEmitter {
-  private codec: WebStreamCodec;
+// =============================================================================
+// Worker Codec - uses WorkerPool.openStream for true streaming in worker
+// =============================================================================
 
-  constructor(_level: number) {
-    super();
-    const compressionStream = new CompressionStream("deflate-raw");
-    const writer =
-      compressionStream.writable.getWriter() as WritableStreamDefaultWriter<Uint8Array>;
-    const reader = compressionStream.readable.getReader();
+function createWorkerStreamCodec(
+  type: WorkerTaskType,
+  pool: WorkerPool | undefined,
+  level: number | undefined,
+  allowTransfer: boolean | undefined
+): DeflateStream | InflateStream {
+  const effectivePool = pool ?? getDefaultWorkerPool();
 
-    this.codec = new WebStreamCodec(writer, reader);
-    this.codec.on("data", chunk => this.emit("data", chunk));
-    this.codec.on("end", () => this.emit("end"));
-    this.codec.on("error", err => this.emit("error", err));
-  }
+  let endResolve: (() => void) | null = null;
+  let endReject: ((err: Error) => void) | null = null;
+  const endPromise = new Promise<void>((resolve, reject) => {
+    endResolve = resolve;
+    endReject = reject;
+  });
 
-  write(chunk: Uint8Array, callback?: StreamCallback): boolean {
-    return this.codec.write(chunk, callback);
-  }
+  const codec = new AsyncStreamCodec();
+  const workerStream = effectivePool.openStream(type, {
+    level,
+    allowTransfer,
+    onData: chunk => codec.emit("data", chunk),
+    onEnd: () => {
+      codec.emit("end");
+      endResolve?.();
+    },
+    onError: err => {
+      codec.emit("error", err);
+      endReject?.(err);
+    }
+  });
 
-  end(callback?: StreamCallback): void {
-    this.codec.end(callback);
-  }
+  codec.setBackend({
+    write: chunk => workerStream.write(chunk),
+    close: async () => {
+      await workerStream.end();
+      await endPromise;
+    },
+    abort: err => {
+      endResolve?.();
+      workerStream.abort(err?.message);
+    }
+  });
 
-  destroy(err?: Error): void {
-    this.codec.destroy(err);
-  }
+  return codec;
 }
 
-/**
- * Fallback Deflate - buffers all data, compresses at end
- */
-class FallbackDeflate extends EventEmitter {
-  private codec: BufferedCodec;
-
-  constructor(_level: number) {
-    super();
-    this.codec = new BufferedCodec(deflateRawCompressed);
-    this.codec.on("data", chunk => this.emit("data", chunk));
-    this.codec.on("end", () => this.emit("end"));
-    this.codec.on("error", err => this.emit("error", err));
-  }
-
-  write(chunk: Uint8Array, callback?: StreamCallback): boolean {
-    return this.codec.write(chunk, callback);
-  }
-
-  end(callback?: StreamCallback): void {
-    this.codec.end(callback);
-  }
-
-  destroy(err?: Error): void {
-    this.codec.destroy(err);
-  }
-}
+// =============================================================================
+// Buffered Codec - fallback when no native streaming available
+// =============================================================================
 
 class BufferedCodec extends EventEmitter {
-  private chunks: Uint8Array[] = [];
+  private readonly chunks: Uint8Array[] = [];
   private ended = false;
 
   constructor(private readonly process: (data: Uint8Array) => Uint8Array) {
@@ -220,135 +280,174 @@ class BufferedCodec extends EventEmitter {
 
   write(chunk: Uint8Array, callback?: StreamCallback): boolean {
     if (this.ended) {
-      const err = new Error("write after end");
-      if (callback) {
-        callback(err);
-      } else {
-        this.emit("error", err);
-      }
+      handleError(this, new Error(WRITE_AFTER_END_ERROR), callback);
       return false;
+    }
+
+    if (chunk.byteLength === 0) {
+      if (callback) {
+        queueMicrotask(callback);
+      }
+      return true;
     }
 
     this.chunks.push(chunk);
     if (callback) {
-      queueMicrotask(() => callback());
+      queueMicrotask(callback);
     }
     return true;
   }
 
   end(callback?: StreamCallback): void {
     if (this.ended) {
-      if (callback) {
-        callback();
-      }
+      callback?.();
       return;
     }
     this.ended = true;
 
+    const chunkCount = this.chunks.length;
+    const data =
+      chunkCount === 0
+        ? EMPTY_UINT8ARRAY
+        : chunkCount === 1
+          ? this.chunks[0]
+          : concatUint8Arrays(this.chunks);
+    this.chunks.length = 0;
+
     try {
-      const data = concatUint8Arrays(this.chunks);
-      const output = this.process(data);
-      this.emit("data", output);
+      const result = this.process(data);
+      this.emit("data", result);
       this.emit("end");
-      if (callback) {
-        callback();
-      }
+      callback?.();
     } catch (err) {
-      const error = asError(err);
-      this.emit("error", error);
-      if (callback) {
-        callback(error);
-      }
+      handleError(this, err, callback);
     }
   }
 
   destroy(err?: Error): void {
     this.ended = true;
+    this.chunks.length = 0;
     if (err) {
       this.emit("error", err);
     }
   }
 }
 
+// =============================================================================
+// Factory - select best codec based on environment and options
+// =============================================================================
+
+function createStreamCodec(
+  type: "deflate" | "inflate",
+  options: StreamCompressOptions
+): DeflateStream | InflateStream {
+  const level = type === "deflate" ? (options.level ?? DEFAULT_COMPRESS_LEVEL) : undefined;
+
+  if (options.useWorker && hasWorkerSupport()) {
+    return createWorkerStreamCodec(
+      type,
+      options.workerPool as WorkerPool | undefined,
+      level,
+      options.allowTransfer
+    );
+  }
+
+  if (hasDeflateRawWebStreams()) {
+    return createNativeWebStreamCodec("deflate-raw", type === "deflate");
+  }
+
+  return new BufferedCodec(type === "deflate" ? deflateRawCompressed : inflateRaw);
+}
+
+// =============================================================================
+// Public API
+// =============================================================================
+
 /**
  * Create a streaming DEFLATE compressor
  */
 export function createDeflateStream(options: StreamCompressOptions = {}): DeflateStream {
-  const level = options.level ?? DEFAULT_COMPRESS_LEVEL;
-
-  if (hasNativeDeflateRawWebStreams()) {
-    return new TrueStreamingDeflate(level);
-  } else {
-    return new FallbackDeflate(level);
-  }
-}
-
-/**
- * Browser True Streaming Inflate using DecompressionStream API
- */
-class TrueStreamingInflate extends EventEmitter {
-  private codec: WebStreamCodec;
-
-  constructor() {
-    super();
-    const decompressionStream = new DecompressionStream("deflate-raw");
-    const writer =
-      decompressionStream.writable.getWriter() as WritableStreamDefaultWriter<Uint8Array>;
-    const reader = decompressionStream.readable.getReader();
-
-    this.codec = new WebStreamCodec(writer, reader);
-    this.codec.on("data", chunk => this.emit("data", chunk));
-    this.codec.on("end", () => this.emit("end"));
-    this.codec.on("error", err => this.emit("error", err));
-  }
-
-  write(chunk: Uint8Array, callback?: StreamCallback): boolean {
-    return this.codec.write(chunk, callback);
-  }
-
-  end(callback?: StreamCallback): void {
-    this.codec.end(callback);
-  }
-
-  destroy(err?: Error): void {
-    this.codec.destroy(err);
-  }
-}
-
-/**
- * Fallback Inflate - buffers all data, decompresses at end
- */
-class FallbackInflate extends EventEmitter {
-  private codec: BufferedCodec;
-
-  constructor() {
-    super();
-    this.codec = new BufferedCodec(inflateRaw);
-    this.codec.on("data", chunk => this.emit("data", chunk));
-    this.codec.on("end", () => this.emit("end"));
-    this.codec.on("error", err => this.emit("error", err));
-  }
-
-  write(chunk: Uint8Array, callback?: StreamCallback): boolean {
-    return this.codec.write(chunk, callback);
-  }
-
-  end(callback?: StreamCallback): void {
-    this.codec.end(callback);
-  }
-
-  destroy(err?: Error): void {
-    this.codec.destroy(err);
-  }
+  return createStreamCodec("deflate", options);
 }
 
 /**
  * Create a streaming INFLATE decompressor
  */
-export function createInflateStream(): InflateStream {
-  if (hasNativeDeflateRawWebStreams()) {
-    return new TrueStreamingInflate();
-  } else {
-    return new FallbackInflate();
-  }
+export function createInflateStream(options: StreamCompressOptions = {}): InflateStream {
+  return createStreamCodec("inflate", options);
 }
+
+// =============================================================================
+// GZIP / ZLIB Streaming - unified factory pattern
+// =============================================================================
+
+export type GzipStream = DeflateStream;
+export type GunzipStream = InflateStream;
+export type ZlibStream = DeflateStream;
+export type UnzlibStream = InflateStream;
+
+interface WrappedCodecConfig {
+  format: WebStreamFormat;
+  hasNative: () => boolean;
+  compressFallback: (data: Uint8Array, level: number) => Uint8Array;
+  decompressFallback: (data: Uint8Array) => Uint8Array;
+}
+
+const GZIP_CONFIG: WrappedCodecConfig = {
+  format: "gzip",
+  hasNative: () => hasGzipCompressionStream() && hasGzipDecompressionStream(),
+  compressFallback: (data, level) => gzipSync(data, { level }),
+  decompressFallback: gunzipSync
+};
+
+const ZLIB_CONFIG: WrappedCodecConfig = {
+  format: "deflate",
+  hasNative: () => hasDeflateCompressionStream() && hasDeflateDecompressionStream(),
+  compressFallback: (data, level) => zlibSync(data, { level }),
+  decompressFallback: unzlibSync
+};
+
+function createWrappedStream(
+  config: WrappedCodecConfig,
+  isCompress: boolean,
+  options: StreamCompressOptions
+): DeflateStream | InflateStream {
+  if (config.hasNative()) {
+    return createNativeWebStreamCodec(config.format, isCompress);
+  }
+  const level = isCompress ? (options.level ?? DEFAULT_COMPRESS_LEVEL) : DEFAULT_COMPRESS_LEVEL;
+  return new BufferedCodec(
+    isCompress ? data => config.compressFallback(data, level) : config.decompressFallback
+  );
+}
+
+/** Create a streaming GZIP compressor */
+export function createGzipStream(options: StreamCompressOptions = {}): GzipStream {
+  return createWrappedStream(GZIP_CONFIG, true, options);
+}
+
+/** Create a streaming GZIP decompressor */
+export function createGunzipStream(options: StreamCompressOptions = {}): GunzipStream {
+  return createWrappedStream(GZIP_CONFIG, false, options);
+}
+
+/** Create a streaming Zlib compressor */
+export function createZlibStream(options: StreamCompressOptions = {}): ZlibStream {
+  return createWrappedStream(ZLIB_CONFIG, true, options);
+}
+
+/** Create a streaming Zlib decompressor */
+export function createUnzlibStream(options: StreamCompressOptions = {}): UnzlibStream {
+  return createWrappedStream(ZLIB_CONFIG, false, options);
+}
+
+// =============================================================================
+// Synchronous stateful deflater (Browser — pure JS)
+// =============================================================================
+
+/**
+ * Browser synchronous deflater — re-exports the pure-JS `SyncDeflater`
+ * from deflate-fallback.ts which maintains a LZ77 sliding window and
+ * bit-stream state across `write()` calls.
+ */
+export { PureJsSyncDeflater as SyncDeflater };

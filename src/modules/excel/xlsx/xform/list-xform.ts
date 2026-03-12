@@ -1,4 +1,5 @@
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { MaxItemsExceededError } from "@excel/errors";
 
 interface ListXformOptions {
   tag: string;
@@ -92,7 +93,7 @@ class ListXform<TChild = any> extends BaseXform<TChild[]> {
         this.parser = undefined;
 
         if (this.maxItems && this.model!.length > this.maxItems) {
-          throw new Error(`Max ${this.childXform.tag} count (${this.maxItems}) exceeded`);
+          throw new MaxItemsExceededError(this.childXform.tag, this.maxItems);
         }
       }
       return true;

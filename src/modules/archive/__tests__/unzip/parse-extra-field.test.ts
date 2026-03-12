@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseExtraField, type ZipVars } from "@archive/unzip/stream.base";
+import { parseExtraField, type ZipVars } from "@archive/unzip/parser-core";
 
 describe("parse-extra-field", () => {
   describe("parseExtraField", () => {
@@ -26,7 +26,9 @@ describe("parse-extra-field", () => {
 
       const result = parseExtraField(extraField, vars);
       expect(result.uncompressedSize).toBe(0x100000000);
+      expect(result.uncompressedSize64).toBe(BigInt(0x100000000));
       expect(vars.uncompressedSize).toBe(0x100000000);
+      expect(vars.uncompressedSize64).toBe(BigInt(0x100000000));
     });
 
     it("should parse ZIP64 extra field with compressed size", () => {
@@ -42,7 +44,9 @@ describe("parse-extra-field", () => {
 
       const result = parseExtraField(extraField, vars);
       expect(result.compressedSize).toBe(0x200000000);
+      expect(result.compressedSize64).toBe(BigInt(0x200000000));
       expect(vars.compressedSize).toBe(0x200000000);
+      expect(vars.compressedSize64).toBe(BigInt(0x200000000));
     });
 
     it("should parse ZIP64 extra field with both sizes", () => {
@@ -60,6 +64,8 @@ describe("parse-extra-field", () => {
       const result = parseExtraField(extraField, vars);
       expect(result.uncompressedSize).toBe(0x100000000);
       expect(result.compressedSize).toBe(0x200000000);
+      expect(result.uncompressedSize64).toBe(BigInt(0x100000000));
+      expect(result.compressedSize64).toBe(BigInt(0x200000000));
     });
 
     it("should skip non-ZIP64 extra field headers", () => {
@@ -100,7 +106,34 @@ describe("parse-extra-field", () => {
 
       const result = parseExtraField(extraField, vars);
       expect(result.offsetToLocalFileHeader).toBe(0x300000000);
+      expect(result.offsetToLocalFileHeader64).toBe(BigInt(0x300000000));
       expect(vars.offsetToLocalFileHeader).toBe(0x300000000);
+      expect(vars.offsetToLocalFileHeader64).toBe(BigInt(0x300000000));
+    });
+
+    it("should expose ZIP64 BigInt values beyond JS safe integers", () => {
+      const tooLarge = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+
+      // ZIP64 header: signature 0x0001, partSize 8
+      const extraField = Buffer.alloc(12);
+      extraField.writeUInt16LE(0x0001, 0);
+      extraField.writeUInt16LE(8, 2);
+      extraField.writeBigUInt64LE(tooLarge, 4);
+
+      const vars: ZipVars = {
+        compressedSize: 123,
+        uncompressedSize: 0xffffffff
+      };
+
+      const result = parseExtraField(extraField, vars);
+
+      // Number form is intentionally not populated when unsafe.
+      expect(result.uncompressedSize).toBeUndefined();
+      expect(vars.uncompressedSize).toBe(0xffffffff);
+
+      // BigInt exact value is preserved.
+      expect(result.uncompressedSize64).toBe(tooLarge);
+      expect(vars.uncompressedSize64).toBe(tooLarge);
     });
 
     it("should parse extended timestamp (0x5455) mtime", () => {

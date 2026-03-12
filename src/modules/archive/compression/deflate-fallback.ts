@@ -11,29 +11,32 @@
  * - Chrome < 103
  */
 
-import { concatUint8Arrays } from "@archive/utils/bytes";
+import { concatUint8Arrays } from "@utils/binary";
 
 // ============================================================================
 // DEFLATE Decompression (Full implementation)
 // ============================================================================
 
 // Fixed Huffman code lengths for literals/lengths (RFC 1951)
-const FIXED_LITERAL_LENGTHS = new Uint8Array(288);
-for (let i = 0; i <= 143; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 8;
-}
-for (let i = 144; i <= 255; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 9;
-}
-for (let i = 256; i <= 279; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 7;
-}
-for (let i = 280; i <= 287; i++) {
-  FIXED_LITERAL_LENGTHS[i] = 8;
-}
+const FIXED_LITERAL_LENGTHS = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(288);
+  for (let i = 0; i <= 143; i++) {
+    t[i] = 8;
+  }
+  for (let i = 144; i <= 255; i++) {
+    t[i] = 9;
+  }
+  for (let i = 256; i <= 279; i++) {
+    t[i] = 7;
+  }
+  for (let i = 280; i <= 287; i++) {
+    t[i] = 8;
+  }
+  return t;
+})();
 
 // Fixed Huffman code lengths for distances
-const FIXED_DISTANCE_LENGTHS = new Uint8Array(32).fill(5);
+const FIXED_DISTANCE_LENGTHS = /* @__PURE__ */ (() => new Uint8Array(32).fill(5))();
 
 // Length base values and extra bits (codes 257-285)
 const LENGTH_BASE = [
@@ -51,6 +54,41 @@ const DISTANCE_BASE = [
 ];
 const DISTANCE_EXTRA = [
   0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
+];
+
+// Distance code table from RFC 1951.
+// Each entry: [maxDistance, code, extraBits]
+const DIST_TABLE: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0],
+  [2, 1, 0],
+  [3, 2, 0],
+  [4, 3, 0],
+  [6, 4, 1],
+  [8, 5, 1],
+  [12, 6, 2],
+  [16, 7, 2],
+  [24, 8, 3],
+  [32, 9, 3],
+  [48, 10, 4],
+  [64, 11, 4],
+  [96, 12, 5],
+  [128, 13, 5],
+  [192, 14, 6],
+  [256, 15, 6],
+  [384, 16, 7],
+  [512, 17, 7],
+  [768, 18, 8],
+  [1024, 19, 8],
+  [1536, 20, 9],
+  [2048, 21, 9],
+  [3072, 22, 10],
+  [4096, 23, 10],
+  [6144, 24, 11],
+  [8192, 25, 11],
+  [12288, 26, 12],
+  [16384, 27, 12],
+  [24576, 28, 13],
+  [32768, 29, 13]
 ];
 
 // Code length order for dynamic Huffman tables
@@ -487,38 +525,62 @@ class BitWriter {
     this.chunks.push(new Uint8Array(this.buffer));
     return concatUint8Arrays(this.chunks);
   }
+
+  /**
+   * Return all fully completed bytes, leaving the partial byte intact.
+   * Used by SyncDeflater.write() to emit output between blocks while
+   * preserving the bit-stream state for the next block.
+   */
+  flushBytes(): Uint8Array {
+    if (this.chunks.length === 0 && this.buffer.length === 0) {
+      return new Uint8Array(0);
+    }
+
+    let result: Uint8Array;
+    if (this.chunks.length === 0) {
+      result = new Uint8Array(this.buffer);
+    } else {
+      this.chunks.push(new Uint8Array(this.buffer));
+      result = concatUint8Arrays(this.chunks);
+      this.chunks = [];
+    }
+    this.buffer = [];
+    return result;
+  }
 }
 
 // Fixed Huffman code tables
-const LITERAL_CODES: Array<[number, number]> = [];
-const LITERAL_LENGTHS_TABLE: number[] = [];
+const LITERAL_CODES = /* @__PURE__ */ (() => {
+  const codes: Array<[number, number]> = [];
 
-// Build fixed literal/length Huffman codes
-for (let i = 0; i <= 287; i++) {
-  let code: number;
-  let len: number;
+  // Build fixed literal/length Huffman codes
+  for (let i = 0; i <= 287; i++) {
+    let code: number;
+    let len: number;
 
-  if (i <= 143) {
-    // 00110000 - 10111111 (8 bits)
-    code = 0x30 + i;
-    len = 8;
-  } else if (i <= 255) {
-    // 110010000 - 111111111 (9 bits)
-    code = 0x190 + (i - 144);
-    len = 9;
-  } else if (i <= 279) {
-    // 0000000 - 0010111 (7 bits)
-    code = i - 256;
-    len = 7;
-  } else {
-    // 11000000 - 11000111 (8 bits)
-    code = 0xc0 + (i - 280);
-    len = 8;
+    if (i <= 143) {
+      // 00110000 - 10111111 (8 bits)
+      code = 0x30 + i;
+      len = 8;
+    } else if (i <= 255) {
+      // 110010000 - 111111111 (9 bits)
+      code = 0x190 + (i - 144);
+      len = 9;
+    } else if (i <= 279) {
+      // 0000000 - 0010111 (7 bits)
+      code = i - 256;
+      len = 7;
+    } else {
+      // 11000000 - 11000111 (8 bits)
+      code = 0xc0 + (i - 280);
+      len = 8;
+    }
+
+    codes[i] = [code, len];
   }
 
-  LITERAL_CODES[i] = [code, len];
-  LITERAL_LENGTHS_TABLE[i] = len;
-}
+  return codes;
+})();
 
 /**
  * Write a literal or end-of-block symbol using fixed Huffman codes
@@ -581,47 +643,13 @@ function writeLengthCode(output: BitWriter, length: number): void {
  * Write a distance code
  */
 function writeDistanceCode(output: BitWriter, distance: number): void {
-  // Distance code table from RFC 1951
-  // Each entry: [maxDistance, code, extraBits]
-  const DIST_TABLE: Array<[number, number, number]> = [
-    [1, 0, 0],
-    [2, 1, 0],
-    [3, 2, 0],
-    [4, 3, 0],
-    [6, 4, 1],
-    [8, 5, 1],
-    [12, 6, 2],
-    [16, 7, 2],
-    [24, 8, 3],
-    [32, 9, 3],
-    [48, 10, 4],
-    [64, 11, 4],
-    [96, 12, 5],
-    [128, 13, 5],
-    [192, 14, 6],
-    [256, 15, 6],
-    [384, 16, 7],
-    [512, 17, 7],
-    [768, 18, 8],
-    [1024, 19, 8],
-    [1536, 20, 9],
-    [2048, 21, 9],
-    [3072, 22, 10],
-    [4096, 23, 10],
-    [6144, 24, 11],
-    [8192, 25, 11],
-    [12288, 26, 12],
-    [16384, 27, 12],
-    [24576, 28, 13],
-    [32768, 29, 13]
-  ];
-
   // Find the appropriate distance code
   let code = 0;
   let extraBits = 0;
   let baseDistance = 1;
 
-  for (const [maxDist, c, extra] of DIST_TABLE) {
+  for (let i = 0; i < DIST_TABLE.length; i++) {
+    const [maxDist, c, extra] = DIST_TABLE[i]!;
     if (distance <= maxDist) {
       code = c;
       extraBits = extra;
@@ -636,5 +664,134 @@ function writeDistanceCode(output: BitWriter, distance: number): void {
   output.writeBitsReverse(code, 5);
   if (extraBits > 0) {
     output.writeBits(extraValue, extraBits);
+  }
+}
+
+// ============================================================================
+// Stateful Streaming Deflater
+// ============================================================================
+
+/** Maximum LZ77 sliding window size (32 KB per RFC 1951). */
+const WINDOW_SIZE = 32768;
+
+/**
+ * Stateful synchronous DEFLATE compressor.
+ *
+ * Unlike `deflateRawCompressed` (which is a one-shot function), this class
+ * maintains state across multiple `write()` calls:
+ *
+ *  - **LZ77 sliding window**: back-references can span across chunks.
+ *  - **Hash table**: match positions persist across chunks.
+ *  - **Bit writer**: bit position is preserved, so consecutive blocks form
+ *    a single valid DEFLATE bit-stream without alignment issues.
+ *
+ * Each `write()` emits one non-final fixed-Huffman block (BFINAL=0).
+ * `finish()` emits a final empty block (BFINAL=1) and returns the tail bytes.
+ *
+ * This is the pure-JS equivalent of Node.js `zlib.deflateRawSync` with
+ * `Z_SYNC_FLUSH`, used by the streaming ZIP writer (`pushSync`) to achieve
+ * constant-memory streaming in both Node.js and browsers.
+ */
+export class SyncDeflater {
+  private _output = new BitWriter();
+  private _hashTable = new Map<number, number>();
+
+  /** Sliding window: the last WINDOW_SIZE bytes of uncompressed data. */
+  private _window = new Uint8Array(WINDOW_SIZE);
+  /** Number of valid bytes currently in the window. */
+  private _windowLen = 0;
+  /** Total bytes written so far (monotonically increasing; used for hash offsets). */
+  private _totalIn = 0;
+
+  /**
+   * Compress a chunk and return the compressed bytes produced so far.
+   * The output is a valid prefix of a DEFLATE stream (one or more non-final blocks).
+   */
+  write(data: Uint8Array): Uint8Array {
+    if (data.length === 0) {
+      return new Uint8Array(0);
+    }
+
+    const out = this._output;
+
+    // Start a non-final fixed-Huffman block
+    out.writeBits(0, 1); // BFINAL = 0
+    out.writeBits(1, 2); // BTYPE  = 01 (fixed Huffman)
+
+    const window = this._window;
+    let wLen = this._windowLen;
+    const hashTable = this._hashTable;
+    const totalIn = this._totalIn;
+
+    for (let pos = 0; pos < data.length; ) {
+      let bestLen = 0;
+      let bestDist = 0;
+
+      if (pos + 2 < data.length) {
+        const h = (data[pos] << 16) | (data[pos + 1] << 8) | data[pos + 2];
+        const matchGlobalPos = hashTable.get(h);
+
+        if (matchGlobalPos !== undefined) {
+          const dist = totalIn + pos - matchGlobalPos;
+          if (dist > 0 && dist <= WINDOW_SIZE) {
+            // Match candidate — scan in the sliding window
+            const wStart = (((wLen - dist) % WINDOW_SIZE) + WINDOW_SIZE) % WINDOW_SIZE;
+            const maxLen = Math.min(258, data.length - pos);
+            let len = 0;
+            while (len < maxLen) {
+              const wByte = window[(wStart + len) % WINDOW_SIZE];
+              if (wByte !== data[pos + len]) {
+                break;
+              }
+              len++;
+            }
+            if (len >= 3) {
+              bestLen = len;
+              bestDist = dist;
+            }
+          }
+        }
+
+        hashTable.set(h, totalIn + pos);
+      }
+
+      if (bestLen >= 3) {
+        writeLengthCode(out, bestLen);
+        writeDistanceCode(out, bestDist);
+        // Advance window
+        for (let i = 0; i < bestLen; i++) {
+          window[wLen % WINDOW_SIZE] = data[pos + i];
+          wLen++;
+        }
+        pos += bestLen;
+      } else {
+        writeLiteralCode(out, data[pos]);
+        window[wLen % WINDOW_SIZE] = data[pos];
+        wLen++;
+        pos++;
+      }
+    }
+
+    // End-of-block symbol
+    writeLiteralCode(out, 256);
+
+    this._windowLen = wLen;
+    this._totalIn = totalIn + data.length;
+
+    // Flush completed bytes from the bit writer
+    return out.flushBytes();
+  }
+
+  /**
+   * Finalize the DEFLATE stream. Emits a final empty fixed-Huffman block
+   * and returns any remaining bytes (including partial-byte padding).
+   */
+  finish(): Uint8Array {
+    const out = this._output;
+    // Final block: BFINAL=1, BTYPE=01, immediately followed by EOB (symbol 256)
+    out.writeBits(1, 1); // BFINAL = 1
+    out.writeBits(1, 2); // BTYPE  = 01
+    writeLiteralCode(out, 256);
+    return out.finish();
   }
 }

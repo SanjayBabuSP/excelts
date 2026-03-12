@@ -1,6 +1,7 @@
 import { XmlStream } from "@excel/utils/xml-stream";
 import { xmlEncode, parseOoxmlDate } from "@utils/utils";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { PivotTableError } from "@excel/errors";
 import { formatDateForExcel } from "@excel/xlsx/xform/pivot-table/cache-field";
 import type {
   PivotTableSource,
@@ -204,7 +205,9 @@ class PivotCacheRecordsXform extends BaseXform<ParsedCacheRecords | null> {
     // shared items — look up index (type-aware for Date)
     const sharedItemsIndex = findSharedItemIndex(sharedItems, value);
     if (sharedItemsIndex < 0) {
-      throw new Error(`${JSON.stringify(value)} not in sharedItems ${JSON.stringify(sharedItems)}`);
+      throw new PivotTableError(
+        `${JSON.stringify(value)} not in sharedItems ${JSON.stringify(sharedItems)}`
+      );
     }
     return `<x v="${sharedItemsIndex}" />`;
   }

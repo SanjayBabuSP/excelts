@@ -1,5 +1,6 @@
 import { range, toSortedArray } from "@utils/utils";
 import { colCache } from "@excel/utils/col-cache";
+import { PivotTableError } from "@excel/errors";
 import type { Table } from "@excel/table";
 
 /**
@@ -344,14 +345,16 @@ function createTableSourceAdapter(table: Table): PivotTableSource {
 
   // Validate that table has headerRow enabled (required for pivot table column names)
   if (tableModel.headerRow === false) {
-    throw new Error(
+    throw new PivotTableError(
       "Cannot create pivot table from a table without headers. Set headerRow: true on the table."
     );
   }
 
   // Validate table has data rows
   if (!tableModel.rows || tableModel.rows.length === 0) {
-    throw new Error("Cannot create pivot table from an empty table. Add data rows to the table.");
+    throw new PivotTableError(
+      "Cannot create pivot table from an empty table. Add data rows to the table."
+    );
   }
 
   const columnNames = tableModel.columns.map(col => col.name);
@@ -360,7 +363,7 @@ function createTableSourceAdapter(table: Table): PivotTableSource {
   const nameSet = new Set<string>();
   for (const name of columnNames) {
     if (nameSet.has(name)) {
-      throw new Error(
+      throw new PivotTableError(
         `Duplicate column name "${name}" found in table. Pivot tables require unique column names.`
       );
     }
@@ -436,7 +439,7 @@ const BASE_CACHE_ID = 10;
  */
 function resolveSource(model: PivotTableModel): PivotTableSource {
   if (model.sourceSheet && model.sourceTable) {
-    throw new Error("Cannot specify both sourceSheet and sourceTable. Choose one.");
+    throw new PivotTableError("Cannot specify both sourceSheet and sourceTable. Choose one.");
   }
   if (model.sourceTable) {
     return createTableSourceAdapter(model.sourceTable);
@@ -568,7 +571,7 @@ function validate(model: PivotTableModel, source: PivotTableSource): void {
   const headerNameSet = new Set(headerNames.map(String));
   const validateFieldExists = (name: string): void => {
     if (!headerNameSet.has(name)) {
-      throw new Error(`The header name "${name}" was not found in ${source.name}.`);
+      throw new PivotTableError(`The header name "${name}" was not found in ${source.name}.`);
     }
   };
   for (const name of model.rows) {
@@ -609,12 +612,12 @@ function validate(model: PivotTableModel, source: PivotTableSource): void {
   }
 
   if (!model.rows.length) {
-    throw new Error("No pivot table rows specified.");
+    throw new PivotTableError("No pivot table rows specified.");
   }
 
   // Allow empty columns - Excel will use "Values" as column field
   if (model.values.length < 1) {
-    throw new Error("Must have at least one value.");
+    throw new PivotTableError("Must have at least one value.");
   }
 
   // Validate metric values at runtime (guards against `as any` bypasses)

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { crc32, crc32Update, crc32Finalize } from "@archive/compression/crc32";
+import { crc32UpdateByte } from "@archive/compression/crc32.base";
 
 describe("crc32", () => {
   describe("basic crc32 calculation", () => {
@@ -200,6 +201,62 @@ describe("crc32", () => {
         const data = new TextEncoder().encode(input);
         expect(crc32(data)).toBe(expected);
       });
+    });
+  });
+
+  describe("crc32UpdateByte", () => {
+    it("should update CRC with a single byte (non-inverted form)", () => {
+      // crc32UpdateByte uses the raw table lookup (non-inverted form)
+      // This is used by ZipCrypto key derivation
+      const initialCrc = 0x12345678;
+      const byte = 0x42;
+
+      const result = crc32UpdateByte(initialCrc, byte);
+
+      // Result should be unsigned 32-bit
+      expect(result).toBeGreaterThanOrEqual(0);
+      expect(result).toBeLessThanOrEqual(0xffffffff);
+      expect(result >>> 0).toBe(result);
+    });
+
+    it("should produce consistent results for same input", () => {
+      const crc = 0x12345678;
+      const byte = 0xab;
+
+      const result1 = crc32UpdateByte(crc, byte);
+      const result2 = crc32UpdateByte(crc, byte);
+
+      expect(result1).toBe(result2);
+    });
+
+    it("should produce different results for different bytes", () => {
+      const crc = 0x12345678;
+
+      const result1 = crc32UpdateByte(crc, 0x00);
+      const result2 = crc32UpdateByte(crc, 0xff);
+
+      expect(result1).not.toBe(result2);
+    });
+
+    it("should match byte-by-byte update with crc32Update", () => {
+      // Test that feeding bytes one at a time through crc32UpdateByte
+      // produces results consistent with the bulk crc32Update
+      const data = new TextEncoder().encode("test");
+
+      // Using crc32Update (bulk)
+      let bulkCrc = 0xffffffff;
+      bulkCrc = crc32Update(bulkCrc, data);
+
+      // Using crc32UpdateByte (one byte at a time)
+      // Note: crc32UpdateByte uses the non-inverted form, so we need to
+      // start with the XOR form
+      let byteCrc = 0xffffffff;
+      for (let i = 0; i < data.length; i++) {
+        byteCrc = crc32UpdateByte(byteCrc, data[i]!);
+      }
+
+      // Both should produce the same intermediate state
+      expect(byteCrc).toBe(bulkCrc);
     });
   });
 });

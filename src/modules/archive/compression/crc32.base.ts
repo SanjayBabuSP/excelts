@@ -56,3 +56,16 @@ export function crc32Finalize(crc: number): number {
 export function crc32JS(data: Uint8Array): number {
   return crc32Finalize(crc32UpdateJS(0xffffffff, data));
 }
+
+/**
+ * Single-byte CRC32 update for ZipCrypto key derivation.
+ * This uses the non-inverted form (raw table lookup).
+ *
+ * @param crc - Current CRC value (non-inverted)
+ * @param byte - Single byte to process
+ * @returns Updated CRC value
+ */
+export function crc32UpdateByte(crc: number, byte: number): number {
+  const table = getCrc32Table();
+  return (table[(crc ^ byte) & 0xff]! ^ (crc >>> 8)) >>> 0;
+}

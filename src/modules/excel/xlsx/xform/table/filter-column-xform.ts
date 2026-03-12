@@ -2,6 +2,7 @@ import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import { ListXform } from "@excel/xlsx/xform/list-xform";
 import { CustomFilterXform } from "@excel/xlsx/xform/table/custom-filter-xform";
 import { FilterXform } from "@excel/xlsx/xform/table/filter-xform";
+import { XmlParseError } from "@excel/errors";
 
 interface FilterColumnModel {
   colId?: string;
@@ -80,7 +81,10 @@ class FilterColumnXform extends BaseXform<FilterColumnModel> {
           this.parseOpen(node);
           return true;
         }
-        throw new Error(`Unexpected xml node in parseOpen: ${JSON.stringify(node)}`);
+        throw new XmlParseError(
+          "filterColumn",
+          `Unexpected xml node in parseOpen: ${JSON.stringify(node)}`
+        );
     }
   }
 

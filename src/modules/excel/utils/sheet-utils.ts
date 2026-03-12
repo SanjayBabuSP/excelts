@@ -189,12 +189,15 @@ export interface CellAddress {
 /**
  * Range object with start and end addresses
  */
-export interface Range {
+export interface SheetRange {
   /** Start cell (top-left) */
   s: CellAddress;
   /** End cell (bottom-right) */
   e: CellAddress;
 }
+
+/** @deprecated Use {@link SheetRange} instead */
+export type Range = SheetRange;
 
 /**
  * Row data for JSON conversion
@@ -258,7 +261,7 @@ export function encodeCell(cell: CellAddress): string {
  * Decode range string to Range object
  * @example decodeRange("A1:B2") => {s: {c: 0, r: 0}, e: {c: 1, r: 1}}
  */
-export function decodeRange(range: string): Range {
+export function decodeRange(range: string): SheetRange {
   const idx = range.indexOf(":");
   if (idx === -1) {
     const cell = decodeCell(range);
@@ -273,11 +276,11 @@ export function decodeRange(range: string): Range {
 /**
  * Encode Range object to range string
  */
-export function encodeRange(range: Range): string;
+export function encodeRange(range: SheetRange): string;
 export function encodeRange(start: CellAddress, end: CellAddress): string;
-export function encodeRange(startOrRange: CellAddress | Range, end?: CellAddress): string {
+export function encodeRange(startOrRange: CellAddress | SheetRange, end?: CellAddress): string {
   if (end === undefined) {
-    const range = startOrRange as Range;
+    const range = startOrRange as SheetRange;
     return encodeRange(range.s, range.e);
   }
   const start = startOrRange as CellAddress;
@@ -657,84 +660,6 @@ export function sheetToJson<T = JSONRow>(worksheet: Worksheet, opts?: Sheet2JSON
   }
 
   return result as T[];
-}
-
-// =============================================================================
-// Sheet to CSV
-// =============================================================================
-
-export interface Sheet2CSVOpts {
-  /** Field separator (default: ",") */
-  FS?: string;
-  /** Record separator (default: "\n") */
-  RS?: string;
-  /** Skip blank rows */
-  blankrows?: boolean;
-  /** Force quote all fields */
-  forceQuotes?: boolean;
-}
-
-/**
- * Convert worksheet to CSV string
- */
-export function sheetToCsv(worksheet: Worksheet, opts?: Sheet2CSVOpts): string {
-  const o = opts || {};
-  const FS = o.FS ?? ",";
-  const RS = o.RS ?? "\n";
-  const rows: string[] = [];
-
-  worksheet.eachRow({ includeEmpty: o.blankrows !== false }, (row, rowNumber) => {
-    const cells: string[] = [];
-    let isEmpty = true;
-
-    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      let val = "";
-      if (cell.value != null) {
-        if (cell.value instanceof Date) {
-          val = cell.value.toISOString();
-        } else if (typeof cell.value === "object") {
-          // Handle rich text, formula results, etc.
-          if ("result" in cell.value) {
-            val = String(cell.value.result ?? "");
-          } else if ("text" in cell.value) {
-            val = String(cell.value.text ?? "");
-          } else if ("richText" in cell.value) {
-            val = (cell.value.richText as Array<{ text: string }>).map(r => r.text).join("");
-          } else {
-            val = String(cell.value);
-          }
-        } else {
-          val = String(cell.value);
-        }
-        isEmpty = false;
-      }
-
-      // Quote if necessary
-      const needsQuote =
-        o.forceQuotes ||
-        val.includes(FS) ||
-        val.includes('"') ||
-        val.includes("\n") ||
-        val.includes("\r");
-
-      if (needsQuote) {
-        val = `"${val.replace(/"/g, '""')}"`;
-      }
-
-      cells.push(val);
-    });
-
-    // Pad cells to match column count
-    while (cells.length < worksheet.columnCount) {
-      cells.push("");
-    }
-
-    if (!isEmpty || o.blankrows !== false) {
-      rows.push(cells.join(FS));
-    }
-  });
-
-  return rows.join(RS);
 }
 
 // =============================================================================

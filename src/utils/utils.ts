@@ -3,8 +3,6 @@
  * Re-exports shared utilities and adds Node.js-specific implementations
  */
 
-import fs from "fs";
-
 // Re-export all shared utilities
 export {
   delay,
@@ -25,15 +23,5 @@ export {
   stringToUtf16Le
 } from "@utils/utils.base";
 
-// =============================================================================
-// File system utilities (Node.js only)
-// =============================================================================
-
-export async function fileExists(path: string): Promise<boolean> {
-  try {
-    await fs.promises.access(path, fs.constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// Re-export file system utilities from centralized fs module
+export { fileExists } from "@utils/fs";

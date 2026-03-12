@@ -1,21 +1,21 @@
 import zlib from "zlib";
 import type { Duplex, PassThrough, Transform } from "@stream";
 import {
-  DATA_DESCRIPTOR_SIGNATURE_BYTES,
   PullStream,
   type PullStreamPublicApi,
   runParseLoop,
   streamUntilValidatedDataDescriptor,
-  type CrxHeader,
-  type EntryProps,
-  type EntryVars,
   type InflateFactory,
-  type ParseDriverState,
   type ParseEmitter,
   type ParseIO,
-  type ParseOptions,
   type ZipEntry
 } from "@archive/unzip/stream.base";
+import {
+  DATA_DESCRIPTOR_SIGNATURE_BYTES,
+  type CrxHeader,
+  type ParseDriverState,
+  type ParseOptions
+} from "@archive/unzip/parser-core";
 
 /**
  * Creates an InflateRaw stream using Node.js native zlib.
@@ -24,9 +24,9 @@ function createInflateRaw(): Transform {
   return zlib.createInflateRaw();
 }
 
-export type { CrxHeader } from "@archive/unzip/stream.base";
+export type { CrxHeader, EntryProps, EntryVars, ParseOptions } from "@archive/unzip/parser-core";
 
-export type { EntryProps, EntryVars, ParseOptions, ZipEntry };
+export type { ZipEntry } from "@archive/unzip/stream.base";
 
 const dataDescriptorSignature = DATA_DESCRIPTOR_SIGNATURE_BYTES;
 
@@ -39,15 +39,31 @@ export type ParseStream = Duplex & {
 export function createParseClass(createInflateRawFn: InflateFactory): {
   new (opts?: ParseOptions): ParseStream;
 } {
-  return class Parse extends PullStream {
+  return class Parse extends PullStream<ZipEntry> {
     private _opts: ParseOptions;
     private _driverState: ParseDriverState = {};
+    private _done = false;
+    private _doneError: Error | null = null;
+    private _donePromise: Promise<void> | null = null;
+    private _doneDeferred: {
+      resolve: () => void;
+      reject: (err: Error) => void;
+    } | null = null;
 
     crxHeader?: CrxHeader;
 
     constructor(opts: ParseOptions = {}) {
-      super();
+      super(opts);
       this._opts = opts;
+
+      // Latch completion early to avoid missing terminal events, but do NOT
+      // create a Promise eagerly (it can reject unhandled in tests/consumers
+      // that never call `promise()`).
+      const onDone = (): void => this._latchDone();
+      const onError = (err: Error): void => this._latchError(err);
+      this.on("close", onDone);
+      this.on("end", onDone);
+      this.on("error", onError);
 
       const io: ParseIO = {
         pull: async (length: number) => this.pull(length),
@@ -56,6 +72,11 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         stream: (length: number) => this.stream(length),
         streamUntilDataDescriptor: () => this._streamUntilValidatedDataDescriptor(),
         setDone: () => {
+          // If the parser reaches EOF without consuming all buffered bytes,
+          // there may still be an in-flight writable callback waiting on
+          // `_maybeReleaseWriteCallback()`. Release it to avoid deadlocks in
+          // callers that await `write(..., cb)`.
+          this._maybeReleaseWriteCallback();
           this.end();
           this.push(null);
         }
@@ -98,6 +119,9 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
         if (!this.__emittedError || this.__emittedError !== e) {
           this.emit("error", e);
         }
+        // Best-effort: ensure upstream writers don't hang waiting for a
+        // deferred write callback if parsing terminates early.
+        this._maybeReleaseWriteCallback();
         this.emit("close");
       });
     }
@@ -127,17 +151,60 @@ export function createParseClass(createInflateRawFn: InflateFactory): {
     }
 
     promise(): Promise<void> {
-      return new Promise<void>((resolve, reject) => {
-        const done = (): void => resolve();
-        this.on("end", done);
-        this.on("close", done);
-        this.on("error", reject);
+      if (this._done) {
+        return this._doneError ? Promise.reject(this._doneError) : Promise.resolve();
+      }
+
+      if (this._donePromise) {
+        return this._donePromise;
+      }
+
+      this._donePromise = new Promise<void>((resolve, reject) => {
+        this._doneDeferred = { resolve, reject };
       });
+      return this._donePromise;
+    }
+
+    private _latchDone(): void {
+      if (this._done) {
+        return;
+      }
+      this._done = true;
+
+      const deferred = this._doneDeferred;
+      this._doneDeferred = null;
+      if (!deferred) {
+        return;
+      }
+      try {
+        deferred.resolve();
+      } catch {
+        // ignore
+      }
+    }
+
+    private _latchError(err: Error): void {
+      if (this._done) {
+        return;
+      }
+      this._done = true;
+      this._doneError = err;
+
+      const deferred = this._doneDeferred;
+      this._doneDeferred = null;
+      if (!deferred) {
+        return;
+      }
+      try {
+        deferred.reject(err);
+      } catch {
+        // ignore
+      }
     }
   };
 }
 
-const BaseParse = createParseClass(createInflateRaw);
+const BaseParse = /* @__PURE__ */ createParseClass(createInflateRaw);
 
 export class Parse extends BaseParse {}
 

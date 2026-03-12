@@ -53,8 +53,14 @@ function isRelativeSpecifier(specifier: string): boolean {
   return RELATIVE_PATH_RE.test(specifier);
 }
 
+// Known JS/TS extensions that indicate a complete specifier
+const JS_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx"]);
+
 function hasExtension(specifier: string): boolean {
-  return Boolean(path.posix.extname(specifier));
+  const ext = path.posix.extname(specifier);
+  // Only consider it "has extension" if it's a known JS extension
+  // This prevents ".browser" from being treated as a complete extension
+  return JS_EXTENSIONS.has(ext);
 }
 
 /**
@@ -429,12 +435,16 @@ function verifyEsmSpecifiers(dir: string): boolean {
 
 console.log(`Rewriting tsconfig path aliases in ESM output (${toPosixPath(esmDir)})...`);
 rewritePathAliases(esmDir, esmDir, { fileExtensions: [".js"], outputExtension: ".js" });
+rewritePathAliases(esmDir, esmDir, { fileExtensions: [".d.ts"], outputExtension: ".js" });
 
 console.log(`Rewriting tsconfig path aliases in declaration output (${toPosixPath(typesDir)})...`);
 rewritePathAliases(typesDir, typesDir, { fileExtensions: [".d.ts"], outputExtension: ".d.ts" });
 
 console.log(`Normalizing declaration specifiers for Node16/NodeNext (${toPosixPath(typesDir)})...`);
 normalizeDeclarationSpecifiers(typesDir);
+
+console.log(`Normalizing declaration specifiers in ESM output (${toPosixPath(esmDir)})...`);
+normalizeDeclarationSpecifiers(esmDir);
 
 console.log("Adding .js extensions to ESM imports for Node.js compatibility...");
 addJsExtensions(esmDir);

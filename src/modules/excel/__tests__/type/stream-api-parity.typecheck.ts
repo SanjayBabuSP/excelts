@@ -26,20 +26,20 @@ type ReturnsEqual<A extends (...args: any[]) => any, B extends (...args: any[]) 
 type ReturnExtends<A extends (...args: any[]) => any, Base> =
   ReturnType<A> extends Base ? true : false;
 
-import type * as NodeStreams from "@stream/streams";
-import type * as BrowserStreams from "@stream/streams.browser";
+import type * as NodeStreams from "@stream/index";
+import type * as BrowserStreams from "@stream/index.browser";
 
 import type {
   FinishedOptions as NodeFinishedOptions,
   PipelineOptions as NodePipelineOptions
-} from "@stream/streams";
+} from "@stream/index";
 import type {
   FinishedOptions as BrowserFinishedOptions,
   PipelineOptions as BrowserPipelineOptions
-} from "@stream/streams.browser";
+} from "@stream/index.browser";
 
-import type * as NodeRuntimeModule from "@stream/streams";
-import type * as BrowserRuntimeModule from "@stream/streams.browser";
+import type * as NodeRuntimeModule from "@stream/index";
+import type * as BrowserRuntimeModule from "@stream/index.browser";
 import type { ICollector, IDuplex, IReadable, ITransform, IWritable } from "@stream/types";
 
 type NodeRuntime = typeof NodeRuntimeModule;
@@ -75,6 +75,38 @@ type _ClassExportNames_BrowserExtra = Assert<
   IsNever<Exclude<ClassKeys<BrowserRuntime>, ClassKeys<NodeRuntime>>>
 >;
 
+// Class external contracts must align with shared interfaces.
+type _ClassContract_Readable_Node = Assert<
+  InstanceType<NodeRuntime["Readable"]> extends IReadable<any> ? true : false
+>;
+type _ClassContract_Readable_Browser = Assert<
+  InstanceType<BrowserRuntime["Readable"]> extends IReadable<any> ? true : false
+>;
+type _ClassContract_Writable_Node = Assert<
+  InstanceType<NodeRuntime["Writable"]> extends IWritable<any> ? true : false
+>;
+type _ClassContract_Writable_Browser = Assert<
+  InstanceType<BrowserRuntime["Writable"]> extends IWritable<any> ? true : false
+>;
+type _ClassContract_Transform_Node = Assert<
+  InstanceType<NodeRuntime["Transform"]> extends ITransform<any, any> ? true : false
+>;
+type _ClassContract_Transform_Browser = Assert<
+  InstanceType<BrowserRuntime["Transform"]> extends ITransform<any, any> ? true : false
+>;
+type _ClassContract_Duplex_Node = Assert<
+  InstanceType<NodeRuntime["Duplex"]> extends IDuplex<any, any> ? true : false
+>;
+type _ClassContract_Duplex_Browser = Assert<
+  InstanceType<BrowserRuntime["Duplex"]> extends IDuplex<any, any> ? true : false
+>;
+type _ClassContract_Collector_Node = Assert<
+  InstanceType<NodeRuntime["Collector"]> extends ICollector<any> ? true : false
+>;
+type _ClassContract_Collector_Browser = Assert<
+  InstanceType<BrowserRuntime["Collector"]> extends ICollector<any> ? true : false
+>;
+
 type _NonClassExportNames_NodeExtra = Assert<
   IsNever<Exclude<keyof NodeRuntimeNonClass, keyof BrowserRuntimeNonClass>>
 >;
@@ -87,7 +119,7 @@ type _NonClassExport_addAbortSignal = Assert<
   IsEqualStrict<NodeRuntimeNonClass["addAbortSignal"], BrowserRuntimeNonClass["addAbortSignal"]>
 >;
 type _NonClassExport_compose = Assert<
-  ParamsEqual<NodeRuntimeNonClass["compose"], BrowserRuntimeNonClass["compose"]>
+  IsEqualStrict<NodeRuntimeNonClass["compose"], BrowserRuntimeNonClass["compose"]>
 >;
 type _NonClassExport_consumers = Assert<
   IsEqualStrict<NodeRuntimeNonClass["consumers"], BrowserRuntimeNonClass["consumers"]>
@@ -105,7 +137,6 @@ type _NonClassExport_createCollector = Assert<
   IsEqualStrict<NodeRuntimeNonClass["createCollector"], BrowserRuntimeNonClass["createCollector"]>
 >;
 type _NonClassExport_createDuplex = Assert<
-  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   IsEqualStrict<NodeRuntimeNonClass["createDuplex"], BrowserRuntimeNonClass["createDuplex"]>
 >;
 type _NonClassExport_createEmptyReadable = Assert<
@@ -130,7 +161,7 @@ type _NonClassExport_createPullStream = Assert<
   IsEqualStrict<NodeRuntimeNonClass["createPullStream"], BrowserRuntimeNonClass["createPullStream"]>
 >;
 type _NonClassExport_createReadable = Assert<
-  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
+  // @ts-expect-error Node vs browser `read()` callback signature differs
   IsEqualStrict<NodeRuntimeNonClass["createReadable"], BrowserRuntimeNonClass["createReadable"]>
 >;
 type _NonClassExport_createReadableFromArray = Assert<
@@ -167,7 +198,7 @@ type _NonClassExport_drainStream = Assert<
   IsEqualStrict<NodeRuntimeNonClass["drainStream"], BrowserRuntimeNonClass["drainStream"]>
 >;
 type _NonClassExport_duplexPair = Assert<
-  ParamsEqual<NodeRuntimeNonClass["duplexPair"], BrowserRuntimeNonClass["duplexPair"]>
+  IsEqualStrict<NodeRuntimeNonClass["duplexPair"], BrowserRuntimeNonClass["duplexPair"]>
 >;
 type _NonClassExport_finished = Assert<
   IsEqualStrict<NodeRuntimeNonClass["finished"], BrowserRuntimeNonClass["finished"]>
@@ -205,14 +236,8 @@ type _NonClassExport_isTransform = Assert<
 type _NonClassExport_isWritable = Assert<
   IsEqualStrict<NodeRuntimeNonClass["isWritable"], BrowserRuntimeNonClass["isWritable"]>
 >;
-type _NonClassExport_normalizeWritable = Assert<
-  IsEqualStrict<
-    NodeRuntimeNonClass["normalizeWritable"],
-    BrowserRuntimeNonClass["normalizeWritable"]
-  >
->;
-type _NonClassExport_once = Assert<
-  IsEqualStrict<NodeRuntimeNonClass["once"], BrowserRuntimeNonClass["once"]>
+type _NonClassExport_toWritable = Assert<
+  IsEqualStrict<NodeRuntimeNonClass["toWritable"], BrowserRuntimeNonClass["toWritable"]>
 >;
 type _NonClassExport_pipeline = Assert<
   IsEqualStrict<NodeRuntimeNonClass["pipeline"], BrowserRuntimeNonClass["pipeline"]>
@@ -355,11 +380,11 @@ type _NonClassExport_streamToUint8Array = Assert<
 // ============================================================================
 
 type _NormalizeWritableParams = Assert<
-  ParamsEqual<typeof NodeStreams.normalizeWritable, typeof BrowserStreams.normalizeWritable>
+  ParamsEqual<typeof NodeStreams.toWritable, typeof BrowserStreams.toWritable>
 >;
 
 type _CreateReadableParams = Assert<
-  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
+  // @ts-expect-error Node vs browser `read()` callback signature differs
   ParamsEqual<typeof NodeStreams.createReadable, typeof BrowserStreams.createReadable>
 >;
 

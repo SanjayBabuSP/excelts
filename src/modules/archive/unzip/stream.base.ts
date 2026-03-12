@@ -1,204 +1,32 @@
+import { Duplex, PassThrough, Transform, pipeline, finished, type Readable } from "@stream";
+import { concatUint8Arrays, textEncoder as utf8Encoder } from "@utils/binary";
+import { ByteQueue } from "@archive/shared/byte-queue";
+import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
+import { decodeZipPath, resolveZipStringCodec } from "@archive/shared/text";
+import { PatternScanner } from "@archive/unzip/pattern-scanner";
+
 import {
-  parseDosDateTimeUTC,
-  resolveZipLastModifiedDateFromUnixSeconds
-} from "@archive/utils/timestamps";
-import {
-  Duplex,
-  PassThrough,
-  Transform,
-  concatUint8Arrays,
-  pipeline,
-  finished,
-  type Readable
-} from "@stream";
-import { parseTyped as parseBuffer } from "@archive/utils/parse-buffer";
-import { ByteQueue } from "@archive/internal/byte-queue";
-import { indexOfUint8ArrayPattern } from "@archive/utils/bytes";
-import { PatternScanner } from "@archive/utils/pattern-scanner";
-import { readUint32LE, writeUint32LE } from "@archive/utils/binary";
-import {
-  parseZipExtraFields,
+  DEFAULT_PARSE_THRESHOLD_BYTES,
+  buildZipEntryProps,
+  getZipEntryType,
+  hasDataDescriptorFlag,
+  isFileSizeKnown,
+  parseExtraField,
+  readDataDescriptor,
+  readLocalFileHeader,
+  resolveZipEntryLastModifiedDateTime,
+  runParseLoopCore,
+  isValidZipRecordSignature,
+  type CrxHeader,
+  type EntryProps,
+  type EntryVars,
+  type ParseDriverState,
+  type ParseOptions,
   type ZipExtraFields,
   type ZipVars
-} from "@archive/utils/zip-extra-fields";
-import {
-  CENTRAL_DIR_HEADER_SIG,
-  DATA_DESCRIPTOR_SIG,
-  END_OF_CENTRAL_DIR_SIG,
-  LOCAL_FILE_HEADER_SIG,
-  ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG,
-  ZIP64_END_OF_CENTRAL_DIR_SIG
-} from "@archive/zip-spec/zip-records";
+} from "@archive/unzip/parser-core";
 
-export const DATA_DESCRIPTOR_SIGNATURE_BYTES = writeUint32LE(DATA_DESCRIPTOR_SIG);
-
-const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
-
-// Shared parseBuffer() formats
-export const CRX_HEADER_FORMAT: [string, number][] = [
-  ["version", 4],
-  ["pubKeyLength", 4],
-  ["signatureLength", 4]
-];
-
-export const LOCAL_FILE_HEADER_FORMAT: [string, number][] = [
-  ["versionsNeededToExtract", 2],
-  ["flags", 2],
-  ["compressionMethod", 2],
-  ["lastModifiedTime", 2],
-  ["lastModifiedDate", 2],
-  ["crc32", 4],
-  ["compressedSize", 4],
-  ["uncompressedSize", 4],
-  ["fileNameLength", 2],
-  ["extraFieldLength", 2]
-];
-
-export const DATA_DESCRIPTOR_FORMAT: [string, number][] = [
-  ["dataDescriptorSignature", 4],
-  ["crc32", 4],
-  ["compressedSize", 4],
-  ["uncompressedSize", 4]
-];
-
-export const CENTRAL_DIRECTORY_FILE_HEADER_FORMAT: [string, number][] = [
-  ["versionMadeBy", 2],
-  ["versionsNeededToExtract", 2],
-  ["flags", 2],
-  ["compressionMethod", 2],
-  ["lastModifiedTime", 2],
-  ["lastModifiedDate", 2],
-  ["crc32", 4],
-  ["compressedSize", 4],
-  ["uncompressedSize", 4],
-  ["fileNameLength", 2],
-  ["extraFieldLength", 2],
-  ["fileCommentLength", 2],
-  ["diskNumber", 2],
-  ["internalFileAttributes", 2],
-  ["externalFileAttributes", 4],
-  ["offsetToLocalFileHeader", 4]
-];
-
-export const END_OF_CENTRAL_DIRECTORY_FORMAT: [string, number][] = [
-  ["diskNumber", 2],
-  ["diskStart", 2],
-  ["numberOfRecordsOnDisk", 2],
-  ["numberOfRecords", 2],
-  ["sizeOfCentralDirectory", 4],
-  ["offsetToStartOfCentralDirectory", 4],
-  ["commentLength", 2]
-];
-
-// Shared entry metadata helpers
-export interface ZipEntryVarsMeta {
-  flags: number | null;
-  uncompressedSize: number;
-  lastModifiedDate: number | null;
-  lastModifiedTime: number | null;
-}
-
-export type { ZipVars, ZipExtraFields };
-
-export interface ZipEntryPropsMeta {
-  path: string;
-  pathBuffer: Uint8Array;
-  flags: {
-    isUnicode: boolean;
-  };
-}
-
-export interface CrxHeader {
-  version: number | null;
-  pubKeyLength: number | null;
-  signatureLength: number | null;
-  publicKey?: Uint8Array;
-  signature?: Uint8Array;
-}
-
-export interface LocalFileHeaderVars {
-  versionsNeededToExtract: number | null;
-  flags: number | null;
-  compressionMethod: number | null;
-  lastModifiedTime: number | null;
-  lastModifiedDate: number | null;
-  crc32: number | null;
-  compressedSize: number | null;
-  uncompressedSize: number | null;
-  fileNameLength: number | null;
-  extraFieldLength: number | null;
-}
-
-export interface DataDescriptorVars {
-  dataDescriptorSignature: number | null;
-  crc32: number | null;
-  compressedSize: number | null;
-  uncompressedSize: number | null;
-}
-
-const textDecoder = new TextDecoder();
-const textEncoder = new TextEncoder();
-
-export function decodeZipEntryPath(pathBuffer: Uint8Array): string {
-  return textDecoder.decode(pathBuffer);
-}
-
-export function isZipUnicodeFlag(flags: number | null): boolean {
-  return ((flags ?? 0) & 0x800) !== 0;
-}
-
-export function isZipDirectoryPath(path: string): boolean {
-  if (path.length === 0) {
-    return false;
-  }
-  const last = path.charCodeAt(path.length - 1);
-  return last === 47 || last === 92;
-}
-
-export function getZipEntryType(path: string, uncompressedSize: number): "Directory" | "File" {
-  return uncompressedSize === 0 && isZipDirectoryPath(path) ? "Directory" : "File";
-}
-
-export function buildZipEntryProps(
-  path: string,
-  pathBuffer: Uint8Array,
-  flags: number | null
-): ZipEntryPropsMeta {
-  return {
-    path,
-    pathBuffer,
-    flags: {
-      isUnicode: isZipUnicodeFlag(flags)
-    }
-  };
-}
-
-export function resolveZipEntryLastModifiedDateTime(
-  vars: ZipEntryVarsMeta,
-  extraFields: ZipExtraFields
-): Date {
-  const dosDate = vars.lastModifiedDate ?? 0;
-  const dosTime = vars.lastModifiedTime ?? 0;
-
-  const dosDateTime = parseDosDateTimeUTC(dosDate, dosTime);
-
-  const unixSecondsMtime = extraFields.mtimeUnixSeconds;
-  if (unixSecondsMtime === undefined) {
-    return dosDateTime;
-  }
-
-  return resolveZipLastModifiedDateFromUnixSeconds(dosDate, dosTime, unixSecondsMtime);
-}
-
-export const parseExtraField = parseZipExtraFields;
-
-export function hasDataDescriptorFlag(flags: number | null): boolean {
-  return ((flags ?? 0) & 0x08) !== 0;
-}
-
-export function isFileSizeKnown(flags: number | null, compressedSize: number | null): boolean {
-  return !hasDataDescriptorFlag(flags) || (compressedSize ?? 0) > 0;
-}
+export const DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK = 256 * 1024;
 
 export type DrainStream = Transform & { promise: () => Promise<void> };
 
@@ -246,8 +74,12 @@ export type PullFn = (length: number) => Promise<Uint8Array>;
 
 const STR_FUNCTION = "function";
 
-export class PullStream extends Duplex {
+export class PullStream<TRead = any> extends Duplex {
   protected readonly _queue = new ByteQueue();
+
+  // Writable-side backpressure (Node.js)
+  private readonly _inputHighWaterMarkBytes: number;
+  private readonly _inputLowWaterMarkBytes: number;
 
   get buffer(): Uint8Array {
     return this._queue.view();
@@ -260,28 +92,130 @@ export class PullStream extends Duplex {
   finished: boolean;
   match?: number;
   __emittedError?: Error;
+  private _pendingChunkResolve?: () => void;
+  private _pendingChunkPromise?: Promise<void>;
 
-  constructor() {
+  constructor(opts: ParseOptions = {}) {
     super({ decodeStrings: false, objectMode: true });
     this.finished = false;
 
+    // Default values are intentionally conservative to avoid memory spikes
+    // when parsing large archives under slow consumers.
+    const hi = Math.max(64 * 1024, opts.inputHighWaterMarkBytes ?? 2 * 1024 * 1024);
+    const lo = Math.max(32 * 1024, opts.inputLowWaterMarkBytes ?? Math.floor(hi / 4));
+    this._inputHighWaterMarkBytes = hi;
+    this._inputLowWaterMarkBytes = Math.min(lo, hi);
+
     this.on("finish", () => {
       this.finished = true;
+      this._notifyPendingChunkWaiter();
       this.emit("chunk", false);
     });
   }
 
+  // Accept string writes as well (Node Readable.from([string]) compatibility).
+  declare write: {
+    (chunk: Uint8Array, callback?: (error?: Error | null) => void): boolean;
+    (chunk: Uint8Array, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+    (chunk: string, callback?: (error?: Error | null) => void): boolean;
+    (chunk: string, encoding?: string, callback?: (error?: Error | null) => void): boolean;
+  };
+
+  // Improve public typing for consumers without relying on generic Duplex types.
+  declare push: (chunk: TRead | null) => boolean;
+
+  private _notifyPendingChunkWaiter(): void {
+    if (!this._pendingChunkResolve) {
+      return;
+    }
+    const resolve = this._pendingChunkResolve;
+    this._pendingChunkResolve = undefined;
+    this._pendingChunkPromise = undefined;
+    resolve();
+  }
+
+  private _waitForChunkSignal(): Promise<void> {
+    if (this._pendingChunkPromise) {
+      return this._pendingChunkPromise;
+    }
+    this._pendingChunkPromise = new Promise<void>(resolve => {
+      this._pendingChunkResolve = resolve;
+    });
+    return this._pendingChunkPromise;
+  }
+
+  private async _pullFixedLength(length: number): Promise<Uint8Array> {
+    const queue = this._queue;
+    let remaining = length;
+    let firstChunk: Uint8Array | null = null;
+    let chunks: Uint8Array[] | null = null;
+
+    const appendChunk = (chunk: Uint8Array): void => {
+      if (chunk.length === 0) {
+        return;
+      }
+
+      if (!firstChunk) {
+        firstChunk = chunk;
+        return;
+      }
+
+      if (!chunks) {
+        chunks = [firstChunk, chunk];
+        return;
+      }
+
+      chunks.push(chunk);
+    };
+
+    while (remaining > 0) {
+      while (queue.length === 0) {
+        if (this.finished) {
+          throw new Error("FILE_ENDED");
+        }
+        await this._waitForChunkSignal();
+      }
+
+      const toRead = Math.min(remaining, queue.length);
+      appendChunk(queue.read(toRead));
+      remaining -= toRead;
+
+      if (queue.length === 0) {
+        this._maybeReleaseWriteCallback();
+      }
+    }
+
+    this._maybeReleaseWriteCallback();
+    if (!firstChunk) {
+      return EMPTY_UINT8ARRAY;
+    }
+    if (!chunks) {
+      return firstChunk;
+    }
+    return concatUint8Arrays(chunks);
+  }
+
   _write(chunk: Uint8Array | string, _encoding: string, callback: () => void): void {
-    const data = typeof chunk === "string" ? textEncoder.encode(chunk) : chunk;
+    const data = typeof chunk === "string" ? utf8Encoder.encode(chunk) : chunk;
     this._queue.append(data);
-    this.cb = callback;
+
+    // Apply writable backpressure by deferring the callback when the input buffer is large.
+    // Otherwise, release it immediately so producers can stream in more bytes.
+    if (this._queue.length >= this._inputHighWaterMarkBytes) {
+      this.cb = callback;
+    } else {
+      callback();
+    }
+    this._notifyPendingChunkWaiter();
     this.emit("chunk");
   }
 
   _read(): void {}
 
   protected _maybeReleaseWriteCallback(): void {
-    if (typeof this.cb === STR_FUNCTION) {
+    // Only release a deferred write callback when we've drained enough data.
+    // This provides bounded buffering while still preventing deadlocks.
+    if (typeof this.cb === STR_FUNCTION && this._queue.length <= this._inputLowWaterMarkBytes) {
       const callback = this.cb as () => void;
       this.cb = undefined;
       callback();
@@ -307,6 +241,11 @@ export class PullStream extends Duplex {
 
     const cb = (): void => {
       this._maybeReleaseWriteCallback();
+    };
+
+    const onDrain = (): void => {
+      waitingDrain = false;
+      pull();
     };
 
     const pull = (): void => {
@@ -375,10 +314,7 @@ export class PullStream extends Duplex {
 
         if (!ok) {
           waitingDrain = true;
-          p.once("drain", () => {
-            waitingDrain = false;
-            pull();
-          });
+          p.once("drain", onDrain);
           return;
         }
 
@@ -411,31 +347,25 @@ export class PullStream extends Duplex {
 
   pull(eof: number | Uint8Array, includeEof?: boolean): Promise<Uint8Array> {
     if (eof === 0) {
-      return Promise.resolve(new Uint8Array(0));
+      return Promise.resolve(EMPTY_UINT8ARRAY);
     }
 
-    // If we already have the required data in buffer
-    // we can resolve the request immediately
-    if (typeof eof === "number" && this._queue.length >= eof) {
-      const data = this._queue.read(eof);
-
-      // Allow the upstream writer to continue once the consumer makes progress.
-      // Waiting for a full drain can deadlock when the producer must call `end()`
-      // but is blocked behind a deferred write callback.
-      this._maybeReleaseWriteCallback();
-      return Promise.resolve(data);
+    if (typeof eof === "number") {
+      return this._pullFixedLength(eof);
     }
+
+    const queue = this._queue;
 
     // Otherwise we wait for more data and fulfill directly from the internal queue.
     // This avoids constructing intermediate streams for small pulls (hot path).
-    const chunks: Uint8Array[] = [];
+    let firstChunk: Uint8Array | null = null;
+    let chunks: Uint8Array[] | null = null;
     let pullStreamRejectHandler: (e: Error) => void;
 
     // Pattern scanning state (only used when eof is a pattern)
-    const eofIsNumber = typeof eof === "number";
-    const pattern = eofIsNumber ? undefined : (eof as Uint8Array);
-    const patternLen = pattern ? pattern.length : 0;
-    const scanner = eofIsNumber ? undefined : new PatternScanner(pattern!);
+    const pattern = eof as Uint8Array;
+    const patternLen = pattern.length;
+    const scanner = new PatternScanner(pattern);
 
     return new Promise<Uint8Array>((resolve, reject) => {
       let settled = false;
@@ -459,11 +389,33 @@ export class PullStream extends Duplex {
       const finalize = (): void => {
         cleanup();
         settled = true;
-        if (chunks.length === 0) {
-          resolve(new Uint8Array(0));
+        if (!firstChunk) {
+          resolve(EMPTY_UINT8ARRAY);
           return;
         }
-        resolve(chunks.length === 1 ? chunks[0] : concatUint8Arrays(chunks));
+        if (!chunks) {
+          resolve(firstChunk);
+          return;
+        }
+        resolve(concatUint8Arrays(chunks));
+      };
+
+      const appendChunk = (chunk: Uint8Array): void => {
+        if (chunk.length === 0) {
+          return;
+        }
+
+        if (!firstChunk) {
+          firstChunk = chunk;
+          return;
+        }
+
+        if (!chunks) {
+          chunks = [firstChunk, chunk];
+          return;
+        }
+
+        chunks.push(chunk);
       };
 
       const onFinish = (): void => {
@@ -481,44 +433,20 @@ export class PullStream extends Duplex {
       };
 
       const onChunk = (): void => {
-        if (typeof eof === "number") {
-          const available = this._queue.length;
-          if (available <= 0) {
-            return;
-          }
-          const toRead = Math.min(eof, available);
-          if (toRead > 0) {
-            chunks.push(this._queue.read(toRead));
-            eof -= toRead;
-          }
-
-          // Allow upstream to continue as soon as we consume bytes.
-          // This avoids deadlocks when the last upstream chunk is waiting on its
-          // callback and the parser needs an EOF signal after draining buffered data.
-          this._maybeReleaseWriteCallback();
-
-          if (eof === 0) {
-            finalize();
-          }
-
-          return;
-        }
-
-        // eof is a pattern
-        while (this._queue.length > 0) {
-          const bufLen = this._queue.length;
-          const match = scanner!.find(this._queue);
+        while (queue.length > 0) {
+          const bufLen = queue.length;
+          const match = scanner.find(queue);
           if (match !== -1) {
             // store signature match byte offset to allow us to reference
             // this for zip64 offset
             this.match = match;
             const toRead = includeEof ? match + patternLen : match;
             if (toRead > 0) {
-              chunks.push(this._queue.read(toRead));
-              scanner!.onConsume(toRead);
+              appendChunk(queue.read(toRead));
+              scanner.onConsume(toRead);
             }
 
-            if (this._queue.length === 0 || (patternLen && this._queue.length <= patternLen)) {
+            if (queue.length === 0 || (patternLen && queue.length <= patternLen)) {
               this._maybeReleaseWriteCallback();
             }
             finalize();
@@ -526,7 +454,7 @@ export class PullStream extends Duplex {
           }
 
           // No match yet. Avoid rescanning bytes that can't start a match.
-          scanner!.onNoMatch(bufLen);
+          scanner.onNoMatch(bufLen);
 
           const safeLen = bufLen - patternLen;
           if (safeLen <= 0) {
@@ -535,10 +463,10 @@ export class PullStream extends Duplex {
             return;
           }
 
-          chunks.push(this._queue.read(safeLen));
-          scanner!.onConsume(safeLen);
+          appendChunk(queue.read(safeLen));
+          scanner.onConsume(safeLen);
 
-          if (this._queue.length === 0 || (patternLen && this._queue.length <= patternLen)) {
+          if (queue.length === 0 || (patternLen && queue.length <= patternLen)) {
             this._maybeReleaseWriteCallback();
             return;
           }
@@ -551,6 +479,13 @@ export class PullStream extends Duplex {
 
       // Attempt immediate fulfillment from any already-buffered data.
       onChunk();
+
+      // Race fix: `finish` can fire between the early `this.finished` check and
+      // registering the listener above. If that happens and we don't have enough
+      // buffered bytes to fulfill the pull, the Promise would never settle.
+      if (this.finished) {
+        onFinish();
+      }
     });
   }
 
@@ -572,245 +507,6 @@ export type PullStreamPublicApi = {
   pull(eof: number | Uint8Array, includeEof?: boolean): Promise<Uint8Array>;
   pullUntil(pattern: Uint8Array, includeEof?: boolean): Promise<Uint8Array>;
 };
-
-export async function readCrxHeader(pull: PullFn): Promise<CrxHeader> {
-  const data = await pull(12);
-  const header =
-    data.length >= 12 ? parseCrxHeaderFast(data) : parseBuffer<CrxHeader>(data, CRX_HEADER_FORMAT);
-  const pubKeyLength = header.pubKeyLength ?? 0;
-  const signatureLength = header.signatureLength ?? 0;
-
-  const keyAndSig = await pull(pubKeyLength + signatureLength);
-  header.publicKey = keyAndSig.subarray(0, pubKeyLength);
-  header.signature = keyAndSig.subarray(pubKeyLength);
-  return header;
-}
-
-export async function readLocalFileHeader(pull: PullFn): Promise<{
-  vars: EntryVars;
-  fileNameBuffer: Uint8Array;
-  extraFieldData: Uint8Array;
-}> {
-  const data = await pull(26);
-  const vars =
-    data.length >= 26
-      ? parseLocalFileHeaderVarsFast(data)
-      : parseBuffer<EntryVars>(data, LOCAL_FILE_HEADER_FORMAT);
-  const fileNameBuffer = await pull(vars.fileNameLength ?? 0);
-  const extraFieldData = await pull(vars.extraFieldLength ?? 0);
-  return { vars, fileNameBuffer, extraFieldData };
-}
-
-export async function readDataDescriptor(pull: PullFn): Promise<DataDescriptorVars> {
-  const data = await pull(16);
-  return data.length >= 16
-    ? parseDataDescriptorVarsFast(data)
-    : parseBuffer<DataDescriptorVars>(data, DATA_DESCRIPTOR_FORMAT);
-}
-
-export async function consumeCentralDirectoryFileHeader(pull: PullFn): Promise<void> {
-  const data = await pull(42);
-  const vars = parseBuffer<Record<string, number | null>>(
-    data,
-    CENTRAL_DIRECTORY_FILE_HEADER_FORMAT
-  );
-  await pull(vars.fileNameLength ?? 0);
-  await pull(vars.extraFieldLength ?? 0);
-  await pull(vars.fileCommentLength ?? 0);
-}
-
-export async function consumeEndOfCentralDirectoryRecord(pull: PullFn): Promise<void> {
-  const data = await pull(18);
-  const vars = parseBuffer<Record<string, number | null>>(data, END_OF_CENTRAL_DIRECTORY_FORMAT);
-  await pull(vars.commentLength ?? 0);
-}
-
-// =============================================================================
-// Validated Data Descriptor Scan (shared by Node + Browser)
-// =============================================================================
-
-function isValidZipRecordSignature(sig: number): boolean {
-  switch (sig) {
-    case LOCAL_FILE_HEADER_SIG:
-    case CENTRAL_DIR_HEADER_SIG:
-    case END_OF_CENTRAL_DIR_SIG:
-    case ZIP64_END_OF_CENTRAL_DIR_SIG:
-    case ZIP64_END_OF_CENTRAL_DIR_LOCATOR_SIG:
-      return true;
-    default:
-      return false;
-  }
-}
-
-function readUint32LEFromBytes(view: Uint8Array, offset: number): number {
-  return (
-    (view[offset] |
-      0 |
-      ((view[offset + 1] | 0) << 8) |
-      ((view[offset + 2] | 0) << 16) |
-      ((view[offset + 3] | 0) << 24)) >>>
-    0
-  );
-}
-
-function readUint16LEFromBytes(view: Uint8Array, offset: number): number {
-  return (view[offset] | ((view[offset + 1] | 0) << 8)) >>> 0;
-}
-
-function parseCrxHeaderFast(data: Uint8Array): CrxHeader {
-  return {
-    version: readUint32LEFromBytes(data, 0),
-    pubKeyLength: readUint32LEFromBytes(data, 4),
-    signatureLength: readUint32LEFromBytes(data, 8)
-  };
-}
-
-function parseLocalFileHeaderVarsFast(data: Uint8Array): EntryVars {
-  return {
-    versionsNeededToExtract: readUint16LEFromBytes(data, 0),
-    flags: readUint16LEFromBytes(data, 2),
-    compressionMethod: readUint16LEFromBytes(data, 4),
-    lastModifiedTime: readUint16LEFromBytes(data, 6),
-    lastModifiedDate: readUint16LEFromBytes(data, 8),
-    crc32: readUint32LEFromBytes(data, 10),
-    compressedSize: readUint32LEFromBytes(data, 14),
-    uncompressedSize: readUint32LEFromBytes(data, 18),
-    fileNameLength: readUint16LEFromBytes(data, 22),
-    extraFieldLength: readUint16LEFromBytes(data, 24)
-  };
-}
-
-function parseDataDescriptorVarsFast(data: Uint8Array): DataDescriptorVars {
-  return {
-    dataDescriptorSignature: readUint32LEFromBytes(data, 0),
-    crc32: readUint32LEFromBytes(data, 4),
-    compressedSize: readUint32LEFromBytes(data, 8),
-    uncompressedSize: readUint32LEFromBytes(data, 12)
-  };
-}
-
-function indexOf4BytesPattern(buffer: Uint8Array, pattern: Uint8Array, startIndex: number): number {
-  if (pattern.length !== 4) {
-    return indexOfUint8ArrayPattern(buffer, pattern, startIndex);
-  }
-
-  const b0 = pattern[0];
-  const b1 = pattern[1];
-  const b2 = pattern[2];
-  const b3 = pattern[3];
-
-  const bufLen = buffer.length;
-  let start = startIndex | 0;
-  if (start < 0) {
-    start = 0;
-  }
-  if (start > bufLen - 4) {
-    return -1;
-  }
-
-  const last = bufLen - 4;
-  let i = buffer.indexOf(b0, start);
-  while (i !== -1 && i <= last) {
-    if (buffer[i + 1] === b1 && buffer[i + 2] === b2 && buffer[i + 3] === b3) {
-      return i;
-    }
-    i = buffer.indexOf(b0, i + 1);
-  }
-
-  return -1;
-}
-
-export interface ValidatedDataDescriptorScanResult {
-  /** Start index of the descriptor within `view`, or -1 when not found yet. */
-  foundIndex: number;
-  /** Where the caller should resume searching on the next scan of (a mostly unchanged) view. */
-  nextSearchFrom: number;
-}
-
-function initScanResult(
-  out?: ValidatedDataDescriptorScanResult
-): ValidatedDataDescriptorScanResult {
-  if (out) {
-    return out;
-  }
-  return { foundIndex: -1, nextSearchFrom: 0 };
-}
-
-/**
- * Scan for a validated DATA_DESCRIPTOR record boundary.
- *
- * Scanning for the 4-byte signature alone is unsafe because it can appear inside
- * compressed data. We validate a candidate by requiring:
- * - the next 4 bytes after the 16-byte descriptor form a known ZIP record signature, and
- * - the descriptor's compressedSize matches the number of compressed bytes emitted so far.
- */
-export function scanValidatedDataDescriptor(
-  view: Uint8Array,
-  dataDescriptorSignature: Uint8Array,
-  bytesEmitted: number,
-  startIndex = 0,
-  out?: ValidatedDataDescriptorScanResult
-): ValidatedDataDescriptorScanResult {
-  const result = initScanResult(out);
-
-  const viewLen = view.length;
-
-  let searchFrom = startIndex | 0;
-  if (searchFrom < 0) {
-    searchFrom = 0;
-  }
-  if (searchFrom > viewLen) {
-    searchFrom = viewLen;
-  }
-
-  // To avoid missing a signature split across chunk boundaries, we may need
-  // to re-check the last (sigLen - 1) bytes on the next scan.
-  const sigLen = dataDescriptorSignature.length | 0;
-  const overlap = sigLen > 0 ? sigLen - 1 : 0;
-
-  const viewLimit = Math.max(0, viewLen - overlap);
-
-  while (searchFrom < viewLen) {
-    const match = indexOf4BytesPattern(view, dataDescriptorSignature, searchFrom);
-    if (match === -1) {
-      result.foundIndex = -1;
-      result.nextSearchFrom = Math.max(searchFrom, viewLimit);
-      return result;
-    }
-
-    const idx = match;
-
-    // Need 16 bytes for descriptor + 4 bytes for next record signature.
-    const nextSigOffset = idx + 16;
-    if (nextSigOffset + 4 <= viewLen) {
-      const nextSig = readUint32LEFromBytes(view, nextSigOffset);
-
-      const descriptorCompressedSize = readUint32LEFromBytes(view, idx + 8);
-      const expectedCompressedSize = (bytesEmitted + idx) >>> 0;
-
-      if (
-        isValidZipRecordSignature(nextSig) &&
-        descriptorCompressedSize === expectedCompressedSize
-      ) {
-        result.foundIndex = idx;
-        result.nextSearchFrom = idx;
-        return result;
-      }
-
-      searchFrom = idx + 1;
-      continue;
-    }
-
-    // Not enough bytes to validate yet. Re-check this candidate once more bytes arrive.
-    result.foundIndex = -1;
-    result.nextSearchFrom = idx;
-    return result;
-  }
-
-  result.foundIndex = -1;
-  result.nextSearchFrom = Math.max(searchFrom, viewLimit);
-  return result;
-}
 
 export interface StreamUntilValidatedDataDescriptorSource {
   getLength(): number;
@@ -864,6 +560,11 @@ export function streamUntilValidatedDataDescriptor(
     }
   };
 
+  const onDrain = (): void => {
+    waitingDrain = false;
+    pull();
+  };
+
   const pull = (): void => {
     if (done) {
       return;
@@ -909,10 +610,7 @@ export function streamUntilValidatedDataDescriptor(
                   written += part.length;
                   if (!ok) {
                     waitingDrain = true;
-                    output.once("drain", () => {
-                      waitingDrain = false;
-                      pull();
-                    });
+                    output.once("drain", onDrain);
                     break;
                   }
                 }
@@ -931,10 +629,7 @@ export function streamUntilValidatedDataDescriptor(
 
                 if (!ok) {
                   waitingDrain = true;
-                  output.once("drain", () => {
-                    waitingDrain = false;
-                    pull();
-                  });
+                  output.once("drain", onDrain);
                   return;
                 }
               }
@@ -971,10 +666,7 @@ export function streamUntilValidatedDataDescriptor(
             written += part.length;
             if (!ok) {
               waitingDrain = true;
-              output.once("drain", () => {
-                waitingDrain = false;
-                pull();
-              });
+              output.once("drain", onDrain);
               break;
             }
           }
@@ -1004,10 +696,7 @@ export function streamUntilValidatedDataDescriptor(
 
         if (!ok) {
           waitingDrain = true;
-          output.once("drain", () => {
-            waitingDrain = false;
-            pull();
-          });
+          output.once("drain", onDrain);
         }
 
         return;
@@ -1037,88 +726,20 @@ export function streamUntilValidatedDataDescriptor(
 // Shared Parse Loop (used by Node + Browser)
 // =============================================================================
 
-export interface ParseOptions {
-  verbose?: boolean;
-  forceStream?: boolean;
-  /**
-   * Browser-only: use a Web Worker to run inflate off the main thread.
-   * Defaults to false.
-   */
-  useWorkerInflate?: boolean;
-  /**
-   * Browser-only: provide an explicit Worker script URL.
-   *
-   * Useful under strict CSP that blocks `blob:` workers. When set, the browser
-   * parser will try to construct `new Worker(workerInflateUrl)`.
-   */
-  workerInflateUrl?: string;
-  /**
-   * Input backpressure high-water mark (bytes).
-   *
-   * When provided, implementations may delay the writable callback until the
-   * internal input buffer drops below `inputLowWaterMarkBytes`.
-   *
-   * This is primarily used by the browser parser, because its writable side
-   * otherwise tends to accept unlimited data and can cause large memory spikes.
-   */
-  inputHighWaterMarkBytes?: number;
-  /**
-   * Input backpressure low-water mark (bytes).
-   * When the internal buffer drops to (or below) this value, a delayed writable
-   * callback may be released.
-   */
-  inputLowWaterMarkBytes?: number;
-  /**
-   * Threshold (in bytes) for small file optimization.
-   * Files smaller than this will use sync decompression (no stream overhead).
-   *
-   * Note: the optimization is only applied when the entry sizes are trusted
-   * (i.e. no data descriptor) and BOTH compressedSize and uncompressedSize
-   * are below this threshold. This avoids buffering huge highly-compressible
-   * files (e.g. large XML) in memory, which would defeat streaming.
-   * Default: 5MB
-   */
-  thresholdBytes?: number;
-}
-
-export interface EntryVars {
-  versionsNeededToExtract: number | null;
-  flags: number | null;
-  compressionMethod: number | null;
-  lastModifiedTime: number | null;
-  lastModifiedDate: number | null;
-  crc32: number | null;
-  compressedSize: number | null;
-  uncompressedSize: number | null;
-  fileNameLength: number | null;
-  extraFieldLength: number | null;
-  lastModifiedDateTime?: Date;
-  crxHeader?: CrxHeader;
-}
-
-export interface EntryProps {
-  path: string;
-  pathBuffer: Uint8Array;
-  flags: {
-    isUnicode: boolean;
-  };
-}
-
 export interface ZipEntry extends PassThrough {
   path: string;
   props: EntryProps;
-  type: "Directory" | "File";
+  /**
+   * Entry type. Note: Streaming parser can only reliably detect "Directory" vs "File".
+   * "Symlink" detection requires Central Directory access (use buffer-based parsing).
+   */
+  type: "Directory" | "File" | "Symlink";
   vars: EntryVars;
   extraFields: ZipExtraFields;
   size?: number;
   __autodraining?: boolean;
   autodrain: () => DrainStream;
   buffer: () => Promise<Uint8Array>;
-}
-
-export interface ParseDriverState {
-  crxHeader?: CrxHeader;
-  reachedCD?: boolean;
 }
 
 export interface ParseIO {
@@ -1147,13 +768,6 @@ export type InflateFactory = () => Transform | Duplex | PassThrough;
  */
 export type InflateRawSync = (data: Uint8Array) => Uint8Array;
 
-/**
- * Default threshold for small file optimization (5MB).
- */
-export const DEFAULT_PARSE_THRESHOLD_BYTES = 5 * 1024 * 1024;
-
-const endDirectorySignature = writeUint32LE(END_OF_CENTRAL_DIR_SIG);
-
 export async function runParseLoop(
   opts: ParseOptions,
   io: ParseIO,
@@ -1164,62 +778,9 @@ export async function runParseLoop(
 ): Promise<void> {
   const thresholdBytes = opts.thresholdBytes ?? DEFAULT_PARSE_THRESHOLD_BYTES;
 
-  while (true) {
-    const sigBytes = await io.pull(4);
-    if (sigBytes.length === 0) {
-      emitter.emitClose();
-      return;
-    }
-
-    const signature = readUint32LE(sigBytes, 0);
-
-    if (signature === 0x34327243) {
-      state.crxHeader = await readCrxHeader(async length => io.pull(length));
-      emitter.emitCrxHeader(state.crxHeader);
-      continue;
-    }
-
-    if (signature === LOCAL_FILE_HEADER_SIG) {
-      await readFileRecord(
-        opts,
-        io,
-        emitter,
-        inflateFactory,
-        state,
-        thresholdBytes,
-        inflateRawSync
-      );
-      continue;
-    }
-
-    if (signature === CENTRAL_DIR_HEADER_SIG) {
-      state.reachedCD = true;
-      await consumeCentralDirectoryFileHeader(async length => io.pull(length));
-      continue;
-    }
-
-    if (signature === END_OF_CENTRAL_DIR_SIG) {
-      await consumeEndOfCentralDirectoryRecord(async length => io.pull(length));
-      io.setDone();
-      emitter.emitClose();
-      return;
-    }
-
-    if (state.reachedCD) {
-      // We are in central directory trailing data; resync by scanning for EOCD signature.
-      // consumeEndOfCentralDirectoryRecord expects the EOCD signature to be consumed, so includeEof=true.
-      const includeEof = true;
-      await io.pullUntil(endDirectorySignature, includeEof);
-      await consumeEndOfCentralDirectoryRecord(async length => io.pull(length));
-      io.setDone();
-      emitter.emitClose();
-      return;
-    }
-
-    emitter.emitError(new Error("invalid signature: 0x" + signature.toString(16)));
-    emitter.emitClose();
-    return;
-  }
+  await runParseLoopCore(opts, io, emitter, state, async (_opts, _io, _emitter, _state) => {
+    await readFileRecord(opts, io, emitter, inflateFactory, state, thresholdBytes, inflateRawSync);
+  });
 }
 
 async function pumpKnownCompressedSizeToEntry(
@@ -1242,41 +803,50 @@ async function pumpKnownCompressedSizeToEntry(
   entry.once("error", onError);
 
   let skipping = false;
+  const anyInflater = inflater as any;
+  let waitResolve: (() => void) | null = null;
+
+  const cleanupWaitListeners = (): void => {
+    try {
+      anyInflater?.removeListener?.("drain", onDrain);
+    } catch {
+      // ignore
+    }
+    try {
+      entry.removeListener("__autodrain", onAutodrain);
+    } catch {
+      // ignore
+    }
+    try {
+      entry.removeListener("close", onClose);
+    } catch {
+      // ignore
+    }
+  };
+
+  const resolveWait = (): void => {
+    const resolve = waitResolve;
+    if (!resolve) {
+      return;
+    }
+    waitResolve = null;
+    cleanupWaitListeners();
+    resolve();
+  };
+
+  const onDrain = (): void => {
+    resolveWait();
+  };
+  const onAutodrain = (): void => {
+    resolveWait();
+  };
+  const onClose = (): void => {
+    resolveWait();
+  };
 
   const waitForDrainOrSkipSignal = async (): Promise<void> => {
     await new Promise<void>(resolve => {
-      const anyInflater = inflater as any;
-
-      const cleanup = () => {
-        try {
-          anyInflater?.removeListener?.("drain", onDrain);
-        } catch {
-          // ignore
-        }
-        try {
-          entry.removeListener("__autodrain", onAutodrain);
-        } catch {
-          // ignore
-        }
-        try {
-          entry.removeListener("close", onClose);
-        } catch {
-          // ignore
-        }
-      };
-
-      const onDrain = () => {
-        cleanup();
-        resolve();
-      };
-      const onAutodrain = () => {
-        cleanup();
-        resolve();
-      };
-      const onClose = () => {
-        cleanup();
-        resolve();
-      };
+      waitResolve = resolve;
 
       if (typeof anyInflater?.once === "function") {
         anyInflater.once("drain", onDrain);
@@ -1385,7 +955,22 @@ async function readFileRecord(
     vars.crxHeader = state.crxHeader;
   }
 
-  const fileName = decodeZipEntryPath(fileNameBuffer);
+  // Parse extra fields first so we can use Unicode Path Extra Field for decoding
+  const zipVars: ZipVars = {
+    uncompressedSize: vars.uncompressedSize ?? 0,
+    compressedSize: vars.compressedSize ?? 0
+  };
+  const extra = parseExtraField(extraFieldData, zipVars);
+
+  // Write back ZIP64-corrected sizes so downstream code uses the real values
+  // instead of the 0xFFFFFFFF sentinel for entries > 4GB.
+  vars.uncompressedSize = zipVars.uncompressedSize;
+  vars.compressedSize = zipVars.compressedSize;
+
+  const decoder = opts.encoding ? resolveZipStringCodec(opts.encoding) : undefined;
+
+  // Decode filename: UTF-8 flag → Unicode extra field → CP437 (or custom decoder)
+  const fileName = decodeZipPath(fileNameBuffer, vars.flags, extra, decoder);
 
   const entry = new PassThrough({
     highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK
@@ -1421,15 +1006,10 @@ async function readFileRecord(
     }
   }
 
-  const zipVars: ZipVars = {
-    uncompressedSize: vars.uncompressedSize ?? 0,
-    compressedSize: vars.compressedSize ?? 0
-  };
-  const extra = parseExtraField(extraFieldData, zipVars);
   vars.lastModifiedDateTime = resolveZipEntryLastModifiedDateTime(
     {
       flags: vars.flags,
-      uncompressedSize: zipVars.uncompressedSize,
+      uncompressedSize: vars.uncompressedSize ?? 0,
       lastModifiedDate: vars.lastModifiedDate,
       lastModifiedTime: vars.lastModifiedTime
     },

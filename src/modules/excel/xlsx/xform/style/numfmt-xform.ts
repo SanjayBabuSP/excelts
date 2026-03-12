@@ -16,7 +16,13 @@ function hashDefaultFormats(): { [key: string]: number } {
   });
   return hash;
 }
-const defaultFmtHash = hashDefaultFormats();
+let _defaultFmtHash: { [key: string]: number } | null = null;
+function getDefaultFmtHash(): { [key: string]: number } {
+  if (!_defaultFmtHash) {
+    _defaultFmtHash = hashDefaultFormats();
+  }
+  return _defaultFmtHash;
+}
 
 // NumFmt encapsulates translation between number format and xlsx
 class NumFmtXform extends BaseXform {
@@ -58,7 +64,7 @@ class NumFmtXform extends BaseXform {
   }
 
   static getDefaultFmtId(formatCode: string): number | undefined {
-    return defaultFmtHash[formatCode];
+    return getDefaultFmtHash()[formatCode];
   }
 
   static getDefaultFmtCode(numFmtId: number): string | undefined {

@@ -7,114 +7,68 @@
  * This file is intentionally export-only (tree-shaking friendly).
  */
 
-export type {
-  ReadableStreamOptions,
-  WritableStreamOptions,
-  TransformStreamOptions,
-  DuplexStreamOptions,
-  PullStreamOptions,
-  BufferedStreamOptions,
-  TransformCallback,
-  FlushCallback,
-  WriteCallback,
-  DestroyCallback,
-  IEventEmitter,
-  IReadable,
-  IWritable,
-  ITransform,
-  IDuplex,
-  IPullStream,
-  IBufferedStream,
-  IPassThrough,
-  ICollector,
-  DataChunk,
-  EventListener,
-  PipelineSource,
-  PipelineTransform,
-  PipelineDestination,
-  ReadWriteBufferOptions
-} from "@stream/types";
+// Shared type + platform-independent exports
+export * from "./index.base";
 
+// Core stream classes (browser implementations)
+import { Readable } from "@stream/browser/readable";
+export { Writable, toWritable } from "@stream/browser/writable";
+export type { WritableOptions } from "@stream/browser/writable";
+export { Transform } from "@stream/browser/transform";
+import { Duplex } from "@stream/browser/duplex";
+export { PassThrough } from "@stream/browser/passthrough";
+export { Collector } from "@stream/browser/collector";
+export { Readable, Duplex };
+
+// Late-binding injection: break circular Readable ↔ Duplex
+import { registerDuplexFrom } from "@stream/browser/_lazy";
+
+registerDuplexFrom(source => Duplex.from(source));
+
+// Factory functions + re-exported helpers
 export {
-  Readable,
-  Writable,
-  Transform,
-  Duplex,
-  PassThrough,
-  Collector,
   PullStream,
   BufferedStream,
   StringChunk,
-  BufferChunk,
+  ByteChunk,
   createReadable,
+  createReadableFromAsyncIterable,
+  createReadableFromArray,
   createWritable,
   createTransform,
   createCollector,
   createPassThrough,
   createPullStream,
   createBufferedStream,
-  createReadableFromArray,
-  createReadableFromAsyncIterable,
+  createDuplex,
   createReadableFromGenerator,
   createReadableFromPromise,
-  createDuplex,
   createEmptyReadable,
-  createNullWritable,
-  pipeline,
-  finished,
+  createNullWritable
+} from "@stream/browser/factories";
+
+// Pipeline & Finished
+export { pipeline, finished, finishedAll } from "@stream/browser/pipeline";
+
+// Compose
+export { compose } from "@stream/browser/compose";
+
+// Utilities
+export {
   streamToPromise,
   streamToUint8Array,
   streamToBuffer,
   streamToString,
   drainStream,
   copyStream,
-  addAbortSignal,
-  compose,
-  finishedAll,
-  once,
-  promisify,
-  isReadable,
-  isWritable,
   isTransform,
   isDuplex,
   isStream,
-  isDestroyed,
+  addAbortSignal,
   isDisturbed,
-  isErrored,
-  getDefaultHighWaterMark,
-  setDefaultHighWaterMark,
+  isReadable,
+  isWritable,
   duplexPair,
-  normalizeWritable as Writeable,
   consumers,
   promises
-} from "@stream/streams.browser";
-
-export type { PipelineOptions, FinishedOptions } from "@stream/streams.browser";
-
-export { EventEmitter } from "@stream/event-emitter";
-export { ChunkedBuilder, TransactionalChunkedBuilder } from "@stream/chunked-builder";
-export type { ChunkedBuilderOptions, BuilderSnapshot } from "@stream/chunked-builder";
-export {
-  textEncoder,
-  textDecoder,
-  stringToUint8Array,
-  uint8ArrayToString,
-  uint8ArrayEquals,
-  uint8ArrayIndexOf,
-  uint8ArraySlice,
-  toUint8Array,
-  bufferToString,
-  concatUint8Arrays
-} from "@stream/shared";
-
-export {
-  collect,
-  text,
-  json,
-  bytes,
-  fromString,
-  fromJSON,
-  fromBytes,
-  transform,
-  filter
-} from "@stream/utils";
+} from "@stream/browser/utils";

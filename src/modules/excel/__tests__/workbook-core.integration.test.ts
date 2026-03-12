@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "fs";
 import { testUtils } from "@excel/__tests__/shared";
-import { Workbook, type CsvStreamReadOptions } from "../../../index";
+import { Workbook, type CsvOptions } from "../../../index";
 import { ValueType } from "@excel/enums";
 import { makeTestDataPath, testFilePath } from "@test/utils";
 import { extractAll } from "@archive/unzip/extract";
@@ -981,11 +981,11 @@ describe("Workbook", () => {
     it("csv file", function () {
       const wb = testUtils.createTestBook(new Workbook(), "csv", undefined);
 
-      return wb.csv
-        .writeFile(TEST_CSV_FILE_NAME)
+      return wb
+        .writeCsvFile(TEST_CSV_FILE_NAME)
         .then(() => {
           const wb2 = new Workbook();
-          return wb2.csv.readFile(TEST_CSV_FILE_NAME).then(() => wb2);
+          return wb2.readCsvFile(TEST_CSV_FILE_NAME).then(() => wb2);
         })
         .then((wb2: any) => {
           testUtils.checkTestBook(wb2, "csv", undefined, {});
@@ -999,26 +999,22 @@ describe("Workbook", () => {
         encoding: "utf-8",
         includeEmptyRows: false,
         sheetName: "sheet1",
-        formatterOptions: {
-          delimiter: "\t",
-          quote: false
-        }
+        delimiter: "\t",
+        quote: false
       };
-      const readOptions: CsvStreamReadOptions = {
+      const readOptions: CsvOptions = {
         dateFormats: ["DD/MM/YYYY HH:mm:ss"],
         sheetName: "sheet1",
-        parserOptions: {
-          delimiter: "\t",
-          quote: null
-        }
+        delimiter: "\t",
+        quote: null
       };
       const wb = testUtils.createTestBook(new Workbook(), "csv", undefined);
 
-      return wb.csv
-        .writeFile(TEST_CSV_FILE_NAME, writeOptions)
+      return wb
+        .writeCsvFile(TEST_CSV_FILE_NAME, writeOptions)
         .then(() => {
           const wb2 = new Workbook();
-          return wb2.csv.readFile(TEST_CSV_FILE_NAME, readOptions).then(() => wb2);
+          return wb2.readCsvFile(TEST_CSV_FILE_NAME, readOptions).then(() => wb2);
         })
         .then((wb2: any) => {
           testUtils.checkTestBook(wb2, "csv", undefined, writeOptions);
@@ -1389,8 +1385,8 @@ describe("Workbook", () => {
   it("throws an error when csv file not found", () => {
     const wb = new Workbook();
     let success = 0;
-    return wb.csv
-      .readFile("./wb.doesnotexist.csv")
+    return wb
+      .readCsvFile("./wb.doesnotexist.csv")
       .then((/* wb */) => {
         success = 1;
       })
@@ -1408,7 +1404,7 @@ describe("Workbook", () => {
       await wb.xlsx.load({});
       expect.fail("should fail for given argument");
     } catch (e) {
-      expect((e as Error).message).toBe(
+      expect((e as Error).message).toContain(
         "Can't read the data of 'the loaded zip file'. Is it in a supported JavaScript type (String, Blob, ArrayBuffer, etc) ?"
       );
     }

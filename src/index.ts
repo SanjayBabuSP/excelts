@@ -78,19 +78,89 @@ export type {
 } from "@excel/stream/worksheet-reader";
 
 // Node.js Only: Streaming writer types
-export type { WorkbookWriterOptions, ZipOptions, ZlibOptions } from "@excel/stream/workbook-writer";
-
-// Node.js CSV types and stream classes (native implementation)
 export type {
-  CsvReadOptions,
-  CsvWriteOptions,
-  CsvStreamReadOptions,
-  CsvStreamWriteOptions
-} from "@csv/csv";
-export { CsvParserStream, CsvFormatterStream } from "@csv/csv";
+  WorkbookWriterOptions,
+  WorkbookZipOptions,
+  ZipOptions,
+  ZlibOptions
+} from "@excel/stream/workbook-writer";
+
+// CSV types and stream classes
+export type { CsvOptions, CsvInput } from "@excel/workbook";
+export {
+  CsvParserStream,
+  CsvFormatterStream,
+  createCsvParserStream,
+  createCsvFormatterStream
+} from "@csv/stream";
+
+// =============================================================================
+// Additional Classes & Types
+// =============================================================================
+
+export { DefinedNames, type DefinedNameModel } from "@excel/defined-names";
+export type { CheckboxState } from "@excel/form-control";
+export type { ColumnDefn, ColumnHeaderValue } from "@excel/column";
+export type { RangeInput } from "@excel/range";
+export type { WorkbookModel, WorkbookMedia } from "@excel/workbook";
+export type { NodeInput } from "@excel/stream/workbook-reader";
 
 // =============================================================================
 // Utilities
 // =============================================================================
 
 export * from "@excel/utils/sheet-utils";
+
+// Date conversion (Excel serial dates <-> JS Date)
+export { dateToExcel, excelToDate } from "@utils/utils.base";
+
+// Base64 utilities (cross-platform)
+export { base64ToUint8Array, uint8ArrayToBase64 } from "@utils/utils.base";
+
+// XML utilities
+export { xmlEncode, xmlDecode } from "@utils/utils.base";
+
+// Date parsing/formatting (high-performance, zero-dep)
+export { DateParser, DateFormatter, getSupportedFormats, type DateFormat } from "@utils/datetime";
+
+// Error infrastructure
+export {
+  BaseError,
+  type BaseErrorOptions,
+  toError,
+  errorToJSON,
+  getErrorChain,
+  getRootCause
+} from "@utils/errors";
+
+// Binary utilities (cross-platform)
+export {
+  concatUint8Arrays,
+  toUint8Array,
+  stringToUint8Array,
+  uint8ArrayToString
+} from "@utils/binary";
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+export {
+  ExcelError,
+  isExcelError,
+  ExcelFileError,
+  ExcelDownloadError,
+  ExcelNotSupportedError,
+  ExcelStreamStateError,
+  InvalidAddressError,
+  ColumnOutOfBoundsError,
+  RowOutOfBoundsError,
+  MergeConflictError,
+  InvalidValueTypeError,
+  XmlParseError,
+  WorksheetNameError,
+  PivotTableError,
+  TableError,
+  ImageError,
+  MaxItemsExceededError
+} from "@excel/errors";

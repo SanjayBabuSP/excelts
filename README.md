@@ -111,6 +111,70 @@ cell.fill = {
   - Data protection
   - Comments and notes
 
+## Subpath Exports
+
+ExcelTS provides focused subpath exports for standalone module usage:
+
+```typescript
+// Main entry - Excel core (Workbook, Worksheet, Cell, etc.)
+import { Workbook, WorkbookWriter } from "@cj-tech-master/excelts";
+
+// ZIP/TAR archive utilities
+import { zip, unzip, ZipArchive, compress } from "@cj-tech-master/excelts/zip";
+
+// CSV parsing, formatting, and streaming
+import { parseCsv, formatCsv, CsvParserStream } from "@cj-tech-master/excelts/csv";
+
+// Cross-platform stream primitives
+import { Readable, pipeline, createTransform } from "@cj-tech-master/excelts/stream";
+```
+
+Each subpath supports `browser`, `import` (ESM), and `require` (CJS) conditions. See the module READMEs for details:
+
+- [CSV Module](src/modules/csv/README.md) - RFC 4180 parser/formatter, streaming, data generation
+- [Archive Module](src/modules/archive/README.md) - ZIP/TAR create/read/edit, compression, encryption
+- [Stream Module](src/modules/stream/README.md) - Cross-platform Readable/Writable/Transform/Duplex
+
+## Archive Utilities (ZIP/TAR)
+
+ExcelTS includes internal ZIP/TAR utilities used by the XLSX pipeline. If you use the
+archive APIs directly, ZIP string encoding can be customized via `ZipStringEncoding`:
+
+- Default: `"utf-8"`
+- Legacy: `"cp437"`
+- Custom: provide a codec with `encode`/`decode` plus optional flags
+
+When a non-UTF-8 encoding is used, Unicode extra fields can be emitted for better
+cross-tool compatibility.
+
+### Editing an existing ZIP (ZipEditor)
+
+ExcelTS also includes a ZIP editor that can apply filesystem-like edits to an existing archive
+and then output a new ZIP.
+
+- Supports `set()`, `delete()`, `rename()`, `deleteDirectory()`, `setComment()`
+- Unchanged entries are passed through efficiently when possible
+
+```js
+import { editZip } from "@cj-tech-master/excelts";
+
+const editor = await editZip(existingZipBytes, {
+  reproducible: true,
+
+  // Passthrough behavior for unchanged entries:
+  // - "strict" (default): raw passthrough must be available or it throws
+  // - "best-effort": if raw passthrough is unavailable, fall back to extract+re-add
+  preserve: "best-effort",
+  onWarning: w => console.warn(w.code, w.entry, w.message)
+});
+
+editor.delete("old.txt");
+editor.rename("a.txt", "renamed.txt");
+editor.set("new.txt", "hello");
+
+const out = await editor.bytes();
+```
+
 ## Streaming API
 
 For processing large Excel files without loading them entirely into memory, ExcelTS provides streaming reader and writer APIs.
@@ -231,26 +295,27 @@ for await (const ws of reader) {
 
 ```javascript
 import { Workbook } from "@cj-tech-master/excelts";
+import fs from "fs";
 
 const workbook = new Workbook();
 
-// Read CSV from file (streaming)
-await workbook.csv.readFile("data.csv");
+// Read CSV from file
+await workbook.readCsvFile("data.csv");
 
 // Read CSV from stream
-import fs from "fs";
 const stream = fs.createReadStream("data.csv");
-await workbook.csv.read(stream, { sheetName: "Imported" });
+await workbook.readCsv(stream, { sheetName: "Imported" });
 
-// Write CSV to file (streaming)
-await workbook.csv.writeFile("output.csv");
+// Write CSV to file
+await workbook.writeCsvFile("output.csv");
 
 // Write CSV to stream
 const writeStream = fs.createWriteStream("output.csv");
-await workbook.csv.write(writeStream);
+await workbook.writeCsv(writeStream);
 
-// Write CSV to buffer
-const buffer = await workbook.csv.writeBuffer();
+// Write CSV to string / bytes
+const csvText = workbook.writeCsv();
+const bytes = await workbook.writeCsvBuffer();
 ```
 
 ### Browser (In-Memory)
@@ -260,19 +325,22 @@ import { Workbook } from "@cj-tech-master/excelts";
 
 const workbook = new Workbook();
 
-// Load CSV from string
-workbook.csv.load(csvString);
+// Read CSV from string
+await workbook.readCsv(csvString);
 
-// Load CSV from ArrayBuffer (e.g., from fetch or file input)
+// Read CSV from ArrayBuffer (e.g., from fetch)
 const response = await fetch("data.csv");
 const arrayBuffer = await response.arrayBuffer();
-workbook.csv.load(arrayBuffer);
+await workbook.readCsv(arrayBuffer);
+
+// Read CSV from File (e.g., <input type="file">)
+await workbook.readCsv(file);
 
 // Write CSV to string
-const csvOutput = workbook.csv.writeString();
+const csvOutput = workbook.writeCsv();
 
-// Write CSV to Uint8Array buffer
-const buffer = workbook.csv.writeBuffer();
+// Write CSV to Uint8Array bytes
+const bytes = await workbook.writeCsvBuffer();
 ```
 
 ## Browser Support
@@ -328,11 +396,47 @@ Then open `http://localhost:3000/src/modules/excel/examples/browser-smoke.html`.
 ### Browser-Specific Notes
 
 - **CSV operations are supported** using native RFC 4180 implementation
-  - Use `csv.load(stringOrArrayBuffer)` to read CSV
-  - Use `csv.writeString()` or `csv.writeBuffer()` to write CSV
+  - Use `await workbook.readCsv(input)` to read CSV
+  - Use `workbook.writeCsv()` or `await workbook.writeCsvBuffer()` to write CSV
 - Use `xlsx.load(arrayBuffer)` instead of `xlsx.readFile()`
 - Use `xlsx.writeBuffer()` instead of `xlsx.writeFile()`
 - Worksheet protection with passwords is fully supported (pure JS SHA-512)
+
+## Utility Exports
+
+The main entry also exports commonly useful utilities:
+
+```typescript
+import {
+  // Excel date conversion
+  dateToExcel, // JS Date -> Excel serial number
+  excelToDate, // Excel serial number -> JS Date
+
+  // Date parsing/formatting (high-performance, zero-dep)
+  DateParser, // Batch date parser with format auto-detection
+  DateFormatter, // Batch date formatter
+
+  // Binary utilities (cross-platform)
+  base64ToUint8Array,
+  uint8ArrayToBase64,
+  concatUint8Arrays,
+  toUint8Array,
+  stringToUint8Array,
+  uint8ArrayToString,
+
+  // XML utilities
+  xmlEncode,
+  xmlDecode,
+
+  // Error infrastructure
+  BaseError, // Base class for all library errors
+  ExcelError, // Base Excel error (instanceof checks)
+  toError, // Normalize unknown -> Error
+  errorToJSON, // Serialize error (with cause chain)
+  getErrorChain, // Get full error cause chain as array
+  getRootCause // Get deepest error in cause chain
+} from "@cj-tech-master/excelts";
+```
 
 ## Requirements
 

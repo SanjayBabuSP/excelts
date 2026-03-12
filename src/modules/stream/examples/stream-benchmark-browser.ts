@@ -4,9 +4,9 @@ import {
   createReadableFromArray as browserCreateReadableFromArray,
   createTransform as browserCreateTransform,
   createCollector as browserCreateCollector,
-  pipeline as browserPipeline,
-  EventEmitter as BrowserEmitter
+  pipeline as browserPipeline
 } from "@stream";
+import { EventEmitter as BrowserEmitter } from "@utils/event-emitter";
 
 const pipelineAsync = promisify(pipeline);
 

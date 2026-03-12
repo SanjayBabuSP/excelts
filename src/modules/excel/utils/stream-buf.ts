@@ -10,8 +10,10 @@
  * - As readable stream: feed data into writable part and read from it
  */
 
-import { EventEmitter } from "@stream";
+import { EventEmitter } from "@utils/event-emitter";
 import { StringBuf } from "@excel/utils/string-buf";
+import { ExcelNotSupportedError, InvalidValueTypeError } from "@excel/errors";
+import { getTextDecoder, uint8ArrayToNodeBufferView } from "@utils/binary";
 
 // =============================================================================
 // Data Chunks - encapsulating incoming data
@@ -115,7 +117,7 @@ class ReadWriteBuf {
     if (this.iRead === 0 && this.iWrite === this.size) {
       return this.buffer;
     }
-    return this.buffer.slice(this.iRead, this.iWrite);
+    return this.buffer.subarray(this.iRead, this.iWrite);
   }
 
   get length(): number {
@@ -141,14 +143,14 @@ class ReadWriteBuf {
       return buf;
     }
 
-    const buf = this.buffer.slice(this.iRead, this.iRead + size);
+    const buf = this.buffer.subarray(this.iRead, this.iRead + size);
     this.iRead += size;
     return buf;
   }
 
   write(chunk: Chunk, offset: number, length: number): number {
     const size = Math.min(length, this.size - this.iWrite);
-    chunk.copy(this.buffer, this.iWrite, offset, offset + size);
+    chunk.copy(this.buffer, this.iWrite, offset, size);
     this.iWrite += size;
     return size;
   }
@@ -166,6 +168,8 @@ interface StreamBufOptions {
 // =============================================================================
 // StreamBuf - Cross-Platform Implementation
 // =============================================================================
+
+const nop = () => {};
 
 /**
  * StreamBuf is a multi-purpose read-write stream that works in both
@@ -188,7 +192,6 @@ class StreamBuf extends EventEmitter {
   private pipes: any[];
   private _ended: boolean;
   // Native WritableStream support
-  private _writableStream: WritableStream<Uint8Array> | null = null;
   private _writableStreamWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private _asyncWriteQueue: Promise<void> = Promise.resolve();
 
@@ -274,7 +277,6 @@ class StreamBuf extends EventEmitter {
     encoding?: TextEncoding | Function,
     callback?: Function
   ): Promise<boolean> {
-    const nop = () => {};
     if (typeof encoding === "function") {
       callback = encoding;
     }
@@ -293,7 +295,10 @@ class StreamBuf extends EventEmitter {
     } else if (typeof data === "string") {
       chunk = new StringChunk(data);
     } else {
-      throw new Error("Chunk must be one of type String, Uint8Array, ArrayBuffer or StringBuf.");
+      throw new InvalidValueTypeError(
+        typeof data,
+        "Chunk must be one of type String, Uint8Array, ArrayBuffer or StringBuf."
+      );
     }
 
     // Handle piping and buffering
@@ -431,12 +436,12 @@ class StreamBuf extends EventEmitter {
           this.buffers.shift();
         }
       }
-      return concatUint8Arrays(buffers);
+      return uint8ArrayToNodeBufferView(concatUint8Arrays(buffers));
     }
 
     const buffers = this.buffers.map(buf => buf.toBuffer()).filter(Boolean) as Uint8Array[];
     this.buffers = [];
-    return concatUint8Arrays(buffers);
+    return uint8ArrayToNodeBufferView(concatUint8Arrays(buffers));
   }
 
   /**
@@ -446,10 +451,7 @@ class StreamBuf extends EventEmitter {
   readString(encoding?: TextEncoding): string {
     const enc = encoding ?? (this.encoding as TextEncoding) ?? "utf-8";
     const buf = this.read();
-    if (typeof Buffer !== "undefined" && buf instanceof Buffer) {
-      return buf.toString(enc);
-    }
-    return new TextDecoder(enc).decode(buf);
+    return getTextDecoder(enc).decode(buf);
   }
 
   /**
@@ -496,7 +498,6 @@ class StreamBuf extends EventEmitter {
    * This properly handles async writes and waits for completion before finish.
    */
   pipeTo(writableStream: WritableStream<Uint8Array>): void {
-    this._writableStream = writableStream;
     this._writableStreamWriter = writableStream.getWriter();
   }
 
@@ -511,14 +512,14 @@ class StreamBuf extends EventEmitter {
    * Put data back at the front (not implemented)
    */
   unshift(): void {
-    throw new Error("Not Implemented");
+    throw new ExcelNotSupportedError("unshift", "Not implemented");
   }
 
   /**
    * Wrap a stream (not implemented)
    */
   wrap(): void {
-    throw new Error("Not Implemented");
+    throw new ExcelNotSupportedError("wrap", "Not implemented");
   }
 
   /**
@@ -541,11 +542,6 @@ class StreamBuf extends EventEmitter {
  * Returns Buffer in Node.js for better toString() compatibility
  */
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  // In Node.js, use Buffer.concat for better compatibility (Buffer.toString() works)
-  if (typeof Buffer !== "undefined" && typeof Buffer.concat === "function") {
-    return Buffer.concat(arrays);
-  }
-
   if (arrays.length === 0) {
     return new Uint8Array(0);
   }

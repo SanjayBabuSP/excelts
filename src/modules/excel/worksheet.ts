@@ -1,6 +1,7 @@
 import { colCache, type DecodedRange } from "@excel/utils/col-cache";
 import { Range, type RangeInput } from "@excel/range";
 import { Row, type RowModel } from "@excel/row";
+import { WorksheetNameError, MergeConflictError } from "@excel/errors";
 import { Column, type ColumnModel, type ColumnDefn } from "@excel/column";
 import type { Cell, FormulaResult, FormulaValueData } from "@excel/cell";
 import { Enums } from "@excel/enums";
@@ -312,27 +313,27 @@ class Worksheet {
     }
 
     if (typeof name !== "string") {
-      throw new Error("The name has to be a string.");
+      throw new WorksheetNameError("The name has to be a string.");
     }
 
     if (name === "") {
-      throw new Error("The name can't be empty.");
+      throw new WorksheetNameError("The name can't be empty.");
     }
 
     if (name === "History") {
-      throw new Error('The name "History" is protected. Please use a different name.');
+      throw new WorksheetNameError('The name "History" is protected. Please use a different name.');
     }
 
     // Illegal character in worksheet name: asterisk (*), question mark (?),
     // colon (:), forward slash (/ \), or bracket ([])
     if (/[*?:/\\[\]]/.test(name)) {
-      throw new Error(
+      throw new WorksheetNameError(
         `Worksheet name ${name} cannot include any of the following characters: * ? : \\ / [ ]`
       );
     }
 
     if (/(^')|('$)/.test(name)) {
-      throw new Error(
+      throw new WorksheetNameError(
         `The first or last character of worksheet name cannot be a single quotation mark: ${name}`
       );
     }
@@ -345,7 +346,7 @@ class Worksheet {
     }
 
     if (this._workbook.worksheets.find(ws => ws && ws.name.toLowerCase() === name.toLowerCase())) {
-      throw new Error(`Worksheet name already exists: ${name}`);
+      throw new WorksheetNameError(`Worksheet name already exists: ${name}`);
     }
 
     this._name = name;
@@ -1011,7 +1012,7 @@ class Worksheet {
     // check cells aren't already merged
     Object.values(this._merges).forEach((merge: Range) => {
       if (merge.intersects(dimensions)) {
-        throw new Error("Cannot merge already merged cells");
+        throw new MergeConflictError();
       }
     });
 

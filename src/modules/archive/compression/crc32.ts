@@ -16,18 +16,46 @@ import { crc32JS, crc32UpdateJS, crc32Finalize } from "@archive/compression/crc3
 // Lazy-loaded zlib module for Node.js
 let _zlib: typeof zlibType | null = null;
 let _zlibLoading: Promise<typeof zlibType | null> | null = null;
+let _zlibInitStarted = false;
 
-// Auto-initialize zlib in Node.js environment
-if (isNode()) {
-  _zlibLoading = import("zlib")
-    .then(module => {
-      _zlib = (module as { default?: typeof zlibType }).default ?? (module as typeof zlibType);
-      return _zlib;
-    })
-    .catch(() => {
-      _zlib = null;
-      return null;
-    });
+/**
+ * Lazily initialize zlib loading in Node.js.
+ * Called on first use rather than at module load time.
+ */
+function ensureZlibLoading(): void {
+  if (_zlibInitStarted) {
+    return;
+  }
+  _zlibInitStarted = true;
+  if (isNode()) {
+    _zlibLoading = import("zlib")
+      .then(module => {
+        _zlib = (module as { default?: typeof zlibType }).default ?? (module as typeof zlibType);
+        return _zlib;
+      })
+      .catch(() => {
+        _zlib = null;
+        return null;
+      });
+  }
+}
+
+/**
+ * Synchronously ensure zlib is loaded for Node.js.
+ * Used by the sync deflate path where the async dynamic import may not have
+ * resolved yet. Falls back to `require()` which is synchronous in Node.js.
+ */
+export function ensureZlibSync(): void {
+  if (_zlib || !isNode()) {
+    return;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _zlib = require("zlib") as typeof zlibType;
+    _zlibInitStarted = true;
+  } catch {
+    // Bundler or non-Node environment — JS fallback will be used
+  }
 }
 
 /**
@@ -45,6 +73,7 @@ if (isNode()) {
  * ```
  */
 export function crc32(data: Uint8Array): number {
+  ensureZlibLoading();
   // Use native zlib.crc32 if available (Node.js)
   if (_zlib && typeof _zlib.crc32 === "function") {
     return _zlib.crc32(data) >>> 0;
@@ -57,6 +86,7 @@ export function crc32(data: Uint8Array): number {
  * Ensure zlib is loaded (for use before calling crc32)
  */
 export async function ensureCrc32(): Promise<void> {
+  ensureZlibLoading();
   if (_zlibLoading) {
     await _zlibLoading;
   }
@@ -83,6 +113,7 @@ export async function ensureCrc32(): Promise<void> {
  * ```
  */
 export function crc32Update(crc: number, data: Uint8Array): number {
+  ensureZlibLoading();
   // If available, use native zlib.crc32 but preserve our internal state shape.
   // zlib.crc32 returns a finalized CRC value and can accept the previous finalized
   // CRC as the second parameter (chainable). Our internal state is the inverted

@@ -41,7 +41,7 @@ describe("extract", () => {
       const contentTypes = files.get("[Content_Types].xml");
       expect(contentTypes).toBeDefined();
       expect(contentTypes!.path).toBe("[Content_Types].xml");
-      expect(contentTypes!.isDirectory).toBe(false);
+      expect(contentTypes!.type).toBe("file");
       expect(contentTypes!.size).toBeGreaterThan(0);
     });
   });

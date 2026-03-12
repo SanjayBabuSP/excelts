@@ -5,8 +5,9 @@
  * Works identically in both browser and Node.js environments.
  */
 
-import { EventEmitter } from "@stream/event-emitter";
-import { textEncoder } from "@stream/shared";
+import { EventEmitter } from "@utils/event-emitter";
+import { StreamStateError } from "@stream/errors";
+import { textEncoder } from "@utils/binary";
 import type { BufferedStreamOptions, DataChunk } from "@stream/types";
 
 export type { BufferedStreamOptions, DataChunk } from "@stream/types";
@@ -45,7 +46,7 @@ export class StringChunk implements DataChunk {
 /**
  * Uint8Array chunk implementation
  */
-export class BufferChunk implements DataChunk {
+export class ByteChunk implements DataChunk {
   private readonly _data: Uint8Array;
 
   constructor(data: Uint8Array) {
@@ -149,11 +150,16 @@ export class BufferedStream extends EventEmitter {
    */
   write(chunk: Uint8Array | string): boolean {
     if (this._destroyed) {
-      this.emit("error", new Error("Cannot write to destroyed stream"));
+      this.emit("error", new StreamStateError("write", "stream is destroyed"));
       return false;
     }
 
-    const dataChunk = typeof chunk === "string" ? new StringChunk(chunk) : new BufferChunk(chunk);
+    if (this._finished) {
+      this.emit("error", new StreamStateError("write", "stream has ended"));
+      return false;
+    }
+
+    const dataChunk = typeof chunk === "string" ? new StringChunk(chunk) : new ByteChunk(chunk);
     this._chunks.push(dataChunk);
     this._totalLength += dataChunk.length;
     return true;
@@ -192,6 +198,10 @@ export class BufferedStream extends EventEmitter {
    * Signal end of writes
    */
   end(chunk?: Uint8Array | string): void {
+    if (this._destroyed || this._finished) {
+      return;
+    }
+
     if (chunk !== undefined) {
       this.write(chunk);
     }
@@ -215,11 +225,13 @@ export class BufferedStream extends EventEmitter {
     this._bufferReadIndex = 0;
     this._totalLength = 0;
 
-    if (error) {
-      this.emit("error", error);
-    }
-
-    this.emit("close");
+    // Defer event emission via queueMicrotask to match Node.js process.nextTick behavior
+    queueMicrotask(() => {
+      if (error) {
+        this.emit("error", error);
+      }
+      this.emit("close");
+    });
   }
 
   /**
@@ -290,7 +302,8 @@ export class BufferedStream extends EventEmitter {
   }
 
   /**
-   * Get all buffered data as a single Uint8Array
+   * Get all buffered data as a single Uint8Array.
+   * Consumes the internal buffers — after this call, `bufferedLength` is 0.
    */
   toUint8Array(): Uint8Array {
     // Fast path: no data
@@ -316,6 +329,13 @@ export class BufferedStream extends EventEmitter {
       out.set(view, offset);
       offset += view.length;
     }
+
+    // Reset internal state — data has been consumed.
+    this._chunks = [];
+    this._chunkReadIndex = 0;
+    this._buffers = [];
+    this._bufferReadIndex = 0;
+    this._totalLength = 0;
 
     // Defensive: if internal counters drift, avoid returning trailing zeros.
     return offset === out.length ? out : out.subarray(0, offset);

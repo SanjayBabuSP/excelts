@@ -74,7 +74,7 @@ async function benchmarkWrapped(chunks: Buffer[]): Promise<number> {
 // Benchmark: EventEmitter overhead
 async function benchmarkEventEmitter(): Promise<{ native: number; wrapped: number }> {
   const { EventEmitter } = await import("events");
-  const { EventEmitter: BrowserEmitter } = await import("@stream/event-emitter");
+  const { EventEmitter: BrowserEmitter } = await import("@utils/event-emitter");
 
   const EMIT_COUNT = 100000;
 

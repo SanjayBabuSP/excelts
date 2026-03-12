@@ -10,34 +10,23 @@
 // =============================================================================
 
 /**
- * Options for creating readable streams
+ * Common options for creating streams (readable, writable, or transform)
  */
-export interface ReadableStreamOptions {
+export interface StreamOptions {
   /** High water mark for backpressure (bytes) */
   highWaterMark?: number;
   /** Enable object mode (non-binary data) */
   objectMode?: boolean;
 }
 
-/**
- * Options for creating writable streams
- */
-export interface WritableStreamOptions {
-  /** High water mark for backpressure (bytes) */
-  highWaterMark?: number;
-  /** Enable object mode (non-binary data) */
-  objectMode?: boolean;
-}
+/** Options for creating readable streams */
+export type ReadableStreamOptions = StreamOptions;
 
-/**
- * Options for creating transform streams
- */
-export interface TransformStreamOptions {
-  /** High water mark for backpressure (bytes) */
-  highWaterMark?: number;
-  /** Enable object mode (non-binary data) */
-  objectMode?: boolean;
-}
+/** Options for creating writable streams */
+export type WritableStreamOptions = StreamOptions;
+
+/** Options for creating transform streams */
+export type TransformStreamOptions = StreamOptions;
 
 /**
  * Options for creating duplex streams
@@ -64,14 +53,19 @@ export interface DuplexStreamOptions {
 // =============================================================================
 
 /**
+ * Callback for stream transform/flush operations
+ */
+export type StreamCallback<T = Uint8Array> = (error?: Error | null, data?: T) => void;
+
+/**
  * Callback for transform operations
  */
-export type TransformCallback<T = Uint8Array> = (error?: Error | null, data?: T) => void;
+export type TransformCallback<T = Uint8Array> = StreamCallback<T>;
 
 /**
  * Callback for flush operations
  */
-export type FlushCallback<T = Uint8Array> = (error?: Error | null, data?: T) => void;
+export type FlushCallback<T = Uint8Array> = StreamCallback<T>;
 
 /**
  * Callback for write operations
@@ -91,6 +85,16 @@ export type DestroyCallback = (error?: Error | null) => void;
  * Event listener type
  */
 export type EventListener = (...args: any[]) => void;
+
+/**
+ * Minimal duck-typed emitter shape for utilities that accept any emitter-like object.
+ */
+export type EventEmitterLike = {
+  on?: (event: string, listener: (...args: any[]) => void) => any;
+  once?: (event: string, listener: (...args: any[]) => void) => any;
+  off?: (event: string, listener: (...args: any[]) => void) => any;
+  removeListener?: (event: string, listener: (...args: any[]) => void) => any;
+};
 
 /**
  * Common event emitter interface
@@ -185,7 +189,7 @@ export interface IWritable<T = any> extends WritableLike {
 export interface ITransform<TInput = any, TOutput = any>
   extends IReadable<TOutput>, IWritable<TInput> {
   _transform(chunk: TInput, encoding: string, callback: TransformCallback<TOutput>): void;
-  _flush(callback: FlushCallback<TOutput>): void;
+  _flush?(callback: FlushCallback<TOutput>): void;
 }
 
 /**
@@ -198,14 +202,9 @@ export interface IDuplex<TRead = any, TWrite = any> extends IReadable<TRead>, IW
 // =============================================================================
 
 /**
- * Options for pull stream
+ * Options for pull stream (reserved for future use)
  */
-export interface PullStreamOptions {
-  /** Enable object mode */
-  objectMode?: boolean;
-  /** High water mark for internal buffer */
-  highWaterMark?: number;
-}
+export type PullStreamOptions = object;
 
 /**
  * Pull stream interface - allows pulling data on demand
@@ -306,12 +305,4 @@ export interface DataChunk {
   readonly length: number;
   copy(target: Uint8Array, targetOffset: number, offset: number, length: number): number;
   toUint8Array(): Uint8Array;
-}
-
-/**
- * Read-write buffer options
- */
-export interface ReadWriteBufferOptions {
-  /** Initial buffer size */
-  size?: number;
 }

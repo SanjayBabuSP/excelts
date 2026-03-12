@@ -5,7 +5,8 @@
  * This file provides the same API but works in browser environments.
  */
 
-import { textEncoder } from "@stream/shared";
+import { textEncoder } from "@utils/binary";
+import { StreamStateError } from "@stream/errors";
 
 /**
  * Options for ChunkedBuilder
@@ -57,9 +58,10 @@ export class ChunkedBuilder {
   }
 
   /**
-   * Consolidate pieces into chunks
+   * Consolidate pieces into chunks.
+   * Subclasses may override to guard against consolidation (e.g. during active snapshots).
    */
-  private _consolidate(): void {
+  protected _consolidate(): void {
     if (this._pieces.length > 0) {
       this._chunks.push(this._pieces.join(""));
       this._pieces.length = 0;
@@ -159,6 +161,18 @@ export class TransactionalChunkedBuilder extends ChunkedBuilder {
   private _snapshots: BuilderSnapshot[] = [];
 
   /**
+   * Skip consolidation while snapshots are active.
+   * Consolidation joins pieces into a chunk and clears the pieces array,
+   * which makes it impossible to rollback to a previous pieces position.
+   */
+  protected override _consolidate(): void {
+    if (this._snapshots.length > 0) {
+      return;
+    }
+    super._consolidate();
+  }
+
+  /**
    * Create a rollback point
    */
   snapshot(): BuilderSnapshot {
@@ -184,7 +198,7 @@ export class TransactionalChunkedBuilder extends ChunkedBuilder {
   rollback(): void {
     const snap = this._snapshots.pop();
     if (!snap) {
-      throw new Error("No snapshot to rollback to");
+      throw new StreamStateError("rollback", "no snapshot available");
     }
 
     if (this._pieces.length > snap.piecesLength) {

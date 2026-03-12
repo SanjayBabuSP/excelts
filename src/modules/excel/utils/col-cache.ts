@@ -1,4 +1,5 @@
 import type { Address, Location } from "@excel/types";
+import { ColumnOutOfBoundsError, InvalidAddressError } from "@excel/errors";
 
 const addressRegex = /^[A-Z]+\d+$/;
 
@@ -90,7 +91,7 @@ const colCache: ColCache = {
     let l3: number;
     let n = 1;
     if (level >= 4) {
-      throw new Error("Out of bounds. Excel supports columns from 1 to 16384");
+      throw new ColumnOutOfBoundsError(level, "Excel supports columns from 1 to 16384");
     }
     if (this._l2nFill < 1 && level >= 1) {
       while (n <= 26) {
@@ -134,13 +135,13 @@ const colCache: ColCache = {
       this._fill(l.length);
     }
     if (!this._l2n[l]) {
-      throw new Error(`Out of bounds. Invalid column letter: ${l}`);
+      throw new ColumnOutOfBoundsError(l, `Invalid column letter: ${l}`);
     }
     return this._l2n[l];
   },
   n2l(n: number): string {
     if (n < 1 || n > 16384) {
-      throw new Error(`${n} is out of bounds. Excel supports columns from 1 to 16384`);
+      throw new ColumnOutOfBoundsError(n);
     }
     if (!this._n2l[n]) {
       this._fill(this._level(n));
@@ -155,7 +156,7 @@ const colCache: ColCache = {
   // check if value looks like an address
   validateAddress(value: string): boolean {
     if (!addressRegex.test(value)) {
-      throw new Error(`Invalid Address: ${value}`);
+      throw new InvalidAddressError(value);
     }
     return true;
   },
@@ -200,7 +201,7 @@ const colCache: ColCache = {
     if (!hasCol) {
       colNumber = undefined;
     } else if (colNumber! > 16384) {
-      throw new Error(`Out of bounds. Invalid column letter: ${col}`);
+      throw new ColumnOutOfBoundsError(col, `Invalid column letter: ${col}`);
     }
     if (!hasRow) {
       rowNumber = undefined;
@@ -328,7 +329,7 @@ const colCache: ColCache = {
       case 4:
         return `${colCache.encodeAddress(args[0], args[1])}:${colCache.encodeAddress(args[2], args[3])}`;
       default:
-        throw new Error("Can only encode with 2 or 4 arguments");
+        throw new InvalidAddressError(String(args.length), "Can only encode with 2 or 4 arguments");
     }
   },
 

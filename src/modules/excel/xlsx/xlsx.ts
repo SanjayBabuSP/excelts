@@ -14,9 +14,9 @@
  * - addMedia: Supports buffer, base64, and filename (via readFileAsync)
  */
 
-import fs from "fs";
-import { fileExists } from "@utils/utils";
+import { fileExists, readFileBytes, createReadStream, createWriteStream } from "@utils/fs";
 import { XLSX as XLSXBase } from "@excel/xlsx/xlsx.browser";
+import { ExcelFileError } from "@excel/errors";
 import { Parse, type ZipEntry } from "@archive/unzip/stream";
 import { Writable, pipeline } from "@stream";
 
@@ -24,7 +24,7 @@ class XLSX extends XLSXBase {
   constructor(workbook: any) {
     super(workbook);
     // Provide file reading capability for addMedia
-    this.readFileAsync = (filename: string) => fs.promises.readFile(filename);
+    this.readFileAsync = (filename: string) => readFileBytes(filename);
   }
 
   private static async *iterateZipEntries(parser: Parse): AsyncGenerator<ZipEntry> {
@@ -197,14 +197,14 @@ class XLSX extends XLSXBase {
 
   async readFile(filename: string, options?: any): Promise<any> {
     if (!(await fileExists(filename))) {
-      throw new Error(`File not found: ${filename}`);
+      throw new ExcelFileError(filename, "read", "File not found");
     }
-    const stream = fs.createReadStream(filename);
+    const stream = createReadStream(filename);
     return this.read(stream, options);
   }
 
   writeFile(filename: string, options?: any): Promise<void> {
-    const stream = fs.createWriteStream(filename);
+    const stream = createWriteStream(filename);
 
     return new Promise((resolve, reject) => {
       let settled = false;

@@ -10,15 +10,14 @@ import {
   ChunkedBuilder,
   TransactionalChunkedBuilder,
   PullStream,
-  createTransform,
-  stringToUint8Array,
-  uint8ArrayToString
+  createTransform
 } from "@stream";
+import { stringToUint8Array, uint8ArrayToString } from "@utils/binary";
 
 /**
  * Example 1: Using createTransform for custom transformation
  */
-export async function exampleBaseTransform(): Promise<void> {
+export async function exampleTransformBasic(): Promise<void> {
   console.log("\n=== createTransform Example ===");
 
   const transform = createTransform<string, string>(chunk => chunk.toUpperCase(), {
@@ -181,7 +180,7 @@ export async function examplePipeTransforms(): Promise<void> {
  * Run all examples
  */
 export async function runAllExamples(): Promise<void> {
-  await exampleBaseTransform();
+  await exampleTransformBasic();
   exampleBufferedStream();
   exampleChunkedBuilder();
   exampleTransactionalBuilder();

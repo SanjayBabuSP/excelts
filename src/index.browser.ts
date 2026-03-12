@@ -72,53 +72,81 @@ export { WorkbookWriter, WorkbookReader, WorksheetWriter, WorksheetReader };
 // =============================================================================
 
 // =============================================================================
-// CSV support (using native RFC 4180 implementation)
+// CSV types and stream classes
 // =============================================================================
-export type {
-  CsvReadOptions,
-  CsvWriteOptions,
-  CsvStreamReadOptions,
-  CsvStreamWriteOptions
-} from "@csv/csv.browser";
-export { CsvParserStream, CsvFormatterStream } from "@csv/csv.browser";
+export type { CsvOptions, CsvInput } from "@excel/workbook";
+export {
+  CsvParserStream,
+  CsvFormatterStream,
+  createCsvParserStream,
+  createCsvFormatterStream
+} from "@csv/stream";
+
+// =============================================================================
+// Additional Classes & Types
+// =============================================================================
+
+export { DefinedNames, type DefinedNameModel } from "@excel/defined-names";
+export type { CheckboxState } from "@excel/form-control";
+export type { ColumnDefn, ColumnHeaderValue } from "@excel/column";
+export type { RangeInput } from "@excel/range";
+export type { WorkbookModel, WorkbookMedia } from "@excel/workbook";
 
 // =============================================================================
 // Utilities
 // =============================================================================
 export * from "@excel/utils/sheet-utils";
 
-// =============================================================================
-// Archive (ZIP) support (Browser-compatible)
-// =============================================================================
+// Date conversion (Excel serial dates <-> JS Date)
+export { dateToExcel, excelToDate } from "@utils/utils.base";
+
+// Base64 utilities (cross-platform)
+export { base64ToUint8Array, uint8ArrayToBase64 } from "@utils/utils.base";
+
+// XML utilities
+export { xmlEncode, xmlDecode } from "@utils/utils.base";
+
+// Date parsing/formatting (high-performance, zero-dep)
+export { DateParser, DateFormatter, getSupportedFormats, type DateFormat } from "@utils/datetime";
+
+// Error infrastructure
 export {
-  // High-level archive API
-  zip,
-  unzip,
-  ZipArchive,
-  ZipReader,
-  UnzipEntry,
-  type ZipOptions,
-  type ZipEntryOptions,
-  type UnzipOptions,
-  type ArchiveSource,
-  type ArchiveSink,
+  BaseError,
+  type BaseErrorOptions,
+  toError,
+  errorToJSON,
+  getErrorChain,
+  getRootCause
+} from "@utils/errors";
 
-  // CRC32
-  crc32,
-  crc32Update,
-  crc32Finalize,
+// Binary utilities (cross-platform)
+export {
+  concatUint8Arrays,
+  toUint8Array,
+  stringToUint8Array,
+  uint8ArrayToString
+} from "@utils/binary";
 
-  // Compression utilities
-  compress,
-  compressSync,
-  decompress,
-  decompressSync,
-  hasCompressionStream,
-  type CompressOptions,
+// =============================================================================
+// Errors
+// =============================================================================
 
-  // Streaming compression
-  createDeflateStream,
-  createInflateStream,
-  hasDeflateRaw,
-  type StreamCompressOptions
-} from "@archive/index.browser";
+export {
+  ExcelError,
+  isExcelError,
+  ExcelFileError,
+  ExcelDownloadError,
+  ExcelNotSupportedError,
+  ExcelStreamStateError,
+  InvalidAddressError,
+  ColumnOutOfBoundsError,
+  RowOutOfBoundsError,
+  MergeConflictError,
+  InvalidValueTypeError,
+  XmlParseError,
+  WorksheetNameError,
+  PivotTableError,
+  TableError,
+  ImageError,
+  MaxItemsExceededError
+} from "@excel/errors";

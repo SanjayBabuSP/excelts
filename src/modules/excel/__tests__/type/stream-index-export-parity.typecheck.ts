@@ -59,7 +59,7 @@ type _NonClass_finished = Assert<
 >;
 
 type _NonClass_createReadable = Assert<
-  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
+  // @ts-expect-error Node vs browser `read()` callback signature differs
   IsEqualStrict<NodeRuntimeNonClass["createReadable"], BrowserRuntimeNonClass["createReadable"]>
 >;
 
@@ -72,7 +72,6 @@ type _NonClass_createTransform = Assert<
 >;
 
 type _NonClass_createDuplex = Assert<
-  // @ts-expect-error Node vs browser `this` parameter and `size` optionality differ
   IsEqualStrict<NodeRuntimeNonClass["createDuplex"], BrowserRuntimeNonClass["createDuplex"]>
 >;
 
@@ -88,10 +87,6 @@ type _NonClass_createCollector = Assert<
 >;
 
 // Shared classes exported from the same files should remain identical.
-
-type _Class_EventEmitter = Assert<
-  IsEqual<NodeRuntime["EventEmitter"], BrowserRuntime["EventEmitter"]>
->;
 
 type _Class_ChunkedBuilder = Assert<
   IsEqual<NodeRuntime["ChunkedBuilder"], BrowserRuntime["ChunkedBuilder"]>

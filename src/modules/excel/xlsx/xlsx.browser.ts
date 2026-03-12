@@ -10,6 +10,13 @@
  */
 
 import { XmlStream } from "@excel/utils/xml-stream";
+import {
+  ExcelStreamStateError,
+  ExcelFileError,
+  ImageError,
+  ExcelNotSupportedError,
+  XmlParseError
+} from "@excel/errors";
 import { StylesXform } from "@excel/xlsx/xform/style/styles-xform";
 import { CoreXform } from "@excel/xlsx/xform/core/core-xform";
 import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xform";
@@ -38,7 +45,8 @@ import { StreamBuf } from "@excel/utils/stream-buf";
 import { bufferToString, base64ToUint8Array } from "@utils/utils";
 import { StreamingZip, ZipDeflateFile } from "@archive/zip/stream";
 import { ZipParser } from "@archive/unzip/zip-parser";
-import { PassThrough, concatUint8Arrays, type IEventEmitter } from "@stream";
+import { PassThrough, type IEventEmitter } from "@stream";
+import { concatUint8Arrays } from "@utils/binary";
 import type { Workbook } from "@excel/workbook";
 import {
   commentsPath,
@@ -85,7 +93,7 @@ import {
 } from "@excel/utils/ooxml-paths";
 import { PassthroughManager } from "@excel/utils/passthrough-manager";
 
-import type { ZipTimestampMode } from "@archive/utils/timestamps";
+import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
 
 type StreamListener = Parameters<IEventEmitter["on"]>[1];
 
@@ -194,7 +202,7 @@ class StreamingZipWriterAdapter implements IZipWriter {
 
   append(data: any, options: { name: string; base64?: boolean }): void {
     if (this.finalized) {
-      throw new Error("Cannot append after finalize");
+      throw new ExcelStreamStateError("append", "stream already finalized");
     }
 
     let buffer: Uint8Array;
@@ -428,7 +436,9 @@ class XLSX {
         !(data instanceof Uint8Array) &&
         !(data instanceof ArrayBuffer))
     ) {
-      throw new Error(
+      throw new ExcelFileError(
+        "<input>",
+        "read",
         "Can't read the data of 'the loaded zip file'. Is it in a supported JavaScript type (String, Blob, ArrayBuffer, etc) ?"
       );
     }
@@ -680,7 +690,7 @@ class XLSX {
     await Promise.all(
       model.media.map(async (medium: WorkbookMediaLike) => {
         if (medium.type !== "image") {
-          throw new Error("Unsupported media");
+          throw new ImageError("Unsupported media");
         }
 
         // Preserve legacy behavior: `${undefined}` becomes "undefined" in template strings
@@ -692,7 +702,10 @@ class XLSX {
             const data = await this.readFileAsync(medium.filename);
             return zip.append(data, { name: filename });
           }
-          throw new Error("Loading images from filename is not supported in this environment");
+          throw new ExcelNotSupportedError(
+            "Loading images from filename",
+            "not supported in this environment"
+          );
         }
 
         if (medium.buffer) {
@@ -704,7 +717,7 @@ class XLSX {
           return zip.append(content, { name: filename, base64: true });
         }
 
-        throw new Error("Unsupported media");
+        throw new ImageError("Unsupported media");
       })
     );
   }
@@ -795,7 +808,7 @@ class XLSX {
       sharedStrings: model.sharedStrings,
       media: model.media,
       mediaIndex: model.mediaIndex,
-      date1904: model.properties && model.properties.date1904,
+      date1904: model.properties?.date1904,
       drawings: model.drawings,
       drawingRels: model.drawingRels,
       comments: model.comments,
@@ -961,7 +974,7 @@ class XLSX {
     const xform = new WorkSheetXform(options);
     const worksheet = await xform.parseStream(stream);
     if (!worksheet) {
-      throw new Error(`Failed to parse worksheet ${path}`);
+      throw new XmlParseError(path, "Failed to parse worksheet");
     }
     worksheet.sheetNo = sheetNo;
     model.worksheetHash[path] = worksheet;
@@ -1654,7 +1667,7 @@ class XLSX {
     const worksheetOptions: any = {
       sharedStrings: model.sharedStrings,
       styles: model.styles,
-      date1904: model.properties.date1904,
+      date1904: model.properties?.date1904,
       drawingsCount: 0,
       media: model.media
     };

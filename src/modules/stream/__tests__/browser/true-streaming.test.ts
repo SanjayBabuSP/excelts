@@ -148,6 +148,34 @@ function getBrowserContext() {
 
 createTrueStreamingTests(getBrowserContext);
 
+const createCompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> => {
+  if (typeof CompressionStream !== "undefined") {
+    return new CompressionStream("deflate-raw") as unknown as TransformStream<
+      Uint8Array,
+      Uint8Array
+    >;
+  }
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    }
+  });
+};
+
+const createDecompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> => {
+  if (typeof DecompressionStream !== "undefined") {
+    return new DecompressionStream("deflate-raw") as unknown as TransformStream<
+      Uint8Array,
+      Uint8Array
+    >;
+  }
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    }
+  });
+};
+
 // ============================================================================
 // Browser-Specific Additional Tests
 // ============================================================================
@@ -155,16 +183,10 @@ createTrueStreamingTests(getBrowserContext);
 describe("Browser-Specific True Streaming", () => {
   describe("Native CompressionStream Verification", () => {
     it("should verify CompressionStream streams chunks progressively", async () => {
-      // Skip if CompressionStream not available
-      if (typeof CompressionStream === "undefined") {
-        console.log("CompressionStream not available, skipping test");
-        return;
-      }
-
       const chunks: { time: number; size: number }[] = [];
       const startTime = performance.now();
 
-      const compressionStream = new CompressionStream("deflate-raw");
+      const compressionStream = createCompressionLikeStream();
       const writer = compressionStream.writable.getWriter();
       const reader = compressionStream.readable.getReader();
 
@@ -219,14 +241,8 @@ describe("Browser-Specific True Streaming", () => {
 
   describe("Native DecompressionStream Verification", () => {
     it("should verify DecompressionStream streams chunks progressively", async () => {
-      // Skip if DecompressionStream not available
-      if (typeof DecompressionStream === "undefined") {
-        console.log("DecompressionStream not available, skipping test");
-        return;
-      }
-
       // First compress some data
-      const compressionStream = new CompressionStream("deflate-raw");
+      const compressionStream = createCompressionLikeStream();
       const compressWriter = compressionStream.writable.getWriter();
       const compressReader = compressionStream.readable.getReader();
 
@@ -262,7 +278,7 @@ describe("Browser-Specific True Streaming", () => {
       const decompressedChunks: { time: number; size: number }[] = [];
       const startTime = performance.now();
 
-      const decompressionStream = new DecompressionStream("deflate-raw");
+      const decompressionStream = createDecompressionLikeStream();
       const decompressWriter = decompressionStream.writable.getWriter();
       const decompressReader = decompressionStream.readable.getReader();
 
@@ -312,5 +328,65 @@ describe("Browser-Specific True Streaming", () => {
       expect(decompressedChunks.length).toBeGreaterThan(0);
       expect(totalDecompressed).toBe(testData.length);
     });
+  });
+
+  describe("Streaming memory behavior (browser)", () => {
+    it("should not accumulate memory during streaming writes", async () => {
+      const chunks: Uint8Array[] = [];
+      const output = new WritableStream<Uint8Array>({
+        write(chunk) {
+          chunks.push(chunk);
+        }
+      });
+
+      const workbook = new WorkbookWriter({
+        stream: output,
+        useSharedStrings: false,
+        trueStreaming: true
+      });
+      const worksheet = workbook.addWorksheet("Sheet 1");
+
+      const cellValue = "abcdefghij".repeat(40); // 400 chars
+
+      // Warm up — stabilize JIT, GC, and internal structures
+      for (let i = 0; i < 1000; i++) {
+        const row = worksheet.getRow(i + 1);
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).value = cellValue;
+        }
+        row.commit();
+      }
+
+      // Yield to let browser GC settle
+      await new Promise(r => setTimeout(r, 100));
+      const perfMem = (performance as any).memory;
+      const baselineHeap = perfMem ? perfMem.usedJSHeapSize : 0;
+
+      // Steady-state — write 4000 more rows
+      for (let i = 1000; i < 5000; i++) {
+        const row = worksheet.getRow(i + 1);
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).value = cellValue;
+        }
+        row.commit();
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+      const finalHeap = perfMem ? perfMem.usedJSHeapSize : 0;
+
+      await workbook.commit();
+
+      const totalBytes = chunks.reduce((sum, c) => sum + c.length, 0);
+      expect(totalBytes).toBeGreaterThan(0);
+
+      // Memory assertion (Chrome only — performance.memory)
+      if (baselineHeap > 0 && finalHeap > 0) {
+        const growthMB = (finalHeap - baselineHeap) / 1024 / 1024;
+        // 4000 rows × 9 cells × 400 chars should not cause significant growth.
+        // Before the fix this would accumulate ~60MB+ in push chain closures.
+        // With the fix, growth should be well under 50MB.
+        expect(growthMB).toBeLessThan(50);
+      }
+    }, 30000);
   });
 });

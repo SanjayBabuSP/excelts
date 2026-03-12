@@ -86,11 +86,27 @@ export function printAnalysis(
   bytesBeforeFinalize: number,
   totalBytes: number
 ): void {
+  const shouldLog = (() => {
+    const g = globalThis as unknown as { __EXCELTS_TEST_LOGS__?: boolean };
+    if (g.__EXCELTS_TEST_LOGS__) {
+      return true;
+    }
+    if (typeof process !== "undefined") {
+      const env = (process as unknown as { env?: Record<string, string | undefined> }).env;
+      return env?.EXCELTS_TEST_LOGS === "1" || env?.VITEST_VERBOSE === "1";
+    }
+    return false;
+  })();
+
+  if (!shouldLog) {
+    return;
+  }
+
   console.log(`\n=== ${title} ===`);
-  logs.forEach(log => {
+  for (const log of logs) {
     const mb = (log.bytes / 1024 / 1024).toFixed(2);
     console.log(`${log.phase}: ${log.chunks} chunks, ${mb} MB`);
-  });
+  }
 
   const analysis = analyzeGrowth(logs.filter(l => !l.phase.includes("After")));
   console.log(`\nGrowth during processing: ${(analysis.totalGrowth / 1024 / 1024).toFixed(2)} MB`);

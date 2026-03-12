@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { Readable, concatUint8Arrays } from "@stream";
+import { Readable } from "@stream";
+import { concatUint8Arrays } from "@utils/binary";
 import { PullStream } from "@archive/unzip/stream.base";
 
 const decoder = new TextDecoder();
