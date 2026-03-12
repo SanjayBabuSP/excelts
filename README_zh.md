@@ -111,6 +111,30 @@ cell.fill = {
   - 数据保护
   - 注释和批注
 
+## 子路径导出
+
+ExcelTS 提供独立模块的子路径导出：
+
+```typescript
+// 主入口 - Excel 核心（Workbook, Worksheet, Cell 等）
+import { Workbook, WorkbookWriter } from "@cj-tech-master/excelts";
+
+// ZIP/TAR 归档工具
+import { zip, unzip, ZipArchive, compress } from "@cj-tech-master/excelts/zip";
+
+// CSV 解析、格式化与流式处理
+import { parseCsv, formatCsv, CsvParserStream } from "@cj-tech-master/excelts/csv";
+
+// 跨平台流式原语
+import { Readable, pipeline, createTransform } from "@cj-tech-master/excelts/stream";
+```
+
+每个子路径支持 `browser`、`import`（ESM）和 `require`（CJS）条件。详见各模块文档：
+
+- [CSV 模块](src/modules/csv/README.md) - RFC 4180 解析/格式化、流式处理、数据生成
+- [归档模块](src/modules/archive/README.md) - ZIP/TAR 创建/读取/编辑、压缩、加密
+- [流模块](src/modules/stream/README.md) - 跨平台 Readable/Writable/Transform/Duplex
+
 ## 归档工具（ZIP/TAR）
 
 ExcelTS 内置 ZIP/TAR 归档工具（用于 XLSX 管线）。若直接使用归档相关 API，
@@ -273,26 +297,23 @@ import fs from "fs";
 
 const workbook = new Workbook();
 
-// 从文件读取 CSV（流式）
-await workbook.csv.readFile("data.csv");
+// 从文件读取 CSV
+await workbook.readCsvFile("data.csv");
 
 // 从流读取 CSV
 const stream = fs.createReadStream("data.csv");
-await workbook.csv.read(stream, { sheetName: "Imported" });
+await workbook.readCsv(stream, { sheetName: "Imported" });
 
-// 从 URL 读取 CSV（Node.js 20+）
-await workbook.csv.parse("https://example.com/data.csv", { sheetName: "Imported" });
-
-// 写入 CSV 到文件（流式）
-await workbook.csv.writeFile("output.csv");
+// 写入 CSV 到文件
+await workbook.writeCsvFile("output.csv");
 
 // 写入 CSV 到流
 const writeStream = fs.createWriteStream("output.csv");
-await workbook.csv.write(writeStream);
+await workbook.writeCsv(writeStream);
 
 // 写入 CSV 为字符串 / 字节
-const csvText = workbook.csv.stringify();
-const bytes = await workbook.csv.toBuffer();
+const csvText = workbook.writeCsv();
+const bytes = await workbook.writeCsvBuffer();
 ```
 
 ### 浏览器（内存中）
@@ -303,24 +324,21 @@ import { Workbook } from "@cj-tech-master/excelts";
 const workbook = new Workbook();
 
 // 从字符串读取 CSV
-await workbook.csv.parse(csvString);
-
-// 从 URL 读取 CSV
-await workbook.csv.parse("https://example.com/data.csv");
+await workbook.readCsv(csvString);
 
 // 从 ArrayBuffer 读取 CSV（例如从 fetch）
 const response = await fetch("data.csv");
 const arrayBuffer = await response.arrayBuffer();
-await workbook.csv.parse(arrayBuffer);
+await workbook.readCsv(arrayBuffer);
 
 // 从 File 读取 CSV（例如 <input type="file">）
-await workbook.csv.parse(file);
+await workbook.readCsv(file);
 
-// 写入 CSV 为字符串 / 字节
-const csvOutput = workbook.csv.stringify();
+// 写入 CSV 为字符串
+const csvOutput = workbook.writeCsv();
 
 // 写入 CSV 为 Uint8Array 字节
-const bytes = await workbook.csv.toBuffer();
+const bytes = await workbook.writeCsvBuffer();
 ```
 
 ## 浏览器支持
@@ -376,11 +394,47 @@ npx serve .
 ### 浏览器版本注意事项
 
 - **支持 CSV 操作**（使用原生 RFC 4180 标准实现）
-  - 使用 `await csv.parse(input)` 读取 CSV
-  - 使用 `csv.stringify()` 或 `await csv.toBuffer()` 写入 CSV
+  - 使用 `await workbook.readCsv(input)` 读取 CSV
+  - 使用 `workbook.writeCsv()` 或 `await workbook.writeCsvBuffer()` 写入 CSV
 - 使用 `xlsx.load(arrayBuffer)` 代替 `xlsx.readFile()`
 - 使用 `xlsx.writeBuffer()` 代替 `xlsx.writeFile()`
 - 完全支持带密码的工作表保护（纯 JS SHA-512 实现）
+
+## 工具导出
+
+主入口还导出了常用工具函数：
+
+```typescript
+import {
+  // Excel 日期转换
+  dateToExcel, // JS Date -> Excel 序列号
+  excelToDate, // Excel 序列号 -> JS Date
+
+  // 日期解析/格式化（高性能，零依赖）
+  DateParser, // 批量日期解析器，支持格式自动检测
+  DateFormatter, // 批量日期格式化器
+
+  // 二进制工具（跨平台）
+  base64ToUint8Array,
+  uint8ArrayToBase64,
+  concatUint8Arrays,
+  toUint8Array,
+  stringToUint8Array,
+  uint8ArrayToString,
+
+  // XML 工具
+  xmlEncode,
+  xmlDecode,
+
+  // 错误基础设施
+  BaseError, // 所有库错误的基类
+  ExcelError, // Excel 基础错误（支持 instanceof 检查）
+  toError, // 将 unknown 标准化为 Error
+  errorToJSON, // 序列化错误（包含 cause 链）
+  getErrorChain, // 获取完整的错误 cause 链数组
+  getRootCause // 获取 cause 链中最深层的错误
+} from "@cj-tech-master/excelts";
+```
 
 ## 系统要求
 

@@ -5,20 +5,23 @@ A cross-platform stream implementation that provides identical APIs for both Nod
 - **Node.js**: Uses native `stream` module for maximum performance
 - **Browser**: Uses Web Streams API (`ReadableStream`, `WritableStream`, `TransformStream`)
 
+```bash
+import { Readable, pipeline, createTransform } from "@cj-tech-master/excelts/stream";
+```
+
 ## Features
 
-- ✅ **100% Cross-Platform**: Same API, same types, same behavior in Node.js and browsers
-- ✅ **Single Entry Point**: Just `import from './modules/stream'`
-- ✅ **Type-Safe**: Full TypeScript support with consistent types
-- ✅ **Node.js Compatible API**: Familiar `Readable`, `Writable`, `Transform`, `Duplex` classes
-- ✅ **High Performance**: Native implementations on both platforms
+- **100% Cross-Platform** - Same API, same types, same behavior in Node.js and browsers
+- **Single Entry Point** - Auto-resolves to correct implementation based on environment
+- **Type-Safe** - Full TypeScript support with consistent types
+- **Node.js Compatible API** - Familiar `Readable`, `Writable`, `Transform`, `Duplex` classes
+- **High Performance** - Native implementations on both platforms
 
 ## Installation
 
-The stream module is part of ExcelTS. Import from the appropriate entry point:
+The stream module is part of ExcelTS. Import from the subpath:
 
 ```typescript
-// Auto-resolves to correct implementation based on environment
 import {
   Readable,
   Writable,
@@ -28,7 +31,7 @@ import {
   finished,
   createTransform,
   createCollector
-} from "./modules/stream";
+} from "@cj-tech-master/excelts/stream";
 ```
 
 ## Quick Start
@@ -39,7 +42,7 @@ import {
   createTransform,
   createCollector,
   pipeline
-} from "./modules/stream";
+} from "@cj-tech-master/excelts/stream";
 
 // Create a pipeline that doubles numbers
 const source = createReadableFromArray([1, 2, 3, 4, 5], { objectMode: true });
@@ -59,7 +62,7 @@ console.log(collector.chunks); // [2, 4, 6, 8, 10]
 Browser-compatible EventEmitter with Node.js-like API.
 
 ```typescript
-import { EventEmitter } from "./modules/stream";
+import { EventEmitter } from "@cj-tech-master/excelts/stream";
 
 const emitter = new EventEmitter();
 
@@ -98,7 +101,7 @@ emitter.removeAllListeners("data");
 A readable stream for consuming data.
 
 ```typescript
-import { Readable, createReadableFromArray } from "./modules/stream";
+import { Readable, createReadableFromArray } from "@cj-tech-master/excelts/stream";
 
 // Create from array
 const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
@@ -149,7 +152,7 @@ readable.unpipe(writable);
 A writable stream for outputting data.
 
 ```typescript
-import { Writable } from "./modules/stream";
+import { Writable } from "@cj-tech-master/excelts/stream";
 
 const writable = new Writable({
   objectMode: true,
@@ -205,7 +208,7 @@ writable.uncork(); // Flush all at once
 A duplex stream that transforms data as it passes through.
 
 ```typescript
-import { Transform, createTransform } from "./modules/stream";
+import { Transform, createTransform } from "@cj-tech-master/excelts/stream";
 
 // Simple transform with factory function (recommended)
 const double = createTransform<number, number>(n => n * 2, { objectMode: true });
@@ -259,7 +262,7 @@ const nodeStyle = new Transform({
 A stream that is both readable and writable independently.
 
 ```typescript
-import { Duplex, createDuplex, duplexPair } from "./modules/stream";
+import { Duplex, createDuplex, duplexPair } from "@cj-tech-master/excelts/stream";
 
 // Create duplex stream
 const duplex = createDuplex({
@@ -295,7 +298,7 @@ client.on("data", data => console.log("Client received:", data));
 Collects all data from a stream into an array.
 
 ```typescript
-import { createCollector, pipeline, finished } from "./modules/stream";
+import { createCollector, pipeline, finished } from "@cj-tech-master/excelts/stream";
 
 // Collect objects
 const collector = createCollector<number>({ objectMode: true });
@@ -332,7 +335,11 @@ const text = binaryCollector.toString(); // Decode as UTF-8 string
 A transform stream with pull-based reading and pattern matching. Useful for parsing protocols and file formats.
 
 ```typescript
-import { createPullStream, stringToUint8Array, uint8ArrayToString } from "./modules/stream";
+import {
+  createPullStream,
+  stringToUint8Array,
+  uint8ArrayToString
+} from "@cj-tech-master/excelts/stream";
 
 const pull = createPullStream();
 
@@ -382,7 +389,7 @@ const val2 = await pull.pull(Infinity); // "value2" (rest of stream)
 Duplex stream with efficient internal buffering.
 
 ```typescript
-import { createBufferedStream, BufferedStream } from "./modules/stream";
+import { createBufferedStream, BufferedStream } from "@cj-tech-master/excelts/stream";
 
 const buffered = createBufferedStream();
 
@@ -409,7 +416,7 @@ console.log(buffered.isFinished);
 Efficient string builder with Uint8Array output. Useful for building large strings/XML/JSON efficiently.
 
 ```typescript
-import { ChunkedBuilder } from "./modules/stream";
+import { ChunkedBuilder } from "@cj-tech-master/excelts/stream";
 
 const builder = new ChunkedBuilder();
 
@@ -435,7 +442,7 @@ console.log(builder.toString()); // "<xml><item>Hello</item><item>World</item></
 ChunkedBuilder with snapshot/rollback support. Useful for speculative parsing where you might need to backtrack.
 
 ```typescript
-import { TransactionalChunkedBuilder } from "./modules/stream";
+import { TransactionalChunkedBuilder } from "@cj-tech-master/excelts/stream";
 
 const builder = new TransactionalChunkedBuilder();
 
@@ -482,7 +489,7 @@ import {
   createReadableFromArray,
   createTransform,
   createCollector
-} from "./modules/stream";
+} from "@cj-tech-master/excelts/stream";
 
 const source = createReadableFromArray([1, 2, 3, 4, 5], { objectMode: true });
 const filter = createTransform<number, number>(
@@ -512,7 +519,7 @@ try {
 Wait for a stream to finish (end, close, or error).
 
 ```typescript
-import { finished, createReadableFromArray } from "./modules/stream";
+import { finished, createReadableFromArray } from "@cj-tech-master/excelts/stream";
 
 const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
 
@@ -537,7 +544,12 @@ await finished(writable);
 Compose multiple transforms into a single transform.
 
 ```typescript
-import { compose, createTransform, createReadableFromArray, pipeline } from "./modules/stream";
+import {
+  compose,
+  createTransform,
+  createReadableFromArray,
+  pipeline
+} from "@cj-tech-master/excelts/stream";
 
 const addOne = createTransform<number, number>(n => n + 1, { objectMode: true });
 const double = createTransform<number, number>(n => n * 2, { objectMode: true });
@@ -563,7 +575,7 @@ console.log(collector.chunks); // [16, 36, 64]
 Wait for multiple streams to finish.
 
 ```typescript
-import { finishedAll, createReadableFromArray } from "./modules/stream";
+import { finishedAll, createReadableFromArray } from "@cj-tech-master/excelts/stream";
 
 const stream1 = createReadableFromArray([1, 2, 3], { objectMode: true });
 const stream2 = createReadableFromArray([4, 5, 6], { objectMode: true });
@@ -584,7 +596,7 @@ console.log("All streams completed");
 Add abort signal handling to any stream.
 
 ```typescript
-import { addAbortSignal, createReadableFromArray, finished } from "./modules/stream";
+import { addAbortSignal, createReadableFromArray, finished } from "@cj-tech-master/excelts/stream";
 
 const controller = new AbortController();
 const readable = createReadableFromArray([1, 2, 3], { objectMode: true });
@@ -616,7 +628,7 @@ try {
 Create a readable stream from an array.
 
 ```typescript
-import { createReadableFromArray } from "./modules/stream";
+import { createReadableFromArray } from "@cj-tech-master/excelts/stream";
 
 // Object mode (for non-binary data)
 const objectStream = createReadableFromArray([{ a: 1 }, { b: 2 }], { objectMode: true });
@@ -635,7 +647,7 @@ const binaryStream = createReadableFromArray([
 Create a readable stream from an async iterable.
 
 ```typescript
-import { createReadableFromAsyncIterable } from "./modules/stream";
+import { createReadableFromAsyncIterable } from "@cj-tech-master/excelts/stream";
 
 async function* generateNumbers() {
   for (let i = 1; i <= 5; i++) {
@@ -658,7 +670,7 @@ for await (const n of readable) {
 Create a readable stream from a generator function.
 
 ```typescript
-import { createReadableFromGenerator } from "./modules/stream";
+import { createReadableFromGenerator } from "@cj-tech-master/excelts/stream";
 
 const readable = createReadableFromGenerator(async function* () {
   yield await fetch("/api/part1").then(r => r.json());
@@ -674,7 +686,7 @@ const readable = createReadableFromGenerator(async function* () {
 Create a readable stream from a promise (emits single value).
 
 ```typescript
-import { createReadableFromPromise } from "./modules/stream";
+import { createReadableFromPromise } from "@cj-tech-master/excelts/stream";
 
 const readable = createReadableFromPromise(
   fetch("/api/data").then(r => r.json()),
@@ -693,7 +705,7 @@ for await (const data of readable) {
 Create a readable that immediately ends with no data.
 
 ```typescript
-import { createEmptyReadable, pipeline } from "./modules/stream";
+import { createEmptyReadable, pipeline } from "@cj-tech-master/excelts/stream";
 
 const empty = createEmptyReadable();
 // Useful for conditional pipelines or testing
@@ -706,7 +718,7 @@ const empty = createEmptyReadable();
 Create a writable that discards all data (like `/dev/null`).
 
 ```typescript
-import { createNullWritable, pipeline } from "./modules/stream";
+import { createNullWritable, pipeline } from "@cj-tech-master/excelts/stream";
 
 const devNull = createNullWritable();
 
@@ -721,7 +733,7 @@ await pipeline(source, devNull);
 Utility functions for consuming entire streams.
 
 ```typescript
-import { consumers, createReadableFromArray } from "./modules/stream";
+import { consumers, createReadableFromArray } from "@cj-tech-master/excelts/stream";
 
 const readable = createReadableFromArray([
   new Uint8Array([123, 34, 110, 97, 109, 101, 34, 58, 34, 116, 101, 115, 116, 34, 125])
@@ -749,7 +761,13 @@ const arrayBuffer = await consumers.arrayBuffer(readable);
 ## Type Guards
 
 ```typescript
-import { isReadable, isWritable, isTransform, isDuplex, isStream } from "./modules/stream";
+import {
+  isReadable,
+  isWritable,
+  isTransform,
+  isDuplex,
+  isStream
+} from "@cj-tech-master/excelts/stream";
 
 // Check stream types
 isReadable(stream); // true if readable stream
@@ -774,7 +792,7 @@ function processStream(input: unknown) {
 ## Stream State Inspection
 
 ```typescript
-import { isDestroyed, isDisturbed, isErrored } from "./modules/stream";
+import { isDestroyed, isDisturbed, isErrored } from "@cj-tech-master/excelts/stream";
 
 // Check if stream has been destroyed
 isDestroyed(stream); // true if destroy() was called
@@ -797,7 +815,7 @@ import {
   uint8ArrayEquals,
   uint8ArrayIndexOf,
   concatUint8Arrays
-} from "./modules/stream";
+} from "@cj-tech-master/excelts/stream";
 
 // String <-> Uint8Array conversion (UTF-8)
 const bytes = stringToUint8Array("Hello, 世界!");
@@ -823,7 +841,7 @@ const combined = concatUint8Arrays([arr1, arr2, arr3]);
 Wait for a single event from an emitter.
 
 ```typescript
-import { once } from "./modules/stream";
+import { once } from "@cj-tech-master/excelts/stream";
 
 // Wait for data event
 const [data] = await once(emitter, "data");
@@ -847,7 +865,7 @@ try {
 Convert callback-style function to promise.
 
 ```typescript
-import { promisify } from "./modules/stream";
+import { promisify } from "@cj-tech-master/excelts/stream";
 
 // Callback-style function
 function fetchData(callback: (err: Error | null, data?: string) => void) {
@@ -866,7 +884,7 @@ const data = await fetchDataAsync();
 Promise-based versions of pipeline and finished.
 
 ```typescript
-import { promises } from "./modules/stream";
+import { promises } from "@cj-tech-master/excelts/stream";
 
 // Same as regular pipeline/finished but explicitly promise-based
 await promises.pipeline(source, transform, destination);
@@ -880,7 +898,7 @@ await promises.finished(stream);
 Control stream buffering behavior.
 
 ```typescript
-import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "./modules/stream";
+import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "@cj-tech-master/excelts/stream";
 
 // Get defaults
 getDefaultHighWaterMark(false); // 16384 (16KB for byte streams)
@@ -908,7 +926,7 @@ const writable = new Writable({
 ## Error Handling
 
 ```typescript
-import { pipeline, createTransform, createReadableFromArray } from "./modules/stream";
+import { pipeline, createTransform, createReadableFromArray } from "@cj-tech-master/excelts/stream";
 
 // Error in transform function
 const badTransform = createTransform(
@@ -980,7 +998,7 @@ import {
   createTransform,
   createCollector,
   pipeline
-} from "./modules/stream";
+} from "@cj-tech-master/excelts/stream";
 
 interface Person {
   name: string;
@@ -1059,7 +1077,7 @@ console.log(collector.chunks); // Array of user objects
 ### Protocol Parsing with PullStream
 
 ```typescript
-import { createPullStream } from "./modules/stream";
+import { createPullStream } from "@cj-tech-master/excelts/stream";
 
 // Parse a simple protocol: LENGTH:DATA
 const pull = createPullStream();
@@ -1094,7 +1112,7 @@ console.log(messages); // ["Hello", "World"]
 
 ```typescript
 import { createReadStream, createWriteStream } from "fs";
-import { pipeline, createTransform } from "./modules/stream";
+import { pipeline, createTransform } from "@cj-tech-master/excelts/stream";
 
 // Transform file content to uppercase
 const uppercase = createTransform<Buffer, Buffer>(chunk =>
@@ -1109,7 +1127,7 @@ await pipeline(createReadStream("input.txt"), uppercase, createWriteStream("outp
 ### Fetch API Integration (Browser)
 
 ```typescript
-import { Readable, pipeline, createCollector } from "./modules/stream";
+import { Readable, pipeline, createCollector } from "@cj-tech-master/excelts/stream";
 
 // Fetch and process response
 const response = await fetch("/api/large-data");

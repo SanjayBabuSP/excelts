@@ -7,155 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.1.18](https://github.com/cjnoname/excelts/compare/v5.1.17...v5.1.18) (2026-03-10)
 
-
 ### Bug Fixes
 
-* sanitize table names to comply with OOXML defined name rules ([#91](https://github.com/cjnoname/excelts/issues/91)) ([b6f9b0e](https://github.com/cjnoname/excelts/commit/b6f9b0e7dd46872b066e90c6ece705931f082ffe))
+- sanitize table names to comply with OOXML defined name rules ([#91](https://github.com/cjnoname/excelts/issues/91)) ([b6f9b0e](https://github.com/cjnoname/excelts/commit/b6f9b0e7dd46872b066e90c6ece705931f082ffe))
 
 ## [5.1.17](https://github.com/cjnoname/excelts/compare/v5.1.16...v5.1.17) (2026-03-10)
 
-
 ### Bug Fixes
 
-* prevent unbounded memory growth in StreamBuf when data listeners are attached ([090b2e4](https://github.com/cjnoname/excelts/commit/090b2e42b659f251f2409cbf7691939f0fb7e9a0))
+- prevent unbounded memory growth in StreamBuf when data listeners are attached ([090b2e4](https://github.com/cjnoname/excelts/commit/090b2e42b659f251f2409cbf7691939f0fb7e9a0))
 
 ## [5.1.16](https://github.com/cjnoname/excelts/compare/v5.1.15...v5.1.16) (2026-03-09)
 
-
 ### Bug Fixes
 
-* handle empty defined name ranges and missing colon in print area/titles ([74ce4e6](https://github.com/cjnoname/excelts/commit/74ce4e6a7bc711c334580bc9cb603800c9b07888))
+- handle empty defined name ranges and missing colon in print area/titles ([74ce4e6](https://github.com/cjnoname/excelts/commit/74ce4e6a7bc711c334580bc9cb603800c9b07888))
 
 ## [5.1.15](https://github.com/cjnoname/excelts/compare/v5.1.14...v5.1.15) (2026-03-08)
 
-
 ### Bug Fixes
 
-* write ht="1" for height=0 rows to reliably trigger Excel auto-height ([69728a6](https://github.com/cjnoname/excelts/commit/69728a6ad6da6cb7bcf7c128dc2a7a75998f9193))
+- write ht="1" for height=0 rows to reliably trigger Excel auto-height ([69728a6](https://github.com/cjnoname/excelts/commit/69728a6ad6da6cb7bcf7c128dc2a7a75998f9193))
 
 ## [5.1.14](https://github.com/cjnoname/excelts/compare/v5.1.13...v5.1.14) (2026-03-07)
 
-
 ### Bug Fixes
 
-* row height=0 ignored due to falsy-zero checks, add customHeight support ([9c91fdc](https://github.com/cjnoname/excelts/commit/9c91fdc8e3d2ac4a8dc44ea654a8c8cd2767e0e8)), closes [#82](https://github.com/cjnoname/excelts/issues/82)
+- row height=0 ignored due to falsy-zero checks, add customHeight support ([9c91fdc](https://github.com/cjnoname/excelts/commit/9c91fdc8e3d2ac4a8dc44ea654a8c8cd2767e0e8)), closes [#82](https://github.com/cjnoname/excelts/issues/82)
 
 ## [5.1.13](https://github.com/cjnoname/excelts/compare/v5.1.12...v5.1.13) (2026-03-07)
 
-
 ### Bug Fixes
 
-* add post-publish verification step to CI workflows ([c93c9c4](https://github.com/cjnoname/excelts/commit/c93c9c4b10600821fd6689533e89fbd06b005f3e))
+- add post-publish verification step to CI workflows ([c93c9c4](https://github.com/cjnoname/excelts/commit/c93c9c4b10600821fd6689533e89fbd06b005f3e))
 
 ## [5.1.12](https://github.com/cjnoname/excelts/compare/v5.1.11...v5.1.12) (2026-03-06)
 
-
 ### Bug Fixes
 
-* isDateFmt now correctly recognizes date formats with text fallback sections ([#79](https://github.com/cjnoname/excelts/issues/79)) ([2d5f238](https://github.com/cjnoname/excelts/commit/2d5f2389a8d7d145b34a92dc6c7ef7231be7beab))
-* mergeCells now preserves perimeter borders like Excel ([d9d28d6](https://github.com/cjnoname/excelts/commit/d9d28d66500b05665fab2399277ba2536b2a7d65))
+- isDateFmt now correctly recognizes date formats with text fallback sections ([#79](https://github.com/cjnoname/excelts/issues/79)) ([2d5f238](https://github.com/cjnoname/excelts/commit/2d5f2389a8d7d145b34a92dc6c7ef7231be7beab))
+- mergeCells now preserves perimeter borders like Excel ([d9d28d6](https://github.com/cjnoname/excelts/commit/d9d28d66500b05665fab2399277ba2536b2a7d65))
 
 ## [5.1.11](https://github.com/cjnoname/excelts/compare/v5.1.10...v5.1.11) (2026-03-06)
 
-
 ### Bug Fixes
 
-* resolve TypeError when loading workbook with table column child elements ([f4bcbe6](https://github.com/cjnoname/excelts/commit/f4bcbe63921060984762fb48f2aa07f5446962a7)), closes [#76](https://github.com/cjnoname/excelts/issues/76)
+- resolve TypeError when loading workbook with table column child elements ([f4bcbe6](https://github.com/cjnoname/excelts/commit/f4bcbe63921060984762fb48f2aa07f5446962a7)), closes [#76](https://github.com/cjnoname/excelts/issues/76)
 
 ## [5.1.10](https://github.com/cjnoname/excelts/compare/v5.1.9...v5.1.10) (2026-03-05)
 
-
 ### Bug Fixes
 
-* empty style object shadowing in _mergeStyle and shared style references in row/cell operations ([7df419d](https://github.com/cjnoname/excelts/commit/7df419daeac85c743c4ae50c885025c7b69bcee6))
+- empty style object shadowing in \_mergeStyle and shared style references in row/cell operations ([7df419d](https://github.com/cjnoname/excelts/commit/7df419daeac85c743c4ae50c885025c7b69bcee6))
 
 ## [5.1.9](https://github.com/cjnoname/excelts/compare/v5.1.8...v5.1.9) (2026-03-02)
 
-
 ### Bug Fixes
 
-* improve normalizeWritable function to handle Web WritableStream correctly ([f5cf6f5](https://github.com/cjnoname/excelts/commit/f5cf6f5fd5167004d90d7f12ae9bfb0ddb053c08))
+- improve normalizeWritable function to handle Web WritableStream correctly ([f5cf6f5](https://github.com/cjnoname/excelts/commit/f5cf6f5fd5167004d90d7f12ae9bfb0ddb053c08))
 
 ## [5.1.8](https://github.com/cjnoname/excelts/compare/v5.1.7...v5.1.8) (2026-02-28)
 
-
 ### Bug Fixes
 
-* improve public API return types and enum types ([d261785](https://github.com/cjnoname/excelts/commit/d261785d4ade30ad5db953a17286e309a0753193))
+- improve public API return types and enum types ([d261785](https://github.com/cjnoname/excelts/commit/d261785d4ade30ad5db953a17286e309a0753193))
 
 ## [5.1.7](https://github.com/cjnoname/excelts/compare/v5.1.6...v5.1.7) (2026-02-28)
 
-
 ### Bug Fixes
 
-* add main, module, and types fields to package.json for legacy moduleResolution compatibility ([3f67511](https://github.com/cjnoname/excelts/commit/3f67511325b183a0752debaebca223b6cbe99d67)), closes [#69](https://github.com/cjnoname/excelts/issues/69)
-* hide internal underscore-prefixed members from public type declarations ([f94d157](https://github.com/cjnoname/excelts/commit/f94d1579a2c964e4b4d42269e560d3642f1e06cb)), closes [#68](https://github.com/cjnoname/excelts/issues/68)
+- add main, module, and types fields to package.json for legacy moduleResolution compatibility ([3f67511](https://github.com/cjnoname/excelts/commit/3f67511325b183a0752debaebca223b6cbe99d67)), closes [#69](https://github.com/cjnoname/excelts/issues/69)
+- hide internal underscore-prefixed members from public type declarations ([f94d157](https://github.com/cjnoname/excelts/commit/f94d1579a2c964e4b4d42269e560d3642f1e06cb)), closes [#68](https://github.com/cjnoname/excelts/issues/68)
 
 ## [5.1.6](https://github.com/cjnoname/excelts/compare/v5.1.5...v5.1.6) (2026-02-28)
 
-
 ### Bug Fixes
 
-* revert unnecessary optional chaining for date1904 property access ([042f6c3](https://github.com/cjnoname/excelts/commit/042f6c35981208e284c4aeb60f6f2631cb32362b))
+- revert unnecessary optional chaining for date1904 property access ([042f6c3](https://github.com/cjnoname/excelts/commit/042f6c35981208e284c4aeb60f6f2631cb32362b))
 
 ## [5.1.5](https://github.com/cjnoname/excelts/compare/v5.1.4...v5.1.5) (2026-02-27)
 
-
 ### Bug Fixes
 
-* use optional chaining for date1904 property access in XLSX class ([4e74f80](https://github.com/cjnoname/excelts/commit/4e74f805b1817a0a917c5fd73d7faf34f791810d))
+- use optional chaining for date1904 property access in XLSX class ([4e74f80](https://github.com/cjnoname/excelts/commit/4e74f805b1817a0a917c5fd73d7faf34f791810d))
 
 ## [5.1.4](https://github.com/cjnoname/excelts/compare/v5.1.3...v5.1.4) (2026-02-27)
 
-
 ### Bug Fixes
 
-* update worksheet fileIndex handling for consistency in ZIP entry paths ([5cda867](https://github.com/cjnoname/excelts/commit/5cda86708efb9007e86435157687a705019fb046))
+- update worksheet fileIndex handling for consistency in ZIP entry paths ([5cda867](https://github.com/cjnoname/excelts/commit/5cda86708efb9007e86435157687a705019fb046))
 
 ## [5.1.3](https://github.com/cjnoname/excelts/compare/v5.1.2...v5.1.3) (2026-02-11)
 
-
 ### Bug Fixes
 
-* clone images when duplicating rows ([#57](https://github.com/cjnoname/excelts/issues/57)) ([bd7d949](https://github.com/cjnoname/excelts/commit/bd7d949694641f2968a94424f14123827c5634c3))
-* prevent image duplication on read-write round-trips ([#58](https://github.com/cjnoname/excelts/issues/58)) ([3da3461](https://github.com/cjnoname/excelts/commit/3da3461c68bd751e2b43527e458e4ee847b5a9b4))
+- clone images when duplicating rows ([#57](https://github.com/cjnoname/excelts/issues/57)) ([bd7d949](https://github.com/cjnoname/excelts/commit/bd7d949694641f2968a94424f14123827c5634c3))
+- prevent image duplication on read-write round-trips ([#58](https://github.com/cjnoname/excelts/issues/58)) ([3da3461](https://github.com/cjnoname/excelts/commit/3da3461c68bd751e2b43527e458e4ee847b5a9b4))
 
 ## [5.1.2](https://github.com/cjnoname/excelts/compare/v5.1.1...v5.1.2) (2026-02-10)
 
-
 ### Bug Fixes
 
-* preserve merged cell styles when splicing rows/columns ([#55](https://github.com/cjnoname/excelts/issues/55)) ([668bec7](https://github.com/cjnoname/excelts/commit/668bec7956818fd6d30b57993d6c74b9b3f213a6))
+- preserve merged cell styles when splicing rows/columns ([#55](https://github.com/cjnoname/excelts/issues/55)) ([668bec7](https://github.com/cjnoname/excelts/commit/668bec7956818fd6d30b57993d6c74b9b3f213a6))
 
 ## [5.1.1](https://github.com/cjnoname/excelts/compare/v5.1.0...v5.1.1) (2026-02-09)
 
-
 ### Bug Fixes
 
-* preserve merge information when splicing rows/columns and duplicating rows ([#53](https://github.com/cjnoname/excelts/issues/53)) ([62bbc16](https://github.com/cjnoname/excelts/commit/62bbc160cfb76ed6686b4c81620feb4c3fc5c143))
+- preserve merge information when splicing rows/columns and duplicating rows ([#53](https://github.com/cjnoname/excelts/issues/53)) ([62bbc16](https://github.com/cjnoname/excelts/commit/62bbc160cfb76ed6686b4c81620feb4c3fc5c143))
 
 ## [5.1.0](https://github.com/cjnoname/excelts/compare/v5.0.6...v5.1.0) (2026-02-08)
 
-
 ### Features
 
-* complete pivot table implementation with roundtrip support and codebase refactoring ([2801053](https://github.com/cjnoname/excelts/commit/2801053450c369bfaeb6a14701cb08a01ed156a7))
+- complete pivot table implementation with roundtrip support and codebase refactoring ([2801053](https://github.com/cjnoname/excelts/commit/2801053450c369bfaeb6a14701cb08a01ed156a7))
 
 ## [5.0.6](https://github.com/cjnoname/excelts/compare/v5.0.5...v5.0.6) (2026-02-06)
 
-
 ### Bug Fixes
 
-* update image anchor positions when rows or columns are spliced ([#50](https://github.com/cjnoname/excelts/issues/50)) ([c164bec](https://github.com/cjnoname/excelts/commit/c164becdf233e1b96e9cff7ece2e8e2e9dc45990))
+- update image anchor positions when rows or columns are spliced ([#50](https://github.com/cjnoname/excelts/issues/50)) ([c164bec](https://github.com/cjnoname/excelts/commit/c164becdf233e1b96e9cff7ece2e8e2e9dc45990))
 
 ## [5.0.5](https://github.com/cjnoname/excelts/compare/v5.0.4...v5.0.5) (2026-02-06)
 
-
 ### Bug Fixes
 
-* handle styleId=0 correctly in reconcile functions ([01a532b](https://github.com/cjnoname/excelts/commit/01a532bd0185c6b1381e5dc2c7caf9e875fe8e40))
-* handle styleId=0 correctly in reconcile functions ([50e097a](https://github.com/cjnoname/excelts/commit/50e097a4edf977331ecb30ee7b86ae000016b755))
-* **streaming:** add null guard in WorksheetWriter.eachRow() for sparse rows ([b0f3079](https://github.com/cjnoname/excelts/commit/b0f30795045794de1231ef53bc761232c50201f2))
+- handle styleId=0 correctly in reconcile functions ([01a532b](https://github.com/cjnoname/excelts/commit/01a532bd0185c6b1381e5dc2c7caf9e875fe8e40))
+- handle styleId=0 correctly in reconcile functions ([50e097a](https://github.com/cjnoname/excelts/commit/50e097a4edf977331ecb30ee7b86ae000016b755))
+- **streaming:** add null guard in WorksheetWriter.eachRow() for sparse rows ([b0f3079](https://github.com/cjnoname/excelts/commit/b0f30795045794de1231ef53bc761232c50201f2))
 
 ## [5.0.4](https://github.com/cjnoname/excelts/compare/v5.0.3...v5.0.4) (2026-01-25)
 
@@ -399,22 +378,52 @@ This release includes all changes from 1.6.0 (which was not published to npm).
 
 ### Added
 
-- **csv:** unified `workbook.csv.parse(input, options)` entry for reading from string/URL/File/Blob/stream
-- **csv:** `workbook.csv.stringify(options)` and `workbook.csv.toBuffer(options)` for writing
+- **csv:** unified `workbook.readCsv(input, options)` entry for reading from string/ArrayBuffer/Uint8Array/File/Blob/stream
+- **csv:** `workbook.writeCsv(options)` and `workbook.writeCsvBuffer(options)` for writing
+- **csv:** `workbook.readCsvFile()` / `workbook.writeCsvFile()` for Node.js file I/O
+- **csv:** `createCsvParserStream()` and `createCsvFormatterStream()` factory functions
 - **csv:** `detectDelimiter()` helper export
+- **csv:** standalone `parseCsvAsync()`, `parseCsvRows()`, `parseCsvWithProgress()` for non-workbook usage
+- **archive:** TAR archive support (`TarArchive`, `TarReader`, `tar()`, `untar()`)
+- **archive:** ZIP editor (`ZipEditor`, `editZip()`, `ZipEditPlan`)
+- **archive:** HTTP range reading (`RemoteZipReader`, `HttpRangeReader`)
+- **archive:** ZIP/TAR encryption support (ZipCrypto, AES-256)
+- **archive:** Gzip/Zlib compression (`gzip()`, `gunzip()`, `zlib()`, `unzlib()`)
+- **archive:** ZIP64 large file support
+- **archive:** progress/abort support for all archive operations
+- **stream:** new subpath export `@cj-tech-master/excelts/stream`
+- **stream:** cross-platform stream error classes (`StreamError`, `StreamStateError`, `StreamTypeError`)
+- **stream:** type guards (`isReadableStream`, `isWritableStream`, `isAsyncIterable`, `isTransformStream`)
+- **excel:** structured error hierarchy (16 typed error classes extending `ExcelError`)
+- **package:** subpath exports for `./zip`, `./csv`, `./stream`
 
 ### Removed
 
-- **csv:** legacy methods `load()`, `writeString()`, `writeBuffer()` (use `parse()`, `stringify()`, `toBuffer()`)
+- **csv:** `workbook.csv` accessor (use `workbook.readCsv()`, `workbook.writeCsv()`, etc. directly)
 - **csv:** legacy type aliases `CsvReadOptions`, `CsvWriteOptions`, `CsvStreamReadOptions`, `CsvStreamWriteOptions` (use `CsvOptions`)
+- **stream:** `BufferChunk` (renamed to `ByteChunk`)
+- **stream:** `normalizeWritable` / `Writeable` (replaced by `toWritable`)
+- **stream:** `EventEmitter` no longer re-exported from stream module (moved to `@utils/event-emitter`)
+- **stream:** `once` function (replaced by `onceEvent`)
+- **stream:** binary utilities (`textEncoder`, `stringToUint8Array`, etc.) no longer re-exported from stream module (moved to `@utils/binary`)
+- **stream:** `ReadWriteBufferOptions` type
+- **archive:** `UnzipEntry.isDirectory` (replaced by `UnzipEntry.type: "file" | "directory" | "symlink"`)
+- **archive:** archive APIs removed from browser main entry (use `@cj-tech-master/excelts/zip` subpath instead)
 
 ### Breaking Changes
 
+- **csv:** `workbook.csv` accessor removed; use `workbook.readCsv()` / `workbook.writeCsv()` / `workbook.writeCsvBuffer()` / `workbook.readCsvFile()` / `workbook.writeCsvFile()` directly
 - **csv:** when no delimiter is provided, parsing now auto-detects the delimiter (previously defaulted to ","); pass `delimiter: ","` to keep the old behavior
-- **csv:** removed `load()` method; use `await parse()` instead (now async)
-- **csv:** removed `writeString()` method; use `stringify()` instead
-- **csv:** removed `writeBuffer()` method; use `toBuffer()` instead
 - **csv:** removed type aliases `CsvReadOptions`, `CsvWriteOptions`, `CsvStreamReadOptions`, `CsvStreamWriteOptions`; use `CsvOptions` instead
+- **csv:** parse option `transform` renamed to `rowTransform`; format option `rowDelimiter` renamed to `lineEnding`
+- **stream:** `BufferChunk` renamed to `ByteChunk`
+- **stream:** `normalizeWritable` / `Writeable` replaced by `toWritable`
+- **stream:** `BufferedStream.toUint8Array()` now consumes the buffer (resets to empty after call)
+- **archive:** `UnzipEntry.isDirectory` removed; use `entry.type === "directory"` instead
+- **archive:** archive APIs removed from browser main entry; use `@cj-tech-master/excelts/zip` subpath
+- **excel:** `Image` type renamed to `ImageData` (deprecated alias preserved)
+- **excel:** `ZipOptions` renamed to `WorkbookZipOptions` (deprecated alias preserved)
+- **eventemitter:** `emit("error")` now throws if no listener (matches Node.js behavior)
 
 ## [1.5.0] - 2025-12-13
 

@@ -111,6 +111,30 @@ cell.fill = {
   - Data protection
   - Comments and notes
 
+## Subpath Exports
+
+ExcelTS provides focused subpath exports for standalone module usage:
+
+```typescript
+// Main entry - Excel core (Workbook, Worksheet, Cell, etc.)
+import { Workbook, WorkbookWriter } from "@cj-tech-master/excelts";
+
+// ZIP/TAR archive utilities
+import { zip, unzip, ZipArchive, compress } from "@cj-tech-master/excelts/zip";
+
+// CSV parsing, formatting, and streaming
+import { parseCsv, formatCsv, CsvParserStream } from "@cj-tech-master/excelts/csv";
+
+// Cross-platform stream primitives
+import { Readable, pipeline, createTransform } from "@cj-tech-master/excelts/stream";
+```
+
+Each subpath supports `browser`, `import` (ESM), and `require` (CJS) conditions. See the module READMEs for details:
+
+- [CSV Module](src/modules/csv/README.md) - RFC 4180 parser/formatter, streaming, data generation
+- [Archive Module](src/modules/archive/README.md) - ZIP/TAR create/read/edit, compression, encryption
+- [Stream Module](src/modules/stream/README.md) - Cross-platform Readable/Writable/Transform/Duplex
+
 ## Archive Utilities (ZIP/TAR)
 
 ExcelTS includes internal ZIP/TAR utilities used by the XLSX pipeline. If you use the
@@ -275,26 +299,23 @@ import fs from "fs";
 
 const workbook = new Workbook();
 
-// Read CSV from file (streaming)
-await workbook.csv.readFile("data.csv");
+// Read CSV from file
+await workbook.readCsvFile("data.csv");
 
 // Read CSV from stream
 const stream = fs.createReadStream("data.csv");
-await workbook.csv.read(stream, { sheetName: "Imported" });
+await workbook.readCsv(stream, { sheetName: "Imported" });
 
-// Read CSV from URL (Node.js 20+)
-await workbook.csv.parse("https://example.com/data.csv", { sheetName: "Imported" });
-
-// Write CSV to file (streaming)
-await workbook.csv.writeFile("output.csv");
+// Write CSV to file
+await workbook.writeCsvFile("output.csv");
 
 // Write CSV to stream
 const writeStream = fs.createWriteStream("output.csv");
-await workbook.csv.write(writeStream);
+await workbook.writeCsv(writeStream);
 
 // Write CSV to string / bytes
-const csvText = workbook.csv.stringify();
-const bytes = await workbook.csv.toBuffer();
+const csvText = workbook.writeCsv();
+const bytes = await workbook.writeCsvBuffer();
 ```
 
 ### Browser (In-Memory)
@@ -305,24 +326,21 @@ import { Workbook } from "@cj-tech-master/excelts";
 const workbook = new Workbook();
 
 // Read CSV from string
-await workbook.csv.parse(csvString);
-
-// Read CSV from URL
-await workbook.csv.parse("https://example.com/data.csv");
+await workbook.readCsv(csvString);
 
 // Read CSV from ArrayBuffer (e.g., from fetch)
 const response = await fetch("data.csv");
 const arrayBuffer = await response.arrayBuffer();
-await workbook.csv.parse(arrayBuffer);
+await workbook.readCsv(arrayBuffer);
 
 // Read CSV from File (e.g., <input type="file">)
-await workbook.csv.parse(file);
+await workbook.readCsv(file);
 
-// Write CSV to string / bytes
-const csvOutput = workbook.csv.stringify();
+// Write CSV to string
+const csvOutput = workbook.writeCsv();
 
 // Write CSV to Uint8Array bytes
-const bytes = await workbook.csv.toBuffer();
+const bytes = await workbook.writeCsvBuffer();
 ```
 
 ## Browser Support
@@ -378,11 +396,47 @@ Then open `http://localhost:3000/src/modules/excel/examples/browser-smoke.html`.
 ### Browser-Specific Notes
 
 - **CSV operations are supported** using native RFC 4180 implementation
-  - Use `await csv.parse(input)` to read CSV
-  - Use `csv.stringify()` or `await csv.toBuffer()` to write CSV
+  - Use `await workbook.readCsv(input)` to read CSV
+  - Use `workbook.writeCsv()` or `await workbook.writeCsvBuffer()` to write CSV
 - Use `xlsx.load(arrayBuffer)` instead of `xlsx.readFile()`
 - Use `xlsx.writeBuffer()` instead of `xlsx.writeFile()`
 - Worksheet protection with passwords is fully supported (pure JS SHA-512)
+
+## Utility Exports
+
+The main entry also exports commonly useful utilities:
+
+```typescript
+import {
+  // Excel date conversion
+  dateToExcel, // JS Date -> Excel serial number
+  excelToDate, // Excel serial number -> JS Date
+
+  // Date parsing/formatting (high-performance, zero-dep)
+  DateParser, // Batch date parser with format auto-detection
+  DateFormatter, // Batch date formatter
+
+  // Binary utilities (cross-platform)
+  base64ToUint8Array,
+  uint8ArrayToBase64,
+  concatUint8Arrays,
+  toUint8Array,
+  stringToUint8Array,
+  uint8ArrayToString,
+
+  // XML utilities
+  xmlEncode,
+  xmlDecode,
+
+  // Error infrastructure
+  BaseError, // Base class for all library errors
+  ExcelError, // Base Excel error (instanceof checks)
+  toError, // Normalize unknown -> Error
+  errorToJSON, // Serialize error (with cause chain)
+  getErrorChain, // Get full error cause chain as array
+  getRootCause // Get deepest error in cause chain
+} from "@cj-tech-master/excelts";
+```
 
 ## Requirements
 
