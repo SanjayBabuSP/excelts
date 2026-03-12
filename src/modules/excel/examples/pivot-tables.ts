@@ -1,8 +1,8 @@
 /**
- * Pivot Table Examples — 24 variations showcasing all supported features
- * Usage: npx tsx examples/pivot-tables.ts
+ * Pivot Table Examples — 25 variations showcasing all supported features
+ * Usage: npx tsx src/modules/excel/examples/pivot-tables.ts
  */
-import { Workbook, type PivotTableValue } from "../src/index";
+import { Workbook, type PivotTableValue } from "../../../index";
 
 async function main() {
   const workbook = new Workbook();
@@ -147,7 +147,7 @@ async function main() {
   dataSheet2.addRows([empHeaders, ...empRows]);
 
   // ==========================================================================
-  // 24 Pivot Table Variations
+  // 25 Pivot Table Variations
   // ==========================================================================
 
   // ---------- 1. Classic: rows + columns + single value + sum ----------
@@ -412,11 +412,21 @@ async function main() {
     metric: "stdDev"
   });
 
+  // ---------- 25. Multi column fields (sourceSheet with 2 column axes) ----------
+  const s25 = workbook.addWorksheet("25-Multi Column Fields");
+  s25.addPivotTable({
+    sourceSheet: dataSheet2,
+    rows: ["Department", "Level", "Employee"],
+    columns: ["Review Year", "Projects"],
+    values: ["Bonus"],
+    metric: "sum"
+  });
+
   // Write output
   const outPath = "out/pivot-tables-example.xlsx";
   await workbook.xlsx.writeFile(outPath);
   console.log(`Done! ${rows.length} sales rows + ${empRows.length} employee rows`);
-  console.log(`Generated 24 pivot tables -> ${outPath}`);
+  console.log(`Generated 25 pivot tables -> ${outPath}`);
   console.log(`
 Pivot Table List:
  1  Classic              rows=Region, cols=Category, val=Revenue(sum)
@@ -433,7 +443,7 @@ Pivot Table List:
 12  Preserve Widths      rows=Region+City, cols=Quarter, val=Cost(sum), applyWidthHeightFormats=0
 13  Customer Type        rows=CustomerType, cols=Channel, val=Revenue(sum), page=Year
 14  Channel Quarter      rows=Channel+CustomerType, cols=Quarter, val=Quantity(sum), pages=Region+Category
-15  Source Sheet          rows=Department, cols=ReviewYear, val=Score(sum) [2nd data source]
+15  Source Sheet          rows=Department, cols=ReviewYear, val=Score(sum) [sourceSheet]
 16  Employee Count       rows=Department+Level, val=Projects(count), page=ReviewYear
 17  Employee Metrics     rows=Department, vals=Score+Projects+Bonus(sum)
 18  Four Row Levels      rows=Region+City+Category+Product, val=Revenue(sum)
@@ -443,6 +453,7 @@ Pivot Table List:
 22  Max                  rows=Category+Product, cols=Year, val=Revenue(max)
 23  Mixed Metrics        rows=Region+Category, vals=Revenue(sum)+Quantity(count)+Margin(average) [per-value]
 24  Mixed Full           rows=Channel+CustomerType, cols=Quarter, vals=Revenue(sum)+Cost(min)+Quantity(max)+Margin(stdDev) [per-value+pages]
+25  Multi Column Fields  rows=Department+Level+Employee, cols=ReviewYear+Projects, val=Bonus(sum) [multi-column]
 `);
 }
 

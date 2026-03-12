@@ -24,3 +24,7 @@ __screenshots__
 tmp/
 
 .claude
+.sisyphus
+.opencode
+benchmark
+

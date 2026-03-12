@@ -139,7 +139,6 @@ export interface AddDirectoryOptions {
   /**
    * Transform function to modify entry metadata or skip entries.
    *
-   * Similar to archiver's data function:
    * - Return modified data to customize the entry
    * - Return `false` to skip the entry
    * - Return `undefined` to include as-is
