@@ -148,7 +148,14 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "AES_VENDOR_ID",
   "AES_VERSION_AE1",
   "AES_VERSION_AE2",
-  "COMPRESSION_METHOD_AES"
+  "COMPRESSION_METHOD_AES",
+
+  // Binary / encoding utilities
+  "base64ToUint8Array",
+  "uint8ArrayToBase64",
+  "concatUint8Arrays",
+  "stringToUint8Array",
+  "uint8ArrayToString"
 ] as const;
 
 /**

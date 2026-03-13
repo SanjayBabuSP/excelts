@@ -118,6 +118,12 @@ export {
   type TarReaderOperation
 } from "@archive/tar/index.browser";
 
+// Binary / encoding utilities
+// These are re-exported so that archive can be used as a standalone package
+// without requiring consumers to reach into internal @utils modules.
+export { base64ToUint8Array, uint8ArrayToBase64 } from "@utils/utils.base";
+export { concatUint8Arrays, stringToUint8Array, uint8ArrayToString } from "@utils/binary";
+
 // Encryption
 export {
   ZIP_CRYPTO_HEADER_SIZE,
