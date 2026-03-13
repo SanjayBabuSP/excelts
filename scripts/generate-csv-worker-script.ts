@@ -38,8 +38,11 @@ try {
   // Ensure outDir exists and is clean-ish
   fs.mkdirSync(outDir, { recursive: true });
 
-  // Bundle via rolldown (already a dev dependency) — use execFileSync to avoid shell injection
-  execFileSync("rolldown", ["-c", configPath], { stdio: "inherit" });
+  // Bundle via rolldown (already a dev dependency).
+  // Run rolldown's CLI entry directly via Node to avoid Windows .cmd shim
+  // issues with execFileSync and to prevent shell injection.
+  const rolldownCli = path.join(projectRoot, "node_modules", "rolldown", "bin", "cli.mjs");
+  execFileSync(process.execPath, [rolldownCli, "-c", configPath], { stdio: "inherit" });
 
   const js = normalizeEol(readUtf8(outJs));
 
