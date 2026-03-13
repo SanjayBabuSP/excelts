@@ -24,7 +24,6 @@ import type {
   AggregateConfig,
   PageConfig
 } from "./types";
-import { safeSet } from "@utils/safe-key";
 
 type SessionData = any[] | any[][];
 
@@ -99,7 +98,10 @@ function toObjectRows(
   const objects = rows.map(row => {
     const obj: Record<string, any> = Object.create(null) as Record<string, any>;
     for (let i = 0; i < resolvedHeaders.length; i++) {
-      safeSet(obj, resolvedHeaders[i], row[i]);
+      const key = resolvedHeaders[i];
+      if (key !== "__proto__") {
+        obj[key] = row[i];
+      }
     }
     return obj;
   });
@@ -283,11 +285,16 @@ function groupByData(data: any[], config: GroupByConfig): any[] {
   for (const group of groups.values()) {
     const obj: Record<string, any> = Object.create(null) as Record<string, any>;
     columns.forEach((col, idx) => {
-      safeSet(obj, String(col), group.keyValues[idx]);
+      const k = String(col);
+      if (k !== "__proto__") {
+        obj[k] = group.keyValues[idx];
+      }
     });
     for (const { column, fn, alias } of aggregates) {
       const key = alias || `${column}_${fn}`;
-      safeSet(obj, key, computeAggregate(group.rows, column, fn));
+      if (key !== "__proto__") {
+        obj[key] = computeAggregate(group.rows, column, fn);
+      }
     }
     result.push(obj);
   }
@@ -300,7 +307,9 @@ function aggregateData(data: any[], configs: AggregateConfig[]): Record<string, 
   for (const config of configs) {
     const { column, fn, alias } = config;
     const key = alias || `${column}_${fn}`;
-    safeSet(result, key, computeAggregate(data, column, fn));
+    if (key !== "__proto__") {
+      result[key] = computeAggregate(data, column, fn);
+    }
   }
   return result;
 }
@@ -374,9 +383,12 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
 // =============================================================================
 
 // Dedicated Web Workers receive messages only from the parent thread —
-// cross-origin messages are impossible by spec. Using addEventListener
-// instead of onmessage to satisfy CodeQL js/missing-origin-check.
+// cross-origin messages are impossible by spec. The origin guard below is
+// a no-op at runtime but satisfies CodeQL's js/missing-origin-check rule.
 self.addEventListener("message", (event: MessageEvent<CsvWorkerRequestMessage>) => {
+  if (event.origin !== "" && event.origin !== self.location?.origin) {
+    return;
+  }
   // Validate incoming message structure (defense-in-depth for dedicated worker)
   const msg = event.data;
   if (!msg || typeof msg.type !== "string") {

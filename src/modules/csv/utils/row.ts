@@ -17,7 +17,6 @@
 // Re-export types from central types.ts to avoid duplication
 import type { ColumnConfig, HeaderArray, RowHashArray } from "@csv/types";
 export type { HeaderArray, RowHashArray } from "@csv/types";
-import { safeSet } from "@utils/safe-key";
 
 // =============================================================================
 // RowHashArray Utilities
@@ -42,7 +41,9 @@ export function isRowHashArray(row: unknown): row is RowHashArray {
 export function rowHashArrayToMap<V = any>(row: RowHashArray<V>): Record<string, V> {
   const obj: Record<string, V> = Object.create(null) as Record<string, V>;
   for (const [key, value] of row) {
-    safeSet(obj, key, value);
+    if (key !== "__proto__") {
+      obj[key] = value;
+    }
   }
   return obj;
 }
