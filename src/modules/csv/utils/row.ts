@@ -39,7 +39,7 @@ export function isRowHashArray(row: unknown): row is RowHashArray {
  * Note: Manual loop is ~4x faster than Object.fromEntries
  */
 export function rowHashArrayToMap<V = any>(row: RowHashArray<V>): Record<string, V> {
-  const obj: Record<string, V> = {};
+  const obj: Record<string, V> = Object.create(null) as Record<string, V>;
   for (const [key, value] of row) {
     obj[key] = value;
   }

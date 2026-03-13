@@ -239,7 +239,7 @@ export function createOnSkipHandler(
  * Internal helper for convertRowToObject.
  */
 function rowToObject(row: string[], headers: HeaderArray): Record<string, string> {
-  const obj: Record<string, string> = {};
+  const obj: Record<string, string> = Object.create(null) as Record<string, string>;
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
     if (header !== null && header !== undefined) {
@@ -279,7 +279,10 @@ function rowToObjectGrouped(
   row: string[],
   headers: HeaderArray
 ): Record<string, string | string[]> {
-  const obj: Record<string, string | string[]> = {};
+  const obj: Record<string, string | string[]> = Object.create(null) as Record<
+    string,
+    string | string[]
+  >;
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
     if (header !== null && header !== undefined) {

@@ -534,12 +534,29 @@ export class DateFormatter {
 
   /** Generic formatter for arbitrary formats */
   private static createGeneric(format: string, utc: boolean): DateFormatter {
-    // Pre-process escaped sections
+    // Pre-process escaped sections (e.g. [literal text] → placeholder)
+    // Manual scan avoids regex backtracking on adversarial input
     const esc: string[] = [];
-    const tpl = format.replace(/\[([^\]]*)\]/g, (_, c) => {
-      esc.push(c);
-      return `\x00${esc.length - 1}\x00`;
-    });
+    const parts: string[] = [];
+    let i = 0;
+    while (i < format.length) {
+      if (format[i] === "[") {
+        const closeIdx = format.indexOf("]", i + 1);
+        if (closeIdx !== -1) {
+          esc.push(format.slice(i + 1, closeIdx));
+          parts.push(`\x00${esc.length - 1}\x00`);
+          i = closeIdx + 1;
+        } else {
+          // No closing bracket — treat '[' as literal
+          parts.push(format[i]);
+          i++;
+        }
+      } else {
+        parts.push(format[i]);
+        i++;
+      }
+    }
+    const tpl = parts.join("");
 
     // Detect used tokens for conditional computation
     const hasY = tpl.includes("YYYY");

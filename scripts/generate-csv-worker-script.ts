@@ -4,7 +4,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 const projectRoot = process.cwd();
 const configPath = path.join(projectRoot, "rolldown.csv-worker.config.ts");
@@ -38,8 +38,8 @@ try {
   // Ensure outDir exists and is clean-ish
   fs.mkdirSync(outDir, { recursive: true });
 
-  // Bundle via rolldown (already a dev dependency)
-  execSync(`rolldown -c ${JSON.stringify(configPath)}`, { stdio: "inherit" });
+  // Bundle via rolldown (already a dev dependency) — use execFileSync to avoid shell injection
+  execFileSync("rolldown", ["-c", configPath], { stdio: "inherit" });
 
   const js = normalizeEol(readUtf8(outJs));
 

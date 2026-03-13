@@ -17,7 +17,7 @@ import type { DynamicTypingConfig, CastDateConfig } from "@csv/types";
  * Matches integers, decimals, and scientific notation.
  * Pre-compiling avoids regex compilation overhead in the hot path.
  */
-const NUMERIC_REGEX = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+const NUMERIC_REGEX = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 // Singleton date parser for ISO formats (created lazily)
 let isoDateParser: DateParser | null = null;

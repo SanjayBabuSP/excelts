@@ -96,7 +96,7 @@ function toObjectRows(
   }
 
   const objects = rows.map(row => {
-    const obj: Record<string, any> = {};
+    const obj: Record<string, any> = Object.create(null) as Record<string, any>;
     for (let i = 0; i < resolvedHeaders.length; i++) {
       obj[resolvedHeaders[i]] = row[i];
     }
@@ -280,12 +280,13 @@ function groupByData(data: any[], config: GroupByConfig): any[] {
 
   const result: any[] = [];
   for (const group of groups.values()) {
-    const obj: Record<string, any> = {};
+    const obj: Record<string, any> = Object.create(null) as Record<string, any>;
     columns.forEach((col, idx) => {
       obj[String(col)] = group.keyValues[idx];
     });
     for (const { column, fn, alias } of aggregates) {
-      obj[alias || `${column}_${fn}`] = computeAggregate(group.rows, column, fn);
+      const key = alias || `${column}_${fn}`;
+      obj[key] = computeAggregate(group.rows, column, fn);
     }
     result.push(obj);
   }
@@ -294,10 +295,11 @@ function groupByData(data: any[], config: GroupByConfig): any[] {
 }
 
 function aggregateData(data: any[], configs: AggregateConfig[]): Record<string, any> {
-  const result: Record<string, any> = {};
+  const result: Record<string, any> = Object.create(null) as Record<string, any>;
   for (const config of configs) {
     const { column, fn, alias } = config;
-    result[alias || `${column}_${fn}`] = computeAggregate(data, column, fn);
+    const key = alias || `${column}_${fn}`;
+    result[key] = computeAggregate(data, column, fn);
   }
   return result;
 }
@@ -371,7 +373,11 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
 // =============================================================================
 
 (self as any).onmessage = (event: MessageEvent<CsvWorkerRequestMessage>) => {
+  // Validate incoming message structure (defense-in-depth for dedicated worker)
   const msg = event.data;
+  if (!msg || typeof msg.type !== "string") {
+    return;
+  }
   const taskId = msg.taskId ?? 0;
   const start = performance.now();
 

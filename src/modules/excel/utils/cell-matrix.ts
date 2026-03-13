@@ -1,13 +1,4 @@
 import { colCache } from "@excel/utils/col-cache";
-import { WorksheetNameError, RowOutOfBoundsError, ColumnOutOfBoundsError } from "@excel/errors";
-
-// Helper to check for prototype pollution
-function isSafeKey(key: string | number): boolean {
-  if (typeof key === "number") {
-    return true;
-  }
-  return key !== "__proto__" && key !== "constructor" && key !== "prototype";
-}
 
 // Safe deep clone that filters out prototype pollution keys
 function safeDeepClone<T>(obj: T): T {
@@ -19,7 +10,7 @@ function safeDeepClone<T>(obj: T): T {
   }
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(obj)) {
-    if (isSafeKey(key)) {
+    if (key !== "__proto__" && key !== "constructor" && key !== "prototype") {
       result[key] = safeDeepClone((obj as Record<string, unknown>)[key]);
     }
   }
@@ -40,15 +31,14 @@ interface CellAddress {
 type Cell = CellAddress & any;
 type Row = Cell[];
 type Sheet = Row[];
-type Sheets = Record<string, Sheet>;
 
 class CellMatrix {
   template: any;
-  sheets: Sheets;
+  sheets: Map<string, Sheet>;
 
   constructor(template?: any) {
     this.template = template;
-    this.sheets = {};
+    this.sheets = new Map();
   }
 
   addCell(addressStr: string): void {
@@ -64,7 +54,7 @@ class CellMatrix {
   }
 
   findCellAt(sheetName: string, rowNumber: number, colNumber: number): Cell | undefined {
-    const sheet = this.sheets[sheetName];
+    const sheet = this.sheets.get(sheetName);
     const row = sheet && sheet[rowNumber];
     return row && row[colNumber];
   }
@@ -92,10 +82,11 @@ class CellMatrix {
   }
 
   getCellAt(sheetName: string, rowNumber: number, colNumber: number): Cell {
-    if (!isSafeKey(sheetName)) {
-      throw new WorksheetNameError(`Invalid sheet name: ${sheetName}`);
+    let sheet = this.sheets.get(sheetName);
+    if (!sheet) {
+      sheet = [];
+      this.sheets.set(sheetName, sheet);
     }
-    const sheet = this.sheets[sheetName] || (this.sheets[sheetName] = []);
     const row = sheet[rowNumber] || (sheet[rowNumber] = []);
     const cell =
       row[colNumber] ||
@@ -124,7 +115,7 @@ class CellMatrix {
     sheetName: string,
     callback: (cell: Cell, rowNumber: number, colNumber: number) => void
   ): void {
-    const sheet = this.sheets[sheetName];
+    const sheet = this.sheets.get(sheetName);
     if (sheet) {
       sheet.forEach((row, rowNumber) => {
         if (row) {
@@ -139,9 +130,9 @@ class CellMatrix {
   }
 
   forEach(callback: (cell: Cell) => void): void {
-    Object.keys(this.sheets).forEach(sheetName => {
-      this.forEachInSheet(sheetName as string, callback);
-    });
+    for (const sheetName of this.sheets.keys()) {
+      this.forEachInSheet(sheetName, callback);
+    }
   }
 
   map<T>(callback: (cell: Cell) => T): T[] {
@@ -154,23 +145,19 @@ class CellMatrix {
 
   findSheet(address: CellAddress, create: boolean): Sheet | undefined {
     const name = address.sheetName!;
-    if (!isSafeKey(name)) {
-      throw new WorksheetNameError(`Invalid sheet name: ${name}`);
-    }
-    if (Object.prototype.hasOwnProperty.call(this.sheets, name)) {
-      return this.sheets[name];
+    if (this.sheets.has(name)) {
+      return this.sheets.get(name);
     }
     if (create) {
-      return (this.sheets[name] = []);
+      const sheet: Sheet = [];
+      this.sheets.set(name, sheet);
+      return sheet;
     }
     return undefined;
   }
 
   findSheetRow(sheet: Sheet | undefined, address: CellAddress, create: boolean): Row | undefined {
     const { row } = address;
-    if (!isSafeKey(row)) {
-      throw new RowOutOfBoundsError(row as number, `Invalid row: ${row}`);
-    }
     if (sheet && sheet[row]) {
       return sheet[row];
     }
@@ -182,9 +169,6 @@ class CellMatrix {
 
   findRowCell(row: Row | undefined, address: CellAddress, create: boolean): Cell | undefined {
     const { col } = address;
-    if (!isSafeKey(col)) {
-      throw new ColumnOutOfBoundsError(col, `Invalid column: ${col}`);
-    }
     if (row && row[col]) {
       return row[col];
     }
@@ -197,7 +181,7 @@ class CellMatrix {
   }
 
   spliceRows(sheetName: string, start: number, numDelete: number, numInsert: number): void {
-    const sheet = this.sheets[sheetName];
+    const sheet = this.sheets.get(sheetName);
     if (sheet) {
       const inserts: Row[] = [];
       for (let i = 0; i < numInsert; i++) {
@@ -208,13 +192,13 @@ class CellMatrix {
   }
 
   spliceColumns(sheetName: string, start: number, numDelete: number, numInsert: number): void {
-    const sheet = this.sheets[sheetName];
+    const sheet = this.sheets.get(sheetName);
     if (sheet) {
       const inserts: (Cell | null)[] = [];
       for (let i = 0; i < numInsert; i++) {
         inserts.push(null);
       }
-      Object.values(sheet).forEach((row: Row) => {
+      sheet.forEach((row: Row) => {
         row.splice(start, numDelete, ...inserts);
       });
     }

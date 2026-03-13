@@ -323,7 +323,7 @@ export async function* parseCsvRows(
           break;
         }
         const canContinue = parser.write(chunk as any);
-        if (!canContinue && !aborted) {
+        if (!canContinue) {
           await new Promise<void>(resolve => parser.once("drain", resolve));
         }
       }

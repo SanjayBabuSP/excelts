@@ -10,6 +10,14 @@ import { escapeRegex, normalizeQuoteOption, normalizeEscapeOption } from "../uti
 import type { DecimalSeparator } from "../utils/number";
 import { CsvError } from "../errors";
 
+/**
+ * Escape a string for use inside a regex character class [...].
+ * Handles all special characters: \ ] ^ -
+ */
+function escapeForCharClass(str: string): string {
+  return str.replace(/[\\\]^-]/g, "\\$&");
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -158,12 +166,8 @@ export function createFormatRegex(options: FormatRegexOptions): CsvFormatRegex {
     needsQuoteRegex: useFastCheck
       ? null // Will use fast check instead
       : (() => {
-          // Build character class content, ensuring '-' is escaped for use inside [...]
-          const classContent =
-            `${escapeRegex(delimiter)}${escapeRegex(quote)}${escape !== quote ? escapeRegex(escape) : ""}\r\n`.replace(
-              /-/g,
-              "\\-"
-            );
+          // Build character class content using dedicated char-class escaping
+          const classContent = `${escapeForCharClass(delimiter)}${escapeForCharClass(quote)}${escape !== quote ? escapeForCharClass(escape) : ""}\r\n`;
           return new RegExp(`[${classContent}]`);
         })(),
     escapeQuoteRegex:

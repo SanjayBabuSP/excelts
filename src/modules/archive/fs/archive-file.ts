@@ -651,7 +651,13 @@ function normalizeTarPath(name: string, prefix?: string): string {
   let result = name.replace(/\\/g, "/");
   result = result.replace(/^\/+/, "");
   if (prefix) {
-    const normalizedPrefix = prefix.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+    let normalizedPrefix = prefix.replace(/\\/g, "/").replace(/^\/+/, "");
+    // Trim trailing slashes without regex to avoid ReDoS on long '/' runs
+    let end = normalizedPrefix.length;
+    while (end > 0 && normalizedPrefix[end - 1] === "/") {
+      end--;
+    }
+    normalizedPrefix = normalizedPrefix.slice(0, end);
     result = normalizedPrefix ? `${normalizedPrefix}/${result}` : result;
   }
   return result;

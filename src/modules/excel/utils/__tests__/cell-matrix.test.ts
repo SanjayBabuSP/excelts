@@ -100,12 +100,20 @@ describe("CellMatrix", () => {
     expect(({} as any).polluted).toBeUndefined();
   });
 
-  it("rejects unsafe sheet names", () => {
+  it("handles __proto__ and constructor as safe sheet names via Map", () => {
     const cm = new CellMatrix();
-    expect(() => cm.getCell("__proto__!A1")).toThrow(/Invalid sheet name/);
 
-    // Also ensure internal API rejects unsafe keys
-    expect(() => cm.getCellAt("constructor" as any, 1, 1)).toThrow(/Invalid sheet name/);
+    // Map-based storage is immune to prototype pollution, so these are valid sheet names
+    const cell1 = cm.getCellAt("__proto__", 1, 1);
+    expect(cell1).toBeTruthy();
+    expect(cell1.sheetName).toBe("__proto__");
+
+    const cell2 = cm.getCellAt("constructor", 1, 1);
+    expect(cell2).toBeTruthy();
+    expect(cell2.sheetName).toBe("constructor");
+
+    // Ensure no prototype pollution occurred
+    expect(({} as any).polluted).toBeUndefined();
   });
 
   it("addCellEx handles decoded ranges", () => {

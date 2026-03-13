@@ -52,23 +52,37 @@ export interface GlobOptions {
 
 const NOT_AVAILABLE = "File system operations are not available in browser environment.";
 
-export async function* traverseDirectory(
+/** Create an async iterable that rejects on iteration — for browser stubs of generator APIs */
+function notAvailable<T>(): AsyncGenerator<T> {
+  const err = new Error(NOT_AVAILABLE);
+  // Implement the AsyncGenerator protocol directly — no generator function needed,
+  // so no unreachable-yield or require-yield concerns
+  return {
+    next: () => Promise.reject(err),
+    return: () => Promise.resolve({ value: undefined as T, done: true as const }),
+    throw: () => Promise.reject(err),
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+    [Symbol.asyncDispose]() {
+      return Promise.resolve();
+    }
+  };
+}
+
+export function traverseDirectory(
   _dirPath: string,
   _options?: TraverseOptions
 ): AsyncGenerator<FileEntry> {
-  throw new Error(NOT_AVAILABLE);
-  // Unreachable but required for generator typing
-  yield undefined!;
+  return notAvailable();
 }
 
 export function traverseDirectorySync(_dirPath: string, _options?: TraverseOptions): FileEntry[] {
   throw new Error(NOT_AVAILABLE);
 }
 
-export async function* glob(_pattern: string, _options?: GlobOptions): AsyncGenerator<FileEntry> {
-  throw new Error(NOT_AVAILABLE);
-  // Unreachable but required for generator typing
-  yield undefined!;
+export function glob(_pattern: string, _options?: GlobOptions): AsyncGenerator<FileEntry> {
+  return notAvailable();
 }
 
 export function globSync(_pattern: string, _options?: GlobOptions): FileEntry[] {

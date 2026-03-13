@@ -155,11 +155,12 @@ const createCompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> 
       Uint8Array
     >;
   }
-  return new TransformStream<Uint8Array, Uint8Array>({
+  const transformer: Transformer<Uint8Array, Uint8Array> = {
     transform(chunk, controller) {
       controller.enqueue(chunk);
     }
-  });
+  };
+  return new TransformStream(transformer);
 };
 
 const createDecompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> => {
@@ -169,11 +170,12 @@ const createDecompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array
       Uint8Array
     >;
   }
-  return new TransformStream<Uint8Array, Uint8Array>({
+  const transformer: Transformer<Uint8Array, Uint8Array> = {
     transform(chunk, controller) {
       controller.enqueue(chunk);
     }
-  });
+  };
+  return new TransformStream(transformer);
 };
 
 // ============================================================================
