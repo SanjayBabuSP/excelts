@@ -74,9 +74,6 @@ export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip"
 export type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip";
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive/unzip";
 
-// Format registry (ZIP/TAR dispatch)
-export { createArchive, createReader } from "@archive/formats";
-
 // TAR archive support (unified API compatible with ZIP)
 // Note: Gzip helpers are exported separately in index.ts / index.browser.ts
 export {

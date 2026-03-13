@@ -661,7 +661,3 @@ export interface ZipOptionsTar extends ZipOptions {
 export interface ZipOptionsZip extends ZipOptions {
   format?: "zip";
 }
-
-export function createZipArchive(options?: ZipOptionsZip): ZipArchive {
-  return new ZipArchive(options);
-}

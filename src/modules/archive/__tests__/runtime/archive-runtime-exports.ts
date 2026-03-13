@@ -74,10 +74,6 @@ export const ARCHIVE_BROWSER_EXPORTS = [
   "ZipReader",
   "UnzipEntry",
 
-  // Format registry (ZIP/TAR dispatch)
-  "createArchive",
-  "createReader",
-
   // TAR archive support (basic - no gzip)
   "TAR_BLOCK_SIZE",
   "TAR_TYPE",

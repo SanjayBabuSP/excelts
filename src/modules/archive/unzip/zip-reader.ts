@@ -676,7 +676,3 @@ export interface UnzipOptionsTar extends UnzipOptions {
 export interface UnzipOptionsZip extends UnzipOptions {
   format?: "zip";
 }
-
-export function createZipReader(source: ArchiveSource, options?: UnzipOptionsZip): ZipReader {
-  return new ZipReader(source, options);
-}
