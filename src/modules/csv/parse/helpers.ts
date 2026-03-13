@@ -16,6 +16,7 @@
 import { deduplicateHeadersWithRenames, type HeaderArray } from "../utils/row";
 import type { CsvRecordError, OnSkipCallback } from "../types";
 import { CsvError } from "../errors";
+import { isSafeKey } from "@utils/safe-key";
 
 // =============================================================================
 // Types
@@ -242,7 +243,7 @@ function rowToObject(row: string[], headers: HeaderArray): Record<string, string
   const obj: Record<string, string> = Object.create(null) as Record<string, string>;
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
-    if (header !== null && header !== undefined) {
+    if (header !== null && header !== undefined && isSafeKey(header)) {
       obj[header] = row[i] ?? "";
     }
   }
@@ -285,7 +286,7 @@ function rowToObjectGrouped(
   >;
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
-    if (header !== null && header !== undefined) {
+    if (header !== null && header !== undefined && isSafeKey(header)) {
       const value = row[i] ?? "";
       if (header in obj) {
         // Column name already exists - convert to array or push to existing array

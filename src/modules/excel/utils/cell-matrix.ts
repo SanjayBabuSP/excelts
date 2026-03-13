@@ -87,10 +87,13 @@ class CellMatrix {
       sheet = [];
       this.sheets.set(sheetName, sheet);
     }
-    const row = sheet[rowNumber] || (sheet[rowNumber] = []);
+    // >>> 0 coerces to uint32, preventing "__proto__" string injection
+    const safeRow = rowNumber >>> 0;
+    const safeCol = colNumber >>> 0;
+    const row = sheet[safeRow] || (sheet[safeRow] = []);
     const cell =
-      row[colNumber] ||
-      (row[colNumber] = {
+      row[safeCol] ||
+      (row[safeCol] = {
         sheetName,
         address: colCache.n2l(colNumber) + rowNumber,
         row: rowNumber,
@@ -108,7 +111,7 @@ class CellMatrix {
     if (!row) {
       return;
     }
-    delete row[address.col];
+    delete row[address.col >>> 0];
   }
 
   forEachInSheet(
@@ -157,23 +160,23 @@ class CellMatrix {
   }
 
   findSheetRow(sheet: Sheet | undefined, address: CellAddress, create: boolean): Row | undefined {
-    const { row } = address;
-    if (sheet && sheet[row]) {
-      return sheet[row];
+    const safeRow = address.row >>> 0;
+    if (sheet && sheet[safeRow]) {
+      return sheet[safeRow];
     }
     if (create) {
-      return (sheet![row] = []);
+      return (sheet![safeRow] = []);
     }
     return undefined;
   }
 
   findRowCell(row: Row | undefined, address: CellAddress, create: boolean): Cell | undefined {
-    const { col } = address;
-    if (row && row[col]) {
-      return row[col];
+    const safeCol = address.col >>> 0;
+    if (row && row[safeCol]) {
+      return row[safeCol];
     }
     if (create) {
-      return (row![col] = this.template
+      return (row![safeCol] = this.template
         ? { ...address, ...safeDeepClone(this.template) }
         : address);
     }

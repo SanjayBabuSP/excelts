@@ -155,12 +155,9 @@ const createCompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> 
       Uint8Array
     >;
   }
-  const transformer: Transformer<Uint8Array, Uint8Array> = {
-    transform(chunk, controller) {
-      controller.enqueue(chunk);
-    }
-  };
-  return new TransformStream(transformer);
+  // Pass-through fallback when CompressionStream is unavailable.
+  // Zero-arg TransformStream is an identity transform.
+  return new TransformStream();
 };
 
 const createDecompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array> => {
@@ -170,12 +167,8 @@ const createDecompressionLikeStream = (): TransformStream<Uint8Array, Uint8Array
       Uint8Array
     >;
   }
-  const transformer: Transformer<Uint8Array, Uint8Array> = {
-    transform(chunk, controller) {
-      controller.enqueue(chunk);
-    }
-  };
-  return new TransformStream(transformer);
+  // Pass-through fallback when DecompressionStream is unavailable.
+  return new TransformStream();
 };
 
 // ============================================================================

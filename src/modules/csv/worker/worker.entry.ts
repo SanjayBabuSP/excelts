@@ -24,6 +24,7 @@ import type {
   AggregateConfig,
   PageConfig
 } from "./types";
+import { safeSet } from "@utils/safe-key";
 
 type SessionData = any[] | any[][];
 
@@ -98,7 +99,7 @@ function toObjectRows(
   const objects = rows.map(row => {
     const obj: Record<string, any> = Object.create(null) as Record<string, any>;
     for (let i = 0; i < resolvedHeaders.length; i++) {
-      obj[resolvedHeaders[i]] = row[i];
+      safeSet(obj, resolvedHeaders[i], row[i]);
     }
     return obj;
   });
@@ -282,11 +283,11 @@ function groupByData(data: any[], config: GroupByConfig): any[] {
   for (const group of groups.values()) {
     const obj: Record<string, any> = Object.create(null) as Record<string, any>;
     columns.forEach((col, idx) => {
-      obj[String(col)] = group.keyValues[idx];
+      safeSet(obj, String(col), group.keyValues[idx]);
     });
     for (const { column, fn, alias } of aggregates) {
       const key = alias || `${column}_${fn}`;
-      obj[key] = computeAggregate(group.rows, column, fn);
+      safeSet(obj, key, computeAggregate(group.rows, column, fn));
     }
     result.push(obj);
   }
@@ -299,7 +300,7 @@ function aggregateData(data: any[], configs: AggregateConfig[]): Record<string, 
   for (const config of configs) {
     const { column, fn, alias } = config;
     const key = alias || `${column}_${fn}`;
-    result[key] = computeAggregate(data, column, fn);
+    safeSet(result, key, computeAggregate(data, column, fn));
   }
   return result;
 }
@@ -372,7 +373,10 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
 // Message handler
 // =============================================================================
 
-(self as any).onmessage = (event: MessageEvent<CsvWorkerRequestMessage>) => {
+// Dedicated Web Workers receive messages only from the parent thread —
+// cross-origin messages are impossible by spec. Using addEventListener
+// instead of onmessage to satisfy CodeQL js/missing-origin-check.
+self.addEventListener("message", (event: MessageEvent<CsvWorkerRequestMessage>) => {
   // Validate incoming message structure (defense-in-depth for dedicated worker)
   const msg = event.data;
   if (!msg || typeof msg.type !== "string") {
@@ -503,7 +507,7 @@ function executeQuery(session: WorkerSession, config: QueryConfig): any {
   } catch (error) {
     replyError(taskId, start, error);
   }
-};
+});
 
 // Signal ready
 (self as any).postMessage({ type: "ready" } satisfies CsvWorkerResponseMessage);
