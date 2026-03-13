@@ -1,5 +1,9 @@
 import { ZipParser, type ZipEntryInfo, type ZipParseOptions } from "@archive/unzip/zip-parser";
-import { processEntryData, readEntryCompressedData } from "@archive/unzip/zip-extract-core";
+import {
+  processEntryData,
+  processEntryDataStream,
+  readEntryCompressedData
+} from "@archive/unzip/zip-extract-core";
 import {
   createParse,
   type ParseOptions,
@@ -26,6 +30,9 @@ import { eventedReadableToAsyncIterableNoDestroy } from "@stream/internal/evente
 import { isWritableStream } from "@stream/internal/type-guards";
 import type { ArchiveFormat } from "@archive/formats/types";
 import type { ZipStringEncoding } from "@archive/shared/text";
+import { COMPRESSION_AES } from "@archive/zip-spec/zip-records";
+import type { ZipEntryEncryptionMethod, ZipEntryType } from "@archive/zip-spec/zip-entry-info";
+import { isSymlink } from "@archive/zip-spec/zip-entry-info";
 
 function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   let cleanedUp = false;
@@ -56,6 +63,47 @@ function attachAbortToParseEntry(entry: any, signal: AbortSignal): void {
   entry.once?.("end", cleanup);
   entry.once?.("close", cleanup);
   entry.once?.("error", cleanup);
+}
+
+/**
+ * Build a ZipEntryInfo from a streaming ParseZipEntry's local file header data.
+ * This enables processEntryData (decrypt + decompress) for streaming-mode entries.
+ */
+function buildEntryInfoFromParseEntry(entry: ParseZipEntry): ZipEntryInfo {
+  const vars = entry.vars;
+  const flags = vars.flags ?? 0;
+  const compressionMethod = vars.compressionMethod ?? 0;
+  const isEncrypted = (flags & 0x01) !== 0 || compressionMethod === COMPRESSION_AES;
+  const aesInfo = entry.extraFields?.aesInfo;
+
+  let encryptionMethod: ZipEntryEncryptionMethod = "none";
+  if (isEncrypted) {
+    if (compressionMethod === COMPRESSION_AES && aesInfo) {
+      encryptionMethod = "aes";
+    } else {
+      encryptionMethod = "zipcrypto";
+    }
+  }
+
+  return {
+    path: entry.path,
+    type: entry.type === "Directory" ? "directory" : "file",
+    compressedSize: vars.compressedSize ?? 0,
+    uncompressedSize: vars.uncompressedSize ?? 0,
+    compressionMethod,
+    crc32: vars.crc32 ?? 0,
+    lastModified: vars.lastModifiedDateTime ?? new Date(0),
+    localHeaderOffset: 0,
+    comment: "",
+    externalAttributes: 0,
+    mode: 0,
+    isEncrypted,
+    encryptionMethod,
+    aesVersion: aesInfo?.version,
+    aesKeyStrength: aesInfo?.keyStrength,
+    originalCompressionMethod: aesInfo?.compressionMethod,
+    dosTime: vars.lastModifiedTime ?? undefined
+  };
 }
 
 /**
@@ -132,8 +180,6 @@ export interface UnzipOptions {
 
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progress";
 
-import { type ZipEntryType, isSymlink } from "@archive/zip-spec/zip-entry-info";
-
 export class UnzipEntry {
   readonly path: string;
   /** Entry type: file, directory, or symlink */
@@ -160,7 +206,7 @@ export class UnzipEntry {
   constructor(
     args:
       | { kind: "buffer"; data: Uint8Array; info: ZipEntryInfo; password?: string | Uint8Array }
-      | { kind: "stream"; entry: ParseZipEntry },
+      | { kind: "stream"; entry: ParseZipEntry; password?: string | Uint8Array },
     hooks: {
       onBytesOut?: (path: string, type: ZipEntryType, bytes: number) => void;
       signal?: AbortSignal;
@@ -176,12 +222,20 @@ export class UnzipEntry {
       this.isEncrypted = args.info.isEncrypted;
     } else {
       this._parseEntry = args.entry;
+      this._password = args.password;
       this.path = args.entry.path;
       // Streaming parser cannot detect symlinks (requires Central Directory)
       this.type = args.entry.type === "Directory" ? "directory" : "file";
       this.mode = 0;
       const flags = args.entry.vars.flags ?? 0;
       this.isEncrypted = (flags & 0x01) !== 0 || args.entry.vars.compressionMethod === 99;
+
+      // For encrypted entries the streaming parser passes through raw ciphertext
+      // (inflate is skipped). Build a ZipEntryInfo so processEntryData can
+      // handle decryption + decompression in bytes()/stream().
+      if (this.isEncrypted) {
+        this._info = buildEntryInfoFromParseEntry(args.entry);
+      }
     }
 
     this._onBytesOut = hooks.onBytesOut;
@@ -219,10 +273,18 @@ export class UnzipEntry {
       const data = await this._parseEntry.buffer();
       // In Node.js, `entry.buffer()` may return a Buffer, which causes
       // deep-equality mismatches against Uint8Array in tests.
-      const bytes =
+      let bytes =
         typeof Buffer !== "undefined" && data instanceof Buffer
           ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
           : data;
+
+      // Encrypted entries in streaming mode carry raw ciphertext (inflate is
+      // skipped by readFileRecord). Decrypt + decompress via processEntryData,
+      // the same path used by buffer mode.
+      if (this._info && this.isEncrypted) {
+        bytes = await processEntryData(this._info, bytes, this._password);
+      }
+
       return this._processExtractedBytes(bytes);
     }
     return new Uint8Array(0);
@@ -244,6 +306,38 @@ export class UnzipEntry {
         typeof (this._parseEntry as any)?.resume === "function"
           ? eventedReadableToAsyncIterableNoDestroy<Uint8Array>(this._parseEntry)
           : (this._parseEntry as any as AsyncIterable<Uint8Array>);
+
+      // Encrypted entries carry raw ciphertext in streaming mode (inflate is
+      // skipped by readFileRecord). Pipe through processEntryDataStream which
+      // handles decrypt + decompress in a true streaming fashion for ZipCrypto.
+      // AES still buffers internally (HMAC needs full ciphertext) but the API
+      // surface remains consistent.
+      if (this.isEncrypted && this._info) {
+        const outStream = processEntryDataStream(this._info, iterable, {
+          password: this._password,
+          signal: this._signal
+        });
+
+        let completed = false;
+        try {
+          for await (const chunk of outStream) {
+            if (this._onBytesOut && chunk.length) {
+              this._onBytesOut(this.path, this.type, chunk.length);
+            }
+            yield chunk;
+          }
+          completed = true;
+        } finally {
+          if (!completed) {
+            try {
+              this._parseEntry.autodrain();
+            } catch {
+              // Best effort cleanup only.
+            }
+          }
+        }
+        return;
+      }
 
       let completed = false;
       try {
@@ -477,7 +571,10 @@ export class ZipReader {
                 bytesOut: 0
               };
             });
-            yield new UnzipEntry({ kind: "stream", entry }, { onBytesOut, signal });
+            yield new UnzipEntry(
+              { kind: "stream", entry, password: this._options.password },
+              { onBytesOut, signal }
+            );
           }
 
           await feedPromise;

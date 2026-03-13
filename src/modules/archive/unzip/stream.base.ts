@@ -1048,12 +1048,20 @@ async function readFileRecord(
     });
   }
 
+  // Encrypted entries store raw ciphertext in place of compressed data.
+  // Decompression must be skipped here; decryption + decompression is handled
+  // downstream by processEntryData / processEntryDataStream.
+  const isEncrypted = ((vars.flags ?? 0) & 0x01) !== 0 || vars.compressionMethod === 99;
+
+  // Whether the entry payload requires inflate (deflate decompression).
+  // False for STORE (method 0), encrypted entries, and autodraining.
+  const needsInflate = vars.compressionMethod !== 0 && !isEncrypted && !autodraining;
+
   // Small file optimization: use sync decompression if:
   // 1. Entry sizes are trusted (no data descriptor)
   // 2. File size is known and below threshold
   // 3. inflateRawSync is provided
-  // 4. File needs decompression (compressionMethod != 0)
-  // 5. Not autodraining
+  // 4. Entry needs inflate (not STORE, not encrypted, not autodraining)
   //
   // We require BOTH compressedSize and uncompressedSize <= thresholdBytes.
   // This prevents materializing large highly-compressible files in memory,
@@ -1066,8 +1074,7 @@ async function readFileRecord(
     sizesTrusted &&
     fileSizeKnown &&
     inflateRawSync &&
-    vars.compressionMethod !== 0 &&
-    !autodraining &&
+    needsInflate &&
     compressedSize <= thresholdBytes &&
     uncompressedSize <= thresholdBytes;
 
@@ -1081,10 +1088,9 @@ async function readFileRecord(
     return;
   }
 
-  const inflater =
-    vars.compressionMethod && !autodraining
-      ? inflateFactory()
-      : new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
+  const inflater = needsInflate
+    ? inflateFactory()
+    : new PassThrough({ highWaterMark: DEFAULT_UNZIP_STREAM_HIGH_WATER_MARK });
 
   if (fileSizeKnown) {
     await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize ?? 0);
