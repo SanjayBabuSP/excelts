@@ -25,15 +25,9 @@ import {
   type ArchiveSource
 } from "@archive/io/archive-source";
 import { collect, pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
-import { createAsyncQueue } from "@archive/shared/async-queue";
-import {
-  createLinkedAbortController,
-  createAbortError,
-  throwIfAborted,
-  toError
-} from "@archive/shared/errors";
-import { ProgressEmitter } from "@archive/shared/progress";
-import { ZipDeflateFile, StreamingZip, ZipRawFile } from "@archive/zip/stream";
+import { throwIfAborted, toError } from "@archive/shared/errors";
+import { createZipOperation } from "./zip-output-pipeline";
+import { ZipDeflateFile, ZipRawFile } from "@archive/zip/stream";
 import { createZip, createZipSync, type ZipRawEntry, type ZipEntry } from "@archive/zip/zip-bytes";
 import type { Zip64Mode } from "@archive/zip-spec/zip-records";
 import type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip/progress";
@@ -585,119 +579,64 @@ export class ZipEditor {
     const progressIntervalMs =
       options.progressIntervalMs ?? this._streamDefaults.progressIntervalMs;
 
-    const { controller, cleanup: cleanupAbortLink } = createLinkedAbortController(signalOpt);
-    const signal = controller.signal;
-
     const preservedMeta = this._buildRawPreservedEntries();
     const sets = this._buildSetEntries();
 
-    const preservedRaw: Array<PreservedEntry & { compressedData: AsyncIterable<Uint8Array> }> = [];
-    const preservedRecompressed: Array<{
-      name: string;
-      info: ZipEntryInfo;
-    }> = [];
-
-    for (const p of preservedMeta) {
-      const compressedData = this._remote.getRawCompressedStream(p.info.path, { signal });
-      if (compressedData) {
-        preservedRaw.push({ ...p, compressedData });
-        continue;
-      }
-
-      this._emitWarning(
-        p.info.path,
-        "raw_unavailable",
-        `Cannot read raw compressed payload for entry "${p.info.path}".`
-      );
-
-      if (this._options.preserve === "strict") {
-        throw new Error(
-          `Cannot preserve entry "${p.info.path}" because its raw compressed payload is unavailable.`
-        );
-      }
-
-      // We cannot re-encrypt entries; best-effort must not silently output decrypted content.
-      if (p.info.isEncrypted) {
-        this._emitWarning(
-          p.info.path,
-          "encryption_unsupported",
-          `Cannot best-effort preserve encrypted entry "${p.info.path}" without raw passthrough.`
-        );
-        continue;
-      }
-
-      // Best-effort fallback: extract and re-add the entry.
-      // This may require holding the entry in memory.
-      preservedRecompressed.push({ name: p.outName, info: p.info });
-    }
-
-    const progress = new ProgressEmitter<ZipProgress>(
-      {
-        type: "zip",
-        phase: "running",
-        entriesTotal: preservedRaw.length + preservedRecompressed.length + sets.length,
-        entriesDone: 0,
-        bytesIn: 0,
-        bytesOut: 0,
-        zip64: this._options.zip64
-      },
-      onProgress,
-      { intervalMs: progressIntervalMs }
-    );
-
-    const queue = createAsyncQueue<Uint8Array>({
-      onCancel: () => {
-        try {
-          controller.abort("cancelled");
-        } catch {
-          // ignore
-        }
-      }
-    });
-
-    const zip = new StreamingZip(
-      (err, data, final) => {
-        if (err) {
-          progress.update({ phase: progress.snapshot.phase === "aborted" ? "aborted" : "error" });
-          queue.fail(err);
-          return;
-        }
-
-        if (data.length) {
-          progress.mutate(s => {
-            s.bytesOut += data.length;
-          });
-          queue.push(data);
-        }
-
-        if (final) {
-          if (progress.snapshot.phase === "running") {
-            progress.update({ phase: "done" });
-          }
-          queue.close();
-        }
-      },
+    return createZipOperation(
+      preservedMeta.length + sets.length,
       {
         comment: this._options.comment,
         zip64: this._options.zip64,
         codec: this._stringCodec
-      }
-    );
+      },
+      { signal: signalOpt, onProgress, progressIntervalMs },
+      async ({ zip, signal, progress }) => {
+        // Classify preserved entries using the pipeline's linked signal so that
+        // abort() properly cancels raw compressed streams.
+        const preservedRaw: Array<PreservedEntry & { compressedData: AsyncIterable<Uint8Array> }> =
+          [];
+        const preservedRecompressed: Array<{
+          name: string;
+          info: ZipEntryInfo;
+        }> = [];
 
-    const onAbort = () => {
-      const err = createAbortError((signal as any).reason);
-      progress.update({ phase: "aborted" });
-      try {
-        zip.abort(err);
-      } catch {
-        // ignore
-      }
-      queue.fail(err);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
+        for (const p of preservedMeta) {
+          const compressedData = this._remote.getRawCompressedStream(p.info.path, { signal });
+          if (compressedData) {
+            preservedRaw.push({ ...p, compressedData });
+            continue;
+          }
 
-    (async () => {
-      try {
+          this._emitWarning(
+            p.info.path,
+            "raw_unavailable",
+            `Cannot read raw compressed payload for entry "${p.info.path}".`
+          );
+
+          if (this._options.preserve === "strict") {
+            throw new Error(
+              `Cannot preserve entry "${p.info.path}" because its raw compressed payload is unavailable.`
+            );
+          }
+
+          // We cannot re-encrypt entries; best-effort must not silently output decrypted content.
+          if (p.info.isEncrypted) {
+            this._emitWarning(
+              p.info.path,
+              "encryption_unsupported",
+              `Cannot best-effort preserve encrypted entry "${p.info.path}" without raw passthrough.`
+            );
+            continue;
+          }
+
+          // Best-effort fallback: extract and re-add the entry.
+          preservedRecompressed.push({ name: p.outName, info: p.info });
+        }
+
+        // Update entriesTotal now that we know how many entries survived classification.
+        const actualTotal = preservedRaw.length + preservedRecompressed.length + sets.length;
+        progress.set("entriesTotal", actualTotal);
+
         // 1) Preserved entries: passthrough raw payload.
         for (let i = 0; i < preservedRaw.length; i++) {
           throwIfAborted(signal);
@@ -833,43 +772,8 @@ export class ZipEditor {
 
         throwIfAborted(signal);
         zip.end();
-      } catch (e) {
-        const err = toError(e);
-        if (err.name === "AbortError") {
-          progress.update({ phase: "aborted" });
-          try {
-            zip.abort(err);
-          } catch {
-            // ignore
-          }
-        } else {
-          progress.update({ phase: "error" });
-        }
-        queue.fail(err);
-      } finally {
-        try {
-          signal.removeEventListener("abort", onAbort);
-        } catch {
-          // ignore
-        }
-        cleanupAbortLink();
-        progress.emitNow();
       }
-    })();
-
-    return {
-      iterable: queue.iterable,
-      signal,
-      abort(reason?: unknown) {
-        controller.abort(reason);
-      },
-      pointer() {
-        return progress.snapshot.bytesOut;
-      },
-      progress() {
-        return progress.snapshotCopy();
-      }
-    };
+    );
   }
 
   /**

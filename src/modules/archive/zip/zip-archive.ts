@@ -4,7 +4,7 @@ import {
   DEFAULT_ZIP_TIMESTAMPS,
   REPRODUCIBLE_ZIP_MOD_TIME
 } from "@archive/shared/defaults";
-import { ZipDeflateFile, StreamingZip } from "@archive/zip/stream";
+import { ZipDeflateFile } from "@archive/zip/stream";
 import { createZip, createZipSync } from "@archive/zip/zip-bytes";
 import { collect, pipeIterableToSink, type ArchiveSink } from "@archive/io/archive-sink";
 import {
@@ -15,14 +15,8 @@ import {
   isInMemoryArchiveSource,
   type ArchiveSource
 } from "@archive/io/archive-source";
-import { createAsyncQueue } from "@archive/shared/async-queue";
-import {
-  createLinkedAbortController,
-  createAbortError,
-  throwIfAborted,
-  toError
-} from "@archive/shared/errors";
-import { ProgressEmitter } from "@archive/shared/progress";
+import { throwIfAborted } from "@archive/shared/errors";
+import { createZipOperation } from "./zip-output-pipeline";
 import { stringToUint8Array as encodeUtf8 } from "@utils/binary";
 import {
   buildDataDescriptor,
@@ -243,77 +237,15 @@ export class ZipArchive {
     const progressIntervalMs =
       options.progressIntervalMs ?? this._streamDefaults.progressIntervalMs;
 
-    const { controller, cleanup: cleanupAbortLink } = createLinkedAbortController(signalOpt);
-    const signal = controller.signal;
-
-    const progress = new ProgressEmitter<ZipProgress>(
-      {
-        type: "zip",
-        phase: "running",
-        entriesTotal: this._entries.length,
-        entriesDone: 0,
-        bytesIn: 0,
-        bytesOut: 0,
-        zip64: this._options.zip64
-      },
-      onProgress,
-      { intervalMs: progressIntervalMs }
-    );
-
-    const queue = createAsyncQueue<Uint8Array>({
-      onCancel: () => {
-        // Consumer stopped reading; abort upstream work to avoid buffering.
-        try {
-          controller.abort("cancelled");
-        } catch {
-          // ignore
-        }
-      }
-    });
-
-    const zip = new StreamingZip(
-      (err, data, final) => {
-        if (err) {
-          progress.update({ phase: progress.snapshot.phase === "aborted" ? "aborted" : "error" });
-          queue.fail(err);
-          return;
-        }
-
-        if (data.length) {
-          progress.mutate(s => {
-            s.bytesOut += data.length;
-          });
-          queue.push(data);
-        }
-
-        if (final) {
-          if (progress.snapshot.phase === "running") {
-            progress.update({ phase: "done" });
-          }
-          queue.close();
-        }
-      },
+    return createZipOperation(
+      this._entries.length,
       {
         comment: this._options.comment,
         zip64: this._options.zip64,
         encoding: this._options.encoding
-      }
-    );
-
-    const onAbort = () => {
-      const err = createAbortError((signal as any).reason);
-      progress.update({ phase: "aborted" });
-      try {
-        zip.abort(err);
-      } catch {
-        // ignore
-      }
-      queue.fail(err);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-
-    (async () => {
-      try {
+      },
+      { signal: signalOpt, onProgress, progressIntervalMs },
+      async ({ zip, signal, progress }) => {
         for (let i = 0; i < this._entries.length; i++) {
           throwIfAborted(signal);
 
@@ -365,43 +297,8 @@ export class ZipArchive {
 
         throwIfAborted(signal);
         zip.end();
-      } catch (e) {
-        const err = toError(e);
-        if ((err as any).name === "AbortError") {
-          progress.update({ phase: "aborted" });
-          try {
-            zip.abort(err);
-          } catch {
-            // ignore
-          }
-        } else {
-          progress.update({ phase: "error" });
-        }
-        queue.fail(err);
-      } finally {
-        try {
-          signal.removeEventListener("abort", onAbort);
-        } catch {
-          // ignore
-        }
-        cleanupAbortLink();
-        progress.emitNow();
       }
-    })();
-
-    return {
-      iterable: queue.iterable,
-      signal,
-      abort(reason?: unknown) {
-        controller.abort(reason);
-      },
-      pointer() {
-        return progress.snapshot.bytesOut;
-      },
-      progress() {
-        return progress.snapshotCopy();
-      }
-    };
+    );
   }
 
   /**
