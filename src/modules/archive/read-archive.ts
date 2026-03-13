@@ -5,7 +5,7 @@ import {
   type UnzipOptions,
   type UnzipOptionsTar,
   type UnzipOptionsZip
-} from "./zip-reader";
+} from "@archive/unzip/zip-reader";
 
 /**
  * Open an archive for reading

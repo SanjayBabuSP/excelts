@@ -14,7 +14,7 @@ import {
 import type { ZipEntryInfo } from "@archive/zip-spec/zip-entry-info";
 import type { RandomAccessReader, HttpRangeReaderOptions } from "@archive/io/random-access";
 import { BufferReader, HttpRangeReader } from "@archive/io/random-access";
-import { RemoteZipReader } from "@archive/io/remote-zip-reader";
+import { RemoteZipReader } from "@archive/unzip/remote-zip-reader";
 import {
   toAsyncIterable,
   collectUint8ArrayStream,

@@ -28,7 +28,7 @@ import type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "./progre
 import { getTextDecoder } from "@utils/binary";
 import { eventedReadableToAsyncIterableNoDestroy } from "@stream/internal/evented-readable-to-async-iterable";
 import { isWritableStream } from "@stream/internal/type-guards";
-import type { ArchiveFormat } from "@archive/formats/types";
+import type { ArchiveFormat } from "@archive/shared/types";
 import type { ZipStringEncoding } from "@archive/shared/text";
 import { COMPRESSION_AES } from "@archive/zip-spec/zip-records";
 import type { ZipEntryEncryptionMethod, ZipEntryType } from "@archive/zip-spec/zip-entry-info";

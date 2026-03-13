@@ -13,8 +13,6 @@ export {
   type SerializedZipEditPlan
 } from "./zip-edit-plan";
 
-export type { ArchiveFormat } from "@archive/formats/types";
-
 export {
   ZipArchive,
   type ZipOptions,
@@ -25,5 +23,3 @@ export {
   type ZipProgress,
   type ZipStreamOptions
 } from "./zip-archive";
-
-export { zip } from "./zip";

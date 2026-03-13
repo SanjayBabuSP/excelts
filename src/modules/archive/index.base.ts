@@ -30,7 +30,7 @@ export {
   type RemoteZipOpenOptions,
   type RemoteZipStats,
   type ExtractOptions
-} from "@archive/io/remote-zip-reader";
+} from "@archive/unzip/remote-zip-reader";
 
 // Abort and Error types - all from centralized errors module
 export {
@@ -54,8 +54,10 @@ export {
 } from "@archive/shared/errors";
 
 // High-level APIs
+export { zip } from "@archive/create-archive";
+export { unzip } from "@archive/read-archive";
+export type { ArchiveFormat } from "@archive/shared/types";
 export {
-  zip,
   ZipArchive,
   ZipEditor,
   editZip,
@@ -66,10 +68,9 @@ export {
   type ZipEditOptions,
   type ZipEditUrlOptions,
   type ZipEditWarning,
-  type ZipEditOp,
-  type ArchiveFormat
+  type ZipEditOp
 } from "@archive/zip";
-export { unzip, ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip";
+export { ZipReader, UnzipEntry, type UnzipOptions } from "@archive/unzip";
 
 export type { ZipOperation, ZipProgress, ZipStreamOptions } from "@archive/zip";
 export type { UnzipOperation, UnzipProgress, UnzipStreamOptions } from "@archive/unzip";

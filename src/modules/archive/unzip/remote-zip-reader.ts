@@ -45,8 +45,8 @@ import {
 } from "@archive/zip-spec/zip-parser-core";
 import { resolveZipStringCodec, type ZipStringEncoding } from "@archive/shared/text";
 import { LOCAL_FILE_HEADER_SIG } from "@archive/zip-spec/zip-records";
-import type { RandomAccessReader, HttpRangeReaderOptions } from "./random-access";
-import { HttpRangeReader } from "./random-access";
+import type { RandomAccessReader, HttpRangeReaderOptions } from "@archive/io/random-access";
+import { HttpRangeReader } from "@archive/io/random-access";
 
 /**
  * Options for RemoteZipReader

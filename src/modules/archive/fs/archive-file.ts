@@ -48,7 +48,7 @@ import { EMPTY_UINT8ARRAY } from "@archive/shared/bytes";
 import type { ZipStringEncoding } from "@archive/shared/text";
 import { createReadStream, createWriteStream } from "node:fs";
 
-import type { ArchiveFormat } from "@archive/formats/types";
+import type { ArchiveFormat } from "@archive/shared/types";
 import type {
   AddFileOptions,
   AddDirectoryOptions,

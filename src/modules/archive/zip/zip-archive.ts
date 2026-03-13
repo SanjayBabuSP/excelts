@@ -28,7 +28,7 @@ import {
 } from "@archive/zip-spec/zip-records";
 import type { ZipOperation, ZipProgress, ZipStreamOptions } from "./progress";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
-import type { ArchiveFormat } from "@archive/formats/types";
+import type { ArchiveFormat } from "@archive/shared/types";
 import { isNode } from "@utils/env";
 import { ByteQueue } from "@archive/shared/byte-queue";
 import { encodeZipString, type ZipStringEncoding } from "@archive/shared/text";

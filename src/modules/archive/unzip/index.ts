@@ -8,5 +8,3 @@ export {
   type UnzipProgress,
   type UnzipStreamOptions
 } from "./zip-reader";
-
-export { unzip } from "./unzip";

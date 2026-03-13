@@ -12,7 +12,7 @@ import type { Zip64Mode } from "@archive/zip-spec/zip-records";
 import type { ZipEncryptionMethod } from "@archive/crypto";
 import type { ZipPathOptions } from "@archive/zip-spec/zip-path";
 import type { ZipStringEncoding } from "@archive/shared/text";
-import type { ArchiveFormat } from "@archive/formats/types";
+import type { ArchiveFormat } from "@archive/shared/types";
 
 export type { ArchiveFormat };
 
