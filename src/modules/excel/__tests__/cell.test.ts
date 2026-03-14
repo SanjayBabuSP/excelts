@@ -399,4 +399,243 @@ describe("Cell", () => {
     expect(a1.model.comment.note.margins.inset).toEqual([0.13, 0.13, 0.25, 0.25]);
     expect(a1.model.comment.note.editAs).toBe("absolute");
   });
+
+  // ===========================================================================
+  // Boolean Values
+  // ===========================================================================
+
+  it("stores boolean values", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    a1.value = true;
+    expect(a1.value).toBe(true);
+    expect(a1.type).toBe(Enums.ValueType.Boolean);
+
+    a1.value = false;
+    expect(a1.value).toBe(false);
+    expect(a1.type).toBe(Enums.ValueType.Boolean);
+  });
+
+  // ===========================================================================
+  // Error Values
+  // ===========================================================================
+
+  it("stores error values", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    a1.value = { error: "#DIV/0!" };
+    expect(a1.value).toEqual({ error: "#DIV/0!" });
+    expect(a1.type).toBe(Enums.ValueType.Error);
+
+    a1.value = { error: "#VALUE!" };
+    expect(a1.value).toEqual({ error: "#VALUE!" });
+    expect(a1.type).toBe(Enums.ValueType.Error);
+
+    a1.value = { error: "#REF!" };
+    expect(a1.value).toEqual({ error: "#REF!" });
+    expect(a1.type).toBe(Enums.ValueType.Error);
+
+    a1.value = { error: "#NAME?" };
+    expect(a1.value).toEqual({ error: "#NAME?" });
+    expect(a1.type).toBe(Enums.ValueType.Error);
+
+    a1.value = { error: "#N/A" };
+    expect(a1.value).toEqual({ error: "#N/A" });
+    expect(a1.type).toBe(Enums.ValueType.Error);
+  });
+
+  // ===========================================================================
+  // Rich Text Values
+  // ===========================================================================
+
+  it("stores rich text values", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    const richText = {
+      richText: [
+        { font: { bold: true }, text: "Bold " },
+        { font: { italic: true }, text: "Italic" }
+      ]
+    };
+
+    a1.value = richText;
+    expect(a1.type).toBe(Enums.ValueType.RichText);
+    expect(a1.text).toBe("Bold Italic");
+  });
+
+  // ===========================================================================
+  // text Getter
+  // ===========================================================================
+
+  it("text getter returns appropriate string for each type", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    // null
+    a1.value = null;
+    expect(a1.text).toBe("");
+
+    // number
+    a1.value = 42;
+    expect(a1.text).toBe("42");
+
+    // string
+    a1.value = "hello";
+    expect(a1.text).toBe("hello");
+
+    // boolean
+    a1.value = true;
+    expect(a1.text).toBe("true");
+
+    a1.value = false;
+    expect(a1.text).toBe("false");
+
+    // date
+    a1.value = new Date(2024, 0, 15);
+    expect(a1.text).toBeTruthy(); // exact format may vary
+
+    // hyperlink
+    a1.value = { text: "link text", hyperlink: "https://example.com" };
+    expect(a1.text).toBe("link text");
+
+    // formula
+    a1.value = { formula: "A2+1", result: 99 };
+    expect(a1.text).toBe("99");
+  });
+
+  // ===========================================================================
+  // toCsvString
+  // ===========================================================================
+
+  it("toCsvString returns correct CSV representation", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    a1.value = null;
+    expect(a1.toCsvString()).toBe("");
+
+    a1.value = 42;
+    expect(a1.toCsvString()).toBe("42");
+
+    // Strings are quoted in CSV
+    a1.value = "hello";
+    expect(a1.toCsvString()).toBe('"hello"');
+
+    // Booleans are represented as 1/0 in CSV
+    a1.value = true;
+    expect(a1.toCsvString()).toBe(1);
+
+    a1.value = false;
+    expect(a1.toCsvString()).toBe(0);
+  });
+
+  // ===========================================================================
+  // toString
+  // ===========================================================================
+
+  it("toString returns string representation", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    a1.value = null;
+    expect(a1.toString()).toBe("");
+
+    a1.value = 42;
+    expect(a1.toString()).toBe("42");
+
+    a1.value = "hello";
+    expect(a1.toString()).toBe("hello");
+  });
+
+  // ===========================================================================
+  // isHyperlink / hyperlink getters
+  // ===========================================================================
+
+  it("isHyperlink and hyperlink getters", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    a1.value = "plain text";
+    expect(a1.isHyperlink).toBe(false);
+    expect(a1.hyperlink).toBeUndefined();
+
+    a1.value = { text: "link", hyperlink: "https://example.com" };
+    expect(a1.isHyperlink).toBe(true);
+    expect(a1.hyperlink).toBe("https://example.com");
+
+    a1.value = 42;
+    expect(a1.isHyperlink).toBe(false);
+    expect(a1.hyperlink).toBeUndefined();
+  });
+
+  // ===========================================================================
+  // fullAddress
+  // ===========================================================================
+
+  it("fullAddress includes sheet, row, col, and address", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    const full = a1.fullAddress;
+    expect(full).toHaveProperty("row");
+    expect(full).toHaveProperty("col");
+    expect(full).toHaveProperty("address");
+    expect(full.address).toBe("A1");
+    expect(full.row).toBe(1);
+    expect(full.col).toBe(1);
+  });
+
+  // ===========================================================================
+  // $col$row
+  // ===========================================================================
+
+  it("$col$row returns absolute reference", () => {
+    const b3 = sheetMock.getCell("B3");
+    expect(b3.$col$row).toBe("$B$3");
+  });
+
+  // ===========================================================================
+  // row and col getters
+  // ===========================================================================
+
+  it("row and col getters return numeric values", () => {
+    const c5 = sheetMock.getCell("C5");
+    expect(c5.row).toBe(5);
+    expect(c5.col).toBe(3);
+  });
+
+  // ===========================================================================
+  // formula / result getters
+  // ===========================================================================
+
+  it("formula and result getters work for formula cells", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    // Non-formula
+    a1.value = 42;
+    expect(a1.formula).toBeUndefined();
+    expect(a1.result).toBeUndefined();
+
+    // Formula with numeric result
+    a1.value = { formula: "B1+C1", result: 100 };
+    expect(a1.formula).toBe("B1+C1");
+    expect(a1.result).toBe(100);
+
+    // Formula with string result
+    a1.value = { formula: 'CONCATENATE("a","b")', result: "ab" };
+    expect(a1.formula).toBe('CONCATENATE("a","b")');
+    expect(a1.result).toBe("ab");
+  });
+
+  // ===========================================================================
+  // destroy
+  // ===========================================================================
+
+  it("destroy clears internal value reference", () => {
+    const a1 = sheetMock.getCell("A1");
+
+    a1.value = "something";
+    a1.font = fonts.arialBlackUI14;
+    expect(a1.value).toBe("something");
+
+    a1.destroy();
+    // After destroy, accessing .type throws because _value is nullified.
+    // This verifies destroy truly clears the cell's internal state.
+    expect(() => a1.type).toThrow();
+  });
 });
