@@ -78,6 +78,9 @@ describe("Worksheet", () => {
       // Existing cell A1 should be overwritten
       expect(ws.getCell("A1").numFmt).toEqual(testUtils.styles.numFmts.numFmt2);
       expect(ws.getCell("A1").font).toEqual(testUtils.styles.fonts.comicSansUdB16);
+      expect(ws.getCell("A1").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
+      expect(ws.getCell("A1").border).toEqual(testUtils.styles.borders.thin);
+      expect(ws.getCell("A1").fill).toEqual(testUtils.styles.fills.redGreenDarkTrellis);
 
       // Row 2 didn't exist, should not be materialized
       expect(ws.findRow(2)).toBeUndefined();
@@ -85,6 +88,9 @@ describe("Worksheet", () => {
       // Existing cell A3 should be overwritten
       expect(ws.getCell("A3").numFmt).toEqual(testUtils.styles.numFmts.numFmt2);
       expect(ws.getCell("A3").font).toEqual(testUtils.styles.fonts.comicSansUdB16);
+      expect(ws.getCell("A3").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
+      expect(ws.getCell("A3").border).toEqual(testUtils.styles.borders.thin);
+      expect(ws.getCell("A3").fill).toEqual(testUtils.styles.fills.redGreenDarkTrellis);
 
       // New cell A2 (created via getCell) should inherit column styles
       expect(ws.getCell("A2").numFmt).toEqual(testUtils.styles.numFmts.numFmt2);

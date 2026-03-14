@@ -15,28 +15,20 @@ import { Workbook } from "@excel/workbook";
 const TEST_DATA_DIR = path.join(__dirname, "data");
 
 describe("HAN CELL xlsx files", () => {
-  it("should load xlsx files created by HAN CELL with namespace prefixes", async () => {
+  it("loads xlsx with namespace prefixes and reads shared strings", async () => {
     const filePath = path.join(TEST_DATA_DIR, "han-cell-test.xlsx");
     const buffer = fs.readFileSync(filePath);
 
     const workbook = new Workbook();
     await workbook.xlsx.load(buffer);
 
-    // Verify the workbook was loaded correctly
+    // Verify the workbook structure
     expect(workbook.worksheets.length).toBe(1);
     expect(workbook.worksheets[0].name).toBe("no build");
-  });
 
-  it("should read shared strings from HAN CELL files", async () => {
-    const filePath = path.join(TEST_DATA_DIR, "han-cell-test.xlsx");
-    const buffer = fs.readFileSync(filePath);
-
-    const workbook = new Workbook();
-    await workbook.xlsx.load(buffer);
-
-    // The HAN CELL file should have some shared strings
-    // (The test file has cells with text content)
+    // Verify actual cell data was parsed (shared strings resolved)
     const worksheet = workbook.worksheets[0];
-    expect(worksheet).toBeDefined();
+    const rowCount = worksheet.rowCount;
+    expect(rowCount).toBeGreaterThan(0);
   });
 });

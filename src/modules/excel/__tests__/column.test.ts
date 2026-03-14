@@ -115,6 +115,11 @@ describe("Column", () => {
     expect(sheet.getCell(3, 1).value).toBe(3);
     expect(sheet.getCell(4, 1).value).toBe(null);
     expect(sheet.getCell(5, 1).value).toBe(5);
+    expect(sheet.getCell(6, 1).value).toBe(null);
+    expect(sheet.getCell(7, 1).value).toBe(null);
+    expect(sheet.getCell(8, 1).value).toBe(null);
+    expect(sheet.getCell(9, 1).value).toBe(null);
+    expect(sheet.getCell(10, 1).value).toBe(null);
     expect(sheet.getCell(11, 1).value).toBe(11);
     expect(sheet.getCell(12, 1).value).toBe(null);
   });
@@ -128,7 +133,11 @@ describe("Column", () => {
     expect(sheet.getCell(3, 1).value).toBe(3);
     expect(sheet.getCell(4, 1).value).toBe(null);
     expect(sheet.getCell(5, 1).value).toBe(5);
+    expect(sheet.getCell(6, 1).value).toBe(null);
     expect(sheet.getCell(7, 1).value).toBe(7);
+    expect(sheet.getCell(8, 1).value).toBe(null);
+    expect(sheet.getCell(9, 1).value).toBe(null);
+    expect(sheet.getCell(10, 1).value).toBe(null);
     expect(sheet.getCell(11, 1).value).toBe(11);
     expect(sheet.getCell(12, 1).value).toBe(null);
   });

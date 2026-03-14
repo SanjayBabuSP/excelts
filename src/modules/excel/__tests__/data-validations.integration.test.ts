@@ -9,6 +9,9 @@ describe("DataValidations", () => {
   it("reads a workbook with dataValidation missing type", async () => {
     const wb = new Workbook();
     await wb.xlsx.readFile(excelTestDataPath("data-validation-missing-type.xlsx"));
+
+    // Should load without error and have at least one worksheet
+    expect(wb.worksheets.length).toBeGreaterThan(0);
   });
 
   it("writes a full-column validation without throwing", async () => {
@@ -28,6 +31,14 @@ describe("DataValidations", () => {
     };
 
     await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+    // Read back and verify validation survived
+    const wb2 = new Workbook();
+    await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+    const ws2 = wb2.getWorksheet("Sheet1")!;
+    const dvKeys = Object.keys(ws2.dataValidations.model);
+    expect(dvKeys.length).toBe(1);
+    expect(ws2.dataValidations.model[dvKeys[0]].type).toBe("list");
   });
 
   it("reads and writes data validations", async () => {
@@ -65,7 +76,8 @@ describe("DataValidations", () => {
       await wb.xlsx.readFile(excelTestDataPath("data-validations-large.xlsx"), {
         ignoreNodes: ["dataValidations"]
       });
-      expect(true).toBe(true);
+      // Should load successfully and have worksheets, but no data validations
+      expect(wb.worksheets.length).toBeGreaterThan(0);
     });
 
     it("load(buffer) ignores dataValidations without blowing up memory", async () => {
@@ -74,7 +86,7 @@ describe("DataValidations", () => {
       await wb.xlsx.load(buffer, {
         ignoreNodes: ["dataValidations"]
       });
-      expect(true).toBe(true);
+      expect(wb.worksheets.length).toBeGreaterThan(0);
     });
   });
 });
