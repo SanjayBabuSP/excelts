@@ -166,5 +166,38 @@ describe("Worksheet", () => {
         result: 4
       });
     });
+
+    it("Fills formula for a single cell range", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet();
+
+      ws.fillFormula("C3:C3", "SUM(A3:B3)", [10]);
+      expect(ws.getCell("C3").value).toEqual({
+        formula: "SUM(A3:B3)",
+        shareType: "shared",
+        ref: "C3:C3",
+        result: 10
+      });
+    });
+
+    it("fillFormula with callback receives correct row and column", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet();
+
+      const calls: Array<[number, number]> = [];
+      ws.fillFormula("B2:C3", "ROW()", (r, c) => {
+        calls.push([r, c]);
+        return r * 10 + c;
+      });
+
+      expect(calls).toEqual([
+        [2, 2],
+        [2, 3],
+        [3, 2],
+        [3, 3]
+      ]);
+      expect(ws.getCell("B2").value).toMatchObject({ result: 22 });
+      expect(ws.getCell("C3").value).toMatchObject({ result: 33 });
+    });
   });
 });
