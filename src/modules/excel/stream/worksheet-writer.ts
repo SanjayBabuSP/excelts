@@ -533,9 +533,9 @@ class WorksheetWriter {
 
   // returns the cell at [r,c] or address given by r. If not found, return undefined
   findCell(r: string | number, c?: number): any {
-    const address: any = colCache.getAddress(r, c);
+    const address = colCache.getAddress(r, c);
     const row = this.findRow(address.row);
-    return row ? row.findCell(address.column) : undefined;
+    return row ? row.findCell(address.col) : undefined;
   }
 
   // return the cell at [r,c] or address given by r. If not found, create a new one.

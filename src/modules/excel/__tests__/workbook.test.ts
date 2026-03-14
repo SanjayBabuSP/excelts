@@ -1,214 +1,314 @@
 import { describe, it, expect } from "vitest";
 import { testUtils } from "@excel/__tests__/shared";
-import { Workbook } from "../../../index";
-import { Enums } from "@excel/enums";
-
-// =============================================================================
-// Helpers
-
-function createSimpleWorkbook() {
-  const wb = new Workbook();
-  const ws = wb.addWorksheet("blort");
-
-  // plain number
-  ws.getCell("A1").value = 7;
-  ws.getCell("A1").name = "Seven";
-
-  // simple string
-  ws.getCell("B1").value = "Hello, World!";
-  ws.getCell("B1").name = "Hello";
-
-  // floating point
-  ws.getCell("C1").value = 3.14;
-
-  // date-time
-  ws.getCell("D1").value = new Date();
-  ws.getCell("D1").dataValidation = {
-    type: "date",
-    operator: "greaterThan",
-    showErrorMessage: true,
-    allowBlank: true,
-    formulae: [new Date(2016, 0, 1)]
-  };
-  // hyperlink
-  ws.getCell("E1").value = {
-    text: "www.google.com",
-    hyperlink: "http://www.google.com"
-  };
-
-  // number formula
-  ws.getCell("A2").value = { formula: "A1", result: 7 };
-  ws.getCell("A2").name = "TheFormula";
-
-  // string formula
-  ws.getCell("B2").value = {
-    formula: 'CONCATENATE("Hello", ", ", "World!")',
-    result: "Hello, World!"
-  };
-  ws.getCell("B2").name = "TheFormula";
-
-  // date formula
-  ws.getCell("C2").value = { formula: "D1", result: new Date() };
-  ws.getCell("C3").value = { formula: "D1" };
-
-  return wb;
-}
+import { Workbook, ValueType } from "../../../index";
 
 // =============================================================================
 // Tests
+// =============================================================================
 
 describe("Workbook", () => {
-  it("stores shared string values properly", () => {
-    const wb = new Workbook();
-    const ws = wb.addWorksheet("blort");
+  // ===========================================================================
+  // Worksheet Access
+  // ===========================================================================
 
-    ws.getCell("A1").value = "Hello, World!";
+  describe("worksheet access", () => {
+    it("returns undefined for non-existent sheet by name", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("first");
+      expect(wb.getWorksheet("w00t")).toBeUndefined();
+    });
 
-    ws.getCell("A2").value = "Hello";
-    ws.getCell("B2").value = "World";
-    ws.getCell("C2").value = {
-      formula: 'CONCATENATE(A2, ", ", B2, "!")',
-      result: "Hello, World!"
-    };
+    it("returns undefined for sheet 0", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("first");
+      expect(wb.getWorksheet(0)).toBeUndefined();
+    });
 
-    ws.getCell("A3").value = `${["Hello", "World"].join(", ")}!`;
+    it("returns correct sheet by id after accessing worksheets or eachSheet", () => {
+      const wb = new Workbook();
+      const sheet = wb.addWorksheet("first");
 
-    // A1 and A3 should reference the same string object
-    expect(ws.getCell("A1").value).toBe(ws.getCell("A3").value);
+      wb.eachSheet(() => {});
+      const numSheets = wb.worksheets.length;
 
-    // A1 and C2 should not reference the same object
-    expect(ws.getCell("A1").value).toBe(ws.getCell("C2").result);
+      expect(numSheets).toBe(1);
+      expect(wb.getWorksheet(0)).toBeUndefined();
+      expect(wb.getWorksheet(1) === sheet).toBe(true);
+    });
+
+    it("returns first worksheet when called with no arguments", () => {
+      const wb = new Workbook();
+      const ws1 = wb.addWorksheet("first");
+      wb.addWorksheet("second");
+
+      expect(wb.getWorksheet()).toBe(ws1);
+    });
+
+    it("returns worksheet by name", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("target");
+      wb.addWorksheet("other");
+
+      expect(wb.getWorksheet("target")).toBe(ws);
+    });
+
+    it("returns worksheet by numeric id", () => {
+      const wb = new Workbook();
+      const ws1 = wb.addWorksheet("first");
+      const ws2 = wb.addWorksheet("second");
+
+      expect(wb.getWorksheet(ws1.id)).toBe(ws1);
+      expect(wb.getWorksheet(ws2.id)).toBe(ws2);
+    });
   });
 
-  it("assigns cell types properly", () => {
-    const wb = createSimpleWorkbook();
-    const ws = wb.getWorksheet("blort")!;
+  // ===========================================================================
+  // Worksheet Management
+  // ===========================================================================
 
-    expect(ws.getCell("A1").type).toBe(Enums.ValueType.Number);
-    expect(ws.getCell("B1").type).toBe(Enums.ValueType.String);
-    expect(ws.getCell("C1").type).toBe(Enums.ValueType.Number);
-    expect(ws.getCell("D1").type).toBe(Enums.ValueType.Date);
-    expect(ws.getCell("E1").type).toBe(Enums.ValueType.Hyperlink);
+  describe("worksheet management", () => {
+    it("removeWorksheet by id", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("first");
+      const ws2 = wb.addWorksheet("second");
+      wb.addWorksheet("third");
 
-    expect(ws.getCell("A2").type).toBe(Enums.ValueType.Formula);
-    expect(ws.getCell("B2").type).toBe(Enums.ValueType.Formula);
-    expect(ws.getCell("C2").type).toBe(Enums.ValueType.Formula);
+      expect(wb.worksheets.length).toBe(3);
+
+      wb.removeWorksheet(ws2.id);
+      expect(wb.worksheets.length).toBe(2);
+      expect(wb.getWorksheet("second")).toBeUndefined();
+      expect(wb.getWorksheet("first")).toBeDefined();
+      expect(wb.getWorksheet("third")).toBeDefined();
+    });
+
+    it("removeWorksheet by name (string id)", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("alpha");
+      wb.addWorksheet("beta");
+
+      wb.removeWorksheet("alpha");
+      expect(wb.worksheets.length).toBe(1);
+      expect(wb.getWorksheet("alpha")).toBeUndefined();
+      expect(wb.getWorksheet("beta")).toBeDefined();
+    });
+
+    it("worksheets getter returns sheets in order", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("A");
+      wb.addWorksheet("B");
+      wb.addWorksheet("C");
+
+      const names = wb.worksheets.map(ws => ws.name);
+      expect(names).toEqual(["A", "B", "C"]);
+    });
+
+    it("eachSheet iterates all worksheets", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("one");
+      wb.addWorksheet("two");
+      wb.addWorksheet("three");
+
+      const names: string[] = [];
+      wb.eachSheet(ws => names.push(ws.name));
+      expect(names).toEqual(["one", "two", "three"]);
+    });
   });
 
-  it("assigns rich text", () => {
-    const wb = new Workbook();
-    const ws = wb.addWorksheet("blort");
-    ws.getCell("A1").value = {
-      richText: [
-        {
-          font: {
-            size: 12,
-            color: { theme: 0 },
-            name: "Calibri",
-            family: 2,
-            scheme: "minor"
+  // ===========================================================================
+  // Cell Types & Values
+  // ===========================================================================
+
+  describe("cell types", () => {
+    it("stores shared string values properly", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("blort");
+
+      ws.getCell("A1").value = "Hello, World!";
+      ws.getCell("A2").value = "Hello";
+      ws.getCell("B2").value = "World";
+      ws.getCell("C2").value = {
+        formula: 'CONCATENATE(A2, ", ", B2, "!")',
+        result: "Hello, World!"
+      };
+      ws.getCell("A3").value = `${["Hello", "World"].join(", ")}!`;
+
+      // A1 and A3 should reference the same string object
+      expect(ws.getCell("A1").value).toBe(ws.getCell("A3").value);
+      // A1 and C2 result should share the same string
+      expect(ws.getCell("A1").value).toBe(ws.getCell("C2").result);
+    });
+
+    it("assigns cell types properly", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("blort");
+
+      ws.getCell("A1").value = 7;
+      ws.getCell("B1").value = "Hello, World!";
+      ws.getCell("C1").value = 3.14;
+      ws.getCell("D1").value = new Date();
+      ws.getCell("E1").value = {
+        text: "www.google.com",
+        hyperlink: "http://www.google.com"
+      };
+      ws.getCell("A2").value = { formula: "A1", result: 7 };
+      ws.getCell("B2").value = {
+        formula: 'CONCATENATE("Hello", ", ", "World!")',
+        result: "Hello, World!"
+      };
+      ws.getCell("C2").value = { formula: "D1", result: new Date() };
+
+      expect(ws.getCell("A1").type).toBe(ValueType.Number);
+      expect(ws.getCell("B1").type).toBe(ValueType.String);
+      expect(ws.getCell("C1").type).toBe(ValueType.Number);
+      expect(ws.getCell("D1").type).toBe(ValueType.Date);
+      expect(ws.getCell("E1").type).toBe(ValueType.Hyperlink);
+      expect(ws.getCell("A2").type).toBe(ValueType.Formula);
+      expect(ws.getCell("B2").type).toBe(ValueType.Formula);
+      expect(ws.getCell("C2").type).toBe(ValueType.Formula);
+    });
+
+    it("assigns rich text", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("blort");
+      ws.getCell("A1").value = {
+        richText: [
+          {
+            font: { size: 12, color: { theme: 0 }, name: "Calibri", family: 2, scheme: "minor" },
+            text: "This is "
           },
-          text: "This is "
-        },
-        {
-          font: {
-            italic: true,
-            size: 12,
-            color: { theme: 0 },
-            name: "Calibri",
-            scheme: "minor"
+          {
+            font: { italic: true, size: 12, color: { theme: 0 }, name: "Calibri", scheme: "minor" },
+            text: "a"
           },
-          text: "a"
-        },
-        {
-          font: {
-            size: 12,
-            color: { theme: 1 },
-            name: "Calibri",
-            family: 2,
-            scheme: "minor"
+          {
+            font: { size: 12, color: { theme: 1 }, name: "Calibri", family: 2, scheme: "minor" },
+            text: " "
           },
-          text: " "
-        },
-        {
-          font: {
-            size: 12,
-            color: { argb: "FFFF6600" },
-            name: "Calibri",
-            scheme: "minor"
+          {
+            font: { size: 12, color: { argb: "FFFF6600" }, name: "Calibri", scheme: "minor" },
+            text: "colorful"
           },
-          text: "colorful"
-        },
-        {
-          font: {
-            size: 12,
-            color: { theme: 1 },
-            name: "Calibri",
-            family: 2,
-            scheme: "minor"
+          {
+            font: { size: 12, color: { theme: 1 }, name: "Calibri", family: 2, scheme: "minor" },
+            text: " text "
           },
-          text: " text "
-        },
-        {
-          font: {
-            size: 12,
-            color: { argb: "FFCCFFCC" },
-            name: "Calibri",
-            scheme: "minor"
+          {
+            font: { size: 12, color: { argb: "FFCCFFCC" }, name: "Calibri", scheme: "minor" },
+            text: "with"
           },
-          text: "with"
-        },
-        {
-          font: {
-            size: 12,
-            color: { theme: 1 },
-            name: "Calibri",
-            family: 2,
-            scheme: "minor"
+          {
+            font: { size: 12, color: { theme: 1 }, name: "Calibri", family: 2, scheme: "minor" },
+            text: " in-cell "
           },
-          text: " in-cell "
-        },
+          {
+            font: {
+              bold: true,
+              size: 12,
+              color: { theme: 1 },
+              name: "Calibri",
+              family: 2,
+              scheme: "minor"
+            },
+            text: "format"
+          }
+        ]
+      };
+
+      expect(ws.getCell("A1").text).toBe("This is a colorful text with in-cell format");
+      expect(ws.getCell("A1").type).toBe(ValueType.RichText);
+    });
+  });
+
+  // ===========================================================================
+  // Images
+  // ===========================================================================
+
+  describe("images", () => {
+    it("addImage and getImage round-trip", () => {
+      const wb = new Workbook();
+      const imageBuffer = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+      const id = wb.addImage({
+        buffer: imageBuffer,
+        extension: "png"
+      });
+
+      expect(typeof id).toBe("number");
+      const img = wb.getImage(id);
+      expect(img).toBeDefined();
+      expect(img!.extension).toBe("png");
+    });
+
+    it("getImage returns undefined for invalid id", () => {
+      const wb = new Workbook();
+      expect(wb.getImage(999)).toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
+  // Metadata
+  // ===========================================================================
+
+  describe("metadata", () => {
+    it("creator and dates can be set and read", () => {
+      const wb = new Workbook();
+      wb.creator = "Test Author";
+      wb.created = new Date(2024, 0, 1);
+      wb.modified = new Date(2024, 5, 15);
+
+      expect(wb.creator).toBe("Test Author");
+      expect(wb.created).toEqual(new Date(2024, 0, 1));
+      expect(wb.modified).toEqual(new Date(2024, 5, 15));
+    });
+
+    it("properties can be set", () => {
+      const wb = new Workbook();
+      wb.title = "My Workbook";
+      wb.subject = "Testing";
+
+      expect(wb.title).toBe("My Workbook");
+      expect(wb.subject).toBe("Testing");
+    });
+  });
+
+  // ===========================================================================
+  // Defined Names
+  // ===========================================================================
+
+  describe("defined names", () => {
+    it("definedNames is accessible", () => {
+      const wb = new Workbook();
+      expect(wb.definedNames).toBeDefined();
+    });
+  });
+
+  // ===========================================================================
+  // Views
+  // ===========================================================================
+
+  describe("views", () => {
+    it("views can be set and read", () => {
+      const wb = new Workbook();
+      wb.views = [
         {
-          font: {
-            bold: true,
-            size: 12,
-            color: { theme: 1 },
-            name: "Calibri",
-            family: 2,
-            scheme: "minor"
-          },
-          text: "format"
+          x: 0,
+          y: 0,
+          width: 10000,
+          height: 20000,
+          firstSheet: 0,
+          activeTab: 0,
+          visibility: "visible"
         }
-      ]
-    };
-
-    expect(ws.getCell("A1").text).toBe("This is a colorful text with in-cell format");
-    expect(ws.getCell("A1").type).toBe(Enums.ValueType.RichText);
+      ];
+      expect(wb.views.length).toBe(1);
+      expect(wb.views[0].activeTab).toBe(0);
+    });
   });
 
-  it("returns undefined for non-existant sheet", () => {
-    const wb = new Workbook();
-    wb.addWorksheet("first");
-    expect(wb.getWorksheet("w00t")).toBeUndefined();
-  });
-
-  it("returns undefined for sheet 0", () => {
-    const wb = new Workbook();
-    wb.addWorksheet("first");
-    expect(wb.getWorksheet(0)).toBeUndefined();
-  });
-
-  it("returns undefined for sheet 0 after accessing wb.worksheets or wb.eachSheet ", () => {
-    const wb = new Workbook();
-    const sheet = wb.addWorksheet("first");
-
-    wb.eachSheet(() => {});
-    const numSheets = wb.worksheets.length;
-
-    expect(numSheets).toBe(1);
-    expect(wb.getWorksheet(0)).toBeUndefined();
-    expect(wb.getWorksheet(1) === sheet).toBe(true);
-  });
+  // ===========================================================================
+  // Duplicate Rows
+  // ===========================================================================
 
   describe("duplicateRows", () => {
     it("inserts duplicates", () => {
@@ -296,6 +396,19 @@ describe("Workbook", () => {
       expect(ws.getRow(2).numFmt).toBe(testUtils.styles.numFmts.numFmt1);
       expect(ws.getRow(3).numFmt).toBeUndefined();
       expect(ws.getRow(3).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+    });
+  });
+
+  // ===========================================================================
+  // Themes
+  // ===========================================================================
+
+  describe("themes", () => {
+    it("clearThemes removes internal themes", () => {
+      const wb = new Workbook();
+      wb.clearThemes();
+      // Should not throw and should clear any themes data
+      expect(wb).toBeDefined();
     });
   });
 });

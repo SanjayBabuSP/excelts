@@ -1,76 +1,501 @@
 import { describe, it, expect } from "vitest";
 import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 import { StreamBuf } from "@excel/utils/stream-buf";
+import { ExcelStreamStateError } from "@excel/errors";
+import { WorkbookWriter } from "../../../index";
+import { Writable } from "@stream";
 
-describe("Worksheet Writer", () => {
-  it("generates valid xml even when there is no data", () =>
-    new Promise((resolve, reject) => {
-      const mockWorkbook: any = {
-        _openStream() {
-          return this.stream;
-        },
-        stream: new StreamBuf()
-      };
-      mockWorkbook.stream.on("finish", () => {
-        try {
-          const xml = mockWorkbook.stream.read().toString();
-          // Basic XML validation: check for proper opening/closing tags
-          expect(xml).toContain("<?xml");
-          expect(xml).toContain("</worksheet>");
-          resolve(undefined);
-        } catch (error) {
-          reject(error);
-        }
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/** Create a WorksheetWriter with a mock workbook that captures XML output. */
+function createWriter(options?: Record<string, unknown>): {
+  writer: WorksheetWriter;
+  getXml: () => string;
+} {
+  const streamBuf = new StreamBuf();
+  const mockWorkbook: any = {
+    _openStream() {
+      return streamBuf;
+    },
+    stream: streamBuf
+  };
+
+  const writer = new WorksheetWriter({
+    id: 1,
+    workbook: mockWorkbook,
+    ...options
+  });
+
+  const getXml = (): string => streamBuf.read()?.toString() ?? "";
+
+  return { writer, getXml };
+}
+
+/** Create a real WorkbookWriter + WorksheetWriter for higher-fidelity tests. */
+function createRealWriter(options?: Record<string, unknown>): {
+  wb: InstanceType<typeof WorkbookWriter>;
+  ws: any; // WorksheetWriter
+} {
+  const stream = new Writable({
+    write(_chunk: Uint8Array, _encoding: string, callback: () => void) {
+      callback();
+    }
+  });
+  const wb = new WorkbookWriter({ stream, ...options });
+  const ws = wb.addWorksheet("test");
+  return { wb, ws };
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+describe("WorksheetWriter", () => {
+  // ===========================================================================
+  // Lifecycle
+  // ===========================================================================
+
+  describe("lifecycle", () => {
+    it("destroy() throws ExcelStreamStateError", () => {
+      const { ws } = createRealWriter();
+      expect(() => ws.destroy()).toThrow(ExcelStreamStateError);
+    });
+
+    it("committed is false before commit", () => {
+      const { ws } = createRealWriter();
+      expect(ws.committed).toBe(false);
+    });
+
+    it("committed is true after commit", () => {
+      const { ws } = createRealWriter();
+      ws.commit();
+      expect(ws.committed).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // XML Output
+  // ===========================================================================
+
+  describe("XML output", () => {
+    it("generates valid xml even when there is no data", () =>
+      new Promise<void>((resolve, reject) => {
+        const { writer, getXml } = createWriter();
+        const streamBuf = (writer as any)._workbook.stream as StreamBuf;
+
+        streamBuf.on("finish", () => {
+          try {
+            const xml = getXml();
+            expect(xml).toContain("<?xml");
+            expect(xml).toContain("</worksheet>");
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+
+        writer.commit();
+      }));
+
+    it("writes sheetProtection before autoFilter in XML output", () =>
+      new Promise<void>((resolve, reject) => {
+        const { writer, getXml } = createWriter();
+        const streamBuf = (writer as any)._workbook.stream as StreamBuf;
+
+        streamBuf.on("finish", () => {
+          try {
+            const xml = getXml();
+            expect(xml).toContain("<sheetProtection");
+            expect(xml).toContain("<autoFilter");
+
+            const protectionIndex = xml.indexOf("<sheetProtection");
+            const autoFilterIndex = xml.indexOf("<autoFilter");
+            expect(protectionIndex).toBeLessThan(autoFilterIndex);
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+
+        writer.autoFilter = { from: "A1", to: "C1" };
+        writer.protect("", {});
+        writer.commit();
+      }));
+  });
+
+  // ===========================================================================
+  // Properties
+  // ===========================================================================
+
+  describe("properties", () => {
+    it("has correct id and name", () => {
+      const { ws } = createRealWriter();
+      expect(ws.id).toBe(1);
+      expect(ws.name).toBe("test");
+    });
+
+    it("state defaults to visible", () => {
+      const { ws } = createRealWriter();
+      expect(ws.state).toBe("visible");
+    });
+
+    it("state can be set to hidden", () => {
+      const { wb } = createRealWriter();
+      const ws = wb.addWorksheet("hidden", { state: "hidden" });
+      expect(ws.state).toBe("hidden");
+    });
+
+    it("state can be set to veryHidden", () => {
+      const { wb } = createRealWriter();
+      const ws = wb.addWorksheet("veryHidden", { state: "veryHidden" });
+      expect(ws.state).toBe("veryHidden");
+    });
+  });
+
+  // ===========================================================================
+  // Row Access
+  // ===========================================================================
+
+  describe("row access", () => {
+    it("addRow() creates a row with values", () => {
+      const { ws } = createRealWriter();
+      const row = ws.addRow([1, "hello", true]);
+
+      expect(row.getCell(1).value).toBe(1);
+      expect(row.getCell(2).value).toBe("hello");
+      expect(row.getCell(3).value).toBe(true);
+    });
+
+    it("getRow() creates/returns a row by number", () => {
+      const { ws } = createRealWriter();
+      const row = ws.getRow(5);
+      row.getCell(1).value = "test";
+
+      expect(row.number).toBe(5);
+      expect(row.getCell(1).value).toBe("test");
+    });
+
+    it("findRow() returns row if exists, undefined otherwise", () => {
+      const { ws } = createRealWriter();
+      expect(ws.findRow(1)).toBeUndefined();
+
+      ws.getRow(1).getCell(1).value = "data";
+      expect(ws.findRow(1)).toBeDefined();
+      expect(ws.findRow(2)).toBeUndefined();
+    });
+
+    it("lastRow returns the last non-empty row", () => {
+      const { ws } = createRealWriter();
+      expect(ws.lastRow).toBeUndefined();
+
+      ws.addRow(["first"]);
+      ws.addRow(["second"]);
+
+      expect(ws.lastRow).toBeDefined();
+    });
+  });
+
+  // ===========================================================================
+  // Cell Access
+  // ===========================================================================
+
+  describe("cell access", () => {
+    it("getCell() by string address", () => {
+      const { ws } = createRealWriter();
+      ws.getCell("B3").value = 42;
+      expect(ws.getCell("B3").value).toBe(42);
+    });
+
+    it("getCell() by row and column numbers", () => {
+      const { ws } = createRealWriter();
+      ws.getCell(2, 3).value = "test";
+      expect(ws.getCell(2, 3).value).toBe("test");
+    });
+
+    it("findCell() returns undefined when no matching row exists", () => {
+      const { ws } = createRealWriter();
+      expect(ws.findCell(1, 2)).toBeUndefined();
+      expect(ws.findCell("Z99")).toBeUndefined();
+    });
+
+    it("findCell() finds cell created via getRow().getCell()", () => {
+      const { ws } = createRealWriter();
+      const row = ws.getRow(1);
+      row.getCell(2).value = 99;
+
+      const cell = ws.findCell(1, 2);
+      expect(cell).toBeDefined();
+      expect(cell.value).toBe(99);
+    });
+
+    it("findCell() finds cell created via addRow()", () => {
+      const { ws } = createRealWriter();
+      ws.addRow([10, 20, 30]);
+
+      expect(ws.findCell(1, 1)?.value).toBe(10);
+      expect(ws.findCell(1, 2)?.value).toBe(20);
+      expect(ws.findCell(1, 3)?.value).toBe(30);
+    });
+
+    it("findCell() with string address", () => {
+      const { ws } = createRealWriter();
+      ws.getRow(1).getCell(2).value = "test";
+
+      const cell = ws.findCell("B1");
+      expect(cell).toBeDefined();
+      expect(cell.value).toBe("test");
+    });
+
+    it("findCell() returns undefined for committed row", () => {
+      const { ws } = createRealWriter();
+      const row = ws.getRow(1);
+      row.getCell(1).value = "will be committed";
+      row.commit();
+
+      expect(ws.findRow(1)).toBeUndefined();
+      expect(ws.findCell(1, 1)).toBeUndefined();
+    });
+
+    it("findCell() works across multiple uncommitted rows", () => {
+      const { ws } = createRealWriter();
+      ws.addRow(["r1c1", "r1c2"]);
+      ws.addRow(["r2c1", "r2c2"]);
+      ws.addRow(["r3c1", "r3c2"]);
+
+      expect(ws.findCell(1, 1)?.value).toBe("r1c1");
+      expect(ws.findCell(2, 2)?.value).toBe("r2c2");
+      expect(ws.findCell(3, 1)?.value).toBe("r3c1");
+      expect(ws.findCell("B3")?.value).toBe("r3c2");
+    });
+  });
+
+  // ===========================================================================
+  // Column Operations
+  // ===========================================================================
+
+  describe("columns", () => {
+    it("columns setter creates column definitions", () => {
+      const { ws } = createRealWriter();
+      ws.columns = [
+        { key: "id", width: 10 },
+        { key: "name", width: 32 }
+      ];
+
+      expect(ws.getColumn("id").width).toBe(10);
+      expect(ws.getColumn("name").width).toBe(32);
+      expect(ws.getColumn(1).key).toBe("id");
+      expect(ws.getColumn(2).key).toBe("name");
+    });
+
+    it("getColumn() by letter", () => {
+      const { ws } = createRealWriter();
+      ws.getColumn("B").width = 20;
+      expect(ws.getColumn("B").width).toBe(20);
+      expect(ws.getColumn(2).width).toBe(20);
+    });
+
+    it("column key management", () => {
+      const { ws } = createRealWriter();
+      const col = ws.getColumn(1);
+      ws.setColumnKey("myKey", col);
+      expect(ws.getColumnKey("myKey")).toBe(col);
+
+      const keys: string[] = [];
+      ws.eachColumnKey((_col: any, key: string) => keys.push(key));
+      expect(keys).toContain("myKey");
+
+      ws.deleteColumnKey("myKey");
+      expect(ws.getColumnKey("myKey")).toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
+  // eachRow
+  // ===========================================================================
+
+  describe("eachRow", () => {
+    it("iterates over uncommitted rows", () => {
+      const { ws } = createRealWriter();
+      ws.addRow(["a"]);
+      ws.addRow(["b"]);
+      ws.addRow(["c"]);
+
+      const values: unknown[] = [];
+      ws.eachRow((row: any) => {
+        values.push(row.getCell(1).value);
+      });
+      expect(values).toEqual(["a", "b", "c"]);
+    });
+  });
+
+  // ===========================================================================
+  // Merge Cells
+  // ===========================================================================
+
+  describe("merge cells", () => {
+    it("mergeCells sets values correctly", () => {
+      const { ws } = createRealWriter();
+      ws.getCell("A1").value = "merged";
+      ws.getCell("B1").value = "will be replaced";
+      ws.mergeCells("A1:B2");
+
+      expect(ws.getCell("A1").value).toBe("merged");
+      expect(ws.getCell("B1").value).toBe("merged");
+      expect(ws.getCell("A2").value).toBe("merged");
+      expect(ws.getCell("B2").value).toBe("merged");
+    });
+
+    it("overlapping merges throw error", () => {
+      const { ws } = createRealWriter();
+      ws.mergeCells("B2:C3");
+
+      expect(() => ws.mergeCells("A1:B2")).toThrow();
+    });
+  });
+
+  // ===========================================================================
+  // Protection
+  // ===========================================================================
+
+  describe("protection", () => {
+    it("protect() without password sets sheet protection", async () => {
+      const { ws } = createRealWriter();
+      await ws.protect();
+      expect(ws.sheetProtection).toBeDefined();
+      expect(ws.sheetProtection!.sheet).toBe(true);
+    });
+
+    it("protect() with password and options", async () => {
+      const { ws } = createRealWriter();
+      await ws.protect("secret", { formatColumns: true });
+      expect(ws.sheetProtection).toBeDefined();
+      expect(ws.sheetProtection!.sheet).toBe(true);
+    });
+
+    it("unprotect() clears sheet protection", async () => {
+      const { ws } = createRealWriter();
+      await ws.protect("secret");
+      expect(ws.sheetProtection).toBeDefined();
+
+      ws.unprotect();
+      expect(ws.sheetProtection).toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // Conditional Formatting
+  // ===========================================================================
+
+  describe("conditional formatting", () => {
+    it("addConditionalFormatting() adds to the array", () => {
+      const { ws } = createRealWriter();
+      expect(ws.conditionalFormatting.length).toBe(0);
+
+      ws.addConditionalFormatting({
+        ref: "A1:A10",
+        rules: [
+          {
+            type: "cellIs",
+            operator: "greaterThan",
+            formulae: [5],
+            style: { font: { bold: true } },
+            priority: 1
+          }
+        ]
       });
 
-      const writer = new WorksheetWriter({
-        id: 1,
-        workbook: mockWorkbook
+      expect(ws.conditionalFormatting.length).toBe(1);
+    });
+
+    it("removeConditionalFormatting() with no args clears all", () => {
+      const { ws } = createRealWriter();
+      ws.addConditionalFormatting({
+        ref: "A1:A10",
+        rules: [{ type: "cellIs", operator: "greaterThan", formulae: [5], priority: 1 }]
+      });
+      ws.addConditionalFormatting({
+        ref: "B1:B10",
+        rules: [{ type: "cellIs", operator: "lessThan", formulae: [3], priority: 2 }]
       });
 
-      writer.commit();
-    }));
+      expect(ws.conditionalFormatting.length).toBe(2);
+      ws.removeConditionalFormatting();
+      expect(ws.conditionalFormatting.length).toBe(0);
+    });
+  });
 
-  it("writes sheetProtection before autoFilter in XML output", () =>
-    // When both autoFilter and sheetProtection are set, sheetProtection must come first
-    // in the XML output for Excel to open the file correctly.
-    new Promise((resolve, reject) => {
-      const mockWorkbook: any = {
-        _openStream() {
-          return this.stream;
-        },
-        stream: new StreamBuf()
-      };
-      mockWorkbook.stream.on("finish", () => {
-        try {
-          const xml = mockWorkbook.stream.read().toString();
+  // ===========================================================================
+  // Background Images
+  // ===========================================================================
 
-          // Both elements should be present
-          expect(xml).toContain("<sheetProtection");
-          expect(xml).toContain("<autoFilter");
-
-          // sheetProtection must come before autoFilter
-          const protectionIndex = xml.indexOf("<sheetProtection");
-          const autoFilterIndex = xml.indexOf("<autoFilter");
-          expect(protectionIndex).toBeLessThan(autoFilterIndex);
-
-          resolve(undefined);
-        } catch (error) {
-          reject(error);
-        }
+  describe("background images", () => {
+    it("addBackgroundImage and getBackgroundImageId", () => {
+      const { ws, wb } = createRealWriter();
+      const imageId = wb.addImage({
+        buffer: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+        extension: "png"
       });
 
-      const writer = new WorksheetWriter({
-        id: 1,
-        workbook: mockWorkbook
-      });
+      ws.addBackgroundImage(imageId);
+      expect(ws.getBackgroundImageId()).toBe(imageId);
+    });
 
-      // Set autoFilter
-      writer.autoFilter = { from: "A1", to: "C1" };
+    it("getBackgroundImageId returns undefined when no background set", () => {
+      const { ws } = createRealWriter();
+      expect(ws.getBackgroundImageId()).toBeUndefined();
+    });
+  });
 
-      // Set sheet protection (no password, no data needed)
-      writer.protect("", {});
+  // ===========================================================================
+  // Page Breaks
+  // ===========================================================================
 
-      writer.commit();
-    }));
+  describe("page breaks", () => {
+    it("rowBreaks accumulate via addPageBreak", () => {
+      const { ws } = createRealWriter();
+      ws.addRow(["row1"]);
+      ws.addRow(["row2"]);
+      ws.addRow(["row3"]);
+
+      ws.getRow(1).addPageBreak();
+      ws.getRow(2).addPageBreak();
+
+      expect(ws.rowBreaks.length).toBe(2);
+    });
+  });
+
+  // ===========================================================================
+  // Dimensions
+  // ===========================================================================
+
+  describe("dimensions", () => {
+    it("reflects data extent after adding cells", () => {
+      const { ws } = createRealWriter();
+      ws.getCell("A1").value = 1;
+      ws.getCell("C5").value = 2;
+
+      const dims = ws.dimensions;
+      expect(dims).toBeDefined();
+    });
+  });
+
+  // ===========================================================================
+  // Auto Filter
+  // ===========================================================================
+
+  describe("autoFilter", () => {
+    it("accepts string form", () => {
+      const { ws } = createRealWriter();
+      ws.autoFilter = "A1:C1";
+      expect(ws.autoFilter).toBe("A1:C1");
+    });
+
+    it("accepts object form", () => {
+      const { ws } = createRealWriter();
+      ws.autoFilter = { from: "A1", to: "C1" };
+      expect(ws.autoFilter).toEqual({ from: "A1", to: "C1" });
+    });
+  });
 });
