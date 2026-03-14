@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "../../../index";
+import type { WorksheetViewFrozen, WorksheetViewSplit } from "@excel/types";
 
 describe("Worksheet", () => {
   describe("Views", () => {
-    it("adjusts collapsed property of columns", () => {
+    // =========================================================================
+    // Column Outline / Collapsed
+    // =========================================================================
+
+    it("adjusts collapsed property of columns based on outlineLevel", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("sheet1");
 
@@ -32,7 +37,11 @@ describe("Worksheet", () => {
       expect(col3.collapsed).toBe(false);
     });
 
-    it("adjusts collapsed property of row", () => {
+    // =========================================================================
+    // Row Outline / Collapsed
+    // =========================================================================
+
+    it("adjusts collapsed property of rows based on outlineLevel", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("sheet1");
 
@@ -74,6 +83,177 @@ describe("Worksheet", () => {
       expect(ws.getColumn(1).outlineLevel).toBe(1);
       expect(ws.getColumn(2).outlineLevel).toBe(2);
       expect(ws.getColumn(3).outlineLevel).toBe(3);
+    });
+
+    // =========================================================================
+    // Frozen Panes
+    // =========================================================================
+
+    it("sets frozen view (split at a specific cell)", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("frozen");
+
+      ws.views = [{ state: "frozen", xSplit: 1, ySplit: 2 }];
+
+      expect(ws.views.length).toBe(1);
+      const view = ws.views[0] as Partial<WorksheetViewFrozen>;
+      expect(view.state).toBe("frozen");
+      expect(view.xSplit).toBe(1);
+      expect(view.ySplit).toBe(2);
+    });
+
+    it("frozen view survives XLSX round-trip", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("frozen");
+      ws.views = [{ state: "frozen", xSplit: 0, ySplit: 1, activeCell: "A2" }];
+      ws.getCell("A1").value = "header";
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      const ws2 = wb2.getWorksheet("frozen")!;
+      expect(ws2.views.length).toBe(1);
+      const view = ws2.views[0] as Partial<WorksheetViewFrozen>;
+      expect(view.state).toBe("frozen");
+      expect(view.ySplit).toBe(1);
+    });
+
+    // =========================================================================
+    // Split Panes
+    // =========================================================================
+
+    it("sets split view", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("split");
+
+      ws.views = [{ state: "split", xSplit: 2000, ySplit: 3000 }];
+
+      const view = ws.views[0] as Partial<WorksheetViewSplit>;
+      expect(view.state).toBe("split");
+      expect(view.xSplit).toBe(2000);
+      expect(view.ySplit).toBe(3000);
+    });
+
+    // =========================================================================
+    // View Options
+    // =========================================================================
+
+    it("sets showGridLines and showRowColHeaders", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("options");
+
+      ws.views = [{ showGridLines: false, showRowColHeaders: false }];
+
+      expect(ws.views[0].showGridLines).toBe(false);
+      expect(ws.views[0].showRowColHeaders).toBe(false);
+    });
+
+    it("sets zoom factor", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("zoom");
+
+      ws.views = [{ zoomScale: 150, zoomScaleNormal: 150 }];
+
+      expect(ws.views[0].zoomScale).toBe(150);
+      expect(ws.views[0].zoomScaleNormal).toBe(150);
+    });
+
+    it("sets right-to-left view", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("rtl");
+
+      ws.views = [{ rightToLeft: true }];
+
+      expect(ws.views[0].rightToLeft).toBe(true);
+    });
+
+    // =========================================================================
+    // Worksheet State
+    // =========================================================================
+
+    it("default state is visible", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+
+      expect(ws.state).toBe("visible");
+    });
+
+    it("state can be set to hidden", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test", { state: "hidden" });
+
+      expect(ws.state).toBe("hidden");
+    });
+
+    it("state can be set to veryHidden", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test", { state: "veryHidden" });
+
+      expect(ws.state).toBe("veryHidden");
+    });
+
+    it("hidden state survives XLSX round-trip", async () => {
+      const wb = new Workbook();
+      wb.addWorksheet("visible");
+      wb.addWorksheet("hidden", { state: "hidden" });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      expect(wb2.getWorksheet("visible")!.state).toBe("visible");
+      expect(wb2.getWorksheet("hidden")!.state).toBe("hidden");
+    });
+
+    // =========================================================================
+    // Page Setup
+    // =========================================================================
+
+    it("page setup properties can be set", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+
+      ws.pageSetup.orientation = "landscape";
+      ws.pageSetup.paperSize = 9; // A4
+      ws.pageSetup.margins = {
+        left: 0.7,
+        right: 0.7,
+        top: 0.75,
+        bottom: 0.75,
+        header: 0.3,
+        footer: 0.3
+      };
+
+      expect(ws.pageSetup.orientation).toBe("landscape");
+      expect(ws.pageSetup.paperSize).toBe(9);
+      expect(ws.pageSetup.margins!.left).toBe(0.7);
+    });
+
+    it("fitToPage is enabled when fitToWidth/fitToHeight set without explicit scale", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test", {
+        pageSetup: { fitToWidth: 1, fitToHeight: 1 }
+      });
+
+      expect(ws.pageSetup.fitToWidth).toBe(1);
+      expect(ws.pageSetup.fitToHeight).toBe(1);
+      expect(ws.pageSetup.fitToPage).toBe(true);
+    });
+
+    // =========================================================================
+    // Header / Footer
+    // =========================================================================
+
+    it("header and footer can be set", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("test");
+
+      ws.headerFooter.oddHeader = "&CPage &P of &N";
+      ws.headerFooter.oddFooter = "&LConfidential&RDate: &D";
+
+      expect(ws.headerFooter.oddHeader).toBe("&CPage &P of &N");
+      expect(ws.headerFooter.oddFooter).toBe("&LConfidential&RDate: &D");
     });
   });
 });
