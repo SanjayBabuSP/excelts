@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0-beta.8](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.7...v6.0.0-beta.8) (2026-03-15)
+
+
+### Bug Fixes
+
+* Correct dishonest type tightenings and remove unsafe toJSON generic ([d974843](https://github.com/cjnoname/excelts/commit/d9748433666b2b0870098fe2900901aa8cde7245))
+* Restore package.json and manifest to current released version ([5111e60](https://github.com/cjnoname/excelts/commit/5111e60d4fd1d7cee301b61e11190c67c66ece00))
+
 ## [6.0.0-beta.7](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.6...v6.0.0-beta.7) (2026-03-15)
 
 
