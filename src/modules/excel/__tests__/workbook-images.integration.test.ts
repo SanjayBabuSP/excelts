@@ -17,11 +17,9 @@ const fsReadFileAsync = promisify(fs.readFile);
 
 describe("Workbook", () => {
   describe("Images", () => {
-    it("stores background image", () => {
+    it("stores background image", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
-      let wb2;
-      let ws2;
       const imageId = wb.addImage({
         filename: IMAGE_FILENAME,
         extension: "jpeg"
@@ -30,31 +28,25 @@ describe("Workbook", () => {
       ws.getCell("A1").value = "Hello, World!";
       ws.addBackgroundImage(imageId);
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(() => {
-          ws2 = wb2.getWorksheet("blort");
-          expect(ws2).toBeDefined();
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
 
-          return fsReadFileAsync(IMAGE_FILENAME);
-        })
-        .then(imageData => {
-          const backgroundId2 = ws2.getBackgroundImageId();
-          const image = wb2.getImage(backgroundId2);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
 
-          expect(Buffer.compare(imageData, image.buffer)).toBe(0);
-        });
+      const ws2 = wb2.getWorksheet("blort");
+      expect(ws2).toBeDefined();
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+
+      const backgroundId2 = ws2!.getBackgroundImageId();
+      const image = wb2.getImage(backgroundId2!);
+
+      expect(Buffer.compare(imageData, image!.buffer as Uint8Array)).toBe(0);
     });
 
-    it("stores embedded image and hyperlink", () => {
+    it("stores embedded image and hyperlink", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
-      let wb2;
-      let ws2;
 
       const imageId = wb.addImage({
         filename: IMAGE_FILENAME,
@@ -68,44 +60,38 @@ describe("Workbook", () => {
       };
       ws.addImage(imageId, "C3:E6");
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(() => {
-          ws2 = wb2.getWorksheet("blort");
-          expect(ws2).toBeDefined();
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
 
-          expect(ws.getCell("A1").value).toBe("Hello, World!");
-          expect(ws.getCell("A2").value).toEqual({
-            hyperlink: "http://www.somewhere.com",
-            text: "www.somewhere.com"
-          });
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
 
-          return fsReadFileAsync(IMAGE_FILENAME);
-        })
-        .then(imageData => {
-          const images = ws2.getImages();
-          expect(images.length).toBe(1);
+      const ws2 = wb2.getWorksheet("blort");
+      expect(ws2).toBeDefined();
 
-          const imageDesc = images[0];
-          expect(imageDesc.range.tl.col).toBe(2);
-          expect(imageDesc.range.tl.row).toBe(2);
-          expect(imageDesc.range.br.col).toBe(5);
-          expect(imageDesc.range.br.row).toBe(6);
+      expect(ws.getCell("A1").value).toBe("Hello, World!");
+      expect(ws.getCell("A2").value).toEqual({
+        hyperlink: "http://www.somewhere.com",
+        text: "www.somewhere.com"
+      });
 
-          const image = wb2.getImage(imageDesc.imageId);
-          expect(Buffer.compare(imageData, image.buffer)).toBe(0);
-        });
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+
+      const images = ws2!.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.tl.col).toBe(2);
+      expect(imageDesc.range!.tl.row).toBe(2);
+      expect(imageDesc.range!.br!.col).toBe(5);
+      expect(imageDesc.range!.br!.row).toBe(6);
+
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer as Uint8Array)).toBe(0);
     });
 
-    it("stores embedded image with oneCell", () => {
+    it("stores embedded image with oneCell", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
-      let wb2;
-      let ws2;
 
       const imageId = wb.addImage({
         filename: IMAGE_FILENAME,
@@ -118,35 +104,29 @@ describe("Workbook", () => {
         editAs: "oneCell"
       });
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(() => {
-          ws2 = wb2.getWorksheet("blort");
-          expect(ws2).toBeDefined();
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
 
-          return fsReadFileAsync(IMAGE_FILENAME);
-        })
-        .then(imageData => {
-          const images = ws2.getImages();
-          expect(images.length).toBe(1);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
 
-          const imageDesc = images[0];
-          expect(imageDesc.range.editAs).toBe("oneCell");
+      const ws2 = wb2.getWorksheet("blort");
+      expect(ws2).toBeDefined();
 
-          const image = wb2.getImage(imageDesc.imageId);
-          expect(Buffer.compare(imageData, image.buffer)).toBe(0);
-        });
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+
+      const images = ws2!.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.editAs).toBe("oneCell");
+
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer as Uint8Array)).toBe(0);
     });
 
-    it("stores embedded image with one-cell-anchor", () => {
+    it("stores embedded image with one-cell-anchor", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
-      let wb2;
-      let ws2;
 
       const imageId = wb.addImage({
         filename: IMAGE_FILENAME,
@@ -159,37 +139,31 @@ describe("Workbook", () => {
         editAs: "oneCell"
       });
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(() => {
-          ws2 = wb2.getWorksheet("blort");
-          expect(ws2).toBeDefined();
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
 
-          return fsReadFileAsync(IMAGE_FILENAME);
-        })
-        .then(imageData => {
-          const images = ws2.getImages();
-          expect(images.length).toBe(1);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
 
-          const imageDesc = images[0];
-          expect(imageDesc.range.editAs).toBe("oneCell");
-          expect(imageDesc.range.ext.width).toBe(100);
-          expect(imageDesc.range.ext.height).toBe(100);
+      const ws2 = wb2.getWorksheet("blort");
+      expect(ws2).toBeDefined();
 
-          const image = wb2.getImage(imageDesc.imageId);
-          expect(Buffer.compare(imageData, image.buffer)).toBe(0);
-        });
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+
+      const images = ws2!.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.editAs).toBe("oneCell");
+      expect(imageDesc.range!.ext!.width).toBe(100);
+      expect(imageDesc.range!.ext!.height).toBe(100);
+
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer as Uint8Array)).toBe(0);
     });
 
-    it("stores embedded image with hyperlinks", () => {
+    it("stores embedded image with hyperlinks", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
-      let wb2;
-      let ws2;
 
       const imageId = wb.addImage({
         filename: IMAGE_FILENAME,
@@ -206,42 +180,36 @@ describe("Workbook", () => {
         }
       });
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(() => {
-          ws2 = wb2.getWorksheet("blort");
-          expect(ws2).toBeDefined();
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
 
-          return fsReadFileAsync(IMAGE_FILENAME);
-        })
-        .then(imageData => {
-          const images = ws2.getImages();
-          expect(images.length).toBe(1);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
 
-          const imageDesc = images[0];
-          expect(imageDesc.range.editAs).toBe("absolute");
-          expect(imageDesc.range.ext.width).toBe(100);
-          expect(imageDesc.range.ext.height).toBe(100);
+      const ws2 = wb2.getWorksheet("blort");
+      expect(ws2).toBeDefined();
 
-          expect(imageDesc.range.hyperlinks).toEqual({
-            hyperlink: "http://www.somewhere.com",
-            tooltip: "www.somewhere.com"
-          });
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
 
-          const image = wb2.getImage(imageDesc.imageId);
-          expect(Buffer.compare(imageData, image.buffer)).toBe(0);
-        });
+      const images = ws2!.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.editAs).toBe("absolute");
+      expect(imageDesc.range!.ext!.width).toBe(100);
+      expect(imageDesc.range!.ext!.height).toBe(100);
+
+      expect(imageDesc.range!.hyperlinks).toEqual({
+        hyperlink: "http://www.somewhere.com",
+        tooltip: "www.somewhere.com"
+      });
+
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer as Uint8Array)).toBe(0);
     });
 
-    it("image extensions should not be case sensitive", () => {
+    it("image extensions should not be case sensitive", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
-      let wb2;
-      let ws2;
 
       const imageId1 = wb.addImage({
         filename: IMAGE_FILENAME,
@@ -264,35 +232,31 @@ describe("Workbook", () => {
         editAs: "oneCell"
       });
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(() => {
-          ws2 = wb2.getWorksheet("blort");
-          expect(ws2).toBeDefined();
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
 
-          return fsReadFileAsync(IMAGE_FILENAME);
-        })
-        .then(imageData => {
-          const images = ws2.getImages();
-          expect(images.length).toBe(2);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
 
-          const imageDesc1 = images[0];
-          expect(imageDesc1.range.ext.width).toBe(100);
-          expect(imageDesc1.range.ext.height).toBe(100);
-          const image1 = wb2.getImage(imageDesc1.imageId);
+      const ws2 = wb2.getWorksheet("blort");
+      expect(ws2).toBeDefined();
 
-          const imageDesc2 = images[1];
-          expect(imageDesc2.range.editAs).toBe("oneCell");
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
 
-          const image2 = wb2.getImage(imageDesc1.imageId);
+      const images = ws2!.getImages();
+      expect(images.length).toBe(2);
 
-          expect(Buffer.compare(imageData, image1.buffer)).toBe(0);
-          expect(Buffer.compare(imageData, image2.buffer)).toBe(0);
-        });
+      const imageDesc1 = images[0];
+      expect(imageDesc1.range!.ext!.width).toBe(100);
+      expect(imageDesc1.range!.ext!.height).toBe(100);
+      const image1 = wb2.getImage(imageDesc1.imageId!);
+
+      const imageDesc2 = images[1];
+      expect(imageDesc2.range!.editAs).toBe("oneCell");
+
+      const image2 = wb2.getImage(imageDesc1.imageId!);
+
+      expect(Buffer.compare(imageData, image1!.buffer!)).toBe(0);
+      expect(Buffer.compare(imageData, image2!.buffer!)).toBe(0);
     });
 
     describe("read-write round-trip (issue #58)", () => {

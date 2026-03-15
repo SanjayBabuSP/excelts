@@ -16,99 +16,74 @@ const TEST_CSV_FILE_NAME = testFilePath("workbook-core.integration", ".csv");
 
 describe("Workbook", () => {
   describe("Serialise", () => {
-    it("xlsx file", () => {
+    it("xlsx file", async () => {
       const wb = testUtils.createTestBook(new Workbook(), "xlsx", undefined);
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          testUtils.checkTestBook(wb2, "xlsx", undefined, {});
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx", undefined, {});
     });
     describe("Xlsx Zip Compression", () => {
-      it("xlsx file with best compression", () => {
+      it("xlsx file with best compression", async () => {
         const wb = testUtils.createTestBook(new Workbook(), "xlsx", undefined);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME, {
-            zip: {
-              compression: "DEFLATE",
-              compressionOptions: {
-                level: 9
-              }
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME, {
+          zip: {
+            compression: "DEFLATE",
+            compressionOptions: {
+              level: 9
             }
-          })
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            testUtils.checkTestBook(wb2, "xlsx", undefined, {});
-          });
+          }
+        });
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        testUtils.checkTestBook(wb2, "xlsx", undefined, {});
       });
 
-      it("xlsx file with default compression", () => {
+      it("xlsx file with default compression", async () => {
         const wb = testUtils.createTestBook(new Workbook(), "xlsx", undefined);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME, {
-            zip: {
-              compression: "DEFLATE"
-            }
-          })
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            testUtils.checkTestBook(wb2, "xlsx", undefined, {});
-          });
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME, {
+          zip: {
+            compression: "DEFLATE"
+          }
+        });
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        testUtils.checkTestBook(wb2, "xlsx", undefined, {});
       });
 
-      it("xlsx file with fast compression", () => {
+      it("xlsx file with fast compression", async () => {
         const wb = testUtils.createTestBook(new Workbook(), "xlsx", undefined);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME, {
-            zip: {
-              compression: "DEFLATE",
-              compressionOptions: {
-                level: 1
-              }
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME, {
+          zip: {
+            compression: "DEFLATE",
+            compressionOptions: {
+              level: 1
             }
-          })
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            testUtils.checkTestBook(wb2, "xlsx", undefined, {});
-          });
+          }
+        });
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        testUtils.checkTestBook(wb2, "xlsx", undefined, {});
       });
 
-      it("xlsx file with no compression", () => {
+      it("xlsx file with no compression", async () => {
         const wb = testUtils.createTestBook(new Workbook(), "xlsx", undefined);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME, {
-            zip: {
-              compression: "STORE"
-            }
-          })
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            testUtils.checkTestBook(wb2, "xlsx", undefined, {});
-          });
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME, {
+          zip: {
+            compression: "STORE"
+          }
+        });
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        testUtils.checkTestBook(wb2, "xlsx", undefined, {});
       });
     });
-    it("sheets with correct names", () => {
+    it("sheets with correct names", async () => {
       const wb = new Workbook();
       const ws1 = wb.addWorksheet("Hello, World!");
       expect(ws1.name).toBe("Hello, World!");
@@ -120,16 +95,11 @@ describe("Workbook", () => {
 
       wb.addWorksheet("This & That");
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          expect(wb2.getWorksheet("Hello, World!")).toBeTruthy();
-          expect(wb2.getWorksheet("This & That")).toBeTruthy();
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.getWorksheet("Hello, World!")).toBeTruthy();
+      expect(wb2.getWorksheet("This & That")).toBeTruthy();
     });
 
     it('removes "vertical tab" and other invalid control characters', async () => {
@@ -620,7 +590,7 @@ describe("Workbook", () => {
       });
     });
 
-    it("creator, lastModifiedBy, etc", () => {
+    it("creator, lastModifiedBy, etc", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.getCell("A1").value = "World!";
@@ -628,20 +598,15 @@ describe("Workbook", () => {
       wb.lastModifiedBy = "Bar";
       wb.created = new Date(2016, 0, 1);
       wb.modified = new Date(2016, 4, 19);
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          expect(wb2.creator).toBe(wb.creator);
-          expect(wb2.lastModifiedBy).toBe(wb.lastModifiedBy);
-          expect(wb2.created).toEqual(wb.created);
-          expect(wb2.modified).toEqual(wb.modified);
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.creator).toBe(wb.creator);
+      expect(wb2.lastModifiedBy).toBe(wb.lastModifiedBy);
+      expect(wb2.created).toEqual(wb.created);
+      expect(wb2.modified).toEqual(wb.modified);
     });
-    it("printTitlesRow", () => {
+    it("printTitlesRow", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("printHeader");
 
@@ -654,19 +619,14 @@ describe("Workbook", () => {
 
       ws.pageSetup.printTitlesRow = "1:2";
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("printHeader");
-          expect(ws2.pageSetup.printTitlesRow).toBe("1:2");
-          expect(ws2.pageSetup.printTitlesColumn).toBeUndefined();
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("printHeader")!;
+      expect(ws2.pageSetup.printTitlesRow).toBe("1:2");
+      expect(ws2.pageSetup.printTitlesColumn).toBeUndefined();
     });
-    it("printTitlesColumn", () => {
+    it("printTitlesColumn", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("printColumn");
 
@@ -682,19 +642,14 @@ describe("Workbook", () => {
 
       ws.pageSetup.printTitlesRow = "A:B";
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("printColumn");
-          expect(ws2.pageSetup.printTitlesRow).toBeUndefined();
-          expect(ws2.pageSetup.printTitlesColumn).toBe("A:B");
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("printColumn")!;
+      expect(ws2.pageSetup.printTitlesRow).toBeUndefined();
+      expect(ws2.pageSetup.printTitlesColumn).toBe("A:B");
     });
-    it("printTitlesRowAndColumn", () => {
+    it("printTitlesRowAndColumn", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("printHeaderAndColumn");
 
@@ -725,17 +680,12 @@ describe("Workbook", () => {
         ]);
       }
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("printHeaderAndColumn");
-          expect(ws2.pageSetup.printTitlesRow).toBe("1:2");
-          expect(ws2.pageSetup.printTitlesColumn).toBe("A:B");
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("printHeaderAndColumn")!;
+      expect(ws2.pageSetup.printTitlesRow).toBe("1:2");
+      expect(ws2.pageSetup.printTitlesColumn).toBe("A:B");
     });
 
     it("single-cell printArea without colon round-trips correctly", async () => {
@@ -783,43 +733,38 @@ describe("Workbook", () => {
       expect(ws2.pageSetup.printTitlesRow).toBe("1:1");
     });
 
-    it("shared formula", () => {
+    it("shared formula", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.fillFormula("A1:B2", "ROW()+COLUMN()", [
         [2, 3],
         [3, 4]
       ]);
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("Hello");
-          expect(ws2.getCell("A1").value).toEqual({
-            formula: "ROW()+COLUMN()",
-            shareType: "shared",
-            ref: "A1:B2",
-            result: 2
-          });
-          expect(ws2.getCell("B1").value).toEqual({
-            sharedFormula: "A1",
-            result: 3
-          });
-          expect(ws2.getCell("A2").value).toEqual({
-            sharedFormula: "A1",
-            result: 3
-          });
-          expect(ws2.getCell("B2").value).toEqual({
-            sharedFormula: "A1",
-            result: 4
-          });
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+      expect(ws2.getCell("A1").value).toEqual({
+        formula: "ROW()+COLUMN()",
+        shareType: "shared",
+        ref: "A1:B2",
+        result: 2
+      });
+      expect(ws2.getCell("B1").value).toEqual({
+        sharedFormula: "A1",
+        result: 3
+      });
+      expect(ws2.getCell("A2").value).toEqual({
+        sharedFormula: "A1",
+        result: 3
+      });
+      expect(ws2.getCell("B2").value).toEqual({
+        sharedFormula: "A1",
+        result: 4
+      });
     });
 
-    it("auto filter", () => {
+    it("auto filter", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.getCell("A1").value = 1;
@@ -831,37 +776,27 @@ describe("Workbook", () => {
 
       ws.autoFilter = "A1:B1";
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("Hello");
-          expect(ws2.autoFilter).toBe("A1:B1");
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+      expect(ws2.autoFilter).toBe("A1:B1");
     });
 
-    it("company, manager, etc", () => {
+    it("company, manager, etc", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.getCell("A1").value = "World!";
       wb.company = "Cyber Sapiens, Ltd";
       wb.manager = "Test Manager";
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          expect(wb2.company).toBe(wb.company);
-          expect(wb2.manager).toBe(wb.manager);
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.company).toBe(wb.company);
+      expect(wb2.manager).toBe(wb.manager);
     });
 
-    it("title, subject, etc", () => {
+    it("title, subject, etc", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.getCell("A1").value = "World!";
@@ -870,77 +805,57 @@ describe("Workbook", () => {
       wb.keywords = "the keywords";
       wb.category = "the category";
       wb.description = "the description";
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          expect(wb2.title).toBe(wb.title);
-          expect(wb2.subject).toBe(wb.subject);
-          expect(wb2.keywords).toBe(wb.keywords);
-          expect(wb2.category).toBe(wb.category);
-          expect(wb2.description).toBe(wb.description);
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.title).toBe(wb.title);
+      expect(wb2.subject).toBe(wb.subject);
+      expect(wb2.keywords).toBe(wb.keywords);
+      expect(wb2.category).toBe(wb.category);
+      expect(wb2.description).toBe(wb.description);
     });
 
-    it("language, revision and contentStatus", () => {
+    it("language, revision and contentStatus", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.getCell("A1").value = "World!";
       wb.language = "Klingon";
       wb.revision = 2;
       wb.contentStatus = "Final";
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          expect(wb2.language).toBe(wb.language);
-          expect(wb2.revision).toBe(wb.revision);
-          expect(wb2.contentStatus).toBe(wb.contentStatus);
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.language).toBe(wb.language);
+      expect(wb2.revision).toBe(wb.revision);
+      expect(wb2.contentStatus).toBe(wb.contentStatus);
     });
 
-    it("empty strings", () => {
+    it("empty strings", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");
       ws.getCell("A1").value = "Foo";
       ws.getCell("A2").value = "";
       ws.getCell("A3").value = "Baz";
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("Hello");
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
 
-          expect(ws2.getCell("A1").value).toBe("Foo");
-          expect(ws2.getCell("A2").value).toBe("");
-          expect(ws2.getCell("A3").value).toBe("Baz");
-        });
+      expect(ws2.getCell("A1").value).toBe("Foo");
+      expect(ws2.getCell("A2").value).toBe("");
+      expect(ws2.getCell("A3").value).toBe("Baz");
     });
 
-    it("dataValidations", () => {
+    it("dataValidations", async () => {
       const wb = testUtils.createTestBook(new Workbook(), "xlsx", ["dataValidations"]);
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          testUtils.checkTestBook(wb2, "xlsx", ["dataValidations"], {});
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx", ["dataValidations"], {});
     });
 
-    it("empty string", () => {
+    it("empty string", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet();
 
@@ -951,10 +866,10 @@ describe("Workbook", () => {
 
       ws.addRow({ id: 1, name: "" });
 
-      return wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
     });
 
-    it("a lot of sheets to xlsx file", function () {
+    it("a lot of sheets to xlsx file", async function () {
       let i;
       const wb = new Workbook();
       const numSheets = 90;
@@ -963,36 +878,26 @@ describe("Workbook", () => {
         const ws = wb.addWorksheet(`sheet${i}`);
         ws.getCell("A1").value = i;
       }
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          for (i = 1; i <= numSheets; i++) {
-            const ws2 = wb2.getWorksheet(`sheet${i}`);
-            expect(ws2).toBeTruthy();
-            expect(ws2.getCell("A1").value).toBe(i);
-          }
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      for (i = 1; i <= numSheets; i++) {
+        const ws2 = wb2.getWorksheet(`sheet${i}`)!;
+        expect(ws2).toBeTruthy();
+        expect(ws2.getCell("A1").value).toBe(i);
+      }
     });
 
-    it("csv file", function () {
+    it("csv file", async function () {
       const wb = testUtils.createTestBook(new Workbook(), "csv", undefined);
 
-      return wb
-        .writeCsvFile(TEST_CSV_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.readCsvFile(TEST_CSV_FILE_NAME).then(() => wb2);
-        })
-        .then((wb2: any) => {
-          testUtils.checkTestBook(wb2, "csv", undefined, {});
-        });
+      await wb.writeCsvFile(TEST_CSV_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.readCsvFile(TEST_CSV_FILE_NAME);
+      testUtils.checkTestBook(wb2, "csv", undefined, {});
     });
 
-    it("CSV file and its configuration", function () {
+    it("CSV file and its configuration", async function () {
       const writeOptions = {
         dateFormat: "DD/MM/YYYY HH:mm:ss",
         dateUTC: false,
@@ -1010,18 +915,13 @@ describe("Workbook", () => {
       };
       const wb = testUtils.createTestBook(new Workbook(), "csv", undefined);
 
-      return wb
-        .writeCsvFile(TEST_CSV_FILE_NAME, writeOptions)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.readCsvFile(TEST_CSV_FILE_NAME, readOptions).then(() => wb2);
-        })
-        .then((wb2: any) => {
-          testUtils.checkTestBook(wb2, "csv", undefined, writeOptions);
-        });
+      await wb.writeCsvFile(TEST_CSV_FILE_NAME, writeOptions);
+      const wb2 = new Workbook();
+      await wb2.readCsvFile(TEST_CSV_FILE_NAME, readOptions);
+      testUtils.checkTestBook(wb2, "csv", undefined, writeOptions);
     });
 
-    it("defined names", () => {
+    it("defined names", async () => {
       const wb1 = new Workbook();
       const ws1a = wb1.addWorksheet("blort");
       const ws1b = wb1.addWorksheet("foo");
@@ -1067,110 +967,99 @@ describe("Workbook", () => {
       assign(ws1a, "G2", 1, ["once", "twice"]);
       ws1a.getCell("G2").removeName("once");
 
-      return wb1.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2a = wb2.getWorksheet("blort");
-          const ws2b = wb2.getWorksheet("foo");
+      await wb1.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2a = wb2.getWorksheet("blort")!;
+      const ws2b = wb2.getWorksheet("foo")!;
 
-          function check(sheet: any, address: any, value: any, name: any) {
-            const cell = sheet.getCell(address);
-            expect(cell.value).toBe(value);
-            expect(cell.name).toBe(name);
-          }
+      function check(sheet: any, address: any, value: any, name: any) {
+        const cell = sheet.getCell(address);
+        expect(cell.value).toBe(value);
+        expect(cell.name).toBe(name);
+      }
 
-          // single entry
-          check(ws2a, "A1", 5, "five");
+      // single entry
+      check(ws2a, "A1", 5, "five");
 
-          // three amigos - horizontal line
-          check(ws2a, "A3", 3, "amigos");
-          check(ws2a, "B3", 3, "amigos");
-          check(ws2a, "C3", 3, "amigos");
+      // three amigos - horizontal line
+      check(ws2a, "A3", 3, "amigos");
+      check(ws2a, "B3", 3, "amigos");
+      check(ws2a, "C3", 3, "amigos");
 
-          // three amigos - vertical line
-          check(ws2a, "E1", 3, "verts");
-          check(ws2a, "E2", 3, "verts");
-          check(ws2a, "E3", 3, "verts");
+      // three amigos - vertical line
+      check(ws2a, "E1", 3, "verts");
+      check(ws2a, "E2", 3, "verts");
+      check(ws2a, "E3", 3, "verts");
 
-          // four square
-          check(ws2a, "C5", 4, "squares");
-          check(ws2a, "B6", 4, "squares");
-          check(ws2a, "C6", 4, "squares");
-          check(ws2a, "B5", 4, "squares");
+      // four square
+      check(ws2a, "C5", 4, "squares");
+      check(ws2a, "B6", 4, "squares");
+      check(ws2a, "C6", 4, "squares");
+      check(ws2a, "B5", 4, "squares");
 
-          // long distance
-          check(ws2a, "B7", 2, "sheets");
-          check(ws2b, "B7", 2, "sheets");
+      // long distance
+      check(ws2a, "B7", 2, "sheets");
+      check(ws2b, "B7", 2, "sheets");
 
-          // two names
-          expect(ws2a.getCell("G1").names).toEqual(expect.arrayContaining(["thing1", "thing2"]));
-          expect(ws2a.getCell("G1").names.length).toBe(2);
+      // two names
+      expect(ws2a.getCell("G1").names).toEqual(expect.arrayContaining(["thing1", "thing2"]));
+      expect(ws2a.getCell("G1").names.length).toBe(2);
 
-          // once removed
-          expect(ws2a.getCell("G2").names).toEqual(expect.arrayContaining(["twice"]));
-          expect(ws2a.getCell("G2").names.length).toBe(1);
+      // once removed
+      expect(ws2a.getCell("G2").names).toEqual(expect.arrayContaining(["twice"]));
+      expect(ws2a.getCell("G2").names.length).toBe(1);
 
-          // ranges
-          function rangeCheck(name: any, members: any) {
-            const ranges = wb2.definedNames.getRanges(name);
-            expect(ranges.name).toBe(name);
-            if (members.length) {
-              expect(ranges.ranges).toEqual(expect.arrayContaining(members));
-              expect(ranges.ranges.length).toBe(members.length);
-            } else {
-              expect(ranges.ranges.length).toBe(0);
-            }
-          }
+      // ranges
+      function rangeCheck(name: any, members: any) {
+        const ranges = wb2.definedNames.getRanges(name);
+        expect(ranges.name).toBe(name);
+        if (members.length) {
+          expect(ranges.ranges).toEqual(expect.arrayContaining(members));
+          expect(ranges.ranges.length).toBe(members.length);
+        } else {
+          expect(ranges.ranges.length).toBe(0);
+        }
+      }
 
-          rangeCheck("five", ["blort!$A$1"]);
-          rangeCheck("amigos", ["blort!$A$3:$C$3"]);
-          rangeCheck("verts", ["blort!$E$1:$E$3"]);
-          rangeCheck("squares", ["blort!$B$5:$C$6"]);
-          rangeCheck("sheets", ["blort!$B$7", "foo!$B$7"]);
-          rangeCheck("thing1", ["blort!$G$1"]);
-          rangeCheck("thing2", ["blort!$G$1"]);
-          rangeCheck("once", []);
-          rangeCheck("twice", ["blort!$G$2"]);
-        });
+      rangeCheck("five", ["blort!$A$1"]);
+      rangeCheck("amigos", ["blort!$A$3:$C$3"]);
+      rangeCheck("verts", ["blort!$E$1:$E$3"]);
+      rangeCheck("squares", ["blort!$B$5:$C$6"]);
+      rangeCheck("sheets", ["blort!$B$7", "foo!$B$7"]);
+      rangeCheck("thing1", ["blort!$G$1"]);
+      rangeCheck("thing2", ["blort!$G$1"]);
+      rangeCheck("once", []);
+      rangeCheck("twice", ["blort!$G$2"]);
     });
 
     describe("Duplicate Rows", () => {
-      it("Duplicate rows with styles properly", () => {
+      it("Duplicate rows with styles properly", async () => {
         const fileDuplicateRowTestFile = excelTestDataPath("duplicate-row-styles.xlsx");
         const wb = new Workbook();
-        return wb.xlsx.readFile(fileDuplicateRowTestFile).then(() => {
-          const ws = wb.getWorksheet("duplicateTest");
-          if (!ws) {
-            throw new Error("Worksheet not found");
-          }
+        await wb.xlsx.readFile(fileDuplicateRowTestFile);
+        const ws = wb.getWorksheet("duplicateTest");
+        if (!ws) {
+          throw new Error("Worksheet not found");
+        }
 
-          ws.getCell("A1").value = "OneInfo";
-          ws.getCell("A2").value = "TwoInfo";
-          ws.duplicateRow(1, 2);
+        ws.getCell("A1").value = "OneInfo";
+        ws.getCell("A2").value = "TwoInfo";
+        ws.duplicateRow(1, 2);
 
-          return wb.xlsx
-            .writeFile(TEST_XLSX_FILE_NAME)
-            .then(() => {
-              const wb2 = new Workbook();
-              return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-            })
-            .then((wb2: any) => {
-              const ws2 = wb2.getWorksheet("duplicateTest");
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("duplicateTest")!;
 
-              expect(ws2.getCell("A2").value).toBe("OneInfo");
-              expect(ws2.getCell("A2").style).toBe(ws2.getCell("A1").style);
-              expect(ws2.getCell("A3").value).toBe("OneInfo");
-              expect(ws2.getCell("A3").style).toBe(ws2.getCell("A1").style);
-              expect(ws2.getCell("A4").value).toBeNull();
-            });
-        });
+        expect(ws2.getCell("A2").value).toBe("OneInfo");
+        expect(ws2.getCell("A2").style).toBe(ws2.getCell("A1").style);
+        expect(ws2.getCell("A3").value).toBe("OneInfo");
+        expect(ws2.getCell("A3").style).toBe(ws2.getCell("A1").style);
+        expect(ws2.getCell("A4").value).toBeNull();
       });
 
-      it("Duplicate rows replacing properly", () => {
+      it("Duplicate rows replacing properly", async () => {
         const wb = new Workbook();
         const ws = wb.addWorksheet("duplicateTest");
         ws.getCell("A1").value = "OneInfo";
@@ -1179,23 +1068,18 @@ describe("Workbook", () => {
         ws.getCell("A4").value = "FourInfo";
         ws.duplicateRow(1, 2, false);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME)
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            const ws2 = wb2.getWorksheet("duplicateTest");
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("duplicateTest")!;
 
-            expect(ws2.getCell("A1").value).toBe("OneInfo");
-            expect(ws2.getCell("A2").value).toBe("OneInfo");
-            expect(ws2.getCell("A3").value).toBe("OneInfo");
-            expect(ws2.getCell("A4").value).toBe("FourInfo");
-          });
+        expect(ws2.getCell("A1").value).toBe("OneInfo");
+        expect(ws2.getCell("A2").value).toBe("OneInfo");
+        expect(ws2.getCell("A3").value).toBe("OneInfo");
+        expect(ws2.getCell("A4").value).toBe("FourInfo");
       });
 
-      it("Duplicate rows shifting properly", () => {
+      it("Duplicate rows shifting properly", async () => {
         const wb = new Workbook();
         const ws = wb.addWorksheet("duplicateTest");
         ws.getCell("A1").value = "OneInfo";
@@ -1204,23 +1088,18 @@ describe("Workbook", () => {
         ws.getCell("A4").value = "FourInfo";
         ws.duplicateRow(1, 2, true);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME)
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            const ws2 = wb2.getWorksheet("duplicateTest");
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("duplicateTest")!;
 
-            expect(ws2.getCell("A1").value).toBe("OneInfo");
-            expect(ws2.getCell("A2").value).toBe("OneInfo");
-            expect(ws2.getCell("A3").value).toBe("OneInfo");
-            expect(ws2.getCell("A4").value).toBe("TwoInfo");
-          });
+        expect(ws2.getCell("A1").value).toBe("OneInfo");
+        expect(ws2.getCell("A2").value).toBe("OneInfo");
+        expect(ws2.getCell("A3").value).toBe("OneInfo");
+        expect(ws2.getCell("A4").value).toBe("TwoInfo");
       });
 
-      it("Duplicate rows with height properly", () => {
+      it("Duplicate rows with height properly", async () => {
         const wb = new Workbook();
         const ws = wb.addWorksheet("duplicateTest");
         ws.getCell("A1").value = "OneInfo";
@@ -1229,25 +1108,20 @@ describe("Workbook", () => {
         ws.getRow(2).height = 15;
         ws.duplicateRow(1, 1, true);
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME)
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            const ws2 = wb2.getWorksheet("duplicateTest");
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("duplicateTest")!;
 
-            expect(ws2.getCell("A1").value).toBe("OneInfo");
-            expect(ws2.getCell("A2").value).toBe("OneInfo");
-            expect(ws2.getRow(1).height).toBe(ws2.getRow(2).height);
-            expect(ws2.getRow(1).height).not.toBe(ws2.getRow(3).height);
-          });
+        expect(ws2.getCell("A1").value).toBe("OneInfo");
+        expect(ws2.getCell("A2").value).toBe("OneInfo");
+        expect(ws2.getRow(1).height).toBe(ws2.getRow(2).height);
+        expect(ws2.getRow(1).height).not.toBe(ws2.getRow(3).height);
       });
     });
 
     describe("Merge Cells", () => {
-      it("serialises and deserialises properly", () => {
+      it("serialises and deserialises properly", async () => {
         const wb = new Workbook();
         const ws = wb.addWorksheet("blort");
 
@@ -1256,28 +1130,23 @@ describe("Workbook", () => {
 
         ws.mergeCells("B2:C3");
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME)
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            const ws2 = wb2.getWorksheet("blort");
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("blort")!;
 
-            expect(ws2.getCell("B2").value).toBe("B2");
-            expect(ws2.getCell("B3").value).toBe("B2");
-            expect(ws2.getCell("C2").value).toBe("B2");
-            expect(ws2.getCell("C3").value).toBe("B2");
+        expect(ws2.getCell("B2").value).toBe("B2");
+        expect(ws2.getCell("B3").value).toBe("B2");
+        expect(ws2.getCell("C2").value).toBe("B2");
+        expect(ws2.getCell("C3").value).toBe("B2");
 
-            expect(ws2.getCell("B2").type).toBe(ValueType.String);
-            expect(ws2.getCell("B3").type).toBe(ValueType.Merge);
-            expect(ws2.getCell("C2").type).toBe(ValueType.Merge);
-            expect(ws2.getCell("C3").type).toBe(ValueType.Merge);
-          });
+        expect(ws2.getCell("B2").type).toBe(ValueType.String);
+        expect(ws2.getCell("B3").type).toBe(ValueType.Merge);
+        expect(ws2.getCell("C2").type).toBe(ValueType.Merge);
+        expect(ws2.getCell("C3").type).toBe(ValueType.Merge);
       });
 
-      it("styles", () => {
+      it("styles", async () => {
         const wb = new Workbook();
         const ws = wb.addWorksheet("blort");
 
@@ -1295,48 +1164,43 @@ describe("Workbook", () => {
 
         const dblRed = testUtils.styles.borders.doubleRed;
 
-        return wb.xlsx
-          .writeFile(TEST_XLSX_FILE_NAME)
-          .then(() => {
-            const wb2 = new Workbook();
-            return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-          })
-          .then((wb2: any) => {
-            const ws2 = wb2.getWorksheet("blort");
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("blort")!;
 
-            // Non-border styles are identical on all cells
-            for (const addr of ["B2", "B3", "C2", "C3"]) {
-              expect(ws2.getCell(addr).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-              expect(ws2.getCell(addr).fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
-              expect(ws2.getCell(addr).alignment).toEqual(
-                testUtils.styles.namedAlignments.middleCentre
-              );
-              expect(ws2.getCell(addr).numFmt).toBe(testUtils.styles.numFmts.numFmt1);
-            }
+        // Non-border styles are identical on all cells
+        for (const addr of ["B2", "B3", "C2", "C3"]) {
+          expect(ws2.getCell(addr).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+          expect(ws2.getCell(addr).fill).toEqual(testUtils.styles.fills.blueWhiteHGrad);
+          expect(ws2.getCell(addr).alignment).toEqual(
+            testUtils.styles.namedAlignments.middleCentre
+          );
+          expect(ws2.getCell(addr).numFmt).toBe(testUtils.styles.numFmts.numFmt1);
+        }
 
-            // Borders are position-aware after round-trip
-            expect(ws2.getCell("B2").border).toEqual({
-              left: dblRed.left,
-              top: dblRed.top
-            });
-            expect(ws2.getCell("C2").border).toEqual({
-              right: dblRed.right,
-              top: dblRed.top
-            });
-            expect(ws2.getCell("B3").border).toEqual({
-              left: dblRed.left,
-              bottom: dblRed.bottom
-            });
-            expect(ws2.getCell("C3").border).toEqual({
-              right: dblRed.right,
-              bottom: dblRed.bottom
-            });
-          });
+        // Borders are position-aware after round-trip
+        expect(ws2.getCell("B2").border).toEqual({
+          left: dblRed.left,
+          top: dblRed.top
+        });
+        expect(ws2.getCell("C2").border).toEqual({
+          right: dblRed.right,
+          top: dblRed.top
+        });
+        expect(ws2.getCell("B3").border).toEqual({
+          left: dblRed.left,
+          bottom: dblRed.bottom
+        });
+        expect(ws2.getCell("C3").border).toEqual({
+          right: dblRed.right,
+          bottom: dblRed.bottom
+        });
       });
     });
   });
 
-  it("spliced meat and ham", () => {
+  it("spliced meat and ham", async () => {
     const wb = new Workbook();
     const sheets = [
       "splice.rows.removeOnly",
@@ -1357,49 +1221,20 @@ describe("Workbook", () => {
 
     testUtils.createTestBook(wb, "xlsx", sheets);
 
-    return wb.xlsx
-      .writeFile(TEST_XLSX_FILE_NAME)
-      .then(() => {
-        const wb2 = new Workbook();
-        return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-      })
-      .then((wb2: any) => {
-        testUtils.checkTestBook(wb2, "xlsx", sheets, options);
-      });
+    await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+    const wb2 = new Workbook();
+    await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+    testUtils.checkTestBook(wb2, "xlsx", sheets, options);
   });
 
-  it("throws an error when xlsx file not found", () => {
+  it("throws an error when xlsx file not found", async () => {
     const wb = new Workbook();
-    let success = 0;
-    return wb.xlsx
-      .readFile("./wb.doesnotexist.xlsx")
-      .then((/* wb2 */) => {
-        success = 1;
-      })
-      .catch((/* error */) => {
-        success = 2;
-        // expect the right kind of error
-      })
-      .then(() => {
-        expect(success).toBe(2);
-      });
+    await expect(wb.xlsx.readFile("./wb.doesnotexist.xlsx")).rejects.toThrow();
   });
 
-  it("throws an error when csv file not found", () => {
+  it("throws an error when csv file not found", async () => {
     const wb = new Workbook();
-    let success = 0;
-    return wb
-      .readCsvFile("./wb.doesnotexist.csv")
-      .then((/* wb */) => {
-        success = 1;
-      })
-      .catch((/* error */) => {
-        success = 2;
-        // expect the right kind of error
-      })
-      .then(() => {
-        expect(success).toBe(2);
-      });
+    await expect(wb.readCsvFile("./wb.doesnotexist.csv")).rejects.toThrow();
   });
   it("throw an error for wrong data type", async () => {
     const wb = new Workbook();
@@ -1414,7 +1249,7 @@ describe("Workbook", () => {
   });
 
   describe("Sheet Views", () => {
-    it("frozen panes", () => {
+    it("frozen panes", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("frozen");
       ws.views = [
@@ -1430,65 +1265,60 @@ describe("Workbook", () => {
       ];
       ws.getCell("A1").value = "Let it Snow!";
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("frozen");
-          expect(ws2).toBeTruthy();
-          expect(ws2.getCell("A1").value).toBe("Let it Snow!");
-          expect(ws2.views).toEqual([
-            {
-              workbookViewId: 0,
-              state: "frozen",
-              xSplit: 2,
-              ySplit: 3,
-              topLeftCell: "C4",
-              activeCell: "D5",
-              showRuler: true,
-              showGridLines: true,
-              showRowColHeaders: true,
-              zoomScale: 100,
-              zoomScaleNormal: 100,
-              rightToLeft: false,
-              tabSelected: false
-            },
-            {
-              workbookViewId: 0,
-              state: "frozen",
-              xSplit: 0,
-              ySplit: 1,
-              topLeftCell: "A2",
-              showRuler: true,
-              showGridLines: true,
-              showRowColHeaders: true,
-              zoomScale: 100,
-              zoomScaleNormal: 100,
-              rightToLeft: false,
-              tabSelected: false
-            },
-            {
-              workbookViewId: 0,
-              state: "frozen",
-              xSplit: 1,
-              ySplit: 0,
-              topLeftCell: "B1",
-              showRuler: true,
-              showGridLines: true,
-              showRowColHeaders: true,
-              zoomScale: 100,
-              zoomScaleNormal: 100,
-              rightToLeft: false,
-              tabSelected: false
-            }
-          ]);
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("frozen")!;
+      expect(ws2).toBeTruthy();
+      expect(ws2.getCell("A1").value).toBe("Let it Snow!");
+      expect(ws2.views).toEqual([
+        {
+          workbookViewId: 0,
+          state: "frozen",
+          xSplit: 2,
+          ySplit: 3,
+          topLeftCell: "C4",
+          activeCell: "D5",
+          showRuler: true,
+          showGridLines: true,
+          showRowColHeaders: true,
+          zoomScale: 100,
+          zoomScaleNormal: 100,
+          rightToLeft: false,
+          tabSelected: false
+        },
+        {
+          workbookViewId: 0,
+          state: "frozen",
+          xSplit: 0,
+          ySplit: 1,
+          topLeftCell: "A2",
+          showRuler: true,
+          showGridLines: true,
+          showRowColHeaders: true,
+          zoomScale: 100,
+          zoomScaleNormal: 100,
+          rightToLeft: false,
+          tabSelected: false
+        },
+        {
+          workbookViewId: 0,
+          state: "frozen",
+          xSplit: 1,
+          ySplit: 0,
+          topLeftCell: "B1",
+          showRuler: true,
+          showGridLines: true,
+          showRowColHeaders: true,
+          zoomScale: 100,
+          zoomScaleNormal: 100,
+          rightToLeft: false,
+          tabSelected: false
+        }
+      ]);
     });
 
-    it("serialises split panes", () => {
+    it("serialises split panes", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("split");
       ws.views = [
@@ -1510,68 +1340,63 @@ describe("Workbook", () => {
       ];
       ws.getCell("A1").value = "Do the splits!";
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          const ws2 = wb2.getWorksheet("split");
-          expect(ws2).toBeTruthy();
-          expect(ws2.getCell("A1").value).toBe("Do the splits!");
-          expect(ws2.views).toEqual([
-            {
-              workbookViewId: 0,
-              state: "split",
-              xSplit: 2000,
-              ySplit: 3000,
-              topLeftCell: "C4",
-              activeCell: "D5",
-              activePane: "bottomRight",
-              showRuler: true,
-              showGridLines: true,
-              showRowColHeaders: true,
-              zoomScale: 100,
-              zoomScaleNormal: 100,
-              rightToLeft: false,
-              tabSelected: false
-            },
-            {
-              workbookViewId: 0,
-              state: "split",
-              xSplit: 0,
-              ySplit: 1500,
-              topLeftCell: "A10",
-              activePane: "bottomLeft",
-              showRuler: true,
-              showGridLines: true,
-              showRowColHeaders: true,
-              zoomScale: 100,
-              zoomScaleNormal: 100,
-              rightToLeft: false,
-              tabSelected: false
-            },
-            {
-              workbookViewId: 0,
-              state: "split",
-              xSplit: 1500,
-              ySplit: 0,
-              topLeftCell: undefined,
-              activePane: "topRight",
-              showRuler: true,
-              showGridLines: true,
-              showRowColHeaders: true,
-              zoomScale: 100,
-              zoomScaleNormal: 100,
-              rightToLeft: false,
-              tabSelected: false
-            }
-          ]);
-        });
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("split")!;
+      expect(ws2).toBeTruthy();
+      expect(ws2.getCell("A1").value).toBe("Do the splits!");
+      expect(ws2.views).toEqual([
+        {
+          workbookViewId: 0,
+          state: "split",
+          xSplit: 2000,
+          ySplit: 3000,
+          topLeftCell: "C4",
+          activeCell: "D5",
+          activePane: "bottomRight",
+          showRuler: true,
+          showGridLines: true,
+          showRowColHeaders: true,
+          zoomScale: 100,
+          zoomScaleNormal: 100,
+          rightToLeft: false,
+          tabSelected: false
+        },
+        {
+          workbookViewId: 0,
+          state: "split",
+          xSplit: 0,
+          ySplit: 1500,
+          topLeftCell: "A10",
+          activePane: "bottomLeft",
+          showRuler: true,
+          showGridLines: true,
+          showRowColHeaders: true,
+          zoomScale: 100,
+          zoomScaleNormal: 100,
+          rightToLeft: false,
+          tabSelected: false
+        },
+        {
+          workbookViewId: 0,
+          state: "split",
+          xSplit: 1500,
+          ySplit: 0,
+          topLeftCell: undefined,
+          activePane: "topRight",
+          showRuler: true,
+          showGridLines: true,
+          showRowColHeaders: true,
+          zoomScale: 100,
+          zoomScaleNormal: 100,
+          rightToLeft: false,
+          tabSelected: false
+        }
+      ]);
     });
 
-    it("multiple book views", () => {
+    it("multiple book views", async () => {
       const wb = new Workbook();
       wb.views = [testUtils.views.book.visible, testUtils.views.book.hidden];
 
@@ -1581,21 +1406,16 @@ describe("Workbook", () => {
       const ws2 = wb.addWorksheet("two");
       ws2.views = [testUtils.views.sheet.split];
 
-      return wb.xlsx
-        .writeFile(TEST_XLSX_FILE_NAME)
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then((wb2: any) => {
-          expect(wb2.views).toEqual(wb.views);
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.views).toEqual(wb.views);
 
-          const ws1b = wb2.getWorksheet("one");
-          expect(ws1b.views).toEqual(ws1.views);
+      const ws1b = wb2.getWorksheet("one")!;
+      expect(ws1b!.views).toEqual(ws1.views);
 
-          const ws2b = wb2.getWorksheet("two");
-          expect(ws2b.views).toEqual(ws2.views);
-        });
+      const ws2b = wb2.getWorksheet("two")!;
+      expect(ws2b!.views).toEqual(ws2.views);
     });
   });
 });
