@@ -109,7 +109,21 @@ export type { NodeInput } from "@excel/stream/workbook-reader";
 // Utilities
 // =============================================================================
 
-export * from "@excel/utils/sheet-utils";
+// Cell address encoding/decoding (0-indexed)
+export {
+  decodeCol,
+  encodeCol,
+  decodeRow,
+  encodeRow,
+  decodeCell,
+  encodeCell,
+  decodeRange,
+  encodeRange
+} from "@excel/utils/address";
+export type { CellAddress, SheetRange, Origin } from "@excel/utils/address";
+
+// Worksheet data conversion option types
+export type { SheetToJSONOptions, AddJSONOptions, AddAOAOptions } from "@excel/worksheet";
 
 // Date conversion (Excel serial dates <-> JS Date)
 export { dateToExcel, excelToDate } from "@utils/utils.base";

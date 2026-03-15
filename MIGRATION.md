@@ -26,8 +26,9 @@ This document describes user-facing breaking changes and recommended migrations.
 18. [Excel: `Image` type renamed to `ImageData`](#excel-image-type-renamed-to-imagedata)
 19. [Excel: `ZipOptions` renamed to `WorkbookZipOptions`](#excel-zipoptions-renamed-to-workbookzipoptions)
 20. [Excel: error types changed to structured error classes](#excel-error-types-changed-to-structured-error-classes)
-21. [EventEmitter: behavioral changes for Node.js parity](#eventemitter-behavioral-changes-for-nodejs-parity)
-22. [Package: new subpath exports](#package-new-subpath-exports)
+21. [Excel: sheet-utils removed — use native Worksheet/Workbook methods](#excel-sheet-utils-removed)
+22. [EventEmitter: behavioral changes for Node.js parity](#eventemitter-behavioral-changes-for-nodejs-parity)
+23. [Package: new subpath exports](#package-new-subpath-exports)
 
 ---
 
@@ -540,6 +541,90 @@ try {
   if (isExcelError(e)) { ... }
 }
 ```
+
+---
+
+## Excel: sheet-utils removed
+
+### What changed
+
+The `sheet-utils` module (standalone utility functions ported from SheetJS) has been removed. All functionality is now available as native methods on `Worksheet` and `Workbook`, providing a more idiomatic API.
+
+The following exports have been removed from the main entry point:
+
+- `jsonToSheet()`, `sheetAddJson()`, `sheetToJson()`
+- `aoaToSheet()`, `sheetAddAoa()`, `sheetToAoa()`
+- `bookNew()`, `bookAppendSheet()`
+- `JSONRow`, `JSON2SheetOpts`, `Sheet2JSONOpts`, `SheetAddJSONOpts`, `AOA2SheetOpts`
+
+The following exports are **unchanged** (moved to a dedicated `address` module internally, but same signatures):
+
+- `decodeCol`, `encodeCol`, `decodeRow`, `encodeRow`
+- `decodeCell`, `encodeCell`, `decodeRange`, `encodeRange`
+- `CellAddress`, `SheetRange`, `Origin`
+
+### How to migrate
+
+#### Worksheet data conversion
+
+| Before                                     | After                                |
+| ------------------------------------------ | ------------------------------------ |
+| `sheetToJson(ws)`                          | `ws.toJSON()`                        |
+| `sheetToJson(ws, { header: 1 })`           | `ws.toJSON({ header: 1 })`           |
+| `sheetToJson(ws, { header: "A" })`         | `ws.toJSON({ header: "A" })`         |
+| `sheetToJson(ws, { raw: false })`          | `ws.toJSON({ raw: false })`          |
+| `sheetToJson(ws, { defval: "" })`          | `ws.toJSON({ defaultValue: "" })`    |
+| `sheetToJson(ws, { blankrows: true })`     | `ws.toJSON({ blankRows: true })`     |
+| `sheetAddJson(ws, data)`                   | `ws.addJSON(data)`                   |
+| `sheetAddJson(ws, data, { origin: "C3" })` | `ws.addJSON(data, { origin: "C3" })` |
+| `sheetToAoa(ws)`                           | `ws.toAOA()`                         |
+| `sheetAddAoa(ws, data)`                    | `ws.addAOA(data)`                    |
+| `sheetAddAoa(ws, data, { origin: -1 })`    | `ws.addAOA(data, { origin: -1 })`    |
+
+#### Creating worksheets from data
+
+| Before                                    | After                                                           |
+| ----------------------------------------- | --------------------------------------------------------------- |
+| `jsonToSheet(data)`                       | `wb.addWorksheet("Sheet1").addJSON(data)`                       |
+| `jsonToSheet(data, { skipHeader: true })` | `wb.addWorksheet("Sheet1").addJSON(data, { skipHeader: true })` |
+| `aoaToSheet(data)`                        | `wb.addWorksheet("Sheet1").addAOA(data)`                        |
+| `aoaToSheet(data, { origin: "C3" })`      | `wb.addWorksheet("Sheet1").addAOA(data, { origin: "C3" })`      |
+
+#### Workbook functions
+
+| Before                            | After                        |
+| --------------------------------- | ---------------------------- |
+| `bookNew()`                       | `new Workbook()`             |
+| `bookAppendSheet(wb, ws, "name")` | `wb.importSheet(ws, "name")` |
+
+#### Option type renames
+
+| Before             | After                       |
+| ------------------ | --------------------------- |
+| `JSON2SheetOpts`   | `AddJSONOptions`            |
+| `SheetAddJSONOpts` | `AddJSONOptions` (merged)   |
+| `Sheet2JSONOpts`   | `SheetToJSONOptions`        |
+| `AOA2SheetOpts`    | `AddAOAOptions`             |
+| `JSONRow`          | `Record<string, CellValue>` |
+| `defval`           | `defaultValue`              |
+| `blankrows`        | `blankRows`                 |
+
+#### New: chaining support
+
+`addJSON()` and `addAOA()` return `this`, enabling chaining:
+
+```ts
+const wb = new Workbook();
+wb.addWorksheet("Data")
+  .addJSON([{ name: "Alice", age: 30 }])
+  .addAOA([["extra row"]], { origin: -1 });
+```
+
+### Notes
+
+- Address functions (`decodeCol`, `encodeCol`, etc.) are unchanged — same signatures, same imports.
+- `cellDates` option has been removed (it was declared but never implemented).
+- The deprecated `Range` type alias (for `SheetRange`) has been removed. Use `SheetRange` directly.
 
 ---
 

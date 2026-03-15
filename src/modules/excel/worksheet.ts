@@ -19,6 +19,8 @@ import { uint8ArrayToBase64 } from "@utils/utils";
 import { makePivotTable, type PivotTable, type PivotTableModel } from "@excel/pivot-table";
 import { copyStyle } from "@excel/utils/copy-style";
 import { applyMergeBorders, collectMergeBorders } from "@excel/utils/merge-borders";
+import { formatCellValue } from "@excel/utils/cell-format";
+import { decodeCell, decodeRange, encodeCol, type Origin } from "@excel/utils/address";
 import type { Workbook } from "@excel/workbook";
 import type {
   AddImageRange,
@@ -1527,6 +1529,422 @@ class Worksheet {
     // Preserve loaded drawing data (charts, etc.)
     this._drawing = value.drawing;
   }
+
+  // ===========================================================================
+  // Data Conversion — JSON
+  // ===========================================================================
+
+  /**
+   * Convert worksheet data to a JSON array.
+   *
+   * @example
+   * // Default: first row as headers, returns array of objects
+   * const data = ws.toJSON();
+   * // => [{name: "Alice", age: 30}, {name: "Bob", age: 25}]
+   *
+   * @example
+   * // Array of arrays
+   * const aoa = ws.toJSON({ header: 1 });
+   * // => [["name", "age"], ["Alice", 30], ["Bob", 25]]
+   *
+   * @example
+   * // Column letters as keys
+   * const cols = ws.toJSON({ header: "A" });
+   * // => [{A: "name", B: "age"}, {A: "Alice", B: 30}]
+   */
+  toJSON<T = Record<string, CellValue>>(opts?: SheetToJSONOptions): T[] {
+    const o = opts || {};
+
+    // Determine range
+    let startRow = 1;
+    let endRow = this.rowCount;
+    let startCol = 1;
+    let endCol = this.columnCount;
+
+    if (o.range !== undefined) {
+      if (typeof o.range === "number") {
+        startRow = o.range + 1; // 0-indexed to 1-indexed
+      } else if (typeof o.range === "string") {
+        const r = decodeRange(o.range);
+        startRow = r.s.r + 1;
+        endRow = r.e.r + 1;
+        startCol = r.s.c + 1;
+        endCol = r.e.c + 1;
+      }
+    }
+
+    if (endRow < startRow || endCol < startCol) {
+      return [];
+    }
+
+    const headerOpt = o.header;
+
+    // header: 1 — return array of arrays
+    if (headerOpt === 1) {
+      const result: CellValue[][] = [];
+      const includeBlank = o.blankRows !== false;
+
+      for (let row = startRow; row <= endRow; row++) {
+        const rowData: CellValue[] = [];
+        let isEmpty = true;
+
+        for (let col = startCol; col <= endCol; col++) {
+          const cell = this.getCell(row, col);
+          const val = o.raw === false ? _getCellDisplayText(cell, o.dateFormat).trim() : cell.value;
+
+          if (val != null && val !== "") {
+            rowData[col - startCol] = val;
+            isEmpty = false;
+          } else if (o.defaultValue !== undefined) {
+            rowData[col - startCol] = o.defaultValue;
+          } else {
+            rowData[col - startCol] = null;
+          }
+        }
+
+        if (!isEmpty || includeBlank) {
+          result.push(rowData);
+        }
+      }
+
+      return result as T[];
+    }
+
+    // header: "A" — use column letters as keys
+    if (headerOpt === "A") {
+      const result: Record<string, CellValue>[] = [];
+      const includeBlank = o.blankRows === true;
+
+      for (let row = startRow; row <= endRow; row++) {
+        const rowData: Record<string, CellValue> = {};
+        let isEmpty = true;
+
+        for (let col = startCol; col <= endCol; col++) {
+          const cell = this.getCell(row, col);
+          const val = o.raw === false ? _getCellDisplayText(cell, o.dateFormat).trim() : cell.value;
+          const key = encodeCol(col - 1);
+
+          if (val != null && val !== "") {
+            rowData[key] = val;
+            isEmpty = false;
+          } else if (o.defaultValue !== undefined) {
+            rowData[key] = o.defaultValue;
+          }
+        }
+
+        if (!isEmpty || includeBlank) {
+          result.push(rowData);
+        }
+      }
+
+      return result as T[];
+    }
+
+    // header: string[] — use provided array as keys
+    if (Array.isArray(headerOpt)) {
+      const result: Record<string, CellValue>[] = [];
+      const includeBlank = o.blankRows === true;
+
+      for (let row = startRow; row <= endRow; row++) {
+        const rowData: Record<string, CellValue> = {};
+        let isEmpty = true;
+
+        for (let col = startCol; col <= endCol; col++) {
+          const colIdx = col - startCol;
+          const key = headerOpt[colIdx] ?? `__EMPTY_${colIdx}`;
+          const cell = this.getCell(row, col);
+          const val = o.raw === false ? _getCellDisplayText(cell, o.dateFormat).trim() : cell.value;
+
+          if (val != null && val !== "") {
+            rowData[key] = val;
+            isEmpty = false;
+          } else if (o.defaultValue !== undefined) {
+            rowData[key] = o.defaultValue;
+          }
+        }
+
+        if (!isEmpty || includeBlank) {
+          result.push(rowData);
+        }
+      }
+
+      return result as T[];
+    }
+
+    // Default: first row as header, disambiguate duplicates
+    const headers: string[] = [];
+    const headerCounts: Record<string, number> = {};
+
+    for (let col = startCol; col <= endCol; col++) {
+      const cell = this.getCell(startRow, col);
+      const val = cell.value;
+      let header = val != null ? String(val) : `__EMPTY_${col - startCol}`;
+
+      if (headerCounts[header] !== undefined) {
+        headerCounts[header]++;
+        header = `${header}_${headerCounts[header]}`;
+      } else {
+        headerCounts[header] = 0;
+      }
+
+      headers.push(header);
+    }
+
+    const result: Record<string, CellValue>[] = [];
+    const dataStartRow = startRow + 1;
+    const includeBlank = o.blankRows === true;
+
+    for (let row = dataStartRow; row <= endRow; row++) {
+      const rowData: Record<string, CellValue> = {};
+      let isEmpty = true;
+
+      for (let col = startCol; col <= endCol; col++) {
+        const cell = this.getCell(row, col);
+        const val = o.raw === false ? _getCellDisplayText(cell, o.dateFormat).trim() : cell.value;
+        const key = headers[col - startCol];
+
+        if (val != null && val !== "") {
+          rowData[key] = val;
+          isEmpty = false;
+        } else if (o.defaultValue !== undefined) {
+          rowData[key] = o.defaultValue;
+        }
+      }
+
+      if (!isEmpty || includeBlank) {
+        result.push(rowData);
+      }
+    }
+
+    return result as T[];
+  }
+
+  /**
+   * Add data from a JSON array to this worksheet.
+   * Each object's keys become column headers (written in the first row unless skipHeader is set).
+   *
+   * @example
+   * ws.addJSON([{name: "Alice", age: 30}, {name: "Bob", age: 25}]);
+   *
+   * @returns this (for chaining)
+   */
+  addJSON(data: Record<string, CellValue>[], opts?: AddJSONOptions): this {
+    if (data.length === 0) {
+      return this;
+    }
+
+    const o = opts || {};
+
+    // Determine starting position
+    let startRow = 1;
+    let startCol = 1;
+    if (o.origin !== undefined) {
+      const resolved = _resolveOrigin(o.origin, this.rowCount);
+      startRow = resolved.row;
+      startCol = resolved.col;
+    }
+
+    // Determine headers
+    const allKeys = new Set<string>();
+    data.forEach(row => Object.keys(row).forEach(k => allKeys.add(k)));
+    const headers = o.header ? [...o.header] : [...allKeys];
+    if (o.header) {
+      allKeys.forEach(k => {
+        if (!headers.includes(k)) {
+          headers.push(k);
+        }
+      });
+    }
+
+    let rowNum = startRow;
+
+    // Write header row
+    if (!o.skipHeader) {
+      headers.forEach((h, colIdx) => {
+        this.getCell(rowNum, startCol + colIdx).value = h;
+      });
+      rowNum++;
+    }
+
+    // Write data rows
+    for (const row of data) {
+      headers.forEach((key, colIdx) => {
+        const val = row[key];
+        if (val === null && o.nullError) {
+          this.getCell(rowNum, startCol + colIdx).value = { error: "#NULL!" };
+        } else if (val !== undefined && val !== null) {
+          this.getCell(rowNum, startCol + colIdx).value = val;
+        }
+      });
+      rowNum++;
+    }
+
+    return this;
+  }
+
+  // ===========================================================================
+  // Data Conversion — Array of Arrays
+  // ===========================================================================
+
+  /**
+   * Convert worksheet data to an array of arrays.
+   *
+   * @example
+   * const aoa = ws.toAOA();
+   * // => [["Name", "Age"], ["Alice", 30], ["Bob", 25]]
+   */
+  toAOA(): CellValue[][] {
+    const result: CellValue[][] = [];
+
+    this.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      const rowData: CellValue[] = [];
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        rowData[colNumber - 1] = cell.value;
+      });
+      result[rowNumber - 1] = rowData;
+    });
+
+    return result;
+  }
+
+  /**
+   * Add data from an array of arrays to this worksheet.
+   *
+   * @example
+   * ws.addAOA([["Name", "Age"], ["Alice", 30], ["Bob", 25]]);
+   *
+   * @returns this (for chaining)
+   */
+  addAOA(data: CellValue[][], opts?: AddAOAOptions): this {
+    if (data.length === 0) {
+      return this;
+    }
+
+    let startRow = 1;
+    let startCol = 1;
+    if (opts?.origin !== undefined) {
+      const resolved = _resolveOrigin(opts.origin, this.rowCount);
+      startRow = resolved.row;
+      startCol = resolved.col;
+    }
+
+    data.forEach((row, rowIdx) => {
+      if (!row) {
+        return;
+      }
+      row.forEach((val, colIdx) => {
+        if (val !== undefined && val !== null) {
+          this.getCell(startRow + rowIdx, startCol + colIdx).value = val;
+        }
+      });
+    });
+
+    return this;
+  }
+}
+
+// =============================================================================
+// Option Types for Data Conversion
+// =============================================================================
+
+export interface SheetToJSONOptions {
+  /**
+   * Control output format:
+   * - `1`: Generate an array of arrays
+   * - `"A"`: Row object keys are literal column labels (A, B, C, ...)
+   * - `string[]`: Use specified strings as keys in row objects
+   * - `undefined`: Read and disambiguate first row as keys
+   */
+  header?: 1 | "A" | string[];
+  /**
+   * Override range:
+   * - `number`: Use worksheet range but set starting row to the value (0-indexed)
+   * - `string`: Use specified range (A1-style bounded range string)
+   * - `undefined`: Use worksheet range
+   */
+  range?: number | string;
+  /** Use raw values (true, default) or formatted text strings (false) */
+  raw?: boolean;
+  /** Default value for empty cells */
+  defaultValue?: CellValue;
+  /** Include blank rows in output (default: true for AOA, false for objects) */
+  blankRows?: boolean;
+  /** Override format for date values (only applies when raw: false) */
+  dateFormat?: string;
+}
+
+export interface AddJSONOptions {
+  /** Use specified field order (default: Object.keys from data) */
+  header?: string[];
+  /** If true, do not include header row in output */
+  skipHeader?: boolean;
+  /** Starting position: cell address string, {c, r} object, row number (0-indexed), or -1 to append */
+  origin?: Origin;
+  /** If true, emit #NULL! error cells for null values */
+  nullError?: boolean;
+}
+
+export interface AddAOAOptions {
+  /** Starting position: cell address string, {c, r} object, row number (0-indexed), or -1 to append */
+  origin?: Origin;
+}
+
+// =============================================================================
+// Private Helpers
+// =============================================================================
+
+/** Resolve an Origin value to 1-indexed {row, col} for internal use */
+function _resolveOrigin(origin: Origin, rowCount: number): { row: number; col: number } {
+  if (typeof origin === "string") {
+    const addr = decodeCell(origin);
+    return { row: addr.r + 1, col: addr.c + 1 };
+  }
+  if (typeof origin === "number") {
+    if (origin === -1) {
+      return { row: rowCount + 1, col: 1 };
+    }
+    return { row: origin + 1, col: 1 };
+  }
+  return { row: origin.r + 1, col: origin.c + 1 };
+}
+
+/** Get formatted display text for a cell value */
+function _getCellDisplayText(cell: Cell, dateFormat?: string): string {
+  const value = cell.value;
+  const numFmt = cell.numFmt;
+  const fmt = typeof numFmt === "string" ? numFmt : (numFmt?.formatCode ?? "General");
+
+  if (value == null) {
+    return "";
+  }
+
+  if (
+    value instanceof Date ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  ) {
+    return formatCellValue(value, fmt, dateFormat);
+  }
+
+  // Formula type — use the result value
+  if (typeof value === "object" && "formula" in value) {
+    const result = value.result;
+    if (result == null) {
+      return "";
+    }
+    if (
+      result instanceof Date ||
+      typeof result === "number" ||
+      typeof result === "boolean" ||
+      typeof result === "string"
+    ) {
+      return formatCellValue(result, fmt, dateFormat);
+    }
+  }
+
+  // Fallback to cell.text for other types (rich text, hyperlink, error, etc.)
+  return cell.text;
 }
 
 export { Worksheet, type WorksheetModel };

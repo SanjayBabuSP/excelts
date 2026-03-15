@@ -466,6 +466,43 @@ class Workbook {
   }
 
   // ===========================================================================
+  // Sheet Import
+  // ===========================================================================
+
+  /**
+   * Import a worksheet from another workbook (or a standalone worksheet).
+   * Copies all cell values, styles, and column properties to a new worksheet
+   * in this workbook.
+   *
+   * @param source - The worksheet to import
+   * @param name - Optional name for the new worksheet (defaults to source name)
+   * @returns The newly created worksheet
+   */
+  importSheet(source: Worksheet, name?: string): Worksheet {
+    const newWs = this.addWorksheet(name ?? source.name);
+
+    // Copy column properties
+    source.columns.forEach((col, idx) => {
+      if (col?.width) {
+        newWs.getColumn(idx + 1).width = col.width;
+      }
+    });
+
+    // Copy all cell values and styles
+    source.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        const newCell = newWs.getCell(rowNumber, colNumber);
+        newCell.value = cell.value;
+        if (cell.style) {
+          newCell.style = cell.style;
+        }
+      });
+    });
+
+    return newWs;
+  }
+
+  // ===========================================================================
   // Format Operations (xlsx)
   // ===========================================================================
 

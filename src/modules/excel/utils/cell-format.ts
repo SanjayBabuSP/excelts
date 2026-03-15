@@ -6,7 +6,7 @@
  * scientific notation, fractions, elapsed time, and more
  */
 
-import { excelToDate, splitFormatSections } from "@utils/utils";
+import { excelToDate, splitFormatSections, dateToExcel } from "@utils/utils";
 
 // =============================================================================
 // Built-in Format Table (Excel numFmtId to format string mapping)
@@ -909,3 +909,76 @@ export const cellFormat = {
   isDateFormat,
   isGeneral
 };
+
+// =============================================================================
+// Display Text Helpers (used by Worksheet.toJSON)
+// =============================================================================
+
+/**
+ * Check if format is a pure time format (no date components like y, m for month, d).
+ * Time formats only contain: h, m (minutes in time context), s, AM/PM.
+ * Excludes elapsed time formats like [h]:mm:ss which need the full serial number.
+ */
+export function isTimeOnlyFormat(fmt: string): boolean {
+  const cleaned = fmt.replace(/"[^"]*"/g, "");
+  if (/\[[hms]\]/i.test(cleaned)) {
+    return false;
+  }
+  const withoutBrackets = cleaned.replace(/\[[^\]]*\]/g, "");
+  const hasTimeComponents = /[hs]/i.test(withoutBrackets) || /AM\/PM|A\/P/i.test(withoutBrackets);
+  const hasDateComponents = /[yd]/i.test(withoutBrackets);
+  if (hasDateComponents) {
+    return false;
+  }
+  if (/m/i.test(withoutBrackets) && !hasTimeComponents) {
+    return false;
+  }
+  return hasTimeComponents;
+}
+
+/**
+ * Check if format is a date format (contains y, d, or month-m).
+ * More precise than the internal isDateFormat — correctly handles elapsed time
+ * formats like [h]:mm:ss (not a date format) and distinguishes month-m from minute-m.
+ */
+export function isDateDisplayFormat(fmt: string): boolean {
+  const cleaned = fmt.replace(/"[^"]*"/g, "");
+  if (/\[[hms]\]/i.test(cleaned)) {
+    return false;
+  }
+  const withoutBrackets = cleaned.replace(/\[[^\]]*\]/g, "");
+  if (/[yd]/i.test(withoutBrackets)) {
+    return true;
+  }
+  if (/m/i.test(withoutBrackets)) {
+    const hasTimeComponents = /[hs]/i.test(withoutBrackets) || /AM\/PM|A\/P/i.test(withoutBrackets);
+    if (!hasTimeComponents) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Format a value according to the given format string.
+ * Handles Date objects with timezone-independent Excel serial conversion.
+ */
+export function formatCellValue(
+  value: Date | number | boolean | string,
+  fmt: string,
+  dateFormat?: string
+): string {
+  if (value instanceof Date) {
+    let serial = dateToExcel(value);
+    if (isTimeOnlyFormat(fmt)) {
+      serial = serial % 1;
+      if (serial < 0) {
+        serial += 1;
+      }
+      return format(fmt, serial);
+    }
+    const actualFmt = dateFormat && isDateDisplayFormat(fmt) ? dateFormat : fmt;
+    return format(actualFmt, serial);
+  }
+  return format(fmt, value);
+}
