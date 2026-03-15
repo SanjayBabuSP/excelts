@@ -25,7 +25,7 @@ const expectations: any[] = [
     tests: ["render", "renderIn", "parse"]
   },
   {
-    title: "core.xml",
+    title: "core.xml - with metadata",
     create: () => new CoreXform(),
     preparedModel: {
       creator: "Test Creator",

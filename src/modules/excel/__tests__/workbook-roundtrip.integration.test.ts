@@ -18,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Test file path
-const SAMPLE_FILE_PATH = path.join(__dirname, "../test/data/workbook-roundtrip.xlsx");
+const SAMPLE_FILE_PATH = path.join(__dirname, "data/workbook-roundtrip.xlsx");
 
 /**
  * Atomic exclusion rules for XML comparison.

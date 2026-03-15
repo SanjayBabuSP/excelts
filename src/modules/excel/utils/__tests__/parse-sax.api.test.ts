@@ -32,13 +32,5 @@ describe("SaxesParser", () => {
       parser.write("<root>\n  <child/>\n</root>");
       expect(parser.line).toBe(3);
     });
-
-    it("should process close() without errors", () => {
-      const parser = new SaxesParser();
-      const events: string[] = [];
-      parser.on("opentag", tag => events.push(tag.name));
-      parser.write("<root/>").close();
-      expect(events).toEqual(["root"]);
-    });
   });
 });

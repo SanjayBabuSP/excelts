@@ -15,106 +15,77 @@ describe("WorkbookReader", () => {
     it("xlsx file", async () => {
       const wb = testUtils.createTestBook(new Workbook(), "xlsx");
 
-      return wb.xlsx
-        .writeFile(TEST_FILE_NAME)
-        .then(() => testUtils.checkTestBookReader(TEST_FILE_NAME));
+      await wb.xlsx.writeFile(TEST_FILE_NAME);
+      await testUtils.checkTestBookReader(TEST_FILE_NAME);
     }, 30000);
   });
 
   describe("#readFile", () => {
     describe("Row limit", () => {
-      it("should bail out if the file contains more rows than the limit", () => {
+      it("should bail out if the file contains more rows than the limit", async () => {
         const workbook = new Workbook();
         // The Fibonacci sheet has 19 rows
-        return workbook.xlsx.readFile(streamTestDataPath("fibonacci.xlsx"), { maxRows: 10 }).then(
-          () => {
-            throw new Error("Promise unexpectedly fulfilled");
-          },
-          err => {
-            expect(err.message).toBe("Max row count (10) exceeded");
-          }
-        );
+        await expect(
+          workbook.xlsx.readFile(streamTestDataPath("fibonacci.xlsx"), { maxRows: 10 })
+        ).rejects.toThrow("Max row count (10) exceeded");
       });
 
       it("should fail fast on a huge file", async () => {
         const workbook = new Workbook();
-        return workbook.xlsx.readFile(streamTestDataPath("huge.xlsx"), { maxRows: 100 }).then(
-          () => {
-            throw new Error("Promise unexpectedly fulfilled");
-          },
-          err => {
-            expect(err.message).toBe("Max row count (100) exceeded");
-          }
-        );
+        await expect(
+          workbook.xlsx.readFile(streamTestDataPath("huge.xlsx"), { maxRows: 100 })
+        ).rejects.toThrow("Max row count (100) exceeded");
       }, 30000);
 
-      it("should parse fine if the limit is not exceeded", () => {
+      it("should parse fine if the limit is not exceeded", async () => {
         const workbook = new Workbook();
-        return workbook.xlsx.readFile(streamTestDataPath("fibonacci.xlsx"), { maxRows: 20 });
+        await workbook.xlsx.readFile(streamTestDataPath("fibonacci.xlsx"), { maxRows: 20 });
+        expect(workbook.worksheets.length).toBeGreaterThan(0);
       });
     });
 
     describe("Column limit", () => {
-      it("should bail out if the file contains more cells than the limit", () => {
+      it("should bail out if the file contains more cells than the limit", async () => {
         const workbook = new Workbook();
         // The many-columns sheet has 20 columns in row 2
-        return workbook.xlsx
-          .readFile(streamTestDataPath("many-columns.xlsx"), {
-            maxCols: 15
-          })
-          .then(
-            () => {
-              throw new Error("Promise unexpectedly fulfilled");
-            },
-            err => {
-              expect(err.message).toBe("Max column count (15) exceeded");
-            }
-          );
+        await expect(
+          workbook.xlsx.readFile(streamTestDataPath("many-columns.xlsx"), { maxCols: 15 })
+        ).rejects.toThrow("Max column count (15) exceeded");
       });
 
       it("should fail fast on a huge file", async () => {
         const workbook = new Workbook();
-        return workbook.xlsx.readFile(streamTestDataPath("huge.xlsx"), { maxCols: 10 }).then(
-          () => {
-            throw new Error("Promise unexpectedly fulfilled");
-          },
-          err => {
-            expect(err.message).toBe("Max column count (10) exceeded");
-          }
-        );
+        await expect(
+          workbook.xlsx.readFile(streamTestDataPath("huge.xlsx"), { maxCols: 10 })
+        ).rejects.toThrow("Max column count (10) exceeded");
       }, 30000);
 
-      it("should parse fine if the limit is not exceeded", () => {
+      it("should parse fine if the limit is not exceeded", async () => {
         const workbook = new Workbook();
-        return workbook.xlsx.readFile(streamTestDataPath("many-columns.xlsx"), { maxCols: 40 });
+        await workbook.xlsx.readFile(streamTestDataPath("many-columns.xlsx"), { maxCols: 40 });
+        expect(workbook.worksheets.length).toBeGreaterThan(0);
       });
     });
   });
 
   describe("#read", () => {
     describe("Row limit", () => {
-      it("should bail out if the file contains more rows than the limit", () => {
+      it("should bail out if the file contains more rows than the limit", async () => {
         const workbook = new Workbook();
         // The Fibonacci sheet has 19 rows
-        return workbook.xlsx
-          .read(fs.createReadStream(streamTestDataPath("fibonacci.xlsx")), {
+        await expect(
+          workbook.xlsx.read(fs.createReadStream(streamTestDataPath("fibonacci.xlsx")), {
             maxRows: 10
           })
-          .then(
-            () => {
-              throw new Error("Promise unexpectedly fulfilled");
-            },
-            err => {
-              expect(err.message).toBe("Max row count (10) exceeded");
-            }
-          );
+        ).rejects.toThrow("Max row count (10) exceeded");
       });
 
-      it("should parse fine if the limit is not exceeded", () => {
+      it("should parse fine if the limit is not exceeded", async () => {
         const workbook = new Workbook();
-        return workbook.xlsx.read(fs.createReadStream(streamTestDataPath("fibonacci.xlsx")), {
+        await workbook.xlsx.read(fs.createReadStream(streamTestDataPath("fibonacci.xlsx")), {
           maxRows: 20
         });
+        expect(workbook.worksheets.length).toBeGreaterThan(0);
       });
     });
   });
@@ -449,30 +420,24 @@ describe("WorkbookReader", () => {
       process.removeListener("unhandledRejection", unhandledRejectionHandler);
     });
 
-    it("should reject the promise with the XML parse error", () => {
+    it("should reject the promise with the XML parse error", async () => {
       const workbook = new Workbook();
-      return workbook.xlsx
-        .readFile(streamTestDataPath("invalid-xml.xlsx"))
-        .then(
-          () => {
-            throw new Error("Promise unexpectedly fulfilled");
-          },
-          err => {
-            expect(err.message).toBe("3:1: text data outside of root node.");
-            // Wait a tick before checking for an unhandled rejection
-            return new Promise(setImmediate);
-          }
-        )
-        .then(() => {
-          expect(unhandledRejection).toBeUndefined();
-        });
+      await expect(workbook.xlsx.readFile(streamTestDataPath("invalid-xml.xlsx"))).rejects.toThrow(
+        "3:1: text data outside of root node."
+      );
+
+      // Wait a tick to verify no unhandled rejection fires
+      await new Promise(setImmediate);
+      expect(unhandledRejection).toBeUndefined();
     });
   });
 
   describe("with a spreadsheet that is missing some files in the zip container", () => {
-    it("should not break", () => {
+    it("should not break", async () => {
       const workbook = new Workbook();
-      return workbook.xlsx.readFile(streamTestDataPath("missing-bits.xlsx"));
+      await workbook.xlsx.readFile(streamTestDataPath("missing-bits.xlsx"));
+      // Should load gracefully despite missing zip entries
+      expect(workbook.worksheets.length).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -486,6 +451,10 @@ describe("WorkbookReader", () => {
     });
 
     describe("with image`s tl anchor", () => {
+      it("should have at least one image in the test file", () => {
+        expect(worksheet.getImages().length).toBeGreaterThan(0);
+      });
+
       it("Should integer part of col equals nativeCol", () => {
         worksheet.getImages().forEach(image => {
           expect(Math.floor(image.range.tl.col)).toBe(image.range.tl.nativeCol);
@@ -564,9 +533,10 @@ describe("WorkbookReader", () => {
     });
   });
   describe("with a spreadsheet containing a defined name that kinda looks like it contains a range", () => {
-    it("should not crash", () => {
+    it("should not crash", async () => {
       const workbook = new Workbook();
-      return workbook.xlsx.read(fs.createReadStream(streamTestDataPath("bogus-defined-name.xlsx")));
+      await workbook.xlsx.read(fs.createReadStream(streamTestDataPath("bogus-defined-name.xlsx")));
+      expect(workbook.worksheets.length).toBeGreaterThanOrEqual(0);
     });
   });
 });

@@ -26,7 +26,7 @@ describe("OOXML _xHHHH_ escape in table column headers (issue #94)", () => {
     //
     // On load, Table.store() overwrites cell C1 with column.name,
     // so if _x000a_ isn't decoded the user sees the literal string.
-    const filePath = path.join(__dirname, "../test/data/excelts_bug_repro.xlsx");
+    const filePath = path.join(__dirname, "data/ooxml-escape-table-header.xlsx");
     const buffer = fs.readFileSync(filePath);
 
     const wb = new Workbook();

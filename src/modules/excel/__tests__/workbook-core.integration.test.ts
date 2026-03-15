@@ -205,7 +205,7 @@ describe("Workbook", () => {
 
     it("readFile should not throw", async () => {
       const wb = new Workbook();
-      await wb.xlsx.readFile(excelTestDataPath("readfile-no-throw.xlsx"));
+      await wb.xlsx.readFile(excelTestDataPath("graceful-read-no-throw.xlsx"));
       expect(wb.worksheets.length).toBeGreaterThan(0);
     });
 
@@ -218,7 +218,7 @@ describe("Workbook", () => {
     describe("1904 dates", () => {
       it("reads 1904-based workbook", async () => {
         const wb = new Workbook();
-        await wb.xlsx.readFile(excelTestDataPath("1904.xlsx"));
+        await wb.xlsx.readFile(excelTestDataPath("date-system-1904.xlsx"));
 
         expect(wb.properties.date1904).toBe(true);
         const ws = wb.getWorksheet("Sheet1")!;
@@ -299,7 +299,7 @@ describe("Workbook", () => {
 
     it("<contentType /> element", async () => {
       const wb = new Workbook();
-      await wb.xlsx.readFile(excelTestDataPath("1519293514-KRISHNAPATNAM_LINE_UP.xlsx"));
+      await wb.xlsx.readFile(excelTestDataPath("content-type-element.xlsx"));
       expect(wb.worksheets.length).toBeGreaterThan(0);
     });
 
@@ -444,14 +444,14 @@ describe("Workbook", () => {
     describe("regressions", () => {
       it("worksheet should not be undefined", async () => {
         const wb = new Workbook();
-        await wb.xlsx.readFile(excelTestDataPath("test-pr-1220.xlsx"));
+        await wb.xlsx.readFile(excelTestDataPath("worksheet-not-undefined.xlsx"));
         const ws = wb.getWorksheet(1);
         expect(ws).toBeDefined();
       });
 
       it("reads worksheet hidden state", async () => {
         const wb = new Workbook();
-        await wb.xlsx.readFile(excelTestDataPath("test-pr-728.xlsx"));
+        await wb.xlsx.readFile(excelTestDataPath("hidden-worksheet-state.xlsx"));
 
         const expected: Record<number, string> = { 1: "visible", 2: "hidden", 3: "visible" };
         wb.eachSheet((ws, sheetId) => {
@@ -461,7 +461,7 @@ describe("Workbook", () => {
 
       it("reads workbook with whole-column defined names", async () => {
         const wb = new Workbook();
-        await wb.xlsx.readFile(excelTestDataPath("test-pr-567.xlsx"));
+        await wb.xlsx.readFile(excelTestDataPath("whole-column-defined-names.xlsx"));
         expect(wb.worksheets.length).toBeGreaterThan(0);
       });
 
@@ -1137,7 +1137,7 @@ describe("Workbook", () => {
 
     describe("Duplicate Rows", () => {
       it("Duplicate rows with styles properly", () => {
-        const fileDuplicateRowTestFile = excelTestDataPath("duplicateRowTest.xlsx");
+        const fileDuplicateRowTestFile = excelTestDataPath("duplicate-row-styles.xlsx");
         const wb = new Workbook();
         return wb.xlsx.readFile(fileDuplicateRowTestFile).then(() => {
           const ws = wb.getWorksheet("duplicateTest");

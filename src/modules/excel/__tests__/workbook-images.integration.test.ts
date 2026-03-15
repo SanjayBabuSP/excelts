@@ -771,9 +771,9 @@ describe("Workbook", () => {
         expect(images[1].range!.tl.nativeRow).toBe(1);
       });
 
-      it("loads issue #57 test file and duplicates row with images", async () => {
+      it("loads test file and duplicates row with images", async () => {
         const wb = new Workbook();
-        await wb.xlsx.readFile(excelTestDataPath("issue57-duplicate-row-images.xlsx"));
+        await wb.xlsx.readFile(excelTestDataPath("duplicate-row-images.xlsx"));
 
         // The test file has a drawing on sheet3 with an image at row 12
         const ws = wb.getWorksheet("Sheet3");

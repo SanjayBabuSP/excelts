@@ -45,7 +45,7 @@ describe("DataValidations", () => {
     const TEST_XLSX_FILE_NAME = testFilePath("pr-1204.data-validations.test");
 
     const wb = new Workbook();
-    await wb.xlsx.readFile(excelTestDataPath("test-pr-1204.xlsx"));
+    await wb.xlsx.readFile(excelTestDataPath("data-validation-text-length.xlsx"));
 
     const expected = {
       E1: {

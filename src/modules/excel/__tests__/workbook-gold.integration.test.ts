@@ -5,7 +5,7 @@ import { makeTestDataPath } from "@test/utils";
 const excelTestDataPath = makeTestDataPath(import.meta.url, "./data");
 
 // =============================================================================
-// This spec is based around a gold standard Excel workbook 'gold.xlsx'
+// This spec is based around a gold standard Excel workbook 'gold-standard.xlsx'
 
 describe("Workbook", () => {
   describe("Gold fixture", () => {
@@ -13,7 +13,7 @@ describe("Workbook", () => {
       let wb;
       beforeAll(() => {
         wb = new Workbook();
-        return wb.xlsx.readFile(excelTestDataPath("gold.xlsx"));
+        return wb.xlsx.readFile(excelTestDataPath("gold-standard.xlsx"));
       });
 
       it("reads Values sheet", () => {

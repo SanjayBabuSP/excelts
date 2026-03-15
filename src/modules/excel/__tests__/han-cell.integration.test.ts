@@ -16,7 +16,7 @@ const TEST_DATA_DIR = path.join(__dirname, "data");
 
 describe("HAN CELL xlsx files", () => {
   it("loads xlsx with namespace prefixes and reads shared strings", async () => {
-    const filePath = path.join(TEST_DATA_DIR, "han-cell-test.xlsx");
+    const filePath = path.join(TEST_DATA_DIR, "han-cell-namespace-prefixes.xlsx");
     const buffer = fs.readFileSync(filePath);
 
     const workbook = new Workbook();

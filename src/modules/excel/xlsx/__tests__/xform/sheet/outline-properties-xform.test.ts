@@ -34,7 +34,7 @@ const expectations = [
     tests: ["render", "renderIn", "parse"]
   },
   {
-    title: "summaryRight",
+    title: "summaryBelow + summaryRight",
     create() {
       return new OutlinePropertiesXform();
     },

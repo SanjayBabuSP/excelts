@@ -3,17 +3,30 @@ import { TwoCellAnchorXform } from "@excel/xlsx/xform/drawing/two-cell-anchor-xf
 
 describe("TwoCellAnchorXform", () => {
   describe("reconcile", () => {
-    it("should not throw on null picture", () => {
+    it("handles null picture gracefully", () => {
       const twoCell = new TwoCellAnchorXform();
-      expect(() => twoCell.reconcile({ picture: null }, {})).not.toThrow();
+      const model: any = { picture: null };
+      expect(() => twoCell.reconcile(model, {})).not.toThrow();
+      // Model should remain intact with null picture
+      expect(model.picture).toBeNull();
     });
-    it("should not throw on null tl", () => {
+
+    it("handles missing tl anchor gracefully", () => {
       const twoCell = new TwoCellAnchorXform();
-      expect(() => twoCell.reconcile({ br: { col: 1, row: 1 } } as any, {})).not.toThrow();
+      const model: any = { br: { col: 1, row: 1 } };
+      expect(() => twoCell.reconcile(model, {})).not.toThrow();
+      // br should be preserved, tl should remain absent
+      expect(model.br).toEqual({ col: 1, row: 1 });
+      expect(model.tl).toBeUndefined();
     });
-    it("should not throw on null br", () => {
+
+    it("handles missing br anchor gracefully", () => {
       const twoCell = new TwoCellAnchorXform();
-      expect(() => twoCell.reconcile({ tl: { col: 1, row: 1 } } as any, {})).not.toThrow();
+      const model: any = { tl: { col: 1, row: 1 } };
+      expect(() => twoCell.reconcile(model, {})).not.toThrow();
+      // tl should be preserved, br should remain absent
+      expect(model.tl).toEqual({ col: 1, row: 1 });
+      expect(model.br).toBeUndefined();
     });
   });
 });

@@ -22,22 +22,17 @@ describe("WorkbookWriter", () => {
   });
 
   describe("Serialise", () => {
-    it("xlsx file", () => {
+    it("xlsx file", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: true
       };
       const wb = testUtils.createTestBook(new WorkbookWriter(options), "xlsx");
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          testUtils.checkTestBook(wb2, "xlsx");
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx");
     });
 
     it("hyperlink with query arguments corrupts workbook", async () => {
@@ -106,7 +101,7 @@ describe("WorkbookWriter", () => {
       }
     });
 
-    it("shared formula", () => {
+    it("shared formula", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: false
@@ -123,36 +118,31 @@ describe("WorkbookWriter", () => {
       ws.getCell("B2").value = { sharedFormula: "A1", result: 4 };
 
       ws.commit();
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          const ws2 = wb2.getWorksheet("Hello")!;
-          expect(ws2.getCell("A1").value).toEqual({
-            formula: "ROW()+COLUMN()",
-            shareType: "shared",
-            ref: "A1:B2",
-            result: 2
-          });
-          expect(ws2.getCell("B1").value).toEqual({
-            sharedFormula: "A1",
-            result: 3
-          });
-          expect(ws2.getCell("A2").value).toEqual({
-            sharedFormula: "A1",
-            result: 3
-          });
-          expect(ws2.getCell("B2").value).toEqual({
-            sharedFormula: "A1",
-            result: 4
-          });
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+      expect(ws2.getCell("A1").value).toEqual({
+        formula: "ROW()+COLUMN()",
+        shareType: "shared",
+        ref: "A1:B2",
+        result: 2
+      });
+      expect(ws2.getCell("B1").value).toEqual({
+        sharedFormula: "A1",
+        result: 3
+      });
+      expect(ws2.getCell("A2").value).toEqual({
+        sharedFormula: "A1",
+        result: 3
+      });
+      expect(ws2.getCell("B2").value).toEqual({
+        sharedFormula: "A1",
+        result: 4
+      });
     });
 
-    it("auto filter", () => {
+    it("auto filter", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: false
@@ -169,39 +159,29 @@ describe("WorkbookWriter", () => {
       ws.autoFilter = "A1:B1";
       ws.commit();
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          const ws2 = wb2.getWorksheet("Hello")!;
-          expect(ws2.autoFilter).toBe("A1:B1");
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+      expect(ws2.autoFilter).toBe("A1:B1");
     });
 
-    it("Without styles", () => {
+    it("Without styles", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: false
       };
       const wb = testUtils.createTestBook(new WorkbookWriter(options), "xlsx");
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          testUtils.checkTestBook(wb2, "xlsx", undefined, {
-            checkStyles: false
-          });
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx", undefined, {
+        checkStyles: false
+      });
     });
 
-    it("serializes row styles and columns properly", () => {
+    it("serializes row styles and columns properly", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: true
@@ -229,40 +209,31 @@ describe("WorkbookWriter", () => {
       ws.getCell("B3").value = "B3";
       ws.getCell("C3").value = "C3";
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          const ws2 = wb2.getWorksheet("blort")!;
-          ["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"].forEach(address => {
-            expect(ws2.getCell(address).value).toBe(address);
-          });
-          expect(ws2.getCell("B1").font).toEqual(testUtils.styles.fonts.comicSansUdB16);
-          expect(ws2.getCell("B1").alignment).toEqual(
-            testUtils.styles.namedAlignments.middleCentre
-          );
-          expect(ws2.getCell("A2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-          expect(ws2.getCell("B2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-          expect(ws2.getCell("C2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-          expect(ws2.getCell("B3").font).toEqual(testUtils.styles.fonts.comicSansUdB16);
-          expect(ws2.getCell("B3").alignment).toEqual(
-            testUtils.styles.namedAlignments.middleCentre
-          );
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("blort")!;
+      ["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"].forEach(address => {
+        expect(ws2.getCell(address).value).toBe(address);
+      });
+      expect(ws2.getCell("B1").font).toEqual(testUtils.styles.fonts.comicSansUdB16);
+      expect(ws2.getCell("B1").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
+      expect(ws2.getCell("A2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+      expect(ws2.getCell("B2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+      expect(ws2.getCell("C2").font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
+      expect(ws2.getCell("B3").font).toEqual(testUtils.styles.fonts.comicSansUdB16);
+      expect(ws2.getCell("B3").alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
 
-          expect(ws2.getColumn(2).font).toEqual(testUtils.styles.fonts.comicSansUdB16);
-          expect(ws2.getColumn(2).alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
-          expect(ws2.getColumn(2).width).toBe(9);
+      expect(ws2.getColumn(2).font).toEqual(testUtils.styles.fonts.comicSansUdB16);
+      expect(ws2.getColumn(2).alignment).toEqual(testUtils.styles.namedAlignments.middleCentre);
+      expect(ws2.getColumn(2).width).toBe(9);
 
-          expect(ws2.getColumn(4).width).toBe(undefined);
+      expect(ws2.getColumn(4).width).toBe(undefined);
 
-          expect(ws2.getRow(2).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
-        });
+      expect(ws2.getRow(2).font).toEqual(testUtils.styles.fonts.broadwayRedOutline20);
     });
 
-    it("rich text", () => {
+    it("rich text", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: true
@@ -286,57 +257,45 @@ describe("WorkbookWriter", () => {
       ws.getCell("B1").value = "plain text";
 
       ws.commit();
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          const ws2 = wb2.getWorksheet("Hello")!;
-          expect(ws2.getCell("A1").value).toEqual({
-            richText: [
-              {
-                font: { color: { argb: "FF0000" } },
-                text: "red "
-              },
-              {
-                font: { color: { argb: "00FF00" }, bold: true },
-                text: " bold green"
-              }
-            ]
-          });
-          expect(ws2.getCell("B1").value).toBe("plain text");
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+      expect(ws2.getCell("A1").value).toEqual({
+        richText: [
+          {
+            font: { color: { argb: "FF0000" } },
+            text: "red "
+          },
+          {
+            font: { color: { argb: "00FF00" }, bold: true },
+            text: " bold green"
+          }
+        ]
+      });
+      expect(ws2.getCell("B1").value).toBe("plain text");
     });
 
-    it("A lot of sheets", function () {
-      let i;
+    it("A lot of sheets", async () => {
       const wb = new WorkbookWriter({
         filename: TEST_XLSX_FILE_NAME
       });
       const numSheets = 90;
-      // add numSheets sheets
-      for (i = 1; i <= numSheets; i++) {
+      for (let i = 1; i <= numSheets; i++) {
         const ws = wb.addWorksheet(`sheet${i}`);
         ws.getCell("A1").value = i;
       }
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          for (i = 1; i <= numSheets; i++) {
-            const ws2 = wb2.getWorksheet(`sheet${i}`)!;
-            expect(ws2).toBeTruthy();
-            expect(ws2.getCell("A1").value).toBe(i);
-          }
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      for (let i = 1; i <= numSheets; i++) {
+        const ws2 = wb2.getWorksheet(`sheet${i}`)!;
+        expect(ws2).toBeTruthy();
+        expect(ws2.getCell("A1").value).toBe(i);
+      }
     });
 
-    it("addRow", () => {
+    it("addRow", async () => {
       const options = {
         stream: fs.createWriteStream(TEST_XLSX_FILE_NAME, { flags: "w" }),
         useStyles: true,
@@ -347,10 +306,15 @@ describe("WorkbookWriter", () => {
       const newRow = worksheet.addRow(["hello"]);
       newRow.commit();
       worksheet.commit();
-      return workbook.commit();
+      await workbook.commit();
+
+      // Verify the written file is a valid XLSX
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      expect(wb2.getWorksheet("test")!.getCell("A1").value).toBe("hello");
     });
 
-    it("defined names", () => {
+    it("defined names", async () => {
       const wb = new WorkbookWriter({
         filename: TEST_XLSX_FILE_NAME
       });
@@ -372,27 +336,22 @@ describe("WorkbookWriter", () => {
       ws.getCell("E3").value = "verde";
       ws.getCell("E3").name = "greens";
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          const ws2 = wb2.getWorksheet("blort")!;
-          expect(ws2.getCell("A1").name).toBe("five");
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("blort")!;
+      expect(ws2.getCell("A1").name).toBe("five");
 
-          expect(ws2.getCell("A3").name).toBe("threes");
-          expect(ws2.getCell("B3").name).toBe("threes");
-          expect(ws2.getCell("B3").name).toBe("threes");
+      expect(ws2.getCell("A3").name).toBe("threes");
+      expect(ws2.getCell("B3").name).toBe("threes");
+      expect(ws2.getCell("B3").name).toBe("threes");
 
-          expect(ws2.getCell("E1").name).toBe("greens");
-          expect(ws2.getCell("E2").name).toBe("greens");
-          expect(ws2.getCell("E3").name).toBe("greens");
-        });
+      expect(ws2.getCell("E1").name).toBe("greens");
+      expect(ws2.getCell("E2").name).toBe("greens");
+      expect(ws2.getCell("E3").name).toBe("greens");
     });
 
-    it("does not escape special xml characters", () => {
+    it("does not escape special xml characters", async () => {
       const wb = new WorkbookWriter({
         filename: TEST_XLSX_FILE_NAME,
         useSharedStrings: true
@@ -402,52 +361,37 @@ describe("WorkbookWriter", () => {
 
       ws.getCell("A1").value = xmlCharacters;
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          const ws2 = wb2.getWorksheet("blort")!;
-          expect(ws2.getCell("A1").value).toBe(xmlCharacters);
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("blort")!;
+      expect(ws2.getCell("A1").value).toBe(xmlCharacters);
     });
 
-    it("serializes and deserializes dataValidations", () => {
+    it("serializes and deserializes dataValidations", async () => {
       const options = { filename: TEST_XLSX_FILE_NAME };
       const wb = testUtils.createTestBook(new WorkbookWriter(options), "xlsx", ["dataValidations"]);
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          testUtils.checkTestBook(wb2, "xlsx", ["dataValidations"]);
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx", ["dataValidations"]);
     });
 
-    it("with zip compression option", () => {
+    it("with zip compression option", async () => {
       const options = {
         filename: TEST_XLSX_FILE_NAME,
         useStyles: true,
         zip: {
-          zlib: { level: 9 } // Sets the compression level.
+          zlib: { level: 9 }
         }
       };
       const wb = testUtils.createTestBook(new WorkbookWriter(options), "xlsx", ["dataValidations"]);
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          testUtils.checkTestBook(wb2, "xlsx", ["dataValidations"]);
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx", ["dataValidations"]);
     });
 
     it("writes notes", async () => {
@@ -612,15 +556,10 @@ describe("WorkbookWriter", () => {
         "conditionalFormatting"
       ]);
 
-      return wb
-        .commit()
-        .then(() => {
-          const wb2 = new Workbook();
-          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
-        })
-        .then(wb2 => {
-          testUtils.checkTestBook(wb2, "xlsx", ["conditionalFormatting"]);
-        });
+      await wb.commit();
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      testUtils.checkTestBook(wb2, "xlsx", ["conditionalFormatting"]);
     });
 
     it("with conditional formatting that contains numFmt (#1814)", async () => {

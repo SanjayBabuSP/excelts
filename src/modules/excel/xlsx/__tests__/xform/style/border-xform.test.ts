@@ -62,7 +62,7 @@ const expectations = [
     tests: ["render", "renderIn", "parse"]
   },
   {
-    title: "Missing Style",
+    title: "Missing Style - render",
     create() {
       return new BorderXform();
     },
@@ -76,7 +76,7 @@ const expectations = [
     tests: ["render", "renderIn"]
   },
   {
-    title: "Missing Style",
+    title: "Missing Style - parse",
     create() {
       return new BorderXform();
     },
