@@ -355,6 +355,10 @@ class XLSX {
     await this.addContentTypes(zip, model);
     await this.addOfficeRels(zip, model);
     await this.addWorkbookRels(zip, model);
+    // Write workbook.xml before worksheets so that streaming readers can
+    // resolve worksheet names/ids/state from workbook metadata before
+    // processing worksheet entries.
+    await this.addWorkbook(zip, model);
     await this.addWorksheets(zip, model);
     await this.addSharedStrings(zip, model);
     this.addDrawings(zip, model);
@@ -365,7 +369,6 @@ class XLSX {
     await this.addFeaturePropertyBag(zip, model);
     await this.addMedia(zip, model);
     await Promise.all([this.addApp(zip, model), this.addCore(zip, model)]);
-    await this.addWorkbook(zip, model);
   }
 
   // ===========================================================================

@@ -597,8 +597,11 @@ export abstract class WorkbookReaderBase<
           sheetNo = getWorksheetNoFromWorksheetPath(normalizedPath)?.toString();
           if (sheetNo) {
             // Performance: only wait for sharedStrings when they are actually needed.
+            // Also require workbook.xml to be parsed so worksheet name, id, and state
+            // can be resolved from workbook metadata before the worksheet event fires.
             const hasPrerequisites =
               !!this.workbookRels &&
+              !!this.model &&
               (this.options.sharedStrings !== "cache" || !!this.sharedStrings);
             if (hasPrerequisites) {
               yield* this._parseWorksheet(iterateStream(entry), sheetNo);

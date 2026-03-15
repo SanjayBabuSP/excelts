@@ -437,4 +437,136 @@ describe("WorkbookReader", () => {
       expect(rowCount).toBe(500);
     });
   });
+
+  // ===========================================================================
+  // Worksheet Name Resolution (GitHub exceljs/exceljs#3025)
+  // ===========================================================================
+
+  describe("worksheet name resolution", () => {
+    it("preserves worksheet names with sharedStrings: 'cache'", async () => {
+      const buffer = await buildXlsxBuffer(wb => {
+        wb.addWorksheet("Alpha").getCell("A1").value = 1;
+        wb.addWorksheet("Beta").getCell("A1").value = 2;
+        wb.addWorksheet("Gamma").getCell("A1").value = 3;
+      });
+
+      const reader = new WorkbookReader(buffer, {
+        worksheets: "emit",
+        sharedStrings: "cache",
+        styles: "cache"
+      });
+
+      const names: string[] = [];
+      for await (const ws of reader) {
+        names.push(ws.name);
+        for await (const _row of ws) {
+          /* drain */
+        }
+      }
+      expect(names).toEqual(["Alpha", "Beta", "Gamma"]);
+    });
+
+    it("preserves worksheet names with sharedStrings: 'ignore'", async () => {
+      const buffer = await buildXlsxBuffer(wb => {
+        wb.addWorksheet("First Sheet").getCell("A1").value = 1;
+        wb.addWorksheet("Second Sheet").getCell("A1").value = 2;
+        wb.addWorksheet("Third Sheet").getCell("A1").value = 3;
+      });
+
+      // This is the exact scenario from exceljs/exceljs#3025:
+      // When sharedStrings is NOT "cache", the hasPrerequisites check
+      // may pass before workbook.xml is parsed, causing worksheet names
+      // to be default ("Sheet1", "Sheet2", ...) instead of the actual names.
+      const reader = new WorkbookReader(buffer, {
+        worksheets: "emit",
+        sharedStrings: "ignore",
+        styles: "ignore"
+      });
+
+      const names: string[] = [];
+      for await (const ws of reader) {
+        names.push(ws.name);
+        for await (const _row of ws) {
+          /* drain */
+        }
+      }
+      expect(names).toEqual(["First Sheet", "Second Sheet", "Third Sheet"]);
+    });
+
+    it("preserves worksheet names via event API with sharedStrings: 'ignore'", async () => {
+      const buffer = await buildXlsxBuffer(wb => {
+        wb.addWorksheet("Report").getCell("A1").value = "data";
+        wb.addWorksheet("Summary").getCell("A1").value = "summary";
+      });
+
+      const reader = new WorkbookReader(buffer, {
+        worksheets: "emit",
+        sharedStrings: "ignore",
+        styles: "ignore"
+      });
+
+      const names: string[] = [];
+      await new Promise<void>((resolve, reject) => {
+        reader.on("worksheet", ws => {
+          names.push(ws.name);
+          ws.on("row", () => {});
+          ws.on("finished", () => {});
+        });
+        reader.on("end", () => resolve());
+        reader.on("error", reject);
+        reader.read();
+      });
+
+      expect(names).toEqual(["Report", "Summary"]);
+    });
+
+    it("preserves worksheet names with sharedStrings: 'emit'", async () => {
+      const buffer = await buildXlsxBuffer(wb => {
+        wb.addWorksheet("Emit Sheet A").getCell("A1").value = 1;
+        wb.addWorksheet("Emit Sheet B").getCell("A1").value = 2;
+      });
+
+      const reader = new WorkbookReader(buffer, {
+        worksheets: "emit",
+        sharedStrings: "emit",
+        styles: "ignore"
+      });
+
+      const names: string[] = [];
+      for await (const ws of reader) {
+        names.push(ws.name);
+        for await (const _row of ws) {
+          /* drain */
+        }
+      }
+      expect(names).toEqual(["Emit Sheet A", "Emit Sheet B"]);
+    });
+
+    it("preserves worksheet state (hidden/veryHidden) with sharedStrings: 'ignore'", async () => {
+      const buffer = await buildXlsxBuffer(wb => {
+        wb.addWorksheet("Visible");
+        wb.addWorksheet("Hidden", { state: "hidden" });
+        wb.addWorksheet("VeryHidden", { state: "veryHidden" });
+      });
+
+      const reader = new WorkbookReader(buffer, {
+        worksheets: "emit",
+        sharedStrings: "ignore",
+        styles: "ignore"
+      });
+
+      const sheets: Array<{ name: string; state: string }> = [];
+      for await (const ws of reader) {
+        sheets.push({ name: ws.name, state: (ws as any).state ?? "visible" });
+        for await (const _row of ws) {
+          /* drain */
+        }
+      }
+      expect(sheets).toEqual([
+        { name: "Visible", state: "visible" },
+        { name: "Hidden", state: "hidden" },
+        { name: "VeryHidden", state: "veryHidden" }
+      ]);
+    });
+  });
 });
