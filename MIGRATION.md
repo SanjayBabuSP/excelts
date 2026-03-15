@@ -625,6 +625,15 @@ wb.addWorksheet("Data")
 - Address functions (`decodeCol`, `encodeCol`, etc.) are unchanged — same signatures, same imports.
 - `cellDates` option has been removed (it was declared but never implemented).
 - The deprecated `Range` type alias (for `SheetRange`) has been removed. Use `SheetRange` directly.
+- **`AutoFilter` object form**: `{ row, column }` has been renamed to `{ row, col }` to be consistent with all other address types (`Address`, `ImageAnchor`, `ImagePosition`, etc.). Update any code that uses the object form:
+  ```ts
+  // Before
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 3 } };
+  // After
+  ws.autoFilter = { from: { row: 1, col: 1 }, to: { row: 1, col: 3 } };
+  ```
+  String-form auto filters (`ws.autoFilter = "A1:C1"`) are unaffected.
+- **`WorksheetModel.merges`** has been removed. The model now uses `mergeCells` exclusively (matching the OOXML `<mergeCells>` element name). If you access the model directly, replace `model.merges` with `model.mergeCells`.
 
 ---
 

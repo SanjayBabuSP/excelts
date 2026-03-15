@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { testUtils } from "@excel/__tests__/shared";
 import { testFilePath } from "@test/utils";
 import { Workbook, WorkbookWriter, ValueType } from "../../../../index";
+import type { CellFormulaValue } from "@excel/types";
 
 const CONCATENATE_HELLO_WORLD = 'CONCATENATE("Hello", ", ", "World!")';
 
@@ -52,17 +53,19 @@ describe("WorksheetWriter", () => {
       expect(ws.getCell("C1").value).toBe(3.14);
       expect(ws.getCell("D1").value).toBe(now);
       expect(ws.getCell("E1").value).toBe("Hello, World!");
-      expect(ws.getCell("F1").value.text).toBe("www.google.com");
-      expect(ws.getCell("F1").value.hyperlink).toBe("http://www.google.com");
+      expect(ws.getCell("F1").value).toEqual({
+        text: "www.google.com",
+        hyperlink: "http://www.google.com"
+      });
 
-      expect(ws.getCell("A2").value.formula).toBe("A1");
-      expect(ws.getCell("A2").value.result).toBe(7);
+      expect(ws.getCell("A2").value).toEqual({ formula: "A1", result: 7 });
 
-      expect(ws.getCell("B2").value.formula).toBe(CONCATENATE_HELLO_WORLD);
-      expect(ws.getCell("B2").value.result).toBe("Hello, World!");
+      expect(ws.getCell("B2").value).toEqual({
+        formula: CONCATENATE_HELLO_WORLD,
+        result: "Hello, World!"
+      });
 
-      expect(ws.getCell("C2").value.formula).toBe("D1");
-      expect(ws.getCell("C2").value.result).toBe(now);
+      expect(ws.getCell("C2").value).toEqual({ formula: "D1", result: now });
     });
 
     it("stores shared string values properly", () => {
@@ -86,7 +89,7 @@ describe("WorksheetWriter", () => {
       expect(ws.getCell("A1").value).toBe(ws.getCell("A3").value);
 
       // A1 and C2 should not reference the same object
-      expect(ws.getCell("A1").value).toBe(ws.getCell("C2").value.result);
+      expect(ws.getCell("A1").value).toBe((ws.getCell("C2").value as CellFormulaValue).result);
     });
 
     it("assigns cell types properly", () => {

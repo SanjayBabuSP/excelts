@@ -783,6 +783,22 @@ describe("Workbook", () => {
       expect(ws2.autoFilter).toBe("A1:B1");
     });
 
+    it("auto filter with object form {row, col}", async () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "Name";
+      ws.getCell("B1").value = "Age";
+      ws.getCell("C1").value = "City";
+      ws.autoFilter = { from: { row: 1, col: 1 }, to: { row: 1, col: 3 } };
+
+      await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Sheet1")!;
+      // After round-trip, autoFilter is read back as string form
+      expect(ws2.autoFilter).toBe("A1:C1");
+    });
+
     it("company, manager, etc", async () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("Hello");

@@ -308,8 +308,8 @@ export type WorksheetState = "visible" | "hidden" | "veryHidden";
 export type AutoFilter =
   | string
   | {
-      from: string | { row: number; column: number };
-      to: string | { row: number; column: number };
+      from: string | { row: number; col: number };
+      to: string | { row: number; col: number };
     };
 
 export interface WorksheetProtection {

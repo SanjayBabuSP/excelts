@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Workbook } from "../../../index";
-import type { CellValue } from "@excel/types";
+import type { CellValue, WorksheetViewFrozen } from "@excel/types";
 
 describe("Worksheet", () => {
   // ===========================================================================
@@ -499,6 +499,105 @@ describe("Worksheet", () => {
       expect(ws2.getCell("A1").value).toBe("styled");
       expect(ws2.getCell("A1").font!.bold).toBe(true);
       expect(ws2.getCell("A1").font!.size).toBe(16);
+    });
+
+    it("copies merged cells", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.getCell("A1").value = "merged";
+      ws1.mergeCells("A1:C3");
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.model.mergeCells).toContain("A1:C3");
+      expect(ws2.getCell("A1").value).toBe("merged");
+    });
+
+    it("copies row heights", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.getRow(1).height = 30;
+      ws1.getRow(2).height = 50;
+      ws1.getCell("A1").value = "tall row";
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.getRow(1).height).toBe(30);
+      expect(ws2.getRow(2).height).toBe(50);
+    });
+
+    it("copies data validations", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.getCell("A1").dataValidation = {
+        type: "list",
+        formulae: ['"Yes,No"']
+      };
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.getCell("A1").dataValidation).toEqual({
+        type: "list",
+        formulae: ['"Yes,No"']
+      });
+    });
+
+    it("copies views (frozen panes)", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.views = [{ state: "frozen", xSplit: 1, ySplit: 1 }];
+      ws1.getCell("A1").value = "header";
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.views).toHaveLength(1);
+      const view = ws2.views[0] as WorksheetViewFrozen;
+      expect(view.state).toBe("frozen");
+      expect(view.xSplit).toBe(1);
+      expect(view.ySplit).toBe(1);
+    });
+
+    it("copies worksheet state (hidden)", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.state = "hidden";
+      ws1.getCell("A1").value = "data";
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.state).toBe("hidden");
+    });
+
+    it("copies auto filter", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.getCell("A1").value = "Name";
+      ws1.getCell("B1").value = "Age";
+      ws1.autoFilter = "A1:B1";
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.autoFilter).toBe("A1:B1");
+    });
+
+    it("copies page setup and header/footer", () => {
+      const wb1 = new Workbook();
+      const ws1 = wb1.addWorksheet("Source");
+      ws1.pageSetup.orientation = "landscape";
+      ws1.headerFooter.oddHeader = "Page &P";
+      ws1.getCell("A1").value = "data";
+
+      const wb2 = new Workbook();
+      const ws2 = wb2.importSheet(ws1);
+
+      expect(ws2.pageSetup.orientation).toBe("landscape");
+      expect(ws2.headerFooter.oddHeader).toBe("Page &P");
     });
   });
 });

@@ -34,6 +34,7 @@ import type {
   Style,
   TableProperties,
   WorksheetProperties,
+  WorksheetState,
   WorksheetView
 } from "@excel/types";
 
@@ -68,7 +69,7 @@ interface WorksheetOptions {
   id?: number;
   orderNo?: number;
   name?: string;
-  state?: string;
+  state?: WorksheetState;
   properties?: Partial<WorksheetProperties>;
   pageSetup?: Partial<PageSetup>;
   headerFooter?: Partial<HeaderFooter>;
@@ -127,7 +128,7 @@ interface WorksheetModel {
   name: string;
   dataValidations: DataValidationModel;
   properties: Partial<WorksheetProperties>;
-  state: string;
+  state: WorksheetState;
   pageSetup: PageSetup;
   headerFooter: HeaderFooter;
   rowBreaks: RowBreak[];
@@ -143,7 +144,6 @@ interface WorksheetModel {
   cols?: ColumnModel[];
   rows?: RowModel[];
   dimensions?: Range;
-  merges?: string[];
   mergeCells?: string[];
   /** Loaded drawing data (for charts, etc.) - preserved for round-trip */
   drawing?: any;
@@ -161,7 +161,7 @@ class Worksheet {
   declare public id: number;
   declare public orderNo: number;
   declare private _name: string;
-  declare public state: string;
+  declare public state: WorksheetState;
   declare private _rows: Row[];
   declare private _columns: Column[];
   declare private _keys: { [key: string]: Column };
@@ -1471,10 +1471,7 @@ class Worksheet {
 
     // ==========================================================
     // Merges
-    model.merges = [];
-    Object.values(this._merges).forEach((merge: Range) => {
-      model.merges!.push(merge.range);
-    });
+    model.mergeCells = Object.values(this._merges).map((merge: Range) => merge.range);
 
     return model;
   }
@@ -1502,6 +1499,7 @@ class Worksheet {
 
   set model(value: WorksheetModel) {
     this.name = value.name;
+    this.state = value.state;
     this._columns = Column.fromModel(this, value.cols ?? []);
     this._parseRows(value);
 

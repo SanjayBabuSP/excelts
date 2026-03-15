@@ -18,7 +18,7 @@ class AutoFilterXform extends BaseXform {
           if (typeof addr === "string") {
             return addr;
           }
-          return colCache.getAddress(addr.row, addr.column).address;
+          return colCache.getAddress(addr.row, addr.col).address;
         };
 
         const firstAddress = getAddress(model.from);

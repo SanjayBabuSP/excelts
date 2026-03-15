@@ -105,25 +105,25 @@ const alignments = [
 
 const borders = {
   thin: {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" }
+    top: { style: "thin" as const },
+    left: { style: "thin" as const },
+    bottom: { style: "thin" as const },
+    right: { style: "thin" as const }
   },
   doubleRed: {
     color: { argb: "FFFF0000" },
-    top: { style: "double" },
-    left: { style: "double" },
-    bottom: { style: "double" },
-    right: { style: "double" }
+    top: { style: "double" as const },
+    left: { style: "double" as const },
+    bottom: { style: "double" as const },
+    right: { style: "double" as const }
   },
   thickRainbow: {
-    top: { style: "double", color: { argb: "FFFF00FF" } },
-    left: { style: "double", color: { argb: "FF00FFFF" } },
-    bottom: { style: "double", color: { argb: "FF00FF00" } },
-    right: { style: "double", color: { argb: "FF00FF" } },
+    top: { style: "double" as const, color: { argb: "FFFF00FF" } },
+    left: { style: "double" as const, color: { argb: "FF00FFFF" } },
+    bottom: { style: "double" as const, color: { argb: "FF00FF00" } },
+    right: { style: "double" as const, color: { argb: "FF00FF" } },
     diagonal: {
-      style: "double",
+      style: "double" as const,
       color: { argb: "FFFFFF00" },
       up: true,
       down: true

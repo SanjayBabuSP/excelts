@@ -471,8 +471,10 @@ class Workbook {
 
   /**
    * Import a worksheet from another workbook (or a standalone worksheet).
-   * Copies all cell values, styles, and column properties to a new worksheet
-   * in this workbook.
+   * Deep-copies all worksheet properties via the model getter/setter, including
+   * cell values, styles, merges, row heights, column widths, data validations,
+   * conditional formatting, images, views, page setup, auto filter, tables,
+   * sheet protection, page breaks, and drawing data.
    *
    * @param source - The worksheet to import
    * @param name - Optional name for the new worksheet (defaults to source name)
@@ -481,23 +483,14 @@ class Workbook {
   importSheet(source: Worksheet, name?: string): Worksheet {
     const newWs = this.addWorksheet(name ?? source.name);
 
-    // Copy column properties
-    source.columns.forEach((col, idx) => {
-      if (col?.width) {
-        newWs.getColumn(idx + 1).width = col.width;
-      }
-    });
-
-    // Copy all cell values and styles
-    source.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        const newCell = newWs.getCell(rowNumber, colNumber);
-        newCell.value = cell.value;
-        if (cell.style) {
-          newCell.style = cell.style;
-        }
-      });
-    });
+    // Deep copy via model: the getter serializes ALL worksheet properties and the
+    // setter deserializes them, so future properties are automatically included.
+    const sourceModel = source.model;
+    newWs.model = {
+      ...sourceModel,
+      id: newWs.id,
+      name: newWs.name
+    };
 
     return newWs;
   }

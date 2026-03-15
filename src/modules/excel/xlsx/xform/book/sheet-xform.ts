@@ -1,10 +1,11 @@
 import { xmlDecode } from "@utils/utils";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import type { WorksheetState } from "@excel/types";
 
 interface SheetModel {
   id: number;
   name: string;
-  state?: string;
+  state: WorksheetState;
   rId: string;
 }
 
@@ -24,7 +25,7 @@ class WorksheetXform extends BaseXform {
       this.model = {
         name: xmlDecode(node.attributes.name),
         id: parseInt(node.attributes.sheetId, 10),
-        state: node.attributes.state,
+        state: (node.attributes.state || "visible") as WorksheetState,
         rId: node.attributes["r:id"]
       };
       return true;

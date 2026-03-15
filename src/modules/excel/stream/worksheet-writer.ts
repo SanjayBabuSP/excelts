@@ -6,6 +6,7 @@ import { uint8ArrayToBase64 } from "@utils/utils";
 import { Dimensions } from "@excel/range";
 import { StringBuf } from "@excel/utils/string-buf";
 import { Row } from "@excel/row";
+import type { Cell } from "@excel/cell";
 import { Column } from "@excel/column";
 import { SheetRelsWriter } from "@excel/stream/sheet-rels-writer";
 import { SheetCommentsWriter } from "@excel/stream/sheet-comments-writer";
@@ -532,14 +533,14 @@ class WorksheetWriter {
   // Cells
 
   // returns the cell at [r,c] or address given by r. If not found, return undefined
-  findCell(r: string | number, c?: number): any {
+  findCell(r: string | number, c?: number): Cell | undefined {
     const address = colCache.getAddress(r, c);
     const row = this.findRow(address.row);
     return row ? row.findCell(address.col) : undefined;
   }
 
   // return the cell at [r,c] or address given by r. If not found, create a new one.
-  getCell(r: string | number, c?: number): any {
+  getCell(r: string | number, c?: number): Cell {
     const address = colCache.getAddress(r, c);
     const row = this.getRow(address.row);
     return row.getCellEx(address);

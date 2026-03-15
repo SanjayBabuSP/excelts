@@ -187,7 +187,7 @@ describe("Worksheet", () => {
 
       // Merge should shift down by 2: A3:C4 -> A5:C6
       const model = ws.model;
-      expect(model.merges).toEqual(["A5:C6"]);
+      expect(model.mergeCells).toEqual(["A5:C6"]);
 
       // Cell-level merge references should also be correct
       expect(ws.getCell("A5").value).toBe("hello");
@@ -212,7 +212,7 @@ describe("Worksheet", () => {
 
       // Merge should shift up by 2: A4:B5 -> A2:B3
       const model = ws.model;
-      expect(model.merges).toEqual(["A2:B3"]);
+      expect(model.mergeCells).toEqual(["A2:B3"]);
 
       expect(ws.getCell("A2").value).toBe("hello");
       expect(ws.getCell("B3").type).toBe(Enums.ValueType.Merge);
@@ -232,7 +232,7 @@ describe("Worksheet", () => {
       ws.spliceRows(2, 2);
 
       const model = ws.model;
-      expect(model.merges).toEqual([]);
+      expect(model.mergeCells).toEqual([]);
     });
 
     it("spliceRows shrinks merge spanning the splice boundary", () => {
@@ -247,7 +247,7 @@ describe("Worksheet", () => {
 
       // Merge should shrink: A1:B4 -> A1:B3
       const model = ws.model;
-      expect(model.merges).toEqual(["A1:B3"]);
+      expect(model.mergeCells).toEqual(["A1:B3"]);
     });
 
     it("duplicateRow preserves single-row horizontal merges", () => {
@@ -263,10 +263,10 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // Should have 3 merges: original A1:C1, plus A2:C2 and A3:C3
-      expect(model.merges).toHaveLength(3);
-      expect(model.merges).toContain("A1:C1");
-      expect(model.merges).toContain("A2:C2");
-      expect(model.merges).toContain("A3:C3");
+      expect(model.mergeCells).toHaveLength(3);
+      expect(model.mergeCells).toContain("A1:C1");
+      expect(model.mergeCells).toContain("A2:C2");
+      expect(model.mergeCells).toContain("A3:C3");
 
       // Verify cell-level merge references in duplicated rows
       expect(ws.getCell("A2").value).toBe("merged");
@@ -306,7 +306,7 @@ describe("Worksheet", () => {
       // For multi-row merges, duplicateRow should only duplicate single-row merges
       // (merges where top == bottom == source row). Multi-row merges are too complex.
       // Let's just verify the original merge is preserved correctly after the splice.
-      expect(model.merges).toContain("A1:B4");
+      expect(model.mergeCells).toContain("A1:B4");
     });
 
     it("duplicateRow with overwrite mode clears existing merges in target rows", () => {
@@ -325,9 +325,9 @@ describe("Worksheet", () => {
       const model = ws.model;
       // Original merge A1:C1 should remain
       // Row 2's old merge A2:D2 should be replaced with A2:C2 (duplicated from row 1)
-      expect(model.merges).toHaveLength(2);
-      expect(model.merges).toContain("A1:C1");
-      expect(model.merges).toContain("A2:C2");
+      expect(model.mergeCells).toHaveLength(2);
+      expect(model.mergeCells).toContain("A1:C1");
+      expect(model.mergeCells).toContain("A2:C2");
     });
 
     it("duplicateRow + XLSX roundtrip preserves merges", async () => {
@@ -347,10 +347,10 @@ describe("Worksheet", () => {
       const ws2 = wb2.getWorksheet("sheet")!;
 
       const model2 = ws2.model;
-      expect(model2.merges).toHaveLength(3);
-      expect(model2.merges).toContain("A1:C1");
-      expect(model2.merges).toContain("A2:C2");
-      expect(model2.merges).toContain("A3:C3");
+      expect(model2.mergeCells).toHaveLength(3);
+      expect(model2.mergeCells).toContain("A1:C1");
+      expect(model2.mergeCells).toContain("A2:C2");
+      expect(model2.mergeCells).toContain("A3:C3");
     });
 
     it("duplicateRow with multiple merges on source row", () => {
@@ -366,13 +366,13 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // 3 rows × 2 merges = 6 total merges
-      expect(model.merges).toHaveLength(6);
-      expect(model.merges).toContain("A1:B1");
-      expect(model.merges).toContain("D1:F1");
-      expect(model.merges).toContain("A2:B2");
-      expect(model.merges).toContain("D2:F2");
-      expect(model.merges).toContain("A3:B3");
-      expect(model.merges).toContain("D3:F3");
+      expect(model.mergeCells).toHaveLength(6);
+      expect(model.mergeCells).toContain("A1:B1");
+      expect(model.mergeCells).toContain("D1:F1");
+      expect(model.mergeCells).toContain("A2:B2");
+      expect(model.mergeCells).toContain("D2:F2");
+      expect(model.mergeCells).toContain("A3:B3");
+      expect(model.mergeCells).toContain("D3:F3");
     });
   });
 
@@ -390,8 +390,8 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // Merge should shift right by 2: C1:E1 → E1:G1
-      expect(model.merges).toHaveLength(1);
-      expect(model.merges).toContain("E1:G1");
+      expect(model.mergeCells).toHaveLength(1);
+      expect(model.mergeCells).toContain("E1:G1");
 
       // Cell-level: E1 is master, F1 and G1 are merge slaves
       expect(ws.getCell("E1").value).toBe("merged");
@@ -412,8 +412,8 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // Merge should shift left by 2: D1:F1 → B1:D1
-      expect(model.merges).toHaveLength(1);
-      expect(model.merges).toContain("B1:D1");
+      expect(model.mergeCells).toHaveLength(1);
+      expect(model.mergeCells).toContain("B1:D1");
 
       // Cell-level: B1 is master
       expect(ws.getCell("B1").value).toBe("merged");
@@ -438,8 +438,8 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // B1:C1 removed, E1:F1 shifts left by 2 → C1:D1
-      expect(model.merges).toHaveLength(1);
-      expect(model.merges).toContain("C1:D1");
+      expect(model.mergeCells).toHaveLength(1);
+      expect(model.mergeCells).toContain("C1:D1");
 
       expect(ws.getCell("C1").value).toBe("survivor");
       expect(ws.getCell("D1").type).toBe(Enums.ValueType.Merge);
@@ -458,8 +458,8 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // Merge should shrink: B1:F1 → B1:D1 (right reduced by 2)
-      expect(model.merges).toHaveLength(1);
-      expect(model.merges).toContain("B1:D1");
+      expect(model.mergeCells).toHaveLength(1);
+      expect(model.mergeCells).toContain("B1:D1");
 
       expect(ws.getCell("B1").value).toBe("wide");
       expect(ws.getCell("C1").type).toBe(Enums.ValueType.Merge);
@@ -468,7 +468,7 @@ describe("Worksheet", () => {
   });
 
   describe("insertRow with merges", () => {
-    it("insertRow preserves model.merges", () => {
+    it("insertRow preserves model.mergeCells", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("sheet");
 
@@ -481,8 +481,8 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // Merge should shift down: A2:C2 → A3:C3
-      expect(model.merges).toHaveLength(1);
-      expect(model.merges).toContain("A3:C3");
+      expect(model.mergeCells).toHaveLength(1);
+      expect(model.mergeCells).toContain("A3:C3");
 
       expect(ws.getCell("A3").value).toBe("merged");
       expect(ws.getCell("B3").type).toBe(Enums.ValueType.Merge);
@@ -503,7 +503,7 @@ describe("Worksheet", () => {
 
       // The merge A2:B3 was entirely within the deleted range, so it should be removed
       const model = ws.model;
-      expect(model.merges).toEqual([]);
+      expect(model.mergeCells).toEqual([]);
 
       // New values should be plain, not merge proxies
       expect(ws.getCell("A2").value).toBe("new1");
@@ -529,9 +529,9 @@ describe("Worksheet", () => {
       // A2:B3 entirely within deleted range -> removed
       // A1:B1 before -> unchanged
       // A4:B4 after -> unchanged (nExpand=0, no shift)
-      expect(model.merges).toHaveLength(2);
-      expect(model.merges).toContain("A1:B1");
-      expect(model.merges).toContain("A4:B4");
+      expect(model.mergeCells).toHaveLength(2);
+      expect(model.mergeCells).toContain("A1:B1");
+      expect(model.mergeCells).toContain("A4:B4");
     });
 
     it("Bug #2: spliceRows copies plain values, not merge proxy values", () => {
@@ -564,7 +564,7 @@ describe("Worksheet", () => {
 
       const model = ws.model;
       // 1x1 merge should be removed
-      expect(model.merges).toEqual([]);
+      expect(model.mergeCells).toEqual([]);
       expect(ws.getCell("A1").value).toBe("hello");
     });
 
@@ -579,7 +579,7 @@ describe("Worksheet", () => {
       ws.spliceColumns(2, 2);
 
       const model = ws.model;
-      expect(model.merges).toEqual([]);
+      expect(model.mergeCells).toEqual([]);
       expect(ws.getCell("A1").value).toBe("hello");
     });
 
@@ -594,7 +594,7 @@ describe("Worksheet", () => {
       ws.spliceRows(3, 1);
 
       const model = ws.model;
-      expect(model.merges).toEqual(["A1:B3"]);
+      expect(model.mergeCells).toEqual(["A1:B3"]);
 
       // Verify cells in new range are correct
       expect(ws.getCell("A1").value).toBe("master");
@@ -671,9 +671,9 @@ describe("Worksheet", () => {
       // Original A1:C1 should remain
       // A2:B3 should be removed (it touched the target row 2)
       // A2:C2 should be created (duplicated from source)
-      expect(model.merges).toContain("A1:C1");
-      expect(model.merges).toContain("A2:C2");
-      expect(model.merges).not.toContain("A2:B3");
+      expect(model.mergeCells).toContain("A1:C1");
+      expect(model.mergeCells).toContain("A2:C2");
+      expect(model.mergeCells).not.toContain("A2:B3");
     });
 
     describe("position-aware border handling", () => {
