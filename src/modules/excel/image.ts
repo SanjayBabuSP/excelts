@@ -59,7 +59,7 @@ interface ModelInput {
 }
 
 class Image {
-  worksheet: Worksheet;
+  readonly worksheet: Worksheet;
   type?: string;
   imageId?: string;
   range?: ImageRange;
@@ -76,20 +76,25 @@ class Image {
       case "background":
         return {
           type: this.type,
-          imageId: this.imageId!
+          imageId: this.imageId ?? ""
         };
-      case "image":
+      case "image": {
+        const range = this.range;
+        if (!range) {
+          throw new ImageError("Image has no range");
+        }
         return {
           type: this.type,
-          imageId: this.imageId!,
-          hyperlinks: this.range!.hyperlinks,
+          imageId: this.imageId ?? "",
+          hyperlinks: range.hyperlinks,
           range: {
-            tl: this.range!.tl.model,
-            br: this.range!.br && this.range!.br.model,
-            ext: this.range!.ext,
-            editAs: this.range!.editAs
+            tl: range.tl.model,
+            br: range.br?.model,
+            ext: range.ext,
+            editAs: range.editAs
           }
         };
+      }
       default:
         throw new ImageError("Invalid Image Type");
     }

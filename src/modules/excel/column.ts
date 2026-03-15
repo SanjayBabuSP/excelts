@@ -454,7 +454,7 @@ class Column {
     // Preserve that behavior by accepting the 1-arg form and intentionally using the
     // cols array as the backing "worksheet" object.
     const worksheet: Worksheet = Array.isArray(worksheetOrCols)
-      ? (worksheetOrCols as any as Worksheet)
+      ? (worksheetOrCols as unknown as Worksheet)
       : worksheetOrCols;
     let cols: ColumnModel[] = Array.isArray(worksheetOrCols) ? worksheetOrCols : (colsMaybe ?? []);
 
@@ -466,9 +466,7 @@ class Column {
      * sort cols by min
      * If it is not sorted, the subsequent column configuration will be overwritten
      * */
-    cols = cols.sort(function (pre, next) {
-      return pre.min - next.min;
-    });
+    cols = cols.sort((pre, next) => pre.min - next.min);
     while (index < cols.length) {
       const col = cols[index++];
       while (count < col.min) {

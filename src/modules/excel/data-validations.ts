@@ -1,7 +1,8 @@
-import { colCache } from "@excel/utils/col-cache";
+import { colCache, type DecodedRange } from "@excel/utils/col-cache";
+import type { DataValidation } from "@excel/types";
 
 interface ValidationModel {
-  [address: string]: any;
+  [address: string]: DataValidation | undefined;
 }
 
 class DataValidations {
@@ -11,11 +12,11 @@ class DataValidations {
     this.model = model || {};
   }
 
-  add(address: string, validation: any): any {
+  add(address: string, validation: DataValidation): DataValidation {
     return (this.model[address] = validation);
   }
 
-  find(address: string): any {
+  find(address: string): DataValidation | undefined {
     // First check direct address match
     const direct = this.model[address];
     if (direct !== undefined) {
@@ -25,7 +26,7 @@ class DataValidations {
     // Check range: prefixed keys in model (from parsing ranges)
     // Only decode address if we see at least one range key.
     let decoded: { row: number; col: number } | undefined;
-    for (const key in this.model) {
+    for (const key of Object.keys(this.model)) {
       if (!key.startsWith("range:")) {
         continue;
       }
@@ -33,18 +34,19 @@ class DataValidations {
       decoded ||= colCache.decodeAddress(address);
 
       const rangeStr = key.slice(6); // Remove "range:" prefix
-      const rangeDecoded = colCache.decodeEx(rangeStr) as any;
-      if (!rangeDecoded.dimensions) {
+      const rangeDecoded = colCache.decodeEx(rangeStr);
+      if (!("dimensions" in rangeDecoded)) {
         continue;
       }
 
-      const tl = rangeDecoded.tl as { row: number; col: number };
-      const br = rangeDecoded.br as { row: number; col: number };
+      const { tl, br } = rangeDecoded as DecodedRange;
+      const tlAddr = typeof tl === "string" ? colCache.decodeAddress(tl) : tl;
+      const brAddr = typeof br === "string" ? colCache.decodeAddress(br) : br;
       if (
-        decoded.row >= tl.row &&
-        decoded.row <= br.row &&
-        decoded.col >= tl.col &&
-        decoded.col <= br.col
+        decoded.row >= tlAddr.row &&
+        decoded.row <= brAddr.row &&
+        decoded.col >= tlAddr.col &&
+        decoded.col <= brAddr.col
       ) {
         return this.model[key];
       }

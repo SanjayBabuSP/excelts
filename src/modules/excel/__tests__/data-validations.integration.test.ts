@@ -38,7 +38,7 @@ describe("DataValidations", () => {
     const ws2 = wb2.getWorksheet("Sheet1")!;
     const dvKeys = Object.keys(ws2.dataValidations.model);
     expect(dvKeys.length).toBe(1);
-    expect(ws2.dataValidations.model[dvKeys[0]].type).toBe("list");
+    expect(ws2.dataValidations.model[dvKeys[0]]?.type).toBe("list");
   });
 
   it("reads and writes data validations", async () => {

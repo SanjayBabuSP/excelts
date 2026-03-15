@@ -637,7 +637,7 @@ class NullValue {
     return null;
   }
 
-  set value(_value: any) {
+  set value(_value: unknown) {
     // nothing to do
   }
 
@@ -1124,7 +1124,7 @@ class FormulaValue {
     if (v === null || v === undefined) {
       return Enums.ValueType.Null;
     }
-    if (v instanceof String || typeof v === "string") {
+    if (typeof v === "string") {
       return Enums.ValueType.String;
     }
     if (typeof v === "number") {
@@ -1414,7 +1414,7 @@ const Value = {
     if (value === null || value === undefined) {
       return Cell.Types.Null;
     }
-    if (value instanceof String || typeof value === "string") {
+    if (typeof value === "string") {
       return Cell.Types.String;
     }
     if (typeof value === "number") {

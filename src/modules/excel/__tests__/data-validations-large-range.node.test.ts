@@ -421,8 +421,10 @@ describe("DataValidation Large Range Performance", () => {
         formulae: ["Direct"]
       };
 
-      expect(ws.dataValidations.find("B5")?.formulae?.[0]).toBe("Direct");
-      expect(ws.dataValidations.find("B6")?.formulae?.[0]).toBe("Range");
+      const b5 = ws.dataValidations.find("B5");
+      const b6 = ws.dataValidations.find("B6");
+      expect(b5?.type !== "any" ? b5?.formulae?.[0] : undefined).toBe("Direct");
+      expect(b6?.type !== "any" ? b6?.formulae?.[0] : undefined).toBe("Range");
     });
   });
 });

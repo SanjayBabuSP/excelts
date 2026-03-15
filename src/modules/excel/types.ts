@@ -470,7 +470,7 @@ interface DataValidationBase {
 /** Data validation that requires formulae and operator */
 export interface DataValidationWithFormulae extends DataValidationBase {
   type: "list" | "whole" | "decimal" | "date" | "textLength" | "custom";
-  formulae: any[];
+  formulae: (string | number | Date)[];
   operator?: DataValidationOperator;
 }
 
@@ -622,12 +622,12 @@ export interface ConditionalFormattingBaseRule {
 
 export interface ExpressionRuleType extends ConditionalFormattingBaseRule {
   type: "expression";
-  formulae?: any[];
+  formulae?: (string | number)[];
 }
 
 export interface CellIsRuleType extends ConditionalFormattingBaseRule {
   type: "cellIs";
-  formulae?: any[];
+  formulae?: (string | number)[];
   operator?: CellIsOperators;
 }
 

@@ -146,7 +146,7 @@ interface WorksheetModel {
   dimensions?: Range;
   mergeCells?: string[];
   /** Loaded drawing data (for charts, etc.) - preserved for round-trip */
-  drawing?: any;
+  drawing?: unknown;
 }
 
 // Worksheet requirements
@@ -182,10 +182,9 @@ class Worksheet {
   declare public formControls: FormCheckbox[];
   declare private _headerRowCount?: number;
   /** Loaded drawing data (for charts, etc.) - preserved for round-trip */
-  declare private _drawing: any;
+  declare private _drawing: unknown;
 
   constructor(options: WorksheetOptions) {
-    options = options || {};
     this._workbook = options.workbook!;
 
     // in a workbook, each sheet will have a number
@@ -216,66 +215,57 @@ class Worksheet {
     this.colBreaks = [];
 
     // for tabColor, default row height, outline levels, etc
-    this.properties = Object.assign(
-      {},
-      {
-        defaultRowHeight: 15,
-        outlineLevelCol: 0,
-        outlineLevelRow: 0
-      },
-      options.properties
-    );
+    this.properties = {
+      defaultRowHeight: 15,
+      outlineLevelCol: 0,
+      outlineLevelRow: 0,
+      ...options.properties
+    };
 
     // for all things printing
-    this.pageSetup = Object.assign(
-      {},
-      {
-        margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
-        orientation: "portrait",
-        // Excel does not normally write these unless explicitly set.
-        // Historically we used 4294967295 as a sentinel when parsing, but emitting it
-        // can cause strict Excel parsers to treat the workbook as corrupted.
-        horizontalDpi: undefined,
-        verticalDpi: undefined,
-        fitToPage: !!(
-          options.pageSetup &&
-          (options.pageSetup.fitToWidth || options.pageSetup.fitToHeight) &&
-          !options.pageSetup.scale
-        ),
-        pageOrder: "downThenOver",
-        blackAndWhite: false,
-        draft: false,
-        cellComments: "None",
-        errors: "displayed",
-        scale: 100,
-        fitToWidth: 1,
-        fitToHeight: 1,
-        paperSize: undefined,
-        showRowColHeaders: false,
-        showGridLines: false,
-        firstPageNumber: undefined,
-        horizontalCentered: false,
-        verticalCentered: false,
-        rowBreaks: null,
-        colBreaks: null
-      },
-      options.pageSetup
-    );
+    this.pageSetup = {
+      margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
+      orientation: "portrait",
+      // Excel does not normally write these unless explicitly set.
+      // Historically we used 4294967295 as a sentinel when parsing, but emitting it
+      // can cause strict Excel parsers to treat the workbook as corrupted.
+      horizontalDpi: undefined,
+      verticalDpi: undefined,
+      fitToPage: !!(
+        options.pageSetup &&
+        (options.pageSetup.fitToWidth || options.pageSetup.fitToHeight) &&
+        !options.pageSetup.scale
+      ),
+      pageOrder: "downThenOver",
+      blackAndWhite: false,
+      draft: false,
+      cellComments: "None",
+      errors: "displayed",
+      scale: 100,
+      fitToWidth: 1,
+      fitToHeight: 1,
+      paperSize: undefined,
+      showRowColHeaders: false,
+      showGridLines: false,
+      firstPageNumber: undefined,
+      horizontalCentered: false,
+      verticalCentered: false,
+      rowBreaks: null,
+      colBreaks: null,
+      ...options.pageSetup
+    } as PageSetup;
 
-    this.headerFooter = Object.assign(
-      {},
-      {
-        differentFirst: false,
-        differentOddEven: false,
-        oddHeader: null,
-        oddFooter: null,
-        evenHeader: null,
-        evenFooter: null,
-        firstHeader: null,
-        firstFooter: null
-      },
-      options.headerFooter
-    );
+    this.headerFooter = {
+      differentFirst: false,
+      differentOddEven: false,
+      oddHeader: null,
+      oddFooter: null,
+      evenHeader: null,
+      evenFooter: null,
+      firstHeader: null,
+      firstFooter: null,
+      ...options.headerFooter
+    };
 
     this.dataValidations = new DataValidations();
 
@@ -669,7 +659,7 @@ class Worksheet {
     return rows;
   }
 
-  addRow(value: any, style: string = "n"): Row {
+  addRow(value: RowValues, style: string = "n"): Row {
     const rowNo = this._nextRow;
     const row = this.getRow(rowNo);
     row.values = value;
@@ -677,7 +667,7 @@ class Worksheet {
     return row;
   }
 
-  addRows(value: any[], style: string = "n"): Row[] {
+  addRows(value: RowValues[], style: string = "n"): Row[] {
     const rows: Row[] = [];
     value.forEach(row => {
       rows.push(this.addRow(row, style));
@@ -685,13 +675,13 @@ class Worksheet {
     return rows;
   }
 
-  insertRow(pos: number, value: any, style: string = "n"): Row {
+  insertRow(pos: number, value: RowValues, style: string = "n"): Row {
     this.spliceRows(pos, 0, value);
     this._setStyleOption(pos, style);
     return this.getRow(pos);
   }
 
-  insertRows(pos: number, values: any[], style: string = "n"): Row[] | undefined {
+  insertRows(pos: number, values: RowValues[], style: string = "n"): Row[] | undefined {
     this.spliceRows(pos, 0, ...values);
     if (style !== "n") {
       // copy over the styles

@@ -548,7 +548,7 @@ class Row {
     this.outlineLevel = value.outlineLevel ?? 0;
     this.dyDescent = value.dyDescent;
 
-    this.style = (value.style && JSON.parse(JSON.stringify(value.style))) || {};
+    this.style = value.style ? structuredClone(value.style) : {};
   }
 }
 

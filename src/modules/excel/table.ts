@@ -134,9 +134,9 @@ interface CacheState {
 
 class Column {
   // wrapper around column model, allowing access and manipulation
-  table: Table;
-  column: TableColumnProperties;
-  index: number;
+  readonly table: Table;
+  readonly column: TableColumnProperties;
+  readonly index: number;
 
   constructor(table: Table, column: TableColumnProperties, index: number) {
     this.table = table;
@@ -203,8 +203,8 @@ class Column {
 }
 
 class Table {
-  worksheet: Worksheet;
-  table!: TableModel;
+  readonly worksheet: Worksheet;
+  declare table: TableModel;
   declare private _cache?: CacheState;
 
   constructor(worksheet: Worksheet, table?: TableModel) {
@@ -375,17 +375,18 @@ class Table {
       const r = worksheet.getRow(row + count++);
       data.forEach((value, j) => {
         const cell = r.getCell(col + j);
-        const formula = (value as any)?.formula;
-        if (typeof formula === "string") {
+        const isFormulaValue = typeof value === "object" && value !== null && "formula" in value;
+        if (isFormulaValue && typeof (value as CellFormulaValue).formula === "string") {
+          const formulaValue = value as CellFormulaValue;
           const shouldQualify = table.qualifyImplicitStructuredReferences === true;
           cell.value = {
-            ...(value as CellFormulaValue),
+            ...formulaValue,
             formula: shouldQualify
-              ? formula.replace(
+              ? formulaValue.formula.replace(
                   /(^|[^A-Za-z0-9_])\[@\[?([^\[\]]+?)\]?\]/g,
                   `$1${table.name}[[#This Row],[$2]]`
                 )
-              : formula
+              : formulaValue.formula
           } as CellFormulaValue;
         } else {
           cell.value = value;

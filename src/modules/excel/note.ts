@@ -1,8 +1,9 @@
 import { deepMerge } from "@excel/utils/under-dash";
+import type { Font } from "@excel/types";
 
 interface NoteText {
   text: string;
-  [key: string]: any;
+  font?: Partial<Font>;
 }
 
 interface NoteConfig {
@@ -24,9 +25,9 @@ interface NoteModel {
 }
 
 class Note {
-  note: string | NoteConfig;
+  note: string | NoteConfig | undefined;
 
-  static DEFAULT_CONFIGS: NoteModel = {
+  static readonly DEFAULT_CONFIGS: NoteModel = {
     note: {
       margins: {
         insetmode: "auto",
@@ -42,7 +43,7 @@ class Note {
   };
 
   constructor(note?: string | NoteConfig) {
-    this.note = note!;
+    this.note = note;
   }
 
   get model(): NoteModel {
@@ -63,7 +64,7 @@ class Note {
       default:
         value = {
           type: "note",
-          note: this.note
+          note: this.note ?? {}
         };
         break;
     }
