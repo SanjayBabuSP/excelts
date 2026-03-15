@@ -2,6 +2,13 @@ import { xmlDecode } from "@utils/utils";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
 import type { WorksheetState } from "@excel/types";
 
+const VALID_STATES: Set<string> = new Set(["visible", "hidden", "veryHidden"]);
+
+function parseWorksheetState(raw: string | undefined): WorksheetState {
+  const state = raw || "visible";
+  return VALID_STATES.has(state) ? (state as WorksheetState) : "visible";
+}
+
 interface SheetModel {
   id: number;
   name: string;
@@ -25,7 +32,7 @@ class WorksheetXform extends BaseXform {
       this.model = {
         name: xmlDecode(node.attributes.name),
         id: parseInt(node.attributes.sheetId, 10),
-        state: (node.attributes.state || "visible") as WorksheetState,
+        state: parseWorksheetState(node.attributes.state),
         rId: node.attributes["r:id"]
       };
       return true;

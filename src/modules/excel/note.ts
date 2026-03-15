@@ -17,6 +17,7 @@ interface NoteConfig {
   };
   editAs?: string;
   texts?: NoteText[];
+  anchor?: string;
 }
 
 interface NoteModel {

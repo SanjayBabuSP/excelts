@@ -51,6 +51,9 @@ export interface Font {
   vertAlign: "superscript" | "subscript";
   strike: boolean;
   outline: boolean;
+  condense: boolean;
+  extend: boolean;
+  shadow: boolean;
 }
 
 // ============================================================================
@@ -551,7 +554,7 @@ export type Address = {
 // ============================================================================
 // Row and Column Types
 // ============================================================================
-export type RowValues = CellValue[] | { [key: string]: CellValue } | undefined | null;
+export type RowValues = CellValue[] | Record<string, unknown> | undefined | null;
 
 // ============================================================================
 // Conditional Formatting Types

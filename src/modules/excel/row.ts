@@ -278,13 +278,16 @@ class Row {
       });
     } else {
       // assume object with column keys
+      // Values are typed as `unknown` because RowValues accepts arbitrary objects
+      // (e.g. DB entities). Cell.value setter handles unknown values via Value.getType
+      // fallback to JSON type, so this cast is safe at runtime.
       this._worksheet.eachColumnKey((column: Column, key: string) => {
         if (value[key] !== undefined) {
           this.getCellEx({
             address: colCache.encodeAddress(this._number, column.number),
             row: this._number,
             col: column.number
-          }).value = value[key];
+          }).value = value[key] as CellValue;
         }
       });
     }

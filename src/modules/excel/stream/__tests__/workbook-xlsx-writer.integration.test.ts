@@ -3,6 +3,7 @@ import fs from "fs";
 import { promisify } from "util";
 import { testUtils } from "@excel/__tests__/shared";
 import { Workbook, WorkbookWriter } from "../../../../index";
+import type { NoteConfig } from "@excel/cell";
 import { makeTestDataPath, testFilePath } from "@test/utils";
 
 const streamTestDataPath = makeTestDataPath(import.meta.url, "./data");
@@ -403,7 +404,7 @@ describe("WorkbookWriter", () => {
       ws.getCell("B2").value = 5;
       ws.getCell("B2").note = "five";
 
-      const note = {
+      const note: NoteConfig = {
         texts: [
           {
             font: {
@@ -452,7 +453,7 @@ describe("WorkbookWriter", () => {
       const ws = wb.addWorksheet("Hello");
       ws.getCell("B2").value = 5;
       ws.getCell("B2").note = "five";
-      const note = {
+      const note: NoteConfig = {
         texts: [
           {
             font: {

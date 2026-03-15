@@ -55,7 +55,7 @@ export interface CellAddress {
 
 export interface NoteText {
   text: string;
-  font?: Record<string, unknown>;
+  font?: Partial<Font>;
 }
 
 export interface NoteConfig {
@@ -63,6 +63,7 @@ export interface NoteConfig {
   margins?: { insetmode?: string; inset?: number[] };
   protection?: { locked?: string; lockText?: string };
   editAs?: string;
+  anchor?: string;
 }
 
 export interface NoteModel {

@@ -1540,7 +1540,9 @@ class Worksheet {
    * const cols = ws.toJSON({ header: "A" });
    * // => [{A: "name", B: "age"}, {A: "Alice", B: 30}]
    */
-  toJSON<T = Record<string, CellValue>>(opts?: SheetToJSONOptions): T[] {
+  toJSON(opts: SheetToJSONOptions & { header: 1 }): CellValue[][];
+  toJSON(opts?: SheetToJSONOptions): Record<string, CellValue>[];
+  toJSON(opts?: SheetToJSONOptions): CellValue[][] | Record<string, CellValue>[] {
     const o = opts || {};
 
     // Determine range
@@ -1595,7 +1597,7 @@ class Worksheet {
         }
       }
 
-      return result as T[];
+      return result;
     }
 
     // header: "A" — use column letters as keys
@@ -1625,7 +1627,7 @@ class Worksheet {
         }
       }
 
-      return result as T[];
+      return result;
     }
 
     // header: string[] — use provided array as keys
@@ -1656,7 +1658,7 @@ class Worksheet {
         }
       }
 
-      return result as T[];
+      return result;
     }
 
     // Default: first row as header, disambiguate duplicates
@@ -1704,7 +1706,7 @@ class Worksheet {
       }
     }
 
-    return result as T[];
+    return result;
   }
 
   /**
