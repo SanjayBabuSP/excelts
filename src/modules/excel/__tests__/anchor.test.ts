@@ -72,16 +72,16 @@ describe("Anchor", () => {
       worksheet.getRow(1).height *= 2;
       expect(anchor.row).not.toBe(pre);
     });
-    it("should integer part of row and rowOff should be always equals", () => {
-      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeCol));
+    it("should integer part of row and nativeRow should always be equal", () => {
+      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeRow));
       worksheet.getRow(1).height *= 2;
-      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeCol));
+      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeRow));
       worksheet.getRow(1).height /= 4;
-      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeCol));
+      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeRow));
       worksheet.getRow(1).height = 0.1;
-      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeCol));
+      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeRow));
       worksheet.getRow(1).height = 9999;
-      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeCol));
+      expect(Math.floor(anchor.row)).toBe(Math.floor(anchor.nativeRow));
     });
     it("should integer part of col and colOff should be always equals", () => {
       expect(Math.floor(anchor.col)).toBe(Math.floor(anchor.nativeCol));

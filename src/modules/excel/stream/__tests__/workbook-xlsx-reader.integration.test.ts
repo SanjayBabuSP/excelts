@@ -107,13 +107,13 @@ describe("WorkbookReader", () => {
         }
       });
 
-      expect(ws.getRow(3).font.color.argb).to.be.equal(ws.getRow(6).font.color.argb);
-      expect(ws.getRow(6).font.color.argb).to.be.equal(ws.getRow(9).font.color.argb);
-      expect(ws.getRow(9).font.color.argb).to.be.equal(ws.getRow(12).font.color.argb);
-      expect(ws.getRow(12).font.color.argb).not.to.be.equal(ws.getRow(15).font.color.argb);
-      expect(ws.getRow(15).font.color.argb).not.to.be.equal(ws.getRow(18).font.color.argb);
-      expect(ws.getRow(15).font.color.argb).to.be.equal(ws.getRow(10).font.color.argb);
-      expect(ws.getRow(10).font.color.argb).to.be.equal(ws.getRow(5).font.color.argb);
+      expect(ws.getRow(3).font.color.argb).toBe(ws.getRow(6).font.color.argb);
+      expect(ws.getRow(6).font.color.argb).toBe(ws.getRow(9).font.color.argb);
+      expect(ws.getRow(9).font.color.argb).toBe(ws.getRow(12).font.color.argb);
+      expect(ws.getRow(12).font.color.argb).not.toBe(ws.getRow(15).font.color.argb);
+      expect(ws.getRow(15).font.color.argb).not.toBe(ws.getRow(18).font.color.argb);
+      expect(ws.getRow(15).font.color.argb).toBe(ws.getRow(10).font.color.argb);
+      expect(ws.getRow(10).font.color.argb).toBe(ws.getRow(5).font.color.argb);
     });
   });
 
@@ -337,7 +337,7 @@ describe("WorkbookReader", () => {
         workbookReader.read();
       });
 
-      expect(rows).to.deep.equal(["Date", new Date("2020-11-20T00:00:00.000Z")]);
+      expect(rows).toEqual(["Date", new Date("2020-11-20T00:00:00.000Z")]);
     });
   });
 
@@ -358,7 +358,7 @@ describe("WorkbookReader", () => {
         workbookReader.read();
       });
 
-      expect(names).to.include("Sum Worksheet");
+      expect(names).toContain("Sum Worksheet");
     });
   });
 
@@ -494,6 +494,10 @@ describe("WorkbookReader", () => {
     });
 
     describe("with image`s br anchor", () => {
+      it("should have at least one image in the test file", () => {
+        expect(worksheet.getImages().length).toBeGreaterThan(0);
+      });
+
       it("Should integer part of col equals nativeCol", () => {
         worksheet.getImages().forEach(image => {
           expect(Math.floor(image.range.br.col)).toBe(image.range.br.nativeCol);

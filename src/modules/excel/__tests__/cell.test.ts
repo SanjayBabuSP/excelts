@@ -491,7 +491,8 @@ describe("Cell", () => {
 
     // date
     a1.value = new Date(2024, 0, 15);
-    expect(a1.text).toBeTruthy(); // exact format may vary
+    expect(a1.text).toBeTypeOf("string");
+    expect(a1.text.length).toBeGreaterThan(0);
 
     // hyperlink
     a1.value = { text: "link text", hyperlink: "https://example.com" };

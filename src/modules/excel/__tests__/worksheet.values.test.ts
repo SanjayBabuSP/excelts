@@ -1464,7 +1464,7 @@ describe("Worksheet", () => {
       });
     });
 
-    it("iterates over collumn cells", () => {
+    it("iterates over column cells", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");
 

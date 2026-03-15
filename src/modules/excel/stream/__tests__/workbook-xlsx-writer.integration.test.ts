@@ -580,14 +580,15 @@ describe("WorkbookWriter", () => {
       const [cf2] = ws2.conditionalFormattings;
 
       // verify that rules from generated file contain styles with valid numFmt
+      expect(cf2.rules.length).toBeGreaterThan(0);
       cf2.rules.forEach(rule => {
         const numFmt = rule.style?.numFmt;
         expect(numFmt).toBeDefined();
         // After reading from file, numFmt is always a NumFmt object (not string)
         expect(typeof numFmt).toBe("object");
         if (typeof numFmt === "object" && numFmt !== null) {
-          expect(numFmt.id).to.be.a("number");
-          expect(numFmt.formatCode).to.be.a("string");
+          expect(numFmt.id).toBeTypeOf("number");
+          expect(numFmt.formatCode).toBeTypeOf("string");
         }
       });
     });

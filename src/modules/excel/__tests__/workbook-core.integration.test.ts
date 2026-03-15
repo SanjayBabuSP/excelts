@@ -1107,17 +1107,20 @@ describe("Workbook", () => {
           check(ws2b, "B7", 2, "sheets");
 
           // two names
-          expect(ws2a.getCell("G1").names).to.have.members(["thing1", "thing2"]);
+          expect(ws2a.getCell("G1").names).toEqual(expect.arrayContaining(["thing1", "thing2"]));
+          expect(ws2a.getCell("G1").names.length).toBe(2);
 
           // once removed
-          expect(ws2a.getCell("G2").names).to.have.members(["twice"]);
+          expect(ws2a.getCell("G2").names).toEqual(expect.arrayContaining(["twice"]));
+          expect(ws2a.getCell("G2").names.length).toBe(1);
 
           // ranges
           function rangeCheck(name: any, members: any) {
             const ranges = wb2.definedNames.getRanges(name);
             expect(ranges.name).toBe(name);
             if (members.length) {
-              expect(ranges.ranges).to.have.members(members);
+              expect(ranges.ranges).toEqual(expect.arrayContaining(members));
+              expect(ranges.ranges.length).toBe(members.length);
             } else {
               expect(ranges.ranges.length).toBe(0);
             }
@@ -1238,7 +1241,7 @@ describe("Workbook", () => {
             expect(ws2.getCell("A1").value).toBe("OneInfo");
             expect(ws2.getCell("A2").value).toBe("OneInfo");
             expect(ws2.getRow(1).height).toBe(ws2.getRow(2).height);
-            expect(ws2.getRow(1).height).to.not.equal(ws2.getRow(3).height);
+            expect(ws2.getRow(1).height).not.toBe(ws2.getRow(3).height);
           });
       });
     });

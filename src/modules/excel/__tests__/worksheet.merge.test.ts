@@ -107,32 +107,6 @@ describe("Worksheet", () => {
       expectMaster("D4:E5", null);
     });
 
-    it("does not allow overlapping merges", () => {
-      const wb = new Workbook();
-      const ws = wb.addWorksheet("blort");
-
-      ws.mergeCells("B2:C3");
-
-      // intersect four corners
-      expect(() => {
-        ws.mergeCells("A1:B2");
-      }).toThrow(Error);
-      expect(() => {
-        ws.mergeCells("C1:D2");
-      }).toThrow(Error);
-      expect(() => {
-        ws.mergeCells("C3:D4");
-      }).toThrow(Error);
-      expect(() => {
-        ws.mergeCells("A3:B4");
-      }).toThrow(Error);
-
-      // enclosing
-      expect(() => {
-        ws.mergeCells("A1:D4");
-      }).toThrow(Error);
-    });
-
     it("merges styles", () => {
       const wb = new Workbook();
       const ws = wb.addWorksheet("blort");

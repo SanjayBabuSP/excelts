@@ -312,5 +312,6 @@ describe("Column", () => {
     expect(ws2.getColumn(1).width).toBe(10);
     expect(ws2.getColumn(2).width).toBe(32);
     expect(ws2.getColumn(3).width).toBe(15);
+    expect(ws2.getColumn(3).outlineLevel).toBe(1);
   });
 });

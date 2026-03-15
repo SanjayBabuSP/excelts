@@ -406,9 +406,10 @@ describe("Workbook", () => {
   describe("themes", () => {
     it("clearThemes removes internal themes", () => {
       const wb = new Workbook();
+      // Themes exist by default as undefined, but after loading an XLSX they'd be set.
+      // clearThemes() should set _themes to undefined without throwing.
       wb.clearThemes();
-      // Should not throw and should clear any themes data
-      expect(wb).toBeDefined();
+      expect((wb as any)._themes).toBeUndefined();
     });
   });
 });

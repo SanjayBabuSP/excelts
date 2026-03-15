@@ -43,49 +43,47 @@ describe("WorkbookReader", () => {
       expect(seen).toBe(true);
     });
 
-    it("reads from ReadableStream<Uint8Array>", async () => {
-      // Migrated from workbook-reader-readable-stream.test.ts
-      if (typeof ReadableStream === "undefined") {
-        return;
-      }
+    it.skipIf(typeof ReadableStream === "undefined")(
+      "reads from ReadableStream<Uint8Array>",
+      async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+        ws.getCell("A1").value = "hello";
+        ws.getCell("A2").value = 42;
+        const data = await wb.xlsx.writeBuffer();
 
-      const wb = new Workbook();
-      const ws = wb.addWorksheet("Sheet1");
-      ws.getCell("A1").value = "hello";
-      ws.getCell("A2").value = 42;
-      const data = await wb.xlsx.writeBuffer();
-
-      const webStream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          const chunkSize = 64 * 1024;
-          for (let i = 0; i < data.length; i += chunkSize) {
-            controller.enqueue(data.slice(i, i + chunkSize));
+        const webStream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const chunkSize = 64 * 1024;
+            for (let i = 0; i < data.length; i += chunkSize) {
+              controller.enqueue(data.slice(i, i + chunkSize));
+            }
+            controller.close();
           }
-          controller.close();
+        });
+
+        const reader = new WorkbookReader(webStream, { worksheets: "emit" });
+        let seen = false;
+
+        for await (const worksheet of reader) {
+          seen = true;
+          expect(worksheet.name).toBe("Sheet1");
+
+          let rowCount = 0;
+          for await (const row of worksheet) {
+            rowCount++;
+            if (row.number === 1) {
+              expect(row.getCell(1).value).toBe("hello");
+            }
+            if (row.number === 2) {
+              expect(row.getCell(1).value).toBe(42);
+            }
+          }
+          expect(rowCount).toBeGreaterThan(0);
         }
-      });
-
-      const reader = new WorkbookReader(webStream, { worksheets: "emit" });
-      let seen = false;
-
-      for await (const worksheet of reader) {
-        seen = true;
-        expect(worksheet.name).toBe("Sheet1");
-
-        let rowCount = 0;
-        for await (const row of worksheet) {
-          rowCount++;
-          if (row.number === 1) {
-            expect(row.getCell(1).value).toBe("hello");
-          }
-          if (row.number === 2) {
-            expect(row.getCell(1).value).toBe(42);
-          }
-        }
-        expect(rowCount).toBeGreaterThan(0);
+        expect(seen).toBe(true);
       }
-      expect(seen).toBe(true);
-    });
+    );
 
     it("reads from ArrayBuffer", async () => {
       const buffer = await buildXlsxBuffer(wb => {
