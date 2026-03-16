@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0](https://github.com/cjnoname/excelts/compare/v6.0.0...v6.1.0) (2026-03-16)
+
+
+### Features
+
+* **stream:** Add WorksheetWriter.addImage support ([#108](https://github.com/cjnoname/excelts/issues/108)) ([a91d9e1](https://github.com/cjnoname/excelts/commit/a91d9e11b8304037658b9bbfc169bde497fd2521))
+
+
+### Bug Fixes
+
+* **ci:** Remove stale release-as pinning to unblock version bumps ([1da5585](https://github.com/cjnoname/excelts/commit/1da558575de7a1e79de16f48e07e6bf1b6bf6961))
+* **test:** Pin TAR modTime in byte-for-byte consistency test ([c163e49](https://github.com/cjnoname/excelts/commit/c163e49568ef7ef58c705dc4ce35b88eb59e86e8))
+
 ## [6.0.0](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.10...v6.0.0) (2026-03-16)
 
 
