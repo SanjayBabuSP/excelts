@@ -3,7 +3,7 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "release-as": "6.0.0-beta.9"
+      "release-as": "6.0.0-beta.10"
     }
   },
   "plugins": ["sentence-case"],
