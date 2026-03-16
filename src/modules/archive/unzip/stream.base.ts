@@ -1094,6 +1094,15 @@ async function readFileRecord(
 
   if (fileSizeKnown) {
     await pumpKnownCompressedSizeToEntry(io, inflater, entry, vars.compressedSize ?? 0);
+    // If the entry has a data descriptor flag, consume it after pumping.
+    // compressedSize > 0 made us take this path, but the data descriptor
+    // still follows the compressed data in the stream and must be skipped.
+    if (hasDataDescriptorFlag(vars.flags)) {
+      const dd = await readDataDescriptor(async l => io.pull(l));
+      if (!entry.size) {
+        entry.size = dd.uncompressedSize ?? 0;
+      }
+    }
     return;
   }
 

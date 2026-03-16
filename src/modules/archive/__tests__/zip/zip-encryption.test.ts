@@ -650,4 +650,101 @@ describe("ZIP Encryption End-to-End", () => {
       }
     });
   });
+
+  describe("discard() hang regression", () => {
+    it("should not hang when discarding large encrypted entries (zipcrypto)", async () => {
+      const largeData = new Uint8Array(512 * 1024).fill(65);
+
+      const zipData = await createZip(
+        [
+          { name: "large-secret.txt", data: largeData },
+          { name: "another.txt", data: new TextEncoder().encode("hello") }
+        ],
+        { encryptionMethod: "zipcrypto", password: "pw" }
+      );
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(zipData);
+          controller.close();
+        }
+      });
+
+      const { ZipReader } = await import("@archive/unzip");
+      const reader = new ZipReader(stream);
+      const entries: { path: string; isEncrypted: boolean }[] = [];
+
+      for await (const entry of reader.entries()) {
+        entries.push({ path: entry.path, isEncrypted: entry.isEncrypted });
+        entry.discard();
+      }
+
+      expect(entries.length).toBe(2);
+      expect(entries[0].isEncrypted).toBe(true);
+      expect(entries[1].isEncrypted).toBe(true);
+    }, 5000);
+
+    it("should not hang when discarding large encrypted entries (aes-256)", async () => {
+      const largeData = new Uint8Array(512 * 1024).fill(66);
+
+      const zipData = await createZip(
+        [
+          { name: "large-aes.txt", data: largeData },
+          { name: "small.txt", data: new TextEncoder().encode("world") }
+        ],
+        { encryptionMethod: "aes-256", password: "pw" }
+      );
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(zipData);
+          controller.close();
+        }
+      });
+
+      const { ZipReader } = await import("@archive/unzip");
+      const reader = new ZipReader(stream);
+      const entries: { path: string; isEncrypted: boolean }[] = [];
+
+      for await (const entry of reader.entries()) {
+        entries.push({ path: entry.path, isEncrypted: entry.isEncrypted });
+        entry.discard();
+      }
+
+      expect(entries.length).toBe(2);
+      expect(entries[0].isEncrypted).toBe(true);
+      expect(entries[1].isEncrypted).toBe(true);
+    }, 5000);
+
+    it("should not hang with unzip() high-level API", async () => {
+      const largeData = new Uint8Array(1024 * 1024).fill(67); // 1MB
+
+      const zipData = await createZip(
+        [
+          { name: "big.txt", data: largeData },
+          { name: "tiny.txt", data: new TextEncoder().encode("x") }
+        ],
+        { encryptionMethod: "zipcrypto", password: "pw" }
+      );
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(zipData);
+          controller.close();
+        }
+      });
+
+      const { unzip } = await import("@archive/read-archive");
+      const reader = unzip(stream);
+      const entries: { path: string; isEncrypted: boolean }[] = [];
+
+      for await (const entry of reader.entries()) {
+        entries.push({ path: entry.path, isEncrypted: entry.isEncrypted });
+        entry.discard();
+      }
+
+      expect(entries.length).toBe(2);
+      expect(entries[0].isEncrypted).toBe(true);
+    }, 5000);
+  });
 });
