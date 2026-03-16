@@ -760,4 +760,626 @@ describe("WorkbookWriter", () => {
       expect(ws.getCell("A5").value).toBe("tiny");
     });
   });
+
+  // ==========================================================================
+  // WorksheetWriter.addImage tests (Issue #108)
+  // ==========================================================================
+
+  describe("WorksheetWriter.addImage", () => {
+    it("stores embedded image with string range (two-cell anchor)", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.getCell("A1").value = "Hello, World!";
+      ws.addImage(imageId, "C3:E6");
+
+      await wb.commit();
+
+      // Read back and verify
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+      expect(ws2).toBeDefined();
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      // String range "C3:E6" => tl: col 2, row 2 (with offset -1: nativeCol=2, nativeRow=2)
+      expect(imageDesc.range!.tl.nativeCol).toBe(2);
+      expect(imageDesc.range!.tl.nativeRow).toBe(2);
+      expect(imageDesc.range!.br!.nativeCol).toBe(5);
+      expect(imageDesc.range!.br!.nativeRow).toBe(6);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("stores embedded image with object range (two-cell anchor)", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.addImage(imageId, {
+        tl: { col: 0.1125, row: 0.4 },
+        br: { col: 2.101046875, row: 3.4 },
+        editAs: "oneCell"
+      });
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.editAs).toBe("oneCell");
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("stores embedded image with one-cell anchor (ext)", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.addImage(imageId, {
+        tl: { col: 0.1125, row: 0.4 },
+        ext: { width: 100, height: 100 },
+        editAs: "oneCell"
+      });
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.editAs).toBe("oneCell");
+      expect(imageDesc.range!.ext!.width).toBe(100);
+      expect(imageDesc.range!.ext!.height).toBe(100);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("stores embedded image with hyperlinks", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.addImage(imageId, {
+        tl: { col: 0.1125, row: 0.4 },
+        ext: { width: 100, height: 100 },
+        editAs: "absolute",
+        hyperlinks: {
+          hyperlink: "http://www.somewhere.com",
+          tooltip: "www.somewhere.com"
+        }
+      });
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.editAs).toBe("absolute");
+      expect(imageDesc.range!.hyperlinks).toEqual({
+        hyperlink: "http://www.somewhere.com",
+        tooltip: "www.somewhere.com"
+      });
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(imageDesc.imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("stores multiple images on the same worksheet", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId1 = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+      const imageId2 = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "jpeg"
+      });
+
+      ws.addImage(imageId1, {
+        tl: { col: 0.1125, row: 0.4 },
+        ext: { width: 100, height: 100 }
+      });
+      ws.addImage(imageId2, {
+        tl: { col: 0.1125, row: 0.4 },
+        br: { col: 2.101046875, row: 3.4 },
+        editAs: "oneCell"
+      });
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(2);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image1 = wb2.getImage(images[0].imageId!);
+      const image2 = wb2.getImage(images[1].imageId!);
+      expect(Buffer.compare(imageData, image1!.buffer!)).toBe(0);
+      expect(Buffer.compare(imageData, image2!.buffer!)).toBe(0);
+    });
+
+    it("stores images on multiple worksheets", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      const ws1 = wb.addWorksheet("Sheet1");
+      ws1.getCell("A1").value = "Sheet 1";
+      ws1.addImage(imageId, "A1:B2");
+
+      const ws2 = wb.addWorksheet("Sheet2");
+      ws2.getCell("A1").value = "Sheet 2";
+      ws2.addImage(imageId, "C3:D4");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+
+      const ws2Sheet1 = wb2.getWorksheet("Sheet1")!;
+      const ws2Sheet2 = wb2.getWorksheet("Sheet2")!;
+
+      expect(ws2Sheet1.getImages().length).toBe(1);
+      expect(ws2Sheet2.getImages().length).toBe(1);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const img1 = wb2.getImage(ws2Sheet1.getImages()[0].imageId!);
+      const img2 = wb2.getImage(ws2Sheet2.getImages()[0].imageId!);
+      expect(Buffer.compare(imageData, img1!.buffer!)).toBe(0);
+      expect(Buffer.compare(imageData, img2!.buffer!)).toBe(0);
+    });
+
+    it("works when worksheet is committed before workbook", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.getCell("A1").value = "Hello, World!";
+      ws.addImage(imageId, "C3:E6");
+      ws.commit();
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(images[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("works with both background and embedded images", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.getCell("A1").value = "Hello, World!";
+      ws.addBackgroundImage(imageId);
+      ws.addImage(imageId, "C3:E6");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      // Check background image
+      const backgroundId = ws2.getBackgroundImageId();
+      expect(backgroundId).toBeDefined();
+
+      // Check embedded image
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(images[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("works with base64 image data", async () => {
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const base64 = imageData.toString("base64");
+
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        base64,
+        extension: "png"
+      });
+
+      ws.addImage(imageId, "A1:B2");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const image = wb2.getImage(images[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("works with buffer image data", async () => {
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        buffer: imageData,
+        extension: "png"
+      });
+
+      ws.addImage(imageId, "A1:B2");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const image = wb2.getImage(images[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("deduplicates drawing rels for same imageId used twice", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      // Add the same image twice with different positions
+      ws.addImage(imageId, "A1:B2");
+      ws.addImage(imageId, "D4:E5");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(2);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      for (const img of images) {
+        const imgBuffer = wb2.getImage(img.imageId!);
+        expect(Buffer.compare(imageData, imgBuffer!.buffer!)).toBe(0);
+      }
+    });
+
+    it("works on a worksheet with only images and no cell data", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Empty");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      // No cell data — only an image
+      ws.addImage(imageId, "A1:B2");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Empty")!;
+      expect(ws2).toBeDefined();
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(images[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("works with native anchor coordinates (nativeCol/nativeRow/nativeColOff/nativeRowOff)", async () => {
+      const options = {
+        filename: TEST_XLSX_FILE_NAME
+      };
+      const wb = new WorkbookWriter(options);
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      ws.addImage(imageId, {
+        tl: { nativeCol: 1, nativeRow: 2, nativeColOff: 100000, nativeRowOff: 50000 } as any,
+        br: { nativeCol: 3, nativeRow: 5, nativeColOff: 200000, nativeRowOff: 80000 } as any,
+        editAs: "twoCell"
+      });
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const imageDesc = images[0];
+      expect(imageDesc.range!.tl.nativeCol).toBe(1);
+      expect(imageDesc.range!.tl.nativeRow).toBe(2);
+      expect(imageDesc.range!.tl.nativeColOff).toBe(100000);
+      expect(imageDesc.range!.tl.nativeRowOff).toBe(50000);
+      expect(imageDesc.range!.br!.nativeCol).toBe(3);
+      expect(imageDesc.range!.br!.nativeRow).toBe(5);
+    });
+
+    it("works via stream output (non-filename)", async () => {
+      const { PassThrough } = await import("@stream");
+      const output = new PassThrough();
+      const chunks: Uint8Array[] = [];
+      output.on("data", (chunk: Uint8Array) => chunks.push(chunk));
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+
+      const wb = new WorkbookWriter({ stream: output });
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        buffer: imageData,
+        extension: "png"
+      });
+
+      ws.getCell("A1").value = "Hello";
+      ws.addImage(imageId, "C3:E6");
+
+      await wb.commit();
+
+      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+      const xlsxBuffer = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        xlsxBuffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(xlsxBuffer);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      expect(ws2.getCell("A1").value).toBe("Hello");
+      const images = ws2.getImages();
+      expect(images.length).toBe(1);
+
+      const image = wb2.getImage(images[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("getImages() returns added images before commit", () => {
+      const wb = new WorkbookWriter({ filename: TEST_XLSX_FILE_NAME });
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      expect(ws.getImages().length).toBe(0);
+
+      ws.addImage(imageId, "A1:B2");
+      expect(ws.getImages().length).toBe(1);
+      expect(ws.getImages()[0].type).toBe("image");
+      expect(ws.getImages()[0].imageId).toBe(String(imageId));
+
+      ws.addImage(imageId, "C3:D4");
+      expect(ws.getImages().length).toBe(2);
+    });
+
+    it("throws error for invalid single-cell string range", () => {
+      const wb = new WorkbookWriter({ filename: TEST_XLSX_FILE_NAME });
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      // "A1" is a single cell, not a range — should throw
+      expect(() => ws.addImage(imageId, "A1")).toThrow('Invalid image range: "A1"');
+    });
+
+    it("addBackgroundImage accepts string imageId", async () => {
+      const wb = new WorkbookWriter({ filename: TEST_XLSX_FILE_NAME });
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "jpeg"
+      });
+
+      ws.getCell("A1").value = "Hello";
+      // Pass imageId as string (same as Worksheet API allows)
+      ws.addBackgroundImage(String(imageId));
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      const backgroundId = ws2.getBackgroundImageId();
+      expect(backgroundId).toBeDefined();
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(backgroundId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("works when individual rows are committed before addImage (string range)", async () => {
+      const wb = new WorkbookWriter({ filename: TEST_XLSX_FILE_NAME });
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      // Commit rows individually first — this advances _rowZero
+      const row1 = ws.getRow(1);
+      row1.getCell(1).value = "data1";
+      row1.commit();
+      const row2 = ws.getRow(2);
+      row2.getCell(1).value = "data2";
+      row2.commit();
+
+      // Should NOT throw RowOutOfBoundsError even though rows 1-2 are committed
+      ws.addImage(imageId, "A1:C3");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      expect(ws2.getImages().length).toBe(1);
+
+      const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+      const image = wb2.getImage(ws2.getImages()[0].imageId!);
+      expect(Buffer.compare(imageData, image!.buffer!)).toBe(0);
+    });
+
+    it("works when all rows are committed before addImage via addRow pattern", async () => {
+      const wb = new WorkbookWriter({ filename: TEST_XLSX_FILE_NAME });
+      const ws = wb.addWorksheet("Hello");
+
+      const imageId = wb.addImage({
+        filename: IMAGE_FILENAME,
+        extension: "png"
+      });
+
+      // Typical streaming pattern: addRow auto-commits previous rows
+      for (let i = 1; i <= 10; i++) {
+        ws.addRow([`row ${i}`]).commit();
+      }
+
+      // Add image referencing rows that are all committed
+      ws.addImage(imageId, "B2:D8");
+
+      await wb.commit();
+
+      const wb2 = new Workbook();
+      await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+      const ws2 = wb2.getWorksheet("Hello")!;
+
+      expect(ws2.getImages().length).toBe(1);
+      expect(ws2.getCell("A1").value).toBe("row 1");
+      expect(ws2.getCell("A10").value).toBe("row 10");
+    });
+  });
 });

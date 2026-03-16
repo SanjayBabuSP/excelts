@@ -23,16 +23,20 @@ import { AppXform } from "@excel/xlsx/xform/core/app-xform";
 import { WorkbookXform } from "@excel/xlsx/xform/book/workbook-xform";
 import { SharedStringsXform } from "@excel/xlsx/xform/strings/shared-strings-xform";
 import { FeaturePropertyBagXform } from "@excel/xlsx/xform/core/feature-property-bag-xform";
+import { DrawingXform } from "@excel/xlsx/xform/drawing/drawing-xform";
 import { theme1Xml } from "@excel/xlsx/xml/theme1";
 import type { Writable } from "@stream";
 import { toWritable } from "@stream";
 import { stringToUint8Array } from "@utils/binary";
 import {
+  drawingPath,
+  drawingRelsPath,
   mediaPath,
   OOXML_PATHS,
   OOXML_REL_TARGETS,
   worksheetRelTarget
 } from "@excel/utils/ooxml-paths";
+import { filterDrawingAnchors } from "@excel/utils/drawing-utils";
 import type { ImageData, WorkbookView, AddWorksheetOptions } from "@excel/types";
 import { WorksheetWriter } from "@excel/stream/worksheet-writer";
 
@@ -109,6 +113,8 @@ export interface WorksheetWriterLike {
   committed?: boolean;
   stream: any;
   commit(): void;
+  /** Drawing model — populated after commit if images were added */
+  drawing?: { rId: string; name: string; anchors: any[]; rels: any[] };
 }
 
 export interface WorksheetWriterConstructor<T extends WorksheetWriterLike> {
@@ -282,6 +288,7 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
     await this.promise;
     await this._commitWorksheets();
     await this.addMedia();
+    this.addDrawings();
     await Promise.all([
       this.addThemes(),
       this.addOfficeRels(),
@@ -399,11 +406,16 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
       worksheets.forEach((ws: any) => {
         ws.fileIndex = ws.id;
       });
+
+      // Collect drawing models from worksheets that have images
+      const drawings = worksheets.filter(ws => ws.drawing).map(ws => ws.drawing);
+
       const model = {
         worksheets,
         sharedStrings: this.sharedStrings,
         commentRefs: this.commentRefs,
         media: this.media,
+        drawings,
         hasCheckboxes: this.styles.hasCheckboxes
       };
       const xform = new ContentTypesXform();
@@ -439,6 +451,37 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
         throw new ImageError("Unsupported media");
       })
     );
+  }
+
+  /**
+   * Generate drawing XML and drawing relationship files for worksheets that have images.
+   * Must be called after _commitWorksheets() so that each WorksheetWriter has built its
+   * drawing model, and after addMedia() so that media files are already in the ZIP.
+   */
+  protected addDrawings(): void {
+    const drawingXform = new DrawingXform();
+    const relsXform = new RelationshipsXform();
+
+    for (const ws of this._worksheets) {
+      if (!ws?.drawing) {
+        continue;
+      }
+
+      const { drawing } = ws;
+
+      // Filter out invalid anchors using shared utility
+      const filteredAnchors = filterDrawingAnchors(drawing.anchors);
+      const drawingForWrite = { ...drawing, anchors: filteredAnchors };
+
+      // Prepare and generate drawing XML
+      drawingXform.prepare(drawingForWrite);
+      const xml = drawingXform.toXml(drawingForWrite);
+      this._addFile(xml, drawingPath(drawing.name));
+
+      // Generate drawing relationships
+      const relsXml = relsXform.toXml(drawing.rels);
+      this._addFile(relsXml, drawingRelsPath(drawing.name));
+    }
   }
 
   addApp(): Promise<void> {

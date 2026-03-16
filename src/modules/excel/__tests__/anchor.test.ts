@@ -105,4 +105,41 @@ describe("Anchor", () => {
       expect(anchor.nativeRowOff).not.toBe(pre);
     });
   });
+
+  describe("integer short-circuit", () => {
+    it("set col/row with integer value does not access colWidth/rowHeight", () => {
+      // worksheet is undefined — colWidth/rowHeight getters would access
+      // worksheet.getColumn()/getRow() and fail if they were called.
+      // With the short-circuit fix, integer values bypass these getters entirely.
+      const anchor = new Anchor(undefined, { col: 3, row: 5 });
+      expect(anchor.nativeCol).toBe(3);
+      expect(anchor.nativeColOff).toBe(0);
+      expect(anchor.nativeRow).toBe(5);
+      expect(anchor.nativeRowOff).toBe(0);
+    });
+
+    it("get col/row with zero offset does not access colWidth/rowHeight", () => {
+      const anchor = new Anchor(undefined, {
+        nativeCol: 3,
+        nativeColOff: 0,
+        nativeRow: 5,
+        nativeRowOff: 0
+      });
+      // If the getters accessed colWidth/rowHeight with undefined worksheet,
+      // they would attempt worksheet.getColumn()/getRow() on undefined.
+      // With the short-circuit fix, zero offsets bypass these getters.
+      expect(anchor.col).toBe(3);
+      expect(anchor.row).toBe(5);
+    });
+
+    it("set col/row with fractional value still computes offset correctly", () => {
+      // With a real worksheet mock, fractional values should produce non-zero offsets.
+      const ws = testUtils.createSheetMock();
+      const anchor = new Anchor(ws, { col: 1.5, row: 2.75 });
+      expect(anchor.nativeCol).toBe(1);
+      expect(anchor.nativeColOff).toBeGreaterThan(0);
+      expect(anchor.nativeRow).toBe(2);
+      expect(anchor.nativeRowOff).toBeGreaterThan(0);
+    });
+  });
 });

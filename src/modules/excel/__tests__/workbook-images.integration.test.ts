@@ -833,5 +833,44 @@ describe("Workbook", () => {
         expect(images.length).toBe(0);
       });
     });
+
+    describe("image deduplication", () => {
+      it("deduplicates drawing rels for non-consecutive same imageId", async () => {
+        const wb = new Workbook();
+        const ws = wb.addWorksheet("Sheet1");
+
+        // Add two different images and use the first one again (non-consecutive)
+        const imgId1 = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+        const imgId2 = wb.addImage({
+          filename: IMAGE_FILENAME,
+          extension: "png"
+        });
+
+        // Pattern: imgId1, imgId2, imgId1 — tests non-consecutive dedup
+        ws.addImage(imgId1, "A1:B2");
+        ws.addImage(imgId2, "C3:D4");
+        ws.addImage(imgId1, "E5:F6");
+
+        await wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+
+        const wb2 = new Workbook();
+        await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        const ws2 = wb2.getWorksheet("Sheet1")!;
+
+        const images = ws2.getImages();
+        expect(images.length).toBe(3);
+
+        // All 3 images should be valid and readable
+        const imageData = await fsReadFileAsync(IMAGE_FILENAME);
+        for (const img of images) {
+          const imgBuffer = wb2.getImage(img.imageId!);
+          expect(imgBuffer).toBeDefined();
+          expect(Buffer.compare(imageData, imgBuffer!.buffer!)).toBe(0);
+        }
+      });
+    });
   });
 });

@@ -722,7 +722,7 @@ class Worksheet {
     // create count duplicates of rowNum
     // either inserting new or overwriting existing rows
 
-    const rSrc = this._rows[rowNum - 1];
+    const rSrc = this.getRow(rowNum);
     const inserts = Array.from<RowValues>({ length: count }).fill(rSrc.values);
 
     // Collect single-row merges from the source row before splicing

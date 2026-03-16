@@ -8,12 +8,18 @@ import { StringBuf } from "@excel/utils/string-buf";
 import { Row } from "@excel/row";
 import type { Cell } from "@excel/cell";
 import { Column } from "@excel/column";
+import { Anchor } from "@excel/anchor";
 import { SheetRelsWriter } from "@excel/stream/sheet-rels-writer";
 import { SheetCommentsWriter } from "@excel/stream/sheet-comments-writer";
 import { DataValidations } from "@excel/data-validations";
 import { applyMergeBorders, collectMergeBorders } from "@excel/utils/merge-borders";
 import type { StreamBuf } from "@excel/utils/stream-buf";
-import { mediaRelTargetFromRels, worksheetPath } from "@excel/utils/ooxml-paths";
+import {
+  drawingRelTargetFromWorksheet,
+  mediaRelTargetFromRels,
+  worksheetPath
+} from "@excel/utils/ooxml-paths";
+import { buildDrawingAnchorsAndRels } from "@excel/utils/drawing-utils";
 
 const xmlBuffer = /* @__PURE__ */ new StringBuf();
 
@@ -36,6 +42,7 @@ import { ConditionalFormattingsXform } from "@excel/xlsx/xform/sheet/cf/conditio
 import { HeaderFooterXform } from "@excel/xlsx/xform/sheet/header-footer-xform";
 import { RowBreaksXform } from "@excel/xlsx/xform/sheet/row-breaks-xform";
 import { ColBreaksXform } from "@excel/xlsx/xform/sheet/col-breaks-xform";
+import { DrawingXform as DrawingPartXform } from "@excel/xlsx/xform/sheet/drawing-xform";
 import type {
   RowBreak,
   ColBreak,
@@ -46,7 +53,8 @@ import type {
   WorksheetState,
   AutoFilter,
   WorksheetProtection,
-  ConditionalFormattingOptions
+  ConditionalFormattingOptions,
+  AddImageRange
 } from "@excel/types";
 
 // since prepare and render are functional, we can use singletons
@@ -71,6 +79,7 @@ const xform = {
   pageSeteup: new PageSetupXform(),
   autoFilter: new AutoFilterXform(),
   picture: new PictureXform(),
+  drawing: new DrawingPartXform(),
   conditionalFormattings: new ConditionalFormattingsXform(),
   headerFooter: new HeaderFooterXform(),
   rowBreaks: new RowBreaksXform(),
@@ -91,6 +100,19 @@ interface WorksheetWriterOptions {
   views?: Partial<WorksheetView>[];
   autoFilter?: AutoFilter;
   headerFooter?: Partial<HeaderFooter>;
+}
+
+/** Internal model for an image added via addImage(). */
+interface WriterImageModel {
+  type: "image";
+  imageId: string;
+  range: {
+    tl: { nativeCol: number; nativeColOff: number; nativeRow: number; nativeRowOff: number };
+    br?: { nativeCol: number; nativeColOff: number; nativeRow: number; nativeRowOff: number };
+    ext?: { width: number; height: number };
+    editAs?: string;
+  };
+  hyperlinks?: { hyperlink?: string; tooltip?: string };
 }
 
 class WorksheetWriter {
@@ -132,7 +154,7 @@ class WorksheetWriter {
   hasComments: boolean;
   private _views: Partial<WorksheetView>[];
   autoFilter: AutoFilter | null;
-  private _media: unknown[];
+  private _media: WriterImageModel[];
   sheetProtection: {
     sheet?: boolean;
     algorithmName?: string;
@@ -145,6 +167,8 @@ class WorksheetWriter {
   startedData: boolean;
   private _background?: { imageId?: number; rId?: string };
   private _headerRowCount?: number;
+  /** Drawing model — populated during commit if images were added */
+  private _drawing?: { rId: string; name: string; anchors: any[]; rels: any[] };
   /** Relationship Id - assigned by WorkbookWriter */
   rId?: string;
 
@@ -337,10 +361,11 @@ class WorksheetWriter {
     this._writeDataValidations();
     this._writePageMargins();
     this._writePageSetup();
-    this._writeBackground();
     this._writeHeaderFooter();
     this._writeRowBreaks();
     this._writeColBreaks();
+    this._writeDrawing(); // Note: must be after rowBreaks/colBreaks
+    this._writeBackground(); // Note: must be after drawing
 
     // Legacy Data tag for comments
     this._writeLegacyData();
@@ -601,14 +626,71 @@ class WorksheetWriter {
 
   // =========================================================================
 
-  addBackgroundImage(imageId: number): void {
+  addBackgroundImage(imageId: string | number): void {
     this._background = {
-      imageId
+      imageId: Number(imageId)
     };
   }
 
   getBackgroundImageId(): number | undefined {
     return this._background && this._background.imageId;
+  }
+
+  // =========================================================================
+  // Images
+
+  /**
+   * Using the image id from `WorkbookWriter.addImage`,
+   * embed an image within the worksheet to cover a range.
+   */
+  addImage(imageId: string | number, range: AddImageRange): void {
+    const model = this._parseImageRange(String(imageId), range);
+    this._media.push(model);
+  }
+
+  /**
+   * Return the images that have been added to this worksheet.
+   * Each entry contains imageId and the normalised range (with native anchors).
+   */
+  getImages(): ReadonlyArray<WriterImageModel> {
+    return this._media;
+  }
+
+  /**
+   * Parse the user-supplied range into a normalised internal model
+   * mirroring what the regular Worksheet / Image class does.
+   */
+  private _parseImageRange(imageId: string, range: AddImageRange): WriterImageModel {
+    if (typeof range === "string") {
+      // e.g. "A1:C3"
+      const decoded = colCache.decode(range);
+      if ("top" in decoded) {
+        return {
+          type: "image",
+          imageId,
+          range: {
+            tl: new Anchor(this as any, { col: decoded.left, row: decoded.top }, -1).model,
+            br: new Anchor(this as any, { col: decoded.right, row: decoded.bottom }, 0).model,
+            editAs: "oneCell"
+          }
+        };
+      }
+      throw new Error(`Invalid image range: "${range}". Expected a range like "A1:C3".`);
+    }
+
+    const tl = new Anchor(this as any, range.tl as any, 0).model;
+    const br = range.br ? new Anchor(this as any, range.br as any, 0).model : undefined;
+    return {
+      type: "image",
+      imageId,
+      range: {
+        tl,
+        br,
+        ext: range.ext,
+        editAs: range.editAs
+      },
+      hyperlinks: range.hyperlinks
+    };
   }
 
   // =========================================================================
@@ -815,6 +897,42 @@ class WorksheetWriter {
     this.stream.write(xform.autoFilter.toXml(this.autoFilter));
   }
 
+  private _writeDrawing(): void {
+    if (this._media.length === 0) {
+      return;
+    }
+
+    // Build the drawing model from the stored images.
+    // The drawing XML will be generated later by WorkbookWriterBase.addDrawings().
+    const drawingName = `drawing${this.id}`;
+    const drawingRId = this._sheetRelsWriter.addRelationship({
+      Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+      Target: drawingRelTargetFromWorksheet(drawingName)
+    });
+
+    // Build anchors and drawing-level rels using the shared utility
+    const { anchors, rels } = buildDrawingAnchorsAndRels(this._media, [], {
+      getBookImage: id => this._workbook.getImage(Number(id)),
+      nextRId: currentRels => `rId${currentRels.length + 1}`
+    });
+
+    // Store drawing model for the workbook writer to generate the actual drawing XML
+    this._drawing = {
+      rId: drawingRId,
+      name: drawingName,
+      anchors,
+      rels
+    };
+
+    // Write <drawing r:id="rIdN"/> into the worksheet XML
+    this.stream.write(xform.drawing.toXml({ rId: drawingRId }));
+  }
+
+  /** Returns the drawing model if images were added, for the workbook writer. */
+  get drawing(): { rId: string; name: string; anchors: any[]; rels: any[] } | undefined {
+    return this._drawing;
+  }
+
   private _writeBackground(): void {
     if (this._background) {
       if (this._background.imageId !== undefined) {
@@ -853,3 +971,4 @@ class WorksheetWriter {
 }
 
 export { WorksheetWriter };
+export type { WriterImageModel };

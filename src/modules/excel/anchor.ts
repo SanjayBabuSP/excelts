@@ -77,21 +77,27 @@ class Anchor {
   }
 
   get col(): number {
-    return this.nativeCol + Math.min(this.colWidth - 1, this.nativeColOff) / this.colWidth;
+    return this.nativeColOff === 0
+      ? this.nativeCol
+      : this.nativeCol + Math.min(this.colWidth - 1, this.nativeColOff) / this.colWidth;
   }
 
   set col(v: number) {
     this.nativeCol = Math.floor(v);
-    this.nativeColOff = Math.floor((v - this.nativeCol) * this.colWidth);
+    const fraction = v - this.nativeCol;
+    this.nativeColOff = fraction === 0 ? 0 : Math.floor(fraction * this.colWidth);
   }
 
   get row(): number {
-    return this.nativeRow + Math.min(this.rowHeight - 1, this.nativeRowOff) / this.rowHeight;
+    return this.nativeRowOff === 0
+      ? this.nativeRow
+      : this.nativeRow + Math.min(this.rowHeight - 1, this.nativeRowOff) / this.rowHeight;
   }
 
   set row(v: number) {
     this.nativeRow = Math.floor(v);
-    this.nativeRowOff = Math.floor((v - this.nativeRow) * this.rowHeight);
+    const fraction = v - this.nativeRow;
+    this.nativeRowOff = fraction === 0 ? 0 : Math.floor(fraction * this.rowHeight);
   }
 
   get colWidth(): number {

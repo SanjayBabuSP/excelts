@@ -30,11 +30,11 @@ import {
   commentsRelTargetFromWorksheet,
   ctrlPropRelTargetFromWorksheet,
   drawingRelTargetFromWorksheet,
-  mediaRelTargetFromRels,
   pivotTableRelTargetFromWorksheet,
   tableRelTargetFromWorksheet,
   vmlDrawingRelTargetFromWorksheet
 } from "@excel/utils/ooxml-paths";
+import { buildDrawingAnchorsAndRels, resolveMediaTarget } from "@excel/utils/drawing-utils";
 
 const mergeRule = (rule, extRule) => {
   Object.keys(extRule).forEach(key => {
@@ -97,7 +97,6 @@ class WorkSheetXform extends BaseXform {
   declare public map: { [key: string]: any };
   declare private ignoreNodes: string[];
   declare public parser: any;
-  declare private preImageId: string | undefined;
 
   static WORKSHEET_ATTRIBUTES = {
     xmlns: "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -267,76 +266,55 @@ class WorkSheetXform extends BaseXform {
       });
     }
 
-    const drawingRelsHash: any[] = [];
-    let bookImage;
+    // Process background and image media entries
+    const backgroundMedia: any[] = [];
+    const imageMedia: any[] = [];
     model.media.forEach(medium => {
       if (medium.type === "background") {
-        const rId = nextRid(rels);
-        bookImage = options.media[medium.imageId];
-        rels.push({
-          Id: rId,
-          Type: RelType.Image,
-          Target: mediaRelTargetFromRels(`${bookImage.name}.${bookImage.extension}`)
-        });
-        model.background = {
-          rId
-        };
-        model.image = options.media[medium.imageId];
+        backgroundMedia.push(medium);
       } else if (medium.type === "image") {
-        let { drawing } = model;
-        bookImage = options.media[medium.imageId];
-        if (!drawing) {
-          drawing = model.drawing = {
-            rId: nextRid(rels),
-            name: `drawing${++options.drawingsCount}`,
-            anchors: [],
-            rels: []
-          };
-          options.drawings.push(drawing);
-          rels.push({
-            Id: drawing.rId,
-            Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
-            Target: drawingRelTargetFromWorksheet(drawing.name)
-          });
-        }
-        let rIdImage =
-          this.preImageId === medium.imageId
-            ? drawingRelsHash[medium.imageId]
-            : drawingRelsHash[drawing.rels.length];
-        if (!rIdImage) {
-          rIdImage = nextRid(drawing.rels);
-          drawingRelsHash[drawing.rels.length] = rIdImage;
-          drawing.rels.push({
-            Id: rIdImage,
-            Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
-            Target: mediaRelTargetFromRels(`${bookImage.name}.${bookImage.extension}`)
-          });
-        }
-
-        const anchor: any = {
-          picture: {
-            rId: rIdImage
-          },
-          range: medium.range
-        };
-        if (medium.hyperlinks && medium.hyperlinks.hyperlink) {
-          const rIdHyperLink = nextRid(drawing.rels);
-          drawingRelsHash[drawing.rels.length] = rIdHyperLink;
-          anchor.picture.hyperlinks = {
-            tooltip: medium.hyperlinks.tooltip,
-            rId: rIdHyperLink
-          };
-          drawing.rels.push({
-            Id: rIdHyperLink,
-            Type: RelType.Hyperlink,
-            Target: medium.hyperlinks.hyperlink,
-            TargetMode: "External"
-          });
-        }
-        this.preImageId = medium.imageId;
-        drawing.anchors.push(anchor);
+        imageMedia.push(medium);
       }
     });
+
+    // Handle background images
+    backgroundMedia.forEach(medium => {
+      const rId = nextRid(rels);
+      const bookImage = options.media[medium.imageId];
+      rels.push({
+        Id: rId,
+        Type: RelType.Image,
+        Target: resolveMediaTarget(bookImage)
+      });
+      model.background = { rId };
+      model.image = options.media[medium.imageId];
+    });
+
+    // Handle embedded images — create drawing model using shared utility
+    if (imageMedia.length > 0) {
+      let { drawing } = model;
+      if (!drawing) {
+        drawing = model.drawing = {
+          rId: nextRid(rels),
+          name: `drawing${++options.drawingsCount}`,
+          anchors: [],
+          rels: []
+        };
+        options.drawings.push(drawing);
+        rels.push({
+          Id: drawing.rId,
+          Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+          Target: drawingRelTargetFromWorksheet(drawing.name)
+        });
+      }
+
+      const result = buildDrawingAnchorsAndRels(imageMedia, drawing.rels, {
+        getBookImage: id => options.media[id as number],
+        nextRId: currentRels => nextRid(currentRels)
+      });
+      drawing.anchors.push(...result.anchors);
+      drawing.rels = result.rels;
+    }
 
     // prepare tables
     model.tables.forEach(table => {

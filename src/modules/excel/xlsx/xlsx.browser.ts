@@ -91,6 +91,7 @@ import {
   worksheetRelsPath,
   worksheetRelTarget
 } from "@excel/utils/ooxml-paths";
+import { filterDrawingAnchors } from "@excel/utils/drawing-utils";
 import { PassthroughManager } from "@excel/utils/passthrough-manager";
 
 import type { ZipTimestampMode } from "@archive/zip-spec/timestamps";
@@ -1500,25 +1501,7 @@ class XLSX {
           zip.append(rawDrawings[drawing.name], { name: drawingPath(drawing.name) });
         } else {
           // Use regenerated XML for normal drawings (images, shapes)
-          // Filter out invalid anchors (null, undefined, or missing content)
-          const filteredAnchors = (drawing.anchors ?? []).filter((a: any) => {
-            if (a == null) {
-              return false;
-            }
-            // Form controls have range.br and shape properties
-            if (a.range?.br && a.shape) {
-              return true;
-            }
-            // One-cell anchors need a valid picture
-            if (!a.br && !a.picture) {
-              return false;
-            }
-            // Two-cell anchors need either picture or shape
-            if (a.br && !a.picture && !a.shape) {
-              return false;
-            }
-            return true;
-          });
+          const filteredAnchors = filterDrawingAnchors(drawing.anchors ?? []);
           const drawingForWrite = drawing.anchors
             ? { ...drawing, anchors: filteredAnchors }
             : drawing;

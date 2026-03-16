@@ -316,4 +316,95 @@ describe("Image", () => {
       expect(restored.range!.editAs).toBe(original.range!.editAs);
     });
   });
+
+  // ===========================================================================
+  // Clone Tests
+  // ===========================================================================
+
+  describe("clone", () => {
+    it("creates a deep copy on the same worksheet", () => {
+      const original = new Image(worksheet, {
+        type: "image",
+        imageId: "clone1",
+        range: {
+          tl: { col: 1, row: 2 },
+          br: { col: 3, row: 4 },
+          editAs: "oneCell"
+        },
+        hyperlinks: {
+          hyperlink: "https://example.com",
+          tooltip: "Test"
+        }
+      });
+
+      const cloned = original.clone();
+
+      expect(cloned).not.toBe(original);
+      expect(cloned.worksheet).toBe(original.worksheet);
+      expect(cloned.type).toBe(original.type);
+      expect(cloned.imageId).toBe(original.imageId);
+      expect(cloned.range!.editAs).toBe(original.range!.editAs);
+      expect(cloned.range!.hyperlinks).toEqual(original.range!.hyperlinks);
+      // Verify deep copy — mutating clone should not affect original
+      expect(cloned.range!.tl).not.toBe(original.range!.tl);
+      expect(cloned.range!.br).not.toBe(original.range!.br);
+      expect(cloned.range!.hyperlinks).not.toBe(original.range!.hyperlinks);
+    });
+
+    it("clones to a different worksheet", () => {
+      const worksheet2 = workbook.addWorksheet("Sheet2");
+      const original = new Image(worksheet, {
+        type: "image",
+        imageId: "clone2",
+        range: {
+          tl: { col: 0, row: 0 },
+          ext: { width: 200, height: 150 }
+        }
+      });
+
+      const cloned = original.clone(worksheet2);
+
+      expect(cloned.worksheet).toBe(worksheet2);
+      expect(cloned.type).toBe("image");
+      expect(cloned.imageId).toBe("clone2");
+      expect(cloned.range!.ext).toEqual({ width: 200, height: 150 });
+      expect(cloned.range!.ext).not.toBe(original.range!.ext);
+      expect(cloned.range!.br).toBeUndefined();
+    });
+
+    it("clones background image (no range)", () => {
+      const original = new Image(worksheet, {
+        type: "background",
+        imageId: "bg-clone"
+      });
+
+      const cloned = original.clone();
+
+      expect(cloned.type).toBe("background");
+      expect(cloned.imageId).toBe("bg-clone");
+      expect(cloned.range).toBeUndefined();
+    });
+
+    it("clone model round-trips correctly", () => {
+      const original = new Image(worksheet, {
+        type: "image",
+        imageId: "rt-clone",
+        range: {
+          tl: { nativeCol: 2, nativeRow: 3, nativeColOff: 50000, nativeRowOff: 60000 },
+          br: { nativeCol: 5, nativeRow: 8, nativeColOff: 0, nativeRowOff: 0 },
+          editAs: "twoCell"
+        },
+        hyperlinks: {
+          hyperlink: "https://clone-test.com",
+          tooltip: "clone tooltip"
+        }
+      });
+
+      const cloned = original.clone();
+      const originalModel = original.model;
+      const clonedModel = cloned.model;
+
+      expect(clonedModel).toEqual(originalModel);
+    });
+  });
 });
