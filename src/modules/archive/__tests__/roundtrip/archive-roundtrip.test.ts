@@ -316,8 +316,21 @@ runRoundtripTests("Unified API TAR Roundtrip", unifiedTarAdapter);
 describe("TAR byte-for-byte consistency", () => {
   it("bytes() and stream() should produce identical bytes", async () => {
     const entries = FIXTURES["multiple-text-files"];
-    const bytesOutput = await tarAdapter.create(entries).bytes();
-    const streamOutput = await collectStream(tarAdapter.create(entries).stream());
+    // Pin modTime so two separate TarArchive instances produce identical headers.
+    const fixedTime = new Date("2024-01-01T00:00:00Z");
+    const createArchive = () => {
+      const archive = new TarArchive({ modTime: fixedTime });
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          archive.addDirectory(entry.path.replace(/\/$/, ""));
+        } else if (entry.content !== null) {
+          archive.add(entry.path, contentToBytes(entry.content));
+        }
+      }
+      return archive;
+    };
+    const bytesOutput = await createArchive().bytes();
+    const streamOutput = await collectStream(createArchive().stream());
     expect(streamOutput).toEqual(bytesOutput);
   });
 });
