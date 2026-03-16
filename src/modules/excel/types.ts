@@ -554,7 +554,7 @@ export type Address = {
 // ============================================================================
 // Row and Column Types
 // ============================================================================
-export type RowValues = CellValue[] | Record<string, unknown> | undefined | null;
+export type RowValues = CellValue[] | Record<string, any> | undefined | null;
 
 // ============================================================================
 // Conditional Formatting Types
