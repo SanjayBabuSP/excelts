@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.10...v6.0.0) (2026-03-16)
+
+
+### Bug Fixes
+
+* Promote to 6.0.0 stable release ([083e0e0](https://github.com/cjnoname/excelts/commit/083e0e0be35f49ff866223b569e30d8ca288f115))
+
 ## [6.0.0-beta.10](https://github.com/cjnoname/excelts/compare/v6.0.0-beta.9...v6.0.0-beta.10) (2026-03-16)
 
 
