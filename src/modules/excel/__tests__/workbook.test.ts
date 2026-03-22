@@ -52,6 +52,27 @@ describe("Workbook", () => {
       expect(wb.getWorksheet("target")).toBe(ws);
     });
 
+    it("returns worksheet by name case-insensitively", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("MySheet");
+
+      expect(wb.getWorksheet("MySheet")).toBe(ws);
+      expect(wb.getWorksheet("mysheet")).toBe(ws);
+      expect(wb.getWorksheet("MYSHEET")).toBe(ws);
+      expect(wb.getWorksheet("mySheet")).toBe(ws);
+    });
+
+    it("getWorksheet finds sheet that addWorksheet would reject as duplicate", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("Sheet");
+
+      // getWorksheet should find the existing sheet with different casing,
+      // consistent with addWorksheet which would reject "sheet" as a duplicate
+      const existing = wb.getWorksheet("sheet");
+      expect(existing).toBeDefined();
+      expect(existing!.name).toBe("Sheet");
+    });
+
     it("returns worksheet by numeric id", () => {
       const wb = new Workbook();
       const ws1 = wb.addWorksheet("first");
@@ -93,6 +114,17 @@ describe("Workbook", () => {
       expect(wb.getWorksheet("beta")).toBeDefined();
     });
 
+    it("removeWorksheet by name case-insensitively", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("Alpha");
+      wb.addWorksheet("Beta");
+
+      wb.removeWorksheet("alpha");
+      expect(wb.worksheets.length).toBe(1);
+      expect(wb.getWorksheet("Alpha")).toBeUndefined();
+      expect(wb.getWorksheet("Beta")).toBeDefined();
+    });
+
     it("worksheets getter returns sheets in order", () => {
       const wb = new Workbook();
       wb.addWorksheet("A");
@@ -112,6 +144,37 @@ describe("Workbook", () => {
       const names: string[] = [];
       wb.eachSheet(ws => names.push(ws.name));
       expect(names).toEqual(["one", "two", "three"]);
+    });
+
+    it("addWorksheet rejects case-insensitive duplicate names", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("Sheet");
+
+      expect(() => wb.addWorksheet("sheet")).toThrow(/already exists/i);
+      expect(() => wb.addWorksheet("SHEET")).toThrow(/already exists/i);
+    });
+
+    it("allows renaming a worksheet to a different casing of the same name", () => {
+      const wb = new Workbook();
+      const ws = wb.addWorksheet("Sheet");
+
+      // Renaming "Sheet" to "SHEET" should not throw -- it's the same sheet
+      ws.name = "SHEET";
+      expect(ws.name).toBe("SHEET");
+
+      ws.name = "sheet";
+      expect(ws.name).toBe("sheet");
+    });
+
+    it("renaming a worksheet still rejects duplicate names with other sheets", () => {
+      const wb = new Workbook();
+      wb.addWorksheet("Alpha");
+      const ws2 = wb.addWorksheet("Beta");
+
+      // Renaming Beta to "alpha" (case-insensitive match with Alpha) should throw
+      expect(() => {
+        ws2.name = "alpha";
+      }).toThrow(/already exists/i);
     });
   });
 
