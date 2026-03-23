@@ -461,4 +461,53 @@ describe("XLSX", () => {
       expect(ws2.getCell("B10000").value).toBe("row-10000");
     });
   });
+
+  // ===========================================================================
+  // Internal Hyperlinks (exceljs/exceljs#3027)
+  // ===========================================================================
+
+  describe("internal hyperlinks", () => {
+    it("should round-trip internal hyperlink without duplication", async () => {
+      const wb = new Workbook();
+      const ws1 = wb.addWorksheet("Sheet1");
+      wb.addWorksheet("Sheet2");
+
+      ws1.getCell("A1").value = {
+        text: "Go to Sheet2",
+        hyperlink: "#Sheet2!A1"
+      };
+
+      const buffer = await wb.xlsx.writeBuffer();
+
+      // Inspect the raw XML to verify correct OOXML structure
+      const { extractAll } = await import("@archive/unzip/extract");
+      const entries = await extractAll(buffer);
+
+      // Check sheet XML for hyperlink element
+      const sheetXml = new TextDecoder().decode(entries.get("xl/worksheets/sheet1.xml")!.data);
+
+      // Internal hyperlink should have location attribute, no r:id
+      expect(sheetXml).toContain("location=");
+      expect(sheetXml).toMatch(/hyperlink[^>]*location="Sheet2!A1"/);
+      // Should NOT have r:id on internal hyperlink
+      expect(sheetXml).not.toMatch(/hyperlink[^>]*r:id="[^"]*"[^>]*location=/);
+
+      // There should be no sheet rels file for hyperlinks (only internal links)
+      const sheetRels = entries.get("xl/worksheets/_rels/sheet1.xml.rels");
+      if (sheetRels) {
+        const relsXml = new TextDecoder().decode(sheetRels.data);
+        // Should not contain hyperlink relationship for internal link
+        expect(relsXml).not.toContain("hyperlink");
+      }
+
+      // Verify round-trip
+      const wb2 = new Workbook();
+      await wb2.xlsx.load(buffer);
+
+      const cell = wb2.getWorksheet("Sheet1")!.getCell("A1");
+      expect(cell.text).toBe("Go to Sheet2");
+      // The hyperlink should be "#Sheet2!A1", not "#Sheet2!A1##Sheet2!A1"
+      expect(cell.hyperlink).toBe("#Sheet2!A1");
+    });
+  });
 });

@@ -3,11 +3,11 @@ import { XmlStream } from "@excel/utils/xml-stream";
 import { RelType } from "@excel/xlsx/rel-type";
 import { Merges } from "@excel/xlsx/xform/sheet/merges";
 import { BaseXform } from "@excel/xlsx/xform/base-xform";
+import { isInternalLink, HyperlinkXform } from "@excel/xlsx/xform/sheet/hyperlink-xform";
 import { ListXform } from "@excel/xlsx/xform/list-xform";
 import { RowXform } from "@excel/xlsx/xform/sheet/row-xform";
 import { ColXform } from "@excel/xlsx/xform/sheet/col-xform";
 import { DimensionXform } from "@excel/xlsx/xform/sheet/dimension-xform";
-import { HyperlinkXform } from "@excel/xlsx/xform/sheet/hyperlink-xform";
 import { MergeCellXform } from "@excel/xlsx/xform/sheet/merge-cell-xform";
 import { DataValidationsXform } from "@excel/xlsx/xform/sheet/data-validations-xform";
 import { SheetPropertiesXform } from "@excel/xlsx/xform/sheet/sheet-properties-xform";
@@ -191,6 +191,11 @@ class WorkSheetXform extends BaseXform {
     }
 
     model.hyperlinks.forEach(hyperlink => {
+      // Internal links (e.g. "#Sheet2!A1") use the location attribute only,
+      // no relationship is needed in the .rels file.
+      if (isInternalLink(hyperlink.target)) {
+        return;
+      }
       const rId = nextRid(rels);
       hyperlink.rId = rId;
       rels.push({
@@ -678,7 +683,11 @@ class WorkSheetXform extends BaseXform {
     }, {});
     options.hyperlinkMap = (model.hyperlinks ?? []).reduce((h, hyperlink) => {
       if (hyperlink.rId) {
+        // External link: resolve target from relationship
         h[hyperlink.address] = rels[hyperlink.rId].Target;
+      } else if (hyperlink.target) {
+        // Internal link: target was restored from location attribute (with "#" prefix)
+        h[hyperlink.address] = hyperlink.target;
       }
       return h;
     }, {});

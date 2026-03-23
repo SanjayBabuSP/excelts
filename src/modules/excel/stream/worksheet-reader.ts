@@ -39,7 +39,8 @@ interface CellParseState {
 /** Hyperlink reference from worksheet XML */
 export interface WorksheetHyperlink {
   ref: string;
-  rId: string;
+  rId?: string;
+  target?: string;
 }
 
 /** Events emitted during worksheet parsing */
@@ -321,9 +322,12 @@ class WorksheetReader extends EventEmitter {
                 break;
               case "hyperlink":
                 if (inHyperlinks) {
+                  const loc = node.attributes.location;
                   const hyperlink = {
                     ref: node.attributes.ref,
-                    rId: node.attributes["r:id"]
+                    rId: node.attributes["r:id"],
+                    // Internal links: resolve target from location attribute
+                    target: loc ? (loc.startsWith("#") ? loc : `#${loc}`) : undefined
                   };
                   if (emitHyperlinks) {
                     (worksheetEvents ||= []).push({ eventType: "hyperlink", value: hyperlink });

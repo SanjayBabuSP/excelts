@@ -2,7 +2,7 @@ import { BaseXform } from "@excel/xlsx/xform/base-xform";
 
 interface HyperlinkModel {
   address: string;
-  rId: string;
+  rId?: string;
   tooltip?: string;
   target?: string;
 }
@@ -13,14 +13,16 @@ class HyperlinkXform extends BaseXform {
   }
 
   render(xmlStream: any, model: HyperlinkModel): void {
-    if (this.isInternalLink(model)) {
+    if (model.target && isInternalLink(model.target)) {
+      // Internal link: use location attribute only (no relationship)
+      // Strip the leading "#" — OOXML location attribute is without "#"
       xmlStream.leafNode("hyperlink", {
         ref: model.address,
-        "r:id": model.rId,
         tooltip: model.tooltip,
-        location: model.target
+        location: model.target.slice(1)
       });
     } else {
+      // External link: use r:id relationship reference
       xmlStream.leafNode("hyperlink", {
         ref: model.address,
         "r:id": model.rId,
@@ -37,9 +39,13 @@ class HyperlinkXform extends BaseXform {
         tooltip: node.attributes.tooltip
       };
 
-      // This is an internal link
+      // Internal link: location attribute stores the target without "#"
+      // Normalize: always store as "#Location" in the model regardless of
+      // whether the source had a leading "#" (our old buggy output) or not
+      // (correct OOXML from Excel or the fixed writer).
       if (node.attributes.location) {
-        this.model.target = node.attributes.location;
+        const loc = node.attributes.location;
+        this.model.target = loc.startsWith("#") ? loc : `#${loc}`;
       }
       return true;
     }
@@ -51,11 +57,15 @@ class HyperlinkXform extends BaseXform {
   parseClose(): boolean {
     return false;
   }
-
-  isInternalLink(model: HyperlinkModel): boolean {
-    // @example: Sheet2!D3, return true
-    return !!(model.target && /^[^!]+![a-zA-Z]+[\d]+$/.test(model.target));
-  }
 }
 
-export { HyperlinkXform };
+/**
+ * Internal hyperlinks start with "#" (e.g. "#Sheet2!A1").
+ * This matches Excel's convention and the OOXML spec where internal links
+ * use the `location` attribute instead of a relationship.
+ */
+function isInternalLink(target: string): boolean {
+  return target.startsWith("#");
+}
+
+export { HyperlinkXform, isInternalLink };

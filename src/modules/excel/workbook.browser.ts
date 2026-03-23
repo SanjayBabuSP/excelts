@@ -1014,7 +1014,10 @@ class Workbook {
       return this._worksheets[id];
     }
     if (typeof id === "string") {
-      return this._worksheets.find(worksheet => worksheet && worksheet.name === id);
+      const idLower = id.toLowerCase();
+      return this._worksheets.find(
+        worksheet => worksheet && worksheet.name.toLowerCase() === idLower
+      );
     }
     return undefined;
   }

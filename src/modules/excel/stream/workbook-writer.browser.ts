@@ -366,7 +366,8 @@ export abstract class WorkbookWriterBase<TWorksheetWriter extends WorksheetWrite
       return this._worksheets[id];
     }
     if (typeof id === "string") {
-      return this._worksheets.find(ws => ws?.name === id);
+      const idLower = id.toLowerCase();
+      return this._worksheets.find(ws => ws?.name?.toLowerCase() === idLower);
     }
     return undefined;
   }

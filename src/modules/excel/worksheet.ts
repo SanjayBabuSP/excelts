@@ -337,7 +337,10 @@ class Worksheet {
       name = name.substring(0, 31);
     }
 
-    if (this._workbook.worksheets.find(ws => ws && ws.name.toLowerCase() === name.toLowerCase())) {
+    const nameLower = name.toLowerCase();
+    if (
+      this._workbook.worksheets.find(ws => ws && ws !== this && ws.name.toLowerCase() === nameLower)
+    ) {
       throw new WorksheetNameError(`Worksheet name already exists: ${name}`);
     }
 

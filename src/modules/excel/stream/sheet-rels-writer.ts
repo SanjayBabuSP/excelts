@@ -1,6 +1,7 @@
 import { xmlEncode } from "@utils/utils";
 import { RelType } from "@excel/xlsx/rel-type";
 import { worksheetRelsPath } from "@excel/utils/ooxml-paths";
+import { isInternalLink } from "@excel/xlsx/xform/sheet/hyperlink-xform";
 
 interface Hyperlink {
   address: string;
@@ -34,7 +35,7 @@ class SheetRelsWriter {
   id: number;
   count: number;
   /** @internal */
-  _hyperlinks: Array<{ rId: string; address: string }>;
+  _hyperlinks: Array<{ rId?: string; address: string; target?: string }>;
   private _workbook: any;
   private _stream?: any;
   private _hyperlinksProxy?: HyperlinksProxy;
@@ -63,7 +64,7 @@ class SheetRelsWriter {
     return this._hyperlinks.length;
   }
 
-  each(fn: (hyperlink: { rId: string; address: string }) => void): void {
+  each(fn: (hyperlink: { rId?: string; address: string; target?: string }) => void): void {
     return this._hyperlinks.forEach(fn);
   }
 
@@ -72,7 +73,15 @@ class SheetRelsWriter {
   }
 
   addHyperlink(hyperlink: Hyperlink): void {
-    // Write to stream
+    if (isInternalLink(hyperlink.target)) {
+      // Internal link: no relationship needed, only store for sheet XML
+      this._hyperlinks.push({
+        address: hyperlink.address,
+        target: hyperlink.target
+      });
+      return;
+    }
+    // External link: write relationship
     const relationship: Relationship = {
       Target: hyperlink.target,
       Type: RelType.Hyperlink,
